@@ -45,14 +45,14 @@ class PremiumFoundationContractTest {
     }
 
     @Test
-    fun `shared presentation avoids decorative gradients and glow tokens`() {
+    fun `Android presentation uses matching launch surfaces without decorative gradients or glow`() {
         val theme = read("src/main/java/cloud/dcompany/erp/ui/theme/Theme.kt")
         val primitives = read("src/main/java/cloud/dcompany/erp/ui/components/Primitives.kt")
         val nativeColors = read("src/main/res/values/colors.xml")
 
         val nativeNightColors = read("src/main/res/values-night/colors.xml")
-        assertTrue("Day launch must match the Web/Compose background", "#FAFAFA" in nativeColors)
-        assertTrue("Night launch must match the Web/Compose background", "#050505" in nativeNightColors)
+        assertTrue("Day launch must match the Android Compose background", "#F7F7F7" in nativeColors)
+        assertTrue("Night launch must match the Android Compose background", "#08131B" in nativeNightColors)
         assertFalse("linearGradient" in theme)
         assertFalse("verticalGradient" in theme)
         assertFalse("GoldSheen" in theme)

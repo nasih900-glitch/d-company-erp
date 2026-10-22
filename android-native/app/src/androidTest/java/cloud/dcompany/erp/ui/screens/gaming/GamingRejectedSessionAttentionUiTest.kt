@@ -21,7 +21,7 @@ class GamingRejectedSessionAttentionUiTest {
     val compose = createComposeRule()
 
     @Test
-    fun rejectedSessionsDriveDangerSummaryAndClearingRestoresReadyState() {
+    fun rejectedSessionsDriveDangerSummaryAndClearingRemovesUnneededBanner() {
         val failedStart = session("start", "station-start", GamingSessionState.START_REJECTED, "start_failed")
         val failedStop = session("stop", "station-stop", GamingSessionState.STOP_REJECTED, "active")
         val current = mutableStateOf(GamingUiState(sessions = listOf(failedStart, failedStop), online = true, refreshing = false))
@@ -60,8 +60,9 @@ class GamingRejectedSessionAttentionUiTest {
             assertTrue(reviewOpened)
             current.value = GamingUiState(online = true, refreshing = false)
         }
-        compose.onNodeWithText("Gaming board ready").assertIsDisplayed()
-        compose.onNodeWithText("Live · no action needs attention").assertIsDisplayed()
+        compose.onNodeWithText("Gaming board ready").assertDoesNotExist()
+        compose.onNodeWithText("Live · no action needs attention").assertDoesNotExist()
+        compose.onNodeWithText("Review").assertDoesNotExist()
     }
 
     @Test

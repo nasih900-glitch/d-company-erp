@@ -4,12 +4,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.auth.ShiftAccess
+import cloud.dcompany.erp.core.auth.CacheScopeLease
 import cloud.dcompany.erp.core.auth.authorizeAction
 import cloud.dcompany.erp.core.db.LocalShiftEntity
 import cloud.dcompany.erp.core.db.RejectedOpenRecoveryResult
 import cloud.dcompany.erp.core.db.RejectedOpenRecoveryStatus
 import cloud.dcompany.erp.core.db.ResolvedOpenShift
 import cloud.dcompany.erp.core.db.ShiftCloseCaptureResult
+import cloud.dcompany.erp.core.db.ShiftCloseBlockerCounts
 import cloud.dcompany.erp.core.db.ShiftCloseCaptureStatus
 import cloud.dcompany.erp.core.db.ShiftHistoryMergePolicy
 import cloud.dcompany.erp.core.db.ShiftHistoryRow
@@ -24,6 +26,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
@@ -73,6 +77,8 @@ data class ShiftUiState(
     val currentUserId: String? = null,
     val canClose: Boolean = false,
     val closeOriginMessage: String? = null,
+    /** Current workspace cache only; null is unchecked, and zero is not server approval. */
+    val closeBlockers: ShiftCloseBlockerCounts? = null,
     /**
      * A refused open/close attempt, not yet dismissed. Previously invisible:
      * a rejected row was excluded from both `open` and `history`, so the
@@ -178,16 +184,30 @@ class ShiftViewModel : ViewModel() {
     private data class ResolvedShiftState(
         val terminalId: String?,
         val open: ResolvedOpenShift?,
+        val closeBlockers: ShiftCloseBlockerCounts? = null,
+        val reviewLease: CacheScopeLease? = null,
     )
-    private val resolvedShift = confirmedTerminalId.flatMapLatest { terminalId ->
-        if (terminalId == null) {
-            flowOf(ResolvedShiftState(null, null))
-        } else {
-            db.shiftDao().observeShiftForManagement(terminalId).map { current ->
-                ResolvedShiftState(terminalId, current)
+    private val resolvedShift = combine(confirmedTerminalId, app.shiftCache.profile, ::Pair)
+        .flatMapLatest { (terminalId, _) ->
+            if (terminalId == null) {
+                flowOf(ResolvedShiftState(null, null))
+            } else {
+                db.shiftDao().observeShiftForManagement(terminalId).flatMapLatest { current ->
+                    if (current == null) flowOf(ResolvedShiftState(terminalId, null))
+                    else {
+                        val reviewLease = app.cacheIsolation.currentLease()
+                        db.shiftCloseSafetyDao().observeBlockersForExactShift(
+                            localShiftId = current.local?.localId ?: current.shiftId,
+                            serverShiftId = current.local?.serverShiftId ?: current.server?.serverShiftId,
+                            terminalId = terminalId,
+                        ).distinctUntilChanged().map { blockers ->
+                            ResolvedShiftState(terminalId, current, blockers, reviewLease)
+                        }.onStart { emit(ResolvedShiftState(terminalId, current)) }
+                            .catch { emit(ResolvedShiftState(terminalId, current)) }
+                    }
+                }
             }
         }
-    }
     private data class HistoryState(
         val rows: List<ShiftHistoryRow>,
         val latestLocalClosed: LocalShiftEntity?,
@@ -338,6 +358,13 @@ class ShiftViewModel : ViewModel() {
             // The opener remains attribution, not an extra ownership lock.
             canClose = currentOpen != null && interaction.access.canClose && closeOrigin?.allowed == true,
             closeOriginMessage = closeOrigin?.message,
+            closeBlockers = scopedCloseReviewCounts(
+                counts = scopedCurrent?.closeBlockers,
+                reviewLease = scopedCurrent?.reviewLease,
+                currentLease = app.cacheIsolation.currentLease(),
+                userId = profile?.userId, companyId = profile?.companyId,
+                branchId = profile?.branchId, terminalId = session.terminalId,
+            ),
             rejectedShift = latestRejected,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ShiftUiState())

@@ -438,23 +438,15 @@ internal fun ShiftDashboardOverview(
         confirmingOpen -> MaterialTheme.colorScheme.operationalWarning
         else -> MaterialTheme.colorScheme.operationalGood
     }
-    val workStatus = when {
-        state.rejectedShift != null -> "Saved open needs review"
-        localState == ShiftState.CLOSE_REJECTED -> "Close rejected"
-        localState == ShiftState.CLOSE_PENDING -> "Close waiting for server"
-        state.closeOriginMessage != null -> "Close from the opening app"
-        state.expectedMinor == null -> "Waiting for verified drawer total"
-        !canClose -> "Review only · close permission required"
-        !state.canClose -> "Close blocked · review requirements"
-        else -> "Ready to count cash and review"
-    }
+    val workStatus = shiftCloseReviewStatus(state, canClose)
+    val cachedCloseBlock = state.cachedCloseBlockMessage()
     val opener = shift.openedByName?.takeIf(String::isNotBlank)
         ?: shift.openedByEmail?.takeIf(String::isNotBlank)
         ?: "Opener not yet verified"
 
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
         Column(
-            Modifier.widthIn(max = 700.dp).fillMaxWidth(),
+            Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(Spacing.sm),
         ) {
             Row(
@@ -516,10 +508,74 @@ internal fun ShiftDashboardOverview(
                         Text(if (state.syncing) "Refreshing…" else "Refresh")
                     }
                 }
+                BoxWithConstraints(Modifier.fillMaxWidth()) {
+                    val narrow = maxWidth < 520.dp
+                    val cards: @Composable (Modifier, Modifier) -> Unit = { expectedModifier, readinessModifier ->
+                        ShiftOverviewMoneyCard(
+                            label = "Expected drawer cash",
+                            value = state.expectedMinor?.asRupees() ?: "Unavailable",
+                            icon = Icons.Filled.AccountBalanceWallet,
+                            tint = if (state.expectedMinor == null) MaterialTheme.colorScheme.operationalWarning else MaterialTheme.colorScheme.onSurface,
+                            modifier = expectedModifier,
+                        )
+                        ShiftOverviewMoneyCard(
+                            label = "Close review",
+                            value = workStatus,
+                            icon = Icons.Filled.LockClock,
+                            tint = if (localState == ShiftState.CLOSE_REJECTED || state.rejectedShift != null)
+                                MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.operationalInformation,
+                            modifier = readinessModifier,
+                        )
+                    }
+                    if (narrow) {
+                        Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                            cards(Modifier.fillMaxWidth(), Modifier.fillMaxWidth())
+                        }
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                            cards(Modifier.weight(0.9f), Modifier.weight(1.1f))
+                        }
+                    }
+                }
+                cachedCloseBlock?.let { message ->
+                    Text(message, color = MaterialTheme.colorScheme.operationalWarning,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.testTag("shift-cached-close-blockers"))
+                }
+                val reviewLabel = when {
+                    state.rejectedShift != null -> "Review saved open"
+                    localState == ShiftState.CLOSE_REJECTED -> "Review rejected close"
+                    localState == ShiftState.CLOSE_PENDING -> "Review saved close"
+                    state.closeOriginMessage != null -> "Review closing device"
+                    !canClose -> "Review shift"
+                    !state.canClose -> "Review close requirements"
+                    else -> "Review & close shift"
+                }
+                Button(
+                    onClick = onReview,
+                    shape = Radius.shapeMd,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color.Transparent,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)
+                        .clip(Radius.shapeMd)
+                        .background(
+                            MaterialTheme.colorScheme.primary,
+                        )
+                        .border(1.dp, MaterialTheme.colorScheme.onPrimaryContainer, Radius.shapeMd),
+                ) {
+                    Box(Modifier.fillMaxWidth().padding(horizontal = Spacing.lg)) {
+                        Text(reviewLabel, modifier = Modifier.align(Alignment.Center),
+                            fontWeight = FontWeight.Bold)
+                        Icon(Icons.Filled.ChevronRight, contentDescription = null,
+                            modifier = Modifier.align(Alignment.CenterEnd))
+                    }
+                }
                 if (accounting == null) {
                     Text(
-                        "Collection breakdown is unavailable until this shift is confirmed by the server. " +
-                            "No cash or payment total is assumed.",
+                        "Reconnect to verify collections. No payment total is assumed.",
                         color = MaterialTheme.colorScheme.operationalWarning,
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -656,66 +712,7 @@ internal fun ShiftDashboardOverview(
                         }
                     }
                 }
-                BoxWithConstraints(Modifier.fillMaxWidth()) {
-                    val narrow = maxWidth < 520.dp
-                    val cards: @Composable (Modifier, Modifier) -> Unit = { expectedModifier, readinessModifier ->
-                        ShiftOverviewMoneyCard(
-                            label = "Expected cash in drawer",
-                            value = state.expectedMinor?.asRupees() ?: "Unavailable",
-                            icon = Icons.Filled.AccountBalanceWallet,
-                            tint = if (state.expectedMinor == null) MaterialTheme.colorScheme.operationalWarning else MaterialTheme.colorScheme.operationalGood,
-                            modifier = expectedModifier,
-                        )
-                        ShiftOverviewMoneyCard(
-                            label = "Close readiness",
-                            value = workStatus,
-                            icon = Icons.Filled.LockClock,
-                            tint = if (localState == ShiftState.CLOSE_REJECTED || state.rejectedShift != null)
-                                MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.operationalInformation,
-                            modifier = readinessModifier,
-                        )
-                    }
-                    if (narrow) {
-                        Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                            cards(Modifier.fillMaxWidth(), Modifier.fillMaxWidth())
-                        }
-                    } else {
-                        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                            cards(Modifier.weight(0.9f), Modifier.weight(1.1f))
-                        }
-                    }
-                }
-                val reviewLabel = when {
-                    state.rejectedShift != null -> "Review saved open"
-                    localState == ShiftState.CLOSE_REJECTED -> "Review rejected close"
-                    localState == ShiftState.CLOSE_PENDING -> "Review saved close"
-                    state.closeOriginMessage != null -> "Review closing device"
-                    !canClose -> "Review shift"
-                    !state.canClose -> "Review close requirements"
-                    else -> "Review & close shift"
-                }
-                Button(
-                    onClick = onReview,
-                    shape = Radius.shapeMd,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color.Transparent,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                    ),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)
-                        .clip(Radius.shapeMd)
-                        .background(
-                            MaterialTheme.colorScheme.primary,
-                        )
-                        .border(1.dp, MaterialTheme.colorScheme.onPrimaryContainer, Radius.shapeMd),
-                ) {
-                    Box(Modifier.fillMaxWidth().padding(horizontal = Spacing.lg)) {
-                        Text(reviewLabel, modifier = Modifier.align(Alignment.Center),
-                            fontWeight = FontWeight.Bold)
-                        Icon(Icons.Filled.ChevronRight, contentDescription = null,
-                            modifier = Modifier.align(Alignment.CenterEnd))
-                    }
-                }
+
             }
         }
     }
@@ -1117,6 +1114,7 @@ internal fun CloseShiftCard(
     val closing = shift.local?.state == ShiftState.CLOSE_PENDING
     val closeRejected = shift.local?.state == ShiftState.CLOSE_REJECTED
     val closeBlocked = closing || closeRejected
+    val cachedCloseBlock = state.cachedCloseBlockMessage()
     val shiftIdentity = shiftCloseUiIdentity(shift)
     // Staff count notes, not totals. Typing a single number invites both
     // arithmetic slips and a "close enough" fudge; counting by denomination
@@ -1174,7 +1172,7 @@ internal fun CloseShiftCard(
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("Close current shift", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
-                Text("Count the drawer, review the variance, then confirm.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                Text("Count cash. The server checks unpaid orders and active sessions when closing.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
             }
             OperationalStatusBadge(
                 label = when {
@@ -1213,7 +1211,7 @@ internal fun CloseShiftCard(
             valueColor = if (state.expectedMinor == null) MaterialTheme.colorScheme.operationalWarning else MaterialTheme.colorScheme.onSurface,
         )
         Text(
-            "Daily collections are summarized once in the overview. Count only the physical drawer cash here.",
+            "Count physical drawer cash only; collections are shown above.",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelSmall,
         )
@@ -1297,7 +1295,7 @@ internal fun CloseShiftCard(
                     }
                     Button(
                         onClick = callbacks.onRetryClose,
-                        enabled = canClosePermission && !state.busy && state.canClose &&
+                        enabled = canClosePermission && !state.busy && state.canClose && cachedCloseBlock == null &&
                             closePresentation.canRetrySavedClose,
                     ) {
                         Text("Retry saved close")
@@ -1333,7 +1331,7 @@ internal fun CloseShiftCard(
             if (!closePresentation.usesSavedCount) {
                 Text("Count the drawer", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
                 Text(
-                    "Count each note and coin in a focused view. Your total and difference stay visible here.",
+                    "Enter the notes and coins physically in the drawer.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
                 )
@@ -1354,7 +1352,11 @@ internal fun CloseShiftCard(
                 Text("Counted", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
                     displayedCountedMinor?.asRupees() ?: if (closePresentation.usesSavedCount) "Saved count unavailable" else "Not counted yet",
-                    color = if (displayedCountedMinor == null) MaterialTheme.colorScheme.operationalDanger else MaterialTheme.colorScheme.onSurface,
+                    color = when {
+                        displayedCountedMinor != null -> MaterialTheme.colorScheme.onSurface
+                        closePresentation.usesSavedCount -> MaterialTheme.colorScheme.operationalDanger
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                     fontWeight = FontWeight.Bold,
                 )
             }
@@ -1371,6 +1373,26 @@ internal fun CloseShiftCard(
                         fontWeight = FontWeight.Bold,
                     )
                 }
+            }
+
+            val nextAction = when {
+                closing -> "Reconnect and wait for the saved close to be confirmed."
+                closeRejected -> "Resolve the rejected close above before trying again."
+                !canClosePermission -> "Ask a staff member with shift-close permission."
+                state.closeOriginMessage != null -> state.closeOriginMessage
+                !state.canClose -> "Refresh to verify this shift's closing access."
+                state.busy -> "Wait for the current shift action to finish."
+                cachedCloseBlock != null -> cachedCloseBlock
+                displayedCountedMinor == null -> "Next: count the drawer, including an empty drawer, before closing."
+                else -> null
+            }
+            nextAction?.let { message ->
+                Text(
+                    message,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.testTag("shift-close-next-action"),
+                )
             }
 
             Row(
@@ -1394,7 +1416,8 @@ internal fun CloseShiftCard(
                             confirmation = ShiftCloseConfirmation(shiftIdentity, counted)
                         }
                     },
-                    enabled = canClosePermission && !closeBlocked && !state.busy && state.canClose && closePresentation.displayedCountedMinor != null,
+                    enabled = canClosePermission && !closeBlocked && !state.busy && state.canClose &&
+                        cachedCloseBlock == null && closePresentation.displayedCountedMinor != null,
                     busy = closing,
                     intent = ActionIntent.Destructive,
                 )
@@ -1431,14 +1454,20 @@ internal fun CloseShiftCard(
             text = {
                 Text(
                     "Counted ${activeConfirmation.countedMinor.asRupees()}. Closing a shift is not reversible " +
-                        "from this app — recount before confirming.",
+                        "from this app — recount before confirming." +
+                        (cachedCloseBlock?.let { "\n\n$it" } ?: ""),
                 )
             },
             confirmButton = {
                 ErpButton(
                     text = "Close shift",
                     intent = ActionIntent.Destructive,
+                    enabled = cachedCloseBlock == null,
                     onClick = {
+                        if (cachedCloseBlock != null) {
+                            confirmationGuardMessage = cachedCloseBlock
+                            return@ErpButton
+                        }
                         confirmation = null
                         val currentIdentity = callbacks.currentShiftIdentity()
                         if (activeConfirmation.isFor(currentIdentity)) {

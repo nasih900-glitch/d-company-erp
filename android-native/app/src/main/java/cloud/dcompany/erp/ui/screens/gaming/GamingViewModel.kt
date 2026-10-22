@@ -57,6 +57,8 @@ import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.core.net.outboxProvenanceHeaders
 import cloud.dcompany.erp.core.sync.ResourceRefreshResult
+import cloud.dcompany.erp.core.sync.gamingActionRequestHash
+import kotlinx.serialization.encodeToString
 import cloud.dcompany.erp.ui.screens.CartModifierSelection
 import cloud.dcompany.erp.ui.screens.configuredUnitPriceMinor
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
@@ -144,7 +146,7 @@ data class GamingUiState(
     val needsCancellation: List<GameSession>
         get() = sessions.filter {
             gamingCleanupWorkflowMessageOrNull(it.lastError) == null &&
-                it.canCancelUnbilled() && it.amountMinor == 0L && !hasActiveAddons(it)
+                it.status == "ended" && it.canCancelUnbilled() && it.amountMinor == 0L && !hasActiveAddons(it)
         }
 
     /** Start/Stop refusals remain station work; Send refusals already belong to the POS queue. */
@@ -186,6 +188,25 @@ data class GamingUiState(
 
     fun participantsFor(session: GameSession): List<GamingParticipantUi> =
         mergeGamingParticipants(session, participantCache, sessionActions, customers)
+
+    fun cancellationBlockFor(session: GameSession, canReconcileLegacy: Boolean): String? = when {
+        !online -> "Connect to the internet to cancel with an audit reason. The session is kept here."
+        !session.canCancelUnbilled() -> "Refresh Gaming before cancelling. A saved Start, Stop or POS action must finish first."
+        session.authority(activeShiftId) != GamingSessionAuthority.CURRENT_SHIFT &&
+            !(canReconcileLegacy && session.status == "ended") ->
+            "Use the open shift and terminal that started this session."
+        (session.participantRevision > 0 || participantCache.any { it.gamingSessionId == session.id }) &&
+            session.status != "ended" -> participantCancellationGuidance(session.status)
+        participantCache.any { it.gamingSessionId == session.id } && session.participantRevision <= 0 ->
+            "Refresh Gaming to verify the stopped player settlement before Void."
+        packageExtensionFor(session.id) != null ->
+            "Resolve the saved paid extension before cancelling this session."
+        unresolvedSequencedActionsFor(session).isNotEmpty() ->
+            "Saved session actions must finish syncing or be reviewed before cancellation."
+        unresolvedAddonsFor(session).isNotEmpty() ->
+            "Resolve saved drink or snack actions before cancellation."
+        else -> sessionCancellationAddonBlockMessage(addonsFor(session))
+    }
 
     fun unresolvedSequencedActionsFor(session: GameSession): List<LocalGamingSessionActionEntity> {
         val localId = sessions.firstOrNull { it.id == session.id }?.id
@@ -924,8 +945,17 @@ internal fun GameSession.canSendToPos(hasActiveAddons: Boolean = false): Boolean
         localState !in setOf(GamingSessionState.SEND_PENDING, GamingSessionState.SENT)
 
 internal fun GameSession.canCancelUnbilled(): Boolean =
-    isUnbilledEnded() && amountMinor != null &&
-        localState !in setOf(GamingSessionState.SEND_PENDING, GamingSessionState.SENT)
+    orderId == null && status in setOf("active", "paused", "ended") &&
+        (status != "ended" || amountMinor != null) &&
+        localState in setOf(null, GamingSessionState.START_SYNCED,
+            GamingSessionState.ENDED_UNBILLED, GamingSessionState.SEND_REJECTED)
+
+internal fun GameSession.matchesCancellationIdentity(expectedServerId: String, original: GameSession): Boolean =
+    id == expectedServerId && stationId == original.stationId && shiftId == original.shiftId
+
+internal fun GameSession.isConfirmedCancellation(expectedServerId: String, original: GameSession): Boolean =
+    matchesCancellationIdentity(expectedServerId, original) && status == "cancelled" && orderId == null &&
+        amountMinor == 0L && billableMinutes == 0 && !cancelReason.isNullOrBlank()
 
 /**
  * Backend cancellation deliberately refuses a session while any add-on still
@@ -1061,6 +1091,18 @@ internal fun GameSession.resolvedStopShiftId(
     GamingSessionAuthority.NO_OPEN_SHIFT,
     -> null
 }
+
+internal fun participantCancellationGuidance(status: String): String =
+    if (status == "ended") "Void this stopped session here with a reason. No POS bill is required."
+    else "Player joins are recorded. Stop this session, then Void it here. No POS bill is required."
+
+internal fun participantVoidBody(session: GameSession, reason: String): SessionCancelBody? =
+    if (session.status == "ended" && session.participantRevision > 0 && session.amountMinor != null) {
+        SessionCancelBody(reason.trim(), session.participantRevision, session.billingRevision, session.amountMinor)
+    } else null
+
+internal fun participantVoidKey(serverSessionId: String): String = "gaming-session-void:$serverSessionId"
+
 
 /**
  * The legacy repair is best-effort startup hygiene; it must never prevent the
@@ -3962,6 +4004,11 @@ class GamingViewModel : ViewModel() {
     fun cancelUnbilled(session: GameSession, reason: String) {
         if (!requireWrite()) return
         if (!session.canCancelUnbilled() || !requireIdle()) return
+        state.value.cancellationBlockFor(session, access.canReconcileLegacySessions)?.let {
+            error.value = it
+            return
+        }
+        if (!requireNoSequencedSessionActions(session, "cancelling the session")) return
         if (!requireNoPackageExtension(session, "voiding the session")) return
         if (!requireNoSessionAddonActions(session, "voiding the whole session")) return
         if (!requireNoActiveSessionAddons(session)) return
@@ -3988,7 +4035,7 @@ class GamingViewModel : ViewModel() {
         }
         val workspaceMessage = gamingWorkspaceUnavailableMessage(
             action = "the session cancellation could start",
-            preservedState = "No cancellation request was sent and the session remains blocked in Gaming.",
+            preservedState = "No cancellation request was sent. The session and its saved work are unchanged.",
         )
         val postRequestWorkspaceMessage = gamingServerResultWorkspaceUnavailableMessage(
             action = "cancelling this session",
@@ -4003,23 +4050,93 @@ class GamingViewModel : ViewModel() {
             try {
                 val dao = db.gamingDao()
                 var serverId: String? = null
+                var dispatchBlock: String? = null
+                suspend fun verifyRetainedWork() {
+                    val local = dao.localSessionByEitherId(session.id)
+                    serverId = local?.serverId ?: session.id.takeIf { local == null }
+                    val id = serverId
+                    val latest = id?.let { dao.sessionCacheById(it)?.toGameSession() }
+                    dispatchBlock = when {
+                        id == null || latest == null ->
+                            "The server has not confirmed this session. Refresh Gaming before cancelling."
+                        latest.stationId != session.stationId || latest.shiftId != session.shiftId ||
+                            !latest.canCancelUnbilled() || (local != null && !local.toGameSession().canCancelUnbilled()) ->
+                            "The session changed while its cancellation was open. Refresh Gaming; saved work is unchanged."
+                        dao.unresolvedSessionActionCount(id) > 0 ||
+                            (local != null && dao.unresolvedSessionActionCount(local.localId) > 0) ->
+                            "Resolve the retained session actions before cancelling. Nothing has been discarded."
+                        dao.unresolvedPackageExtensionCount(id) > 0 ->
+                            "Resolve the retained paid extension before cancelling."
+                        dao.unresolvedSessionAddonActionCount(local?.localId, id) > 0 ->
+                            "Resolve the retained drink or snack action before cancelling."
+                        (latest.participantRevision > 0 || dao.participantEvidenceCount(id) > 0) && latest.status != "ended" ->
+                            participantCancellationGuidance(latest.status)
+                        dao.participantEvidenceCount(id) > 0 && latest.participantRevision <= 0 ->
+                            "Refresh Gaming to verify the stopped player settlement before Void."
+                        dao.activeSessionAddonCount(id) > 0 ->
+                            "Void each active drink or snack with a reason before cancelling."
+                        else -> state.value.cancellationBlockFor(latest, access.canReconcileLegacySessions)
+                    }
+                }
                 if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
                         lease = scopeLease,
                         onStale = { error.value = workspaceMessage },
-                    ) {
-                        val local = dao.localSessionByEitherId(session.id)
-                        serverId = local?.serverId ?: session.id.takeIf { local == null }
-                    }
+                    ) { db.withTransaction { verifyRetainedWork() } }
                 ) return@launch
-                if (serverId == null) {
-                    error.value =
-                        "This session has not been confirmed by the server yet. Refresh Gaming before cancelling it."
+                dispatchBlock?.let { error.value = it; return@launch }
+                // Refresh server state before dispatch; the endpoint still enforces
+                // tenant, opener, shift and consumption guards under row locks.
+                val expectedServerId = requireNotNull(serverId)
+                val current = gamingApi.session(expectedServerId)
+                if (!current.matchesCancellationIdentity(expectedServerId, session)) {
+                    error.value = "The server session identity changed. Refresh Gaming; saved work is unchanged."
                     return@launch
                 }
-                val cancelled = gamingApi.cancel(
-                    id = requireNotNull(serverId),
-                    body = SessionCancelBody(normalizedReason),
-                )
+                if (current.status == "cancelled") {
+                    if (!current.isConfirmedCancellation(expectedServerId, session)) {
+                        error.value = "The cancellation receipt is inconsistent. Refresh Gaming before retrying."
+                        return@launch
+                    }
+                    if (appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                            lease = scopeLease, onStale = { error.value = postRequestWorkspaceMessage },
+                        ) {
+                            dao.upsertAuthoritativeSession(current.toCacheEntity())
+                            GamingAlarmReconciler.reconcile(appCtx)
+                        }
+                    ) notice.value = "Already voided. Recorded reason: ${current.cancelReason}"
+                    return@launch
+                }
+                if (!current.canCancelUnbilled() ||
+                    (current.participantRevision > 0 && (current.status != "ended" || session.status != "ended" ||
+                        current.participantRevision != session.participantRevision || current.billingRevision != session.billingRevision ||
+                        current.amountMinor != session.amountMinor))) {
+                    error.value = "This session changed. Refresh Gaming before cancelling; its saved work is unchanged."
+                    return@launch
+                }
+                if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
+                        lease = scopeLease, onStale = { error.value = workspaceMessage },
+                    ) { db.withTransaction { verifyRetainedWork() } }
+                ) return@launch
+                dispatchBlock?.let { error.value = it; return@launch }
+                if (serverId != expectedServerId) {
+                    error.value = "The session identity changed. Refresh Gaming before retrying."
+                    return@launch
+                }
+                if (!requireWrite() || !appCtx.connectivity.online.value) return@launch
+                val participantBody = participantVoidBody(session, normalizedReason)
+                val body = participantBody ?: SessionCancelBody(normalizedReason)
+                val key = participantBody?.let { participantVoidKey(expectedServerId) }
+                val expectedHash = key?.let {
+                    gamingActionRequestHash("POST", "/api/v1/gaming/sessions/$expectedServerId/cancel", it,
+                        ApiClient.json.encodeToString(body).toByteArray(Charsets.UTF_8))
+                }
+                val cancelled = gamingApi.cancel(id = expectedServerId, body = body, key = key)
+                if (!cancelled.isConfirmedCancellation(expectedServerId, session) ||
+                    (key != null && (cancelled.cancellationReceiptId.isNullOrBlank() ||
+                        cancelled.cancellationIdempotencyKey != key || cancelled.cancellationRequestHash != expectedHash))) {
+                    error.value = "Cancellation was not confirmed for this session. Refresh Gaming before retrying."
+                    return@launch
+                }
                 if (appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
                         lease = scopeLease,
                         onStale = { error.value = postRequestWorkspaceMessage },
@@ -4028,18 +4145,20 @@ class GamingViewModel : ViewModel() {
                         GamingAlarmReconciler.reconcile(appCtx)
                     }
                 ) {
-                    notice.value = "Session voided with its reason preserved in the audit trail."
+                    notice.value = "Session cancelled with its reason preserved in the audit trail."
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: ApiException) {
                 error.value = if (e.isAmbiguous) {
-                    "The server response was lost, so cancellation is not confirmed. This session remains blocked " +
-                        "from POS and new play. Reconnect and try Cancel again; do not create a replacement session."
+                    "The server response was lost, so cancellation is not confirmed. Refresh Gaming, then retry Cancel " +
+                        "if this session is still shown. Do not create a replacement session."
                 } else {
                     "Cancellation was refused: ${e.message ?: "check the shift, branch, terminal, and session state."}"
                 }
             } catch (_: Exception) {
                 error.value =
-                    "Cancellation could not be recorded. The session remains blocked; refresh and try again."
+                    "Cancellation was not confirmed. The session and saved work are kept here; refresh before retrying."
             } finally {
                 busyStationId.value = null
             }

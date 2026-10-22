@@ -1,5 +1,10 @@
 package cloud.dcompany.erp.ui
 
+import cloud.dcompany.erp.core.net.ClientUpdateNotice
+import cloud.dcompany.erp.core.update.AppUpdateUiState
+import cloud.dcompany.erp.core.update.DirectUpdateMetadataResult
+import cloud.dcompany.erp.core.update.validateDirectUpdateMetadata
+import cloud.dcompany.erp.optionalUpdateMayDismiss
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -47,6 +52,30 @@ class OptionalUpdateInteractionContractTest {
             "The optional offer must remain available after every auth-state screen is rendered",
             authStateRendering < optionalOffer,
         )
+    }
+
+    @Test
+    fun `Later stays available except while the exact offered download is active`() {
+        val notice = ClientUpdateNotice(
+            message = "Update available", updateUrl = "https://updates.example.test/build-11.apk",
+            currentVersionCode = 10, minimumSupportedVersionCode = 10,
+            latestVersionCode = 11, latestVersionName = "3.1.0",
+            apkSha256 = "ab".repeat(32), apkSizeBytes = 42L * 1024 * 1024,
+            apkSigningCertSha256 = "12".repeat(32),
+        )
+        val descriptor = (validateDirectUpdateMetadata(notice, installedVersionCode = 10)
+            as DirectUpdateMetadataResult.Valid).descriptor
+        val downloading = AppUpdateUiState.Downloading(descriptor, 100, descriptor.sizeBytes)
+        val verifying = AppUpdateUiState.Verifying(descriptor)
+        assertFalse(optionalUpdateMayDismiss(notice, downloading, 10))
+        assertFalse(optionalUpdateMayDismiss(notice, verifying, 10))
+        listOf(AppUpdateUiState.Idle,
+            AppUpdateUiState.Paused(descriptor, 100, descriptor.sizeBytes),
+            AppUpdateUiState.Ready(descriptor, "/private/update.apk"),
+            AppUpdateUiState.Failed(11, "Connection interrupted", descriptor, canResume = true),
+        ).forEach { state -> assertTrue(optionalUpdateMayDismiss(notice, state, 10)) }
+        assertTrue(optionalUpdateMayDismiss(notice.copy(apkSha256 = "cd".repeat(32)), downloading, 10))
+        assertTrue(optionalUpdateMayDismiss(notice.copy(apkSha256 = null), verifying, 10))
     }
 
     private fun read(relativePath: String): String =

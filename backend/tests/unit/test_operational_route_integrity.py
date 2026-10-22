@@ -12,6 +12,8 @@ from inspect import signature
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
+from starlette.requests import Request
+
 import pytest
 from fastapi import BackgroundTasks
 from pydantic import ValidationError as PydanticValidationError
@@ -2412,6 +2414,7 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
         gaming_session.id,
         gaming_router.SessionCancel(reason="  Customer left before billing  "),
         first_session,
+        Request({"type": "http", "headers": []}),
         tenant,
     )
 
@@ -2436,6 +2439,7 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
         gaming_session.id,
         gaming_router.SessionCancel(reason="Different retry body"),
         retry_session,
+        Request({"type": "http", "headers": []}),
         tenant,
     )
     assert retry.cancel_reason == "Customer left before billing"
@@ -2458,6 +2462,7 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
                 _Result(scalar=0),
                 entities={(Station, station.id): station},
             ),
+            Request({"type": "http", "headers": []}),
             wrong_terminal,
         )
 
@@ -2480,6 +2485,7 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
                 _Result(scalar=0),
                 entities={(Station, station.id): station},
             ),
+            Request({"type": "http", "headers": []}),
             other_staff,
         )
 
@@ -2501,6 +2507,7 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
                 _Result(scalar=0),
                 entities={(Station, station.id): station},
             ),
+            Request({"type": "http", "headers": []}),
             protected_owner,
         )
 

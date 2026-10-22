@@ -31,10 +31,14 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -148,6 +152,141 @@ class GamingBoardUiTest {
     }
 
     @Test
+    fun reviewedDrinkNeverSilentlyAdoptsRefreshedCataloguePriceOrName() {
+        val original = gamingDrinkFixtureItems().first { it.id == "mango" }
+        val catalogue = mutableStateOf(listOf(original))
+        val added = mutableListOf<Pair<MenuItemEntity, Int>>()
+        compose.setContent {
+            DCompanyTheme {
+                Box(Modifier.width(700.dp).height(600.dp)) {
+                    GamingInlineDrinkEditor(
+                        session = GameSession(id = "review-session", stationId = "ps5-1",
+                            shiftId = "shift-1", status = "active", startAt = "2026-09-27T10:00:00Z"),
+                        items = catalogue.value, configurableItemIds = emptySet(), busy = false,
+                        onConfirm = { item, quantity -> added += item to quantity },
+                        onConfigure = {}, onClose = {}, pinActions = true,
+                    )
+                }
+            }
+        }
+        compose.onNodeWithText("Select").performClick()
+        compose.onNodeWithText("+").performClick()
+        compose.runOnIdle { assertTrue(added.isEmpty()) }
+        val replacement = original.copy(name = "Mango premium drink", basePriceMinor = 9_000)
+        compose.runOnIdle { catalogue.value = listOf(replacement) }
+        compose.onNodeWithText("Review Mango drink").assertIsDisplayed()
+        compose.onNodeWithText("Confirm add · ₹100.00").assertIsNotEnabled().performClick()
+        compose.onNodeWithTag("gaming-drinks-review-stale").assertIsDisplayed()
+        compose.runOnIdle { assertTrue(added.isEmpty()) }
+        compose.onNodeWithText("Choose another item").performClick()
+        compose.onNodeWithText("Mango premium drink").assertIsDisplayed()
+        compose.onNodeWithText("Select").performClick()
+        compose.onNodeWithText("Confirm add · ₹90.00").performClick()
+        compose.runOnIdle { assertEquals(listOf(replacement to 1), added) }
+        compose.onNodeWithText("Select").performClick()
+        compose.runOnIdle { catalogue.value = emptyList() }
+        compose.onNodeWithTag("gaming-drinks-inline-confirm").assertIsNotEnabled()
+        compose.onNodeWithTag("gaming-drinks-review-stale").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(1, added.size) }
+    }
+
+    @Test
+    fun drinkReviewSurvivesRealWorkspaceTabRoundTripAndRejectsCatalogueChangedWhileAway() {
+        val original = gamingDrinkFixtureItems().first { it.id == "mango" }
+        val catalogue = mutableStateOf(listOf(original))
+        val destination = mutableStateOf(Destination.Gaming)
+        val confirmed = mutableListOf<Pair<MenuItemEntity, Int>>()
+        compose.setContent {
+            DCompanyTheme {
+                Box(Modifier.width(1_024.dp).height(640.dp)) {
+                    WorkspaceScaffold(
+                        destinations = listOf(Destination.Gaming, Destination.Pos),
+                        currentDestination = destination.value,
+                        employeeName = "Test cashier", locationLabel = "Test shop",
+                        connectivityProblem = SyncAvailabilityProblem.NONE,
+                        outboxWorkStatus = OutboxWorkStatus(), syncing = false,
+                        canChangeTill = false, onOpenSupport = {}, onChangeTill = {}, onSignOut = {},
+                        onDestinationChanged = { destination.value = it },
+                    ) { current, _ ->
+                        if (current == Destination.Gaming) GamingInlineDrinkEditor(
+                            session = GameSession(id = "retained-drink-review", stationId = "ps5-1",
+                                shiftId = "shift-1", status = "active", startAt = "2026-09-27T10:00:00Z"),
+                            items = catalogue.value, configurableItemIds = emptySet(), busy = false,
+                            onConfirm = { item, quantity -> confirmed += item to quantity },
+                            onConfigure = {}, onClose = {}, modifier = Modifier.fillMaxSize(), pinActions = true,
+                        )
+                    }
+                }
+            }
+        }
+        compose.onNodeWithText("Select").performClick()
+        compose.onNodeWithText("+").performClick()
+        compose.onNodeWithContentDescription("POS. Take orders and payments").performClick()
+        compose.onNodeWithContentDescription("Gaming. Manage stations and sessions").performClick()
+        compose.onNodeWithText("Review Mango drink").assertIsDisplayed()
+        compose.onNodeWithText("Confirm add · ₹100.00").assertIsDisplayed()
+        compose.runOnIdle { assertTrue(confirmed.isEmpty()) }
+        compose.onNodeWithContentDescription("POS. Take orders and payments").performClick()
+        compose.runOnIdle { catalogue.value = listOf(original.copy(name = "Fresh mango drink", basePriceMinor = 9_000)) }
+        compose.onNodeWithContentDescription("Gaming. Manage stations and sessions").performClick()
+        compose.onNodeWithText("Review Mango drink").assertIsDisplayed()
+        compose.onNodeWithText("Confirm add · ₹100.00").assertIsNotEnabled().performClick()
+        compose.onNodeWithTag("gaming-drinks-review-stale").assertIsDisplayed()
+        compose.runOnIdle { assertTrue(confirmed.isEmpty()) }
+    }
+
+    @Test
+    fun drinkReviewNeverMovesToAReplacementSessionAtTheSameStationAfterTabReturn() {
+        val original = gamingDrinkFixtureItems().first { it.id == "mango" }
+        val destination = mutableStateOf(Destination.Gaming)
+        val session = mutableStateOf(GameSession(
+            id = "session-a", stationId = "ps5-1", shiftId = "shift-1",
+            status = "active", startAt = "2026-09-27T10:00:00Z",
+        ))
+        val confirmed = mutableListOf<Triple<String, MenuItemEntity, Int>>()
+        compose.setContent {
+            DCompanyTheme {
+                Box(Modifier.width(1_024.dp).height(640.dp)) {
+                    WorkspaceScaffold(
+                        destinations = listOf(Destination.Gaming, Destination.Pos),
+                        currentDestination = destination.value,
+                        employeeName = "Test cashier", locationLabel = "Test shop",
+                        connectivityProblem = SyncAvailabilityProblem.NONE,
+                        outboxWorkStatus = OutboxWorkStatus(), syncing = false,
+                        canChangeTill = false, onOpenSupport = {}, onChangeTill = {}, onSignOut = {},
+                        onDestinationChanged = { destination.value = it },
+                    ) { current, _ ->
+                        if (current == Destination.Gaming) {
+                            val reviewedSession = session.value
+                            GamingInlineDrinkEditor(
+                                session = reviewedSession, items = listOf(original),
+                                configurableItemIds = emptySet(), busy = false,
+                                onConfirm = { item, quantity ->
+                                    confirmed += Triple(reviewedSession.id, item, quantity)
+                                },
+                                onConfigure = {}, onClose = {},
+                                modifier = Modifier.fillMaxSize(), pinActions = true,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        compose.onNodeWithText("Select").performClick()
+        compose.onNodeWithText("+").performClick().performClick()
+        compose.onNodeWithText("Confirm add · ₹150.00").assertIsDisplayed()
+        compose.onNodeWithContentDescription("POS. Take orders and payments").performClick()
+        compose.runOnIdle { session.value = session.value.copy(id = "session-b") }
+        compose.onNodeWithContentDescription("Gaming. Manage stations and sessions").performClick()
+        compose.onNodeWithText("Review Mango drink").assertDoesNotExist()
+        compose.onNodeWithTag("gaming-drinks-inline-confirm").assertDoesNotExist()
+        compose.runOnIdle { assertTrue(confirmed.isEmpty()) }
+        compose.onNodeWithText("Select").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Confirm add · ₹50.00").assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(listOf(Triple("session-b", original, 1)), confirmed) }
+    }
+
+    @Test
     fun compactUnpinnedDrinksReviewCanLiveInsideTheWorkspaceScrollOwner() {
         val added = mutableListOf<Pair<String, Int>>()
         val session = GameSession(
@@ -190,6 +329,160 @@ class GamingBoardUiTest {
         compose.onNodeWithTag("gaming-drinks-inline-confirm")
             .performScrollTo().assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(listOf("mango" to 3), added) }
+    }
+
+    @Test
+    fun playerRegistrationDraftNeverMovesToReplacementSessionAfterTabReturn() {
+        val destination = mutableStateOf(Destination.Gaming)
+        val session = mutableStateOf(GameSession(
+            id = "player-session-a", stationId = "ps5-1", shiftId = "shift-1",
+            status = "active", startAt = "2026-09-27T10:00:00Z",
+        ))
+        val joins = mutableListOf<List<String?>>()
+        compose.setContent {
+            DCompanyTheme {
+                Box(Modifier.width(1_024.dp).height(640.dp)) {
+                    WorkspaceScaffold(
+                        destinations = listOf(Destination.Gaming, Destination.Pos),
+                        currentDestination = destination.value,
+                        employeeName = "Test cashier", locationLabel = "Test shop",
+                        connectivityProblem = SyncAvailabilityProblem.NONE,
+                        outboxWorkStatus = OutboxWorkStatus(), syncing = false,
+                        canChangeTill = false, onOpenSupport = {}, onChangeTill = {}, onSignOut = {},
+                        onDestinationChanged = { destination.value = it },
+                    ) { current, _ ->
+                        if (current == Destination.Gaming) {
+                            val reviewedSession = session.value
+                            GamingInlineParticipantEditor(
+                                session = reviewedSession, participants = emptyList(), customers = emptyList(),
+                                wallClock = remember { mutableLongStateOf(1_779_989_200_000L) }, busy = false,
+                                onJoin = { customerId, guestName, phone, identity ->
+                                    joins += listOf(reviewedSession.id, customerId, guestName, phone, identity)
+                                },
+                                onLeave = {}, onClose = {}, modifier = Modifier.fillMaxSize(),
+                                pinConfirmAction = true,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        compose.onNodeWithText("Guest name (optional · no points)").performTextReplacement("Nora")
+        compose.onNodeWithText("Save new customer").performClick()
+        compose.onNodeWithText("Phone (required)").performTextReplacement("0501234567")
+        compose.onNodeWithContentDescription("POS. Take orders and payments").performClick()
+        compose.runOnIdle { session.value = session.value.copy(id = "player-session-b") }
+        compose.onNodeWithContentDescription("Gaming. Manage stations and sessions").performClick()
+        compose.onNodeWithText("Phone (required)").assertDoesNotExist()
+        compose.onNodeWithText("Guest name (optional · no points)").assertIsDisplayed()
+        compose.runOnIdle { assertTrue(joins.isEmpty()) }
+        compose.onNodeWithTag("gaming-player-inline-confirm").performClick()
+        compose.runOnIdle { assertEquals(listOf(listOf("player-session-b", null, null, null, null)), joins) }
+    }
+
+    private fun pendingOfflinePlayerSession() = GameSession(
+        id = "offline-pending-session", stationId = "ps5-1", shiftId = "shift-1",
+        status = "starting", startAt = "2026-09-27T10:00:00Z",
+        timerMinutes = 30, amountMinor = 8_000, billingMode = "package",
+        packageId = "single-30", packagePriceMinorSnapshot = 8_000,
+        packageDurationMinutesSnapshot = 30, packageVariantSnapshot = "single",
+        packageStationTypeSnapshot = "ps5", packagePricingTierSnapshot = "standard",
+        pauseVersion = 0, localState = GamingSessionState.START_PENDING,
+    )
+
+    @Test
+    fun pendingOfflineStartOpensInlineAnonymousJoinAndKeepsOrderedStopReachable() {
+        val station = Station("ps5-1", "PS5-1", "PS5 Station 1", "ps5", 12_000)
+        val pending = pendingOfflinePlayerSession()
+        val state = mutableStateOf(GamingUiState(
+            catalogueLoaded = true, stations = listOf(station), sessions = listOf(pending),
+            packages = listOf(GamingPackage(id = "single-30", code = "single-30", stationType = "ps5",
+                variant = "single", kind = "base", name = "Single 30", durationMinutes = 30, priceMinor = 8_000)),
+            everSynced = true, refreshing = false, online = false,
+            activeShiftId = "shift-1", activeShiftServerConfirmed = true,
+        ))
+        val calls = mutableListOf<String>()
+        val joins = mutableListOf<List<String?>>()
+        compose.setContent {
+            DCompanyTheme {
+                Box(Modifier.width(1_280.dp).height(744.dp)) {
+                    GamingCommandWorkspace(
+                        state = state.value, access = GamingAccess(canManageSessions = true),
+                        filters = listOf(StationFilter("all", "All")), selectedFilter = "all",
+                        visibleStations = listOf(station), selectedStationId = station.id,
+                        showDetail = false, focusStationId = null, focusRequested = false,
+                        startTerminalBlockMessage = null,
+                        wallClock = remember { mutableLongStateOf(1_790_503_500_000L) }, attentionCount = 0,
+                        onSelectFilter = {}, onSelectStation = {}, onBackToBoard = {},
+                        onOpenAttention = {}, onRefresh = {}, onStart = {},
+                        onConfirmStart = { _, _, _, _, _, _, _, _ -> },
+                        onStop = { _, stopped -> calls += "stop:${stopped.id}" },
+                        onSend = {}, onCancelUnbilled = {}, onExtendTimer = {},
+                        onExtendPackage = { _, _ -> }, onTransfer = {}, onPauseResume = {},
+                        onReconcile = {}, onRepairBilling = {}, onResolveLegacyStart = {},
+                        onDiscardPackageExtension = {}, onAddItems = {}, onVoidAddon = { _, _ -> },
+                        onReviewRejectedAddon = {}, onManageParticipants = {},
+                        onJoinParticipant = { joinedSession, customer, name, phone, identity ->
+                            calls += "join:${joinedSession.id}"
+                            joins += listOf(customer, name, phone, identity)
+                            state.value = state.value.copy(busyStationId = station.id)
+                        },
+                    )
+                }
+            }
+        }
+        compose.onNodeWithText("Players").assertIsDisplayed().assertIsEnabled().performClick()
+        compose.onNodeWithTag("gaming-player-pending-start-guidance").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Resume the session before adding a player.").assertDoesNotExist()
+        compose.onNodeWithTag("gaming-player-inline-confirm").assertIsDisplayed().assertIsEnabled().performClick()
+        compose.runOnIdle {
+            assertEquals(listOf(listOf<String?>(null, null, null, null)), joins)
+            assertEquals(listOf("join:${pending.id}"), calls)
+        }
+        compose.onNodeWithTag("gaming-player-inline-confirm").assertIsNotEnabled()
+        compose.runOnIdle { state.value = state.value.copy(busyStationId = null) }
+        compose.onNodeWithTag("gaming-primary-action-host").assertIsDisplayed().assertIsEnabled()
+        compose.onNodeWithText("Stop & calculate").assertIsDisplayed().assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals(listOf("join:${pending.id}", "stop:${pending.id}"), calls) }
+    }
+
+    @Test
+    fun pendingInlineJoinRetainsCapacityAndBlocksPausedRejectedOrUnverifiedStarts() {
+        val pending = pendingOfflinePlayerSession()
+        val session = mutableStateOf(pending)
+        val participants = mutableStateOf(emptyList<GamingParticipantUi>())
+        var joins = 0
+        compose.setContent {
+            DCompanyTheme {
+                Box(Modifier.width(720.dp).height(600.dp)) {
+                    GamingInlineParticipantEditor(
+                        session.value, participants.value, emptyList(),
+                        remember { mutableLongStateOf(1_790_503_500_000L) }, false,
+                        onJoin = { _, _, _, _ -> joins++ }, onLeave = {}, onClose = {},
+                        modifier = Modifier.fillMaxSize(), pinConfirmAction = true,
+                    )
+                }
+            }
+        }
+        compose.onNodeWithTag("gaming-player-inline-confirm").assertIsEnabled()
+        compose.runOnIdle {
+            participants.value = (1..3).map { index -> GamingParticipantUi(
+                reference = "friend-$index", customerId = null, name = null, phone = null,
+                active = true, pending = true,
+            ) }
+        }
+        compose.onNodeWithTag("gaming-player-inline-confirm").assertDoesNotExist()
+        compose.onNodeWithText("All four player places are assigned. A player must leave before another can join.")
+            .performScrollTo().assertIsDisplayed()
+        compose.runOnIdle { participants.value = emptyList(); session.value = pending.copy(status = "paused") }
+        compose.onNodeWithTag("gaming-player-inline-confirm").assertDoesNotExist()
+        compose.onNodeWithText("Resume the session before adding a player.").assertIsDisplayed()
+        compose.runOnIdle { session.value = pending.copy(status = "start_failed", localState = GamingSessionState.START_REJECTED) }
+        compose.onNodeWithTag("gaming-player-inline-confirm").assertDoesNotExist()
+        compose.onNodeWithText("Resolve this session's saved Start or Stop before adding a player.").assertIsDisplayed()
+        compose.runOnIdle { session.value = pending.copy(packagePricingTierSnapshot = null) }
+        compose.onNodeWithTag("gaming-player-inline-confirm").assertDoesNotExist()
+        compose.runOnIdle { assertEquals(0, joins) }
     }
 
     @Test
@@ -267,7 +560,7 @@ class GamingBoardUiTest {
     @OptIn(ExperimentalTestApi::class)
     @Test
     fun hoveringDurationPriceKeepsBookingUnchangedAndMarkerStillSelects() {
-        val selected = mutableStateOf("single-30")
+        val selected = mutableStateOf("single-60")
         compose.setContent {
             DCompanyTheme(preference = AppearancePreference.Night) {
                 Surface(color = MaterialTheme.colorScheme.background) {
@@ -291,7 +584,7 @@ class GamingBoardUiTest {
         capture("gaming-duration-price-before-hover.png", "dial-hover-fixture")
         sixtyMinutePrice.performMouseInput { enter() }
         capture("gaming-duration-price-hover.png", "dial-hover-fixture")
-        compose.runOnIdle { assertEquals("single-30", selected.value) }
+        compose.runOnIdle { assertEquals("single-60", selected.value) }
         val marker = sixtyMinutePrice.fetchSemanticsNode().boundsInRoot
         val fixture = compose.onNodeWithTag("dial-hover-fixture").fetchSemanticsNode().boundsInRoot
         val hovered = compose.onNodeWithTag("dial-hover-fixture").captureToImage().asAndroidBitmap()
@@ -333,7 +626,7 @@ class GamingBoardUiTest {
                                 GamingDurationChoice("single-30", 30, 8_000),
                                 GamingDurationChoice("single-60", 60, 12_000),
                             ),
-                            selectedPackageId = "single-30",
+                            selectedPackageId = "single-60",
                             onSelect = {},
                             dialSize = 280.dp,
                             showChoiceChips = false,
@@ -343,7 +636,7 @@ class GamingBoardUiTest {
             }
         }
 
-        val expected = "60 min\n₹120.00"
+        val expected = "60"
         val endpoint = compose.onNodeWithText(expected, useUnmergedTree = true)
             .assertIsDisplayed()
         val ring = compose.onNodeWithTag("gaming-control-ring")
@@ -363,14 +656,14 @@ class GamingBoardUiTest {
         assertEquals(1, layouts.size)
         val layout = layouts.single()
         assertTrue(
-            "The enlarged endpoint must render two complete unclipped lines: " +
+            "The enlarged endpoint must render a complete unclipped clock label: " +
                 "size=${layout.size} lines=${layout.lineCount} " +
                 "visibleEnd=${layout.getLineEnd(layout.lineCount - 1, visibleEnd = true)}",
-            layout.lineCount == 2 &&
+            layout.lineCount == 1 &&
                 !layout.didOverflowHeight &&
-                !layout.isLineEllipsized(1) &&
-                layout.getLineEnd(1) == expected.length &&
-                layout.getLineEnd(1, visibleEnd = true) == expected.length,
+                !layout.isLineEllipsized(0) &&
+                layout.getLineEnd(0) == expected.length &&
+                layout.getLineEnd(0, visibleEnd = true) == expected.length,
         )
     }
 
@@ -454,59 +747,57 @@ class GamingBoardUiTest {
     fun durationHapticTicksOnlyForDifferentUserPublishedSelections() {
         val selected = mutableStateOf("single-30")
         val selections = mutableListOf<String>()
-        var tickCount = 0
+        var ticks = 0
         compose.setContent {
             DCompanyTheme {
                 GamingDurationDial(
                     choices = listOf(
                         GamingDurationChoice("single-30", 30, 8_000),
                         GamingDurationChoice("single-60", 60, 12_000),
-                        GamingDurationChoice("single-90", 90, 16_000),
                     ),
                     selectedPackageId = selected.value,
-                    onSelect = {
-                        selections += it
-                        selected.value = it
-                    },
-                    segmentTick = { tickCount++ },
+                    onSelect = { selected.value = it; selections += it },
+                    segmentTick = { ticks++ },
+                    showChoiceChips = false,
                 )
             }
         }
-
-        compose.runOnIdle { assertEquals(0, tickCount) }
-        compose.runOnIdle { selected.value = "single-60" }
-        compose.waitForIdle()
-        compose.onNodeWithText("90 min · ₹160.00").performMouseInput { enter() }
-        compose.onNodeWithText("60 min · ₹120.00").performClick()
-        compose.runOnIdle {
-            assertEquals(0, tickCount)
-            assertEquals(listOf("single-60"), selections)
-        }
-
         val dial = compose.onNodeWithContentDescription("Session duration dial")
-        dial.performTouchInput { click(ringPoint(width, height, 125f)) }
-        compose.onNodeWithText("30 min · ₹80.00").performClick()
-        dial.performSemanticsAction(SemanticsActions.SetProgress) { setProgress ->
-            assertTrue(setProgress(1f))
+        dial.performTouchInput {
+            down(ringPoint(width, height, 90f))
+            repeat(12) { step -> moveTo(ringPoint(width, height, 90f + (step + 1) * 15f), delayMillis = 16) }
+            up()
         }
-        dial.performSemanticsAction(SemanticsActions.SetProgress) { setProgress ->
-            assertTrue(setProgress(1f))
-        }
-
-        compose.runOnIdle {
-            assertEquals(3, tickCount)
-            assertEquals(
-                listOf("single-60", "single-90", "single-30", "single-60", "single-60"),
-                selections,
-            )
-        }
+        compose.onNodeWithContentDescription("Choose 60 minutes, ₹120.00").performClick()
+        dial.performSemanticsAction(SemanticsActions.SetProgress) { assertTrue(it(1f)) }
+        compose.runOnIdle { assertEquals(1, ticks) }
+        compose.onNodeWithContentDescription("Choose 30 minutes, ₹80.00").performClick()
+        compose.runOnIdle { assertEquals(2, ticks); assertEquals("single-30", selected.value) }
     }
 
     @Test
     fun durationHapticDoesNotTickWhenFirstStopNormalizesMissingSelection() {
-        val selected = mutableStateOf<String?>("single-60")
         val selections = mutableListOf<String>()
-        var tickCount = 0
+        var ticks = 0
+        compose.setContent {
+            DCompanyTheme {
+                GamingDurationDial(
+                    choices = listOf(GamingDurationChoice("single-30", 30, 8_000), GamingDurationChoice("single-60", 60, 12_000)),
+                    selectedPackageId = null, onSelect = selections::add,
+                    segmentTick = { ticks++ }, showChoiceChips = false,
+                )
+            }
+        }
+        val dial = compose.onNodeWithContentDescription("Session duration dial")
+        repeat(2) { dial.performTouchInput { click(ringPoint(width, height, 95f)) } }
+        compose.runOnIdle { assertEquals(0, ticks); assertEquals(listOf("single-30", "single-30"), selections) }
+    }
+
+    @Test
+    fun durationHapticFullCircleDragTracksBothDirectionsWithoutDuplicateStops() {
+        val selected = mutableStateOf("single-30")
+        val selections = mutableListOf<String>()
+        var ticks = 0
         compose.setContent {
             DCompanyTheme {
                 GamingDurationDial(
@@ -515,161 +806,90 @@ class GamingBoardUiTest {
                         GamingDurationChoice("single-60", 60, 12_000),
                     ),
                     selectedPackageId = selected.value,
-                    onSelect = {
-                        selections += it
-                        selected.value = it
-                    },
-                    segmentTick = { tickCount++ },
+                    onSelect = { selected.value = it; selections += it },
+                    segmentTick = { ticks++ },
+                    showChoiceChips = false,
                 )
             }
         }
-
-        compose.runOnIdle { selected.value = null }
-        compose.waitForIdle()
         val dial = compose.onNodeWithContentDescription("Session duration dial")
-        dial.performTouchInput { click(Offset(width * 0.17f, height * 0.31f)) }
-        dial.performTouchInput { click(Offset(width * 0.17f, height * 0.31f)) }
-
-        compose.runOnIdle {
-            assertEquals(0, tickCount)
-            assertEquals(listOf("single-30"), selections)
-        }
-    }
-
-    @Test
-    fun durationHapticFullCircleDragTracksBothDirectionsWithoutDuplicateStops() {
-        val selections = mutableListOf<String>()
-        var tickCount = 0
-        compose.setContent {
-            DCompanyTheme {
-                GamingDurationDial(
-                    choices = listOf(
-                        GamingDurationChoice("single-30", 30, 8_000),
-                        GamingDurationChoice("single-60", 60, 12_000),
-                        GamingDurationChoice("single-90", 90, 16_000),
-                    ),
-                    selectedPackageId = "single-30",
-                    onSelect = { selections += it },
-                    segmentTick = { tickCount++ },
-                )
-            }
-        }
-
-        val dial = compose.onNodeWithContentDescription("Session duration dial")
-        // Select the maximum without crossing the shared 135-degree endpoint.
-        dial.performTouchInput { click(ringPoint(width, height, 125f)) }
-        // Turn one full revolution counter-clockwise: max -> middle -> min.
         dial.performTouchInput {
-            down(ringPoint(width, height, 125f))
-            repeat(24) { step ->
-                moveTo(ringPoint(width, height, 125f - (step + 1) * 15f), delayMillis = 16)
-            }
+            down(ringPoint(width, height, 90f))
+            repeat(12) { step -> moveTo(ringPoint(width, height, 90f + (step + 1) * 15f), delayMillis = 16) }
             up()
         }
-        // Turn one full revolution clockwise: min -> middle -> max.
         dial.performTouchInput {
-            down(ringPoint(width, height, 135f))
-            repeat(24) { step ->
-                moveTo(ringPoint(width, height, 135f + (step + 1) * 15f), delayMillis = 16)
-            }
+            down(ringPoint(width, height, 270f))
+            repeat(12) { step -> moveTo(ringPoint(width, height, 270f - (step + 1) * 15f), delayMillis = 16) }
             up()
         }
-        dial.performTouchInput { click(ringPoint(width, height, 135f)) }
-
-        compose.runOnIdle {
-            assertEquals(6, tickCount)
-            assertEquals(
-                listOf(
-                    "single-90", "single-60", "single-30",
-                    "single-60", "single-90", "single-30",
-                ),
-                selections,
-            )
-        }
+        compose.runOnIdle { assertEquals(2, ticks); assertEquals(listOf("single-60", "single-30"), selections) }
     }
 
     @Test
     fun cancelledDurationDragSnapsToPublishedStopAndAcceptsNextGesture() {
         val selected = mutableStateOf("single-30")
-        var tickCount = 0
+        val selections = mutableListOf<String>()
+        var ticks = 0
         compose.setContent {
             DCompanyTheme {
                 GamingDurationDial(
                     choices = listOf(
                         GamingDurationChoice("single-30", 30, 8_000),
                         GamingDurationChoice("single-60", 60, 12_000),
-                        GamingDurationChoice("single-90", 90, 16_000),
                     ),
                     selectedPackageId = selected.value,
-                    onSelect = { selected.value = it },
-                    segmentTick = { tickCount++ },
+                    onSelect = { selected.value = it; selections += it },
+                    segmentTick = { ticks++ },
+                    showChoiceChips = false,
                 )
             }
         }
-
         val dial = compose.onNodeWithContentDescription("Session duration dial")
         dial.performTouchInput {
-            down(ringPoint(width, height, 125f))
-            moveTo(ringPoint(width, height, 100f))
+            down(ringPoint(width, height, 90f))
+            moveTo(ringPoint(width, height, 125f))
             cancel()
         }
-        compose.onNodeWithText("90 min").assertIsDisplayed()
-        compose.runOnIdle { selected.value = "single-30" }
-        compose.waitForIdle()
-        dial.performTouchInput { click(ringPoint(width, height, 315f)) }
-
-        compose.runOnIdle {
-            assertEquals("single-60", selected.value)
-            assertEquals(2, tickCount)
+        compose.runOnIdle { assertEquals("single-30", selected.value); assertEquals(0, ticks) }
+        dial.performTouchInput {
+            down(ringPoint(width, height, 90f))
+            repeat(12) { step -> moveTo(ringPoint(width, height, 90f + (step + 1) * 15f), delayMillis = 16) }
+            up()
         }
+        compose.runOnIdle { assertEquals("single-60", selected.value); assertEquals(1, ticks) }
     }
 
     @Test
     fun externalSelectionDuringHeldDragStopsOldGestureBeforeItCanRepublish() {
         val selected = mutableStateOf("single-30")
         val selections = mutableListOf<String>()
-        var tickCount = 0
+        var ticks = 0
         compose.setContent {
             DCompanyTheme {
                 GamingDurationDial(
                     choices = listOf(
                         GamingDurationChoice("single-30", 30, 8_000),
                         GamingDurationChoice("single-60", 60, 12_000),
-                        GamingDurationChoice("single-90", 90, 16_000),
                     ),
                     selectedPackageId = selected.value,
-                    onSelect = {
-                        selections += it
-                        selected.value = it
-                    },
-                    segmentTick = { tickCount++ },
+                    onSelect = { selected.value = it; selections += it },
+                    segmentTick = { ticks++ },
+                    showChoiceChips = false,
                 )
             }
         }
-
         val dial = compose.onNodeWithContentDescription("Session duration dial")
         dial.performTouchInput {
-            down(ringPoint(width, height, 125f))
-            moveTo(ringPoint(width, height, 100f))
+            down(ringPoint(width, height, 90f))
+            moveTo(ringPoint(width, height, 120f))
         }
-        compose.waitForIdle()
         compose.runOnIdle { selected.value = "single-60" }
         compose.waitForIdle()
-        dial.performTouchInput {
-            moveTo(ringPoint(width, height, 315f))
-            up()
-        }
-
-        compose.runOnIdle {
-            assertEquals("single-60", selected.value)
-            assertEquals(listOf("single-90"), selections)
-        }
-        dial.performTouchInput { click(ringPoint(width, height, 135f)) }
-        compose.runOnIdle {
-            assertEquals("single-30", selected.value)
-            assertEquals(listOf("single-90", "single-30"), selections)
-            assertEquals(2, tickCount)
-        }
+        dial.performTouchInput { moveTo(ringPoint(width, height, 90f)); up() }
+        compose.runOnIdle { assertEquals("single-60", selected.value); assertTrue(selections.isEmpty()) }
+        compose.onNodeWithContentDescription("Choose 30 minutes, ₹80.00").performClick()
+        compose.runOnIdle { assertEquals("single-30", selected.value); assertEquals(1, ticks) }
     }
 
     @Test
@@ -710,16 +930,89 @@ class GamingBoardUiTest {
         compose.waitForIdle()
         val ringDragScrollBaseline = parentScroll.value
         dial.performTouchInput {
-            swipe(
-                start = Offset(width * 0.90f, height * 0.50f),
-                end = Offset(width * 0.50f, height * 0.90f),
-                durationMillis = 300,
-            )
+            down(ringPoint(width, height, 90f))
+            repeat(12) { step -> moveTo(ringPoint(width, height, 90f + (step + 1) * 15f), delayMillis = 16) }
+            up()
         }
         compose.runOnIdle {
             assertEquals(listOf("single-60"), selections)
             assertEquals(ringDragScrollBaseline, parentScroll.value)
         }
+    }
+
+    @Test
+    fun clockShowsThirtyAtBottomRevealsHourAfterPassingAndIgnoresReleaseJitter() {
+        val selected = mutableStateOf("single-30")
+        val selections = mutableListOf<String>()
+        var ticks = 0
+        compose.setContent {
+            DCompanyTheme {
+                GamingDurationDial(
+                    choices = listOf(
+                        GamingDurationChoice("single-30", 30, 8_000),
+                        GamingDurationChoice("single-60", 60, 12_000),
+                    ),
+                    selectedPackageId = selected.value,
+                    onSelect = { selected.value = it; selections += it },
+                    segmentTick = { ticks++ },
+                    showChoiceChips = false,
+                )
+            }
+        }
+        val dial = compose.onNodeWithContentDescription("Session duration dial")
+        compose.onNodeWithContentDescription("Choose 60 minutes, ₹120.00").assertDoesNotExist()
+        val ring = compose.onNodeWithTag("gaming-control-ring").getUnclippedBoundsInRoot()
+        val thirty = compose.onNodeWithContentDescription("Choose 30 minutes, ₹80.00").getUnclippedBoundsInRoot()
+        assertTrue((thirty.top + thirty.bottom) / 2 > (ring.top + ring.bottom) / 2)
+        dial.performTouchInput {
+            down(ringPoint(width, height, 90f))
+            moveTo(ringPoint(width, height, 105f))
+        }
+        compose.onNodeWithContentDescription("Choose 60 minutes, ₹120.00").assertIsDisplayed()
+        compose.runOnIdle { assertEquals("single-30", selected.value) }
+        dial.performTouchInput {
+            repeat(11) { step -> moveTo(ringPoint(width, height, 120f + step * 15f), delayMillis = 16) }
+            moveTo(ringPoint(width, height, 269f))
+            up()
+        }
+        compose.runOnIdle { assertEquals("single-60", selected.value); assertEquals(1, ticks) }
+        compose.onNodeWithContentDescription("Choose 30 minutes, ₹80.00").performClick()
+        repeat(8) { dial.performTouchInput { click(ringPoint(width, height, 91f)) } }
+        compose.runOnIdle { assertEquals("single-30", selected.value); assertEquals(2, ticks) }
+    }
+
+    @Test
+    fun activeSessionCancelStaysInlineAndRequiresAnAuditReason() {
+        val selected = mutableStateOf<GameSession?>(null)
+        var confirmed: String? = null
+        val station = Station("ps5-1", "PS5-1", "PS5 Station 1", "ps5", 12_000)
+        val session = GameSession("active-cancel", "ps5-1", "shift-1", "active", "2026-10-21T10:00:00Z")
+        compose.setContent {
+            DCompanyTheme {
+                Box(Modifier.width(600.dp).height(700.dp)) {
+                    GamingStationCard(
+                        station = station, session = session, packageExtensionAction = null,
+                        wallClock = remember { mutableLongStateOf(1_792_576_800_000L) },
+                        actionInProgress = false, busyHere = false, focused = true,
+                        canWrite = true, canReconcileLegacy = false, activeShiftId = "shift-1",
+                        activeShiftServerConfirmed = true, online = true, packages = emptyList(),
+                        hasTransferTarget = false, onStart = {}, onStop = {}, onSend = {},
+                        onCancelUnbilled = { selected.value = it }, onExtendTimer = {},
+                        onExtendPackage = { _, _ -> }, onTransfer = {}, onReconcile = {},
+                        onRepairBilling = {}, onResolveLegacyStart = {}, onDiscardPackageExtension = {},
+                    )
+                }
+                if (selected.value != null) CancelUnbilledSessionDialog(
+                    stationName = station.name, amountMinor = 0, activeSession = true,
+                    onDismiss = { selected.value = null }, onConfirm = { confirmed = it; selected.value = null },
+                )
+            }
+        }
+        compose.onNodeWithTag("gaming-cancel-active-session").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Cancel session").assertIsNotEnabled()
+        compose.onNodeWithText("Entered by mistake").performClick()
+        compose.onNodeWithText("Cancel session").performClick()
+        compose.runOnIdle { assertEquals("Entered by mistake", confirmed) }
     }
 
     @Test
@@ -747,9 +1040,13 @@ class GamingBoardUiTest {
             }
         }
         val dial = compose.onNodeWithContentDescription("Session duration dial")
-        dial.performTouchInput { click(Offset(width * 0.83f, height * 0.31f)) }
+        dial.performTouchInput {
+            down(ringPoint(width, height, 90f))
+            repeat(12) { step -> moveTo(ringPoint(width, height, 90f + (step + 1) * 15f), delayMillis = 16) }
+            up()
+        }
         compose.onNodeWithText("Start 60 min · ₹120.00").assertIsDisplayed().performClick()
-        dial.performTouchInput { click(Offset(width * 0.17f, height * 0.31f)) }
+        compose.onNodeWithContentDescription("Choose 30 minutes, ₹80.00").performClick()
         compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(listOf("single-60", "single-30"), confirmed) }
     }
@@ -780,19 +1077,23 @@ class GamingBoardUiTest {
         }
         val dial = compose.onNodeWithContentDescription("Session duration dial")
         dial.performTouchInput {
-            swipe(
-                start = Offset(width * 0.17f, height * 0.31f),
-                end = Offset(width * 0.83f, height * 0.31f),
-                durationMillis = 300,
-            )
+            down(Offset(width * 0.50f, height * 0.90f))
+                repeat(12) { step ->
+                    val radians = Math.toRadians((90f + (step + 1) * 15f).toDouble())
+                    moveTo(Offset(width * (0.5f + 0.4f * kotlin.math.cos(radians).toFloat()),
+                        height * (0.5f + 0.4f * kotlin.math.sin(radians).toFloat())), delayMillis = 16)
+                }
+                up()
         }
         compose.onNodeWithText("Start 60 min · ₹120.00").assertIsDisplayed().performClick()
         dial.performTouchInput {
-            swipe(
-                start = Offset(width * 0.83f, height * 0.31f),
-                end = Offset(width * 0.17f, height * 0.31f),
-                durationMillis = 300,
-            )
+            down(Offset(width * 0.50f, height * 0.10f))
+                repeat(12) { step ->
+                    val radians = Math.toRadians((270f - (step + 1) * 15f).toDouble())
+                    moveTo(Offset(width * (0.5f + 0.4f * kotlin.math.cos(radians).toFloat()),
+                        height * (0.5f + 0.4f * kotlin.math.sin(radians).toFloat())), delayMillis = 16)
+                }
+                up()
         }
         compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(listOf("single-60", "single-30"), confirmed) }
@@ -1077,7 +1378,7 @@ class GamingBoardUiTest {
         }
         compose.onNodeWithTag("gaming-station-board").assertIsDisplayed()
         capture("gaming-same-screen-1280x800-payment-due.png")
-        compose.onNodeWithText("Send to POS before the next session.")
+        compose.onNodeWithText("Send to POS or Void this unpaid session here before starting again.")
             .performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Send to POS").performScrollTo().assertIsDisplayed()
     }
@@ -1132,7 +1433,7 @@ class GamingBoardUiTest {
 
         compose.onNodeWithText("VR Racing Sim").performClick()
         compose.onNodeWithContentDescription("Session duration dial")
-            .performTouchInput { click(Offset(width * 0.83f, height * 0.31f)) }
+            .performTouchInput { click(Offset(width * 0.50f, height * 0.90f)) }
         compose.onNodeWithText("Start 30 min · ₹140.00")
             .assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals("racing-30", submitted) }
@@ -1484,6 +1785,107 @@ class GamingBoardUiTest {
     }
 
     @Test
+    fun bookedPackageSubtotalNeverClaimsToIncludeThreeAddedPlayers() {
+        val station = Station("ps5-1", "PS5-1", "PS5 Station 1", "ps5", 12_000)
+        val start = Instant.parse("2026-10-22T10:00:00Z")
+        val running = GameSession(
+            id = "booked-subtotal-session", stationId = station.id, shiftId = "shift-1",
+            status = "active", startAt = start.toString(),
+            timerMinutes = 30, timerEndsAt = start.plusSeconds(1_800).toString(),
+            amountMinor = 8_000, billingMode = "package", packageId = "single-30",
+            packagePriceMinorSnapshot = 8_000, packageDurationMinutesSnapshot = 30,
+            packageVariantSnapshot = "single", packageStationTypeSnapshot = "ps5",
+            packagePricingTierSnapshot = "standard", participantRevision = 3,
+        )
+        val state = mutableStateOf(GamingUiState(
+            stations = listOf(station), sessions = listOf(running),
+            participantCache = (1..3).map { index ->
+                GamingSessionParticipantCacheEntity(
+                    id = "joined-$index", gamingSessionId = running.id,
+                    participantIdentityId = "guest-$index",
+                    joinedAtMillis = start.toEpochMilli(), joinedPlayElapsedMs = 0,
+                    joinRevision = index,
+                )
+            },
+            everSynced = true, refreshing = false, online = true,
+            activeShiftId = "shift-1", activeShiftServerConfirmed = true,
+        ))
+        val drink = GamingSessionAddonUi(
+            id = "confirmed-cola", serverAddonId = "confirmed-cola",
+            serverSessionId = running.id, clientLineId = "cola-line",
+            menuItemId = "cola", menuItemName = "Cola", menuItemType = "beverage",
+            qty = 1, unitPriceMinor = 5_000, lineTotalMinor = 5_000,
+        )
+        compose.setContent {
+            DCompanyTheme {
+                val configuration = Configuration(LocalConfiguration.current).apply {
+                    screenWidthDp = 1_280
+                    screenHeightDp = 800
+                }
+                CompositionLocalProvider(LocalConfiguration provides configuration) {
+                    Box(Modifier.width(1_280.dp).height(744.dp)) {
+                        GamingCommandWorkspace(
+                            state = state.value, access = GamingAccess(canManageSessions = true),
+                            filters = listOf(StationFilter("all", "All")), selectedFilter = "all",
+                            visibleStations = listOf(station), selectedStationId = station.id,
+                            showDetail = false, focusStationId = null, focusRequested = false,
+                            startTerminalBlockMessage = null,
+                            wallClock = remember { mutableLongStateOf(start.plusSeconds(600).toEpochMilli()) },
+                            attentionCount = 0, onSelectFilter = {}, onSelectStation = {},
+                            onBackToBoard = {}, onOpenAttention = {}, onRefresh = {}, onStart = {},
+                            onConfirmStart = { _, _, _, _, _, _, _, _ -> },
+                            onStop = { _, _ -> }, onSend = {}, onCancelUnbilled = {},
+                            onExtendTimer = {}, onExtendPackage = { _, _ -> }, onTransfer = {},
+                            onPauseResume = {}, onReconcile = {}, onRepairBilling = {},
+                            onResolveLegacyStart = {}, onDiscardPackageExtension = {},
+                            onAddItems = {}, onVoidAddon = { _, _ -> },
+                            onReviewRejectedAddon = {}, onManageParticipants = {},
+                        )
+                    }
+                }
+            }
+        }
+        compose.onNodeWithText("Booked session ₹80.00", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("Booked package · ₹80.00").assertIsDisplayed()
+        compose.onNodeWithText("Booked package price is locked; added players and drinks are extra.")
+            .assertIsDisplayed()
+        compose.onNodeWithText("Estimated ₹80.00").assertDoesNotExist()
+        compose.onNodeWithText("Package total", substring = true).assertDoesNotExist()
+        compose.onNodeWithText("Players").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Players · 4/4").assertIsDisplayed()
+        compose.onNodeWithText("3 added players playing now · 1 booked").assertIsDisplayed()
+        compose.runOnIdle {
+            assertEquals(9_000L, estimatedGamingFriendControllerMinor(
+                state.value.participantsFor(running), 600_000L,
+            ))
+        }
+        compose.onNodeWithTag("gaming-player-inline-close").performClick()
+        compose.runOnIdle { state.value = state.value.copy(sessionAddons = listOf(drink)) }
+        compose.onNodeWithText("Booked + drinks ₹130.00", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("Booked package · ₹80.00").assertIsDisplayed()
+        compose.onNodeWithText("Estimated ₹130.00").assertDoesNotExist()
+        compose.runOnIdle {
+            // A server-voided drink remains in history but contributes no money.
+            state.value = state.value.copy(sessionAddons = listOf(drink.copy(
+                voided = true, voidReason = "Entered in error",
+            )))
+        }
+        compose.onNodeWithText("Booked session ₹80.00", useUnmergedTree = true).assertIsDisplayed()
+        compose.runOnIdle {
+            state.value = state.value.copy(sessions = listOf(running.copy(
+                status = "ended", endAt = start.plusSeconds(600).toString(),
+                amountMinor = 17_000, billableMinutes = 10,
+            )))
+        }
+        compose.onNode(
+            hasText("₹170.00") and hasAnyAncestor(hasTestTag("gaming-station-ps5-1")),
+            useUnmergedTree = true,
+        ).assertIsDisplayed()
+        compose.onNodeWithText("Booked session ₹80.00").assertDoesNotExist()
+        compose.onNodeWithText("₹260.00").assertDoesNotExist()
+    }
+
+    @Test
     fun fullTabletWorkspaceShowsBoardDialCustomerAndStartTogether() {
         val stations = (1..4).map { number ->
             Station("ps5-$number", "PS5-$number", "PS5 Station $number", "ps5", 12_000)
@@ -1585,15 +1987,16 @@ class GamingBoardUiTest {
         compose.onNodeWithTag("gaming-filter-ps5").assertIsDisplayed()
         compose.onNodeWithTag("gaming-filter-racing").assertIsDisplayed()
         compose.onNodeWithTag("gaming-filter-vr").assertIsDisplayed()
-        compose.onNodeWithText("Gaming board ready").assertIsDisplayed()
-        val readyAttentionBounds = compose.onNodeWithTag("gaming-attention-bar")
+        compose.onNodeWithText("Gaming board ready").assertDoesNotExist()
+        compose.onNodeWithTag("gaming-attention-bar").assertDoesNotExist()
+        val readyHeaderBounds = compose.onNodeWithTag("gaming-board-header")
             .assertIsDisplayed().getUnclippedBoundsInRoot()
         compose.runOnIdle { state.value = state.value.copy(refreshing = true) }
-        compose.onNodeWithText("Refreshing Gaming board").assertIsDisplayed()
+        compose.onNodeWithText("Refreshing…").assertIsDisplayed()
         assertEquals(
-            "Ready and refreshing attention states must keep identical bounds",
-            readyAttentionBounds,
-            compose.onNodeWithTag("gaming-attention-bar").getUnclippedBoundsInRoot(),
+            "Refreshing must not move the station header or controls",
+            readyHeaderBounds,
+            compose.onNodeWithTag("gaming-board-header").getUnclippedBoundsInRoot(),
         )
         compose.runOnIdle { state.value = state.value.copy(refreshing = false) }
         val firstTile = compose.onNodeWithTag("gaming-station-ps5-1")
@@ -1784,6 +2187,21 @@ class GamingBoardUiTest {
             assertIntegratedDrinksFooterInsideControlPane()
             compose.onNodeWithTag("gaming-drinks-inline-confirm").performClick()
             compose.runOnIdle { assertEquals(listOf("mango" to 1), quickAdds) }
+            compose.runOnIdle {
+                state.value = state.value.copy(sessions = state.value.sessions.map {
+                    it.copy(status = "paused", pausedAt = "2026-09-27T10:10:00Z", pauseVersion = 1)
+                })
+            }
+            compose.onNodeWithText("PAUSED").assertIsDisplayed()
+            assertEquals("Pausing must preserve the permanent dial bounds", wideActiveRingBounds,
+                compose.onNodeWithTag("gaming-control-ring").assertIsDisplayed().getUnclippedBoundsInRoot())
+            assertEquals("Pausing must preserve the primary action bounds", wideActivePrimaryBounds,
+                compose.onNodeWithTag("gaming-primary-action-host").assertIsDisplayed().getUnclippedBoundsInRoot())
+            compose.runOnIdle {
+                state.value = state.value.copy(sessions = state.value.sessions.map {
+                    it.copy(status = "active", pausedAt = null, pauseVersion = 2)
+                })
+            }
             capture("gaming-full-workspace-1280x800-active.png", "gaming-full-workspace")
 
             compose.runOnIdle {
@@ -1795,11 +2213,11 @@ class GamingBoardUiTest {
                     ratePerHourMinor = 12_000,
                 )))
             }
-            compose.onNodeWithText("Action centre · 1 to review").assertIsDisplayed()
+            compose.onNodeWithTag("gaming-attention-bar").assertIsDisplayed()
             assertEquals(
-                "Review attention must not resize the operational rail",
-                readyAttentionBounds,
-                compose.onNodeWithTag("gaming-attention-bar").getUnclippedBoundsInRoot(),
+                "Payment attention must share the existing header height",
+                readyHeaderBounds,
+                compose.onNodeWithTag("gaming-board-header").getUnclippedBoundsInRoot(),
             )
             assertEquals(
                 "Payment attention must update the status rail without moving the dial",
@@ -1927,14 +2345,24 @@ class GamingBoardUiTest {
             )
             capture("gaming-full-workspace-960x600-board-and-dial.png", "gaming-full-workspace")
             dial.performTouchInput {
-                swipe(Offset(width * 0.17f, height * 0.31f),
-                    Offset(width * 0.83f, height * 0.31f), 300)
+                down(Offset(width * 0.50f, height * 0.90f))
+                repeat(12) { step ->
+                    val radians = Math.toRadians((90f + (step + 1) * 15f).toDouble())
+                    moveTo(Offset(width * (0.5f + 0.4f * kotlin.math.cos(radians).toFloat()),
+                        height * (0.5f + 0.4f * kotlin.math.sin(radians).toFloat())), delayMillis = 16)
+                }
+                up()
             }
             compose.onNodeWithText("Start 60 min · ₹120.00").assertIsDisplayed().performClick()
             compose.runOnIdle { assertEquals("single-60", submittedPackageId) }
             dial.performTouchInput {
-                swipe(Offset(width * 0.83f, height * 0.31f),
-                    Offset(width * 0.17f, height * 0.31f), 300)
+                down(Offset(width * 0.50f, height * 0.10f))
+                repeat(12) { step ->
+                    val radians = Math.toRadians((270f - (step + 1) * 15f).toDouble())
+                    moveTo(Offset(width * (0.5f + 0.4f * kotlin.math.cos(radians).toFloat()),
+                        height * (0.5f + 0.4f * kotlin.math.sin(radians).toFloat())), delayMillis = 16)
+                }
+                up()
             }
             compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed().performClick()
             compose.runOnIdle { assertEquals("single-30", submittedPackageId) }
@@ -2075,8 +2503,8 @@ class GamingBoardUiTest {
                     ),
                 ))
             }
-            compose.onNodeWithText("Action centre · 1 to review").assertIsDisplayed()
-            compose.onNodeWithText("Send to POS before the next session.")
+            compose.onNodeWithTag("gaming-attention-bar").assertIsDisplayed()
+            compose.onNodeWithText("Send to POS or Void this unpaid session here before starting again.")
                 .performScrollTo().assertIsDisplayed()
             compose.onNodeWithText("Send to POS").performScrollTo().assertIsDisplayed()
             val stoppedRing = compose.onNodeWithTag("gaming-control-ring").assertIsDisplayed()

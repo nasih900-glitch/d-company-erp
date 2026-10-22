@@ -134,6 +134,7 @@ jobs:
             ops/backup-requirements.lock
       - name: Install and audit backend dependencies
         run: |
+          python -I -B infra/scripts/bootstrap-verified-pip.py
           python -m pip install --only-binary=:all: --require-hashes -r backend/requirements-ci.lock
           python -m pip install --only-binary=:all: --require-hashes -r ops/backup-requirements.lock
           python -m pip_audit -r backend/requirements.lock

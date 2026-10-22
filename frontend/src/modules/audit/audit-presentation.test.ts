@@ -18,6 +18,14 @@ const event = (details: Record<string, unknown>) =>
     action_label: 'Payment recorded',
   }) as BusinessAuditEntryDTO;
 describe('Source-backed business language', () => {
+  it('separates the original voided charge from zero due while retaining attendance facts', () => {
+    const row = { ...event({ voided_amount_minor: 18_000, amount_after_void_minor: 0,
+      original_billable_minutes: 12, added_player_interval_count: 2, attendance_retained: true }),
+      action: 'gaming_session_voided', action_code: 'GAM-VOID' };
+    expect(auditBusinessSummary(row)).toBe('Voided ₹180.00 · Amount after void ₹0.00 · Attendance retained');
+    expect(businessLabel('added_player_interval_count')).toBe('Added-player attendance records');
+    expect(businessLabel('original_billable_minutes')).toBe('Original recorded billable minutes');
+  });
   it('summarizes retained amount and method without inventing a result', () => {
     expect(
       auditBusinessSummary(event({ amount_minor: 27000, method: 'upi' })),
@@ -159,4 +167,11 @@ describe('Retained finance evidence vocabulary', () => {
     expect(JSON.stringify(raw)).toBe(original);
     expect(JSON.stringify(safeAuditValue(raw))).toBe(original);
   });
+});
+
+
+it('describes retained global update-policy changes without technical artifact identifiers', () => {
+  const row={...event({update_mode_before:'required',update_mode_after:'optional',policy_revision:6,minimum_supported_build:54,global_installations:true,reason:'Reviewed supported builds'}),action:'android_update_policy_changed',action_code:'UPD-POL'};
+  expect(auditBusinessSummary(row)).toBe('Optional updates · Minimum supported build 54 · All direct Android installations');
+  expect(businessLabel('environment_safety_floor')).toBe('Deployment safety floor');
 });

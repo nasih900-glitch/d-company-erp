@@ -1,3 +1,4 @@
+import { gamingCancellationBlock, matchesCancellationIdentity, isConfirmedCancellation, removeConfirmedCancelledSession, participantVoidMetadataReady, participantVoidReview, participantVoidRequestHash } from './GamingCancellation';
 import { InlineShiftWorkspace } from '@/modules/pos/OrdersAndShiftsScreen';
 /**
  * Gaming screen — stations + sessions (live + demo).
@@ -716,7 +717,27 @@ export default function GamingScreen() {
   // independently operate POS checkout.
   const canManageSessionAddons = canManageStations;
 
+  const cancellationBusyRef = useRef<number | null>(null);
+  const cancellationOperationRef = useRef(0);
+  const cancellationContextKey = [me?.company_id, me?.user_id, me?.branch_id,
+    terminalId, terminalReady, canManageStations].join(':');
+  const cancellationContextRef = useRef(cancellationContextKey);
+  cancellationContextRef.current = cancellationContextKey;
+  const cancellationLifecycleRef = useRef({ mounted: true, generation: 0 });
+  useEffect(() => {
+    const lifecycle = cancellationLifecycleRef.current;
+    lifecycle.mounted = true;
+    cancellationBusyRef.current = null;
+    setCancelling(null);
+    setCancelStationTarget(null);
+    return () => { lifecycle.mounted = false; lifecycle.generation += 1; };
+  }, [cancellationContextKey]);
   function requireGamingWrite(actionTitle: string): GamingWriteDispatcher {
+    if (cancellationBusyRef.current !== null) {
+      return createGamingWriteDispatcher(false, () => {
+        notifications.error('Wait for this session cancellation to be confirmed before another Gaming action.');
+      }, gaming);
+    }
     return createGamingWriteDispatcher(canManageStations, () => {
       notifications.error(
         'Gaming is view-only for this account. Ask an owner to enable the Gaming module for this role.',
@@ -810,7 +831,7 @@ export default function GamingScreen() {
   const [pendingPauseTarget, setPendingPauseTarget] = useState<StationDTO | null>(null);
   const [changingPause, setChangingPause] = useState<string | null>(null);
   const [stoppingSession, setStoppingSession] = useState<string | null>(null);
-  const [cancelStationTarget, setCancelStationTarget] = useState<StationDTO | null>(null);
+  const [cancelStationTarget, setCancelStationTarget] = useState<{ station: StationDTO; reviewed: LocalSession } | null>(null);
   const [repairStationTarget, setRepairStationTarget] = useState<StationDTO | null>(null);
   const [repairingBilling, setRepairingBilling] = useState<string | null>(null);
   const [legacyPauseResolutionTarget, setLegacyPauseResolutionTarget] = useState<StationDTO | null>(null);
@@ -3013,11 +3034,38 @@ export default function GamingScreen() {
     }
   }
 
-  async function cancelSession(st: StationDTO, reason: string) {
+  async function cancelSession(st: StationDTO, reason: string, reviewed: LocalSession) {
     const write = requireGamingWrite('Cannot cancel session');
     if (!write.allowed) return;
     const current = sessions[st.id];
-    if (!current?.backend_session_id) return;
+    if (!current?.backend_session_id || current.backend_session_id !== reviewed.backend_session_id) {
+      notifications.error('The selected session changed. Refresh Gaming and review Void again.');
+      return;
+    }
+    const cancellationBlock = gamingCancellationBlock({
+      online: navigator.onLine,
+      status: current.status,
+      hasOrder: Boolean(current.order_id),
+      ownsCurrentShift: ownsCurrentShift(current),
+      hasPendingActions: Boolean(gamingActionBusyRef.current || savedGamingActions.error ||
+        savedGamingActions.attempts.some((attempt) => attempt.sessionId === current.backend_session_id) ||
+        transferAttempt || transferBoardStale || changingPause || stoppingSession ||
+        addonCreateAttempt?.sessionId === current.backend_session_id ||
+        addonVoidAttempt?.sessionId === current.backend_session_id),
+      hasParticipantEvidence: Boolean((current.participant_revision ?? 0) > 0 ||
+        participantsBySession[current.backend_session_id]?.participants.length),
+      participantVoidReady: participantVoidMetadataReady(current),
+      addonLedgerReady: !addonCreatePersistenceError && isGamingAddonLedgerAuthoritative(
+        current.backend_session_id, addonAuthoritativeLedgerSessions, addonLoadErrors,
+      ),
+      hasActiveAddons: (addonsBySession[current.backend_session_id] ?? []).some((addon) => !addon.voided_at),
+      hasUnresolvedExtension: Boolean(paidExtensionRecoveryBySession[current.backend_session_id]?.attempt ||
+        paidExtensionRecoveryBySession[current.backend_session_id]?.error),
+    });
+    if (cancellationBlock) {
+      notifications.error(cancellationBlock, { title: 'Cannot cancel session yet' });
+      return;
+    }
     const activeAddons = addonsBySession[current.backend_session_id]?.filter(
       (addon) => !addon.voided_at,
     ) ?? [];
@@ -3051,7 +3099,15 @@ export default function GamingScreen() {
     }
     if (!requireCurrentShiftOwnership(current, 'cancel it')) return;
     if (!requirePaidExtensionResolved(current, 'cancelled')) return;
-    if (!reason.trim()) return;
+    if (!reason.trim() || reason.trim().length > 500) return;
+    const expected = { id: current.backend_session_id, stationId: st.id, shiftId: current.shift_id };
+    const expectedContext = cancellationContextRef.current;
+    const expectedGeneration = cancellationLifecycleRef.current.generation;
+    const requestScopeIsCurrent = () => cancellationLifecycleRef.current.mounted
+      && cancellationLifecycleRef.current.generation === expectedGeneration
+      && cancellationContextRef.current === expectedContext;
+    const operationId = ++cancellationOperationRef.current;
+    cancellationBusyRef.current = operationId;
     setCancelling(st.id);
     setSendErrors((errors) => {
       const next = { ...errors };
@@ -3059,17 +3115,39 @@ export default function GamingScreen() {
       return next;
     });
     try {
-      await write.dispatch('cancelSession', current.backend_session_id, reason.trim());
-      setSessions((all) => {
-        const next = { ...all };
-        delete next[st.id];
-        return next;
-      });
+      const latest = await gaming.getSession(expected.id);
+      if (!requestScopeIsCurrent()) return;
+      if (!matchesCancellationIdentity(latest, expected) ||
+        (latest.status !== 'cancelled' &&
+          (!['active', 'paused', 'ended'].includes(latest.status) || latest.order_id ||
+            (latest.participant_revision !== 0 && (latest.status !== 'ended' || current.status !== 'ended' ||
+              latest.participant_revision !== reviewed.participant_revision || latest.billing_revision !== reviewed.billing_revision ||
+              latest.amount_minor !== reviewed.amount_minor))))) {
+        throw new Error('The session changed. Refresh Gaming before cancelling; saved work is unchanged.');
+      }
+      const review = participantVoidReview(expected.id, reviewed);
+      const expectedHash = latest.status !== 'cancelled' && review
+        ? await participantVoidRequestHash(expected.id, reason.trim(), review) : null;
+      if (!requestScopeIsCurrent()) return;
+      const cancelled = latest.status === 'cancelled' ? latest : await write.dispatch(
+        'cancelSession', expected.id, reason.trim(), review,
+      );
+      if (!requestScopeIsCurrent()) return;
+      if (!isConfirmedCancellation(cancelled, expected) ||
+        (latest.status !== 'cancelled' && review && (!cancelled.cancellation_receipt_id ||
+          cancelled.cancellation_idempotency_key !== review.idempotencyKey ||
+          cancelled.cancellation_request_hash !== expectedHash))) {
+        throw new Error('Cancellation was not confirmed in this workspace. Refresh Gaming before retrying.');
+      }
+      setSessions((all) => removeConfirmedCancelledSession(all, st.id, expected.id));
       setCancelStationTarget(null);
-      notifications.success(`${st.name} was cancelled with an audit reason.`, {
-        title: 'Session cancelled',
+      notifications.success(latest.status === 'cancelled'
+        ? `Already voided. Recorded reason: ${cancelled.cancel_reason}`
+        : `${st.name} was voided with its reason retained.`, {
+        title: latest.status === 'cancelled' ? 'Already voided' : 'Session voided',
       });
     } catch (e) {
+      if (!requestScopeIsCurrent()) return;
       const message = (e as Error).message;
       setSendErrors((errors) => ({
         ...errors,
@@ -3077,7 +3155,10 @@ export default function GamingScreen() {
       }));
       notifications.error(message, { title: 'Could not cancel session' });
     } finally {
-      setCancelling(null);
+      if (cancellationBusyRef.current === operationId) {
+        cancellationBusyRef.current = null;
+        if (requestScopeIsCurrent()) setCancelling(null);
+      }
     }
   }
 
@@ -3895,6 +3976,20 @@ export default function GamingScreen() {
               && !addonLoadError
               && !actionPending,
             );
+            const cancellationBlock = session ? gamingCancellationBlock({
+              online: navigator.onLine,
+              status: session.status,
+              hasOrder: Boolean(session.order_id),
+              ownsCurrentShift: sessionOwned,
+              hasPendingActions: Boolean(actionPending || gamingActionBusy || transferAttempt ||
+                transferBoardStale || changingPause || stoppingSession || addonMutationPending),
+              hasParticipantEvidence: Boolean((session.participant_revision ?? 0) > 0 ||
+                participantState?.participants.length),
+              participantVoidReady: participantVoidMetadataReady(session),
+              addonLedgerReady: addonListReady && !addonCreatePersistenceError && !addonLoadError,
+              hasActiveAddons: activeSessionAddons.length > 0,
+              hasUnresolvedExtension: paidExtensionLifecycleBlocked,
+            }) : null;
             const packageSelection = session ? gamingPackageSelectionLabel(session) : null;
             const stationBaseTariffs = packagesFor(st.type, 'base');
             const stationPricingDescription = session && session.billing_mode !== 'hourly'
@@ -4043,16 +4138,17 @@ export default function GamingScreen() {
                         <GamingMutationButton
                           canManageSessions={canManageStations}
                           className="btn btn-ghost text-accent-bad"
-                          disabled={!sessionOwned || billingMissing || paidExtensionLifecycleBlocked || Boolean(addonCreatePersistenceError) || addonMutationPending || !addonListReady || Boolean(addonLoadError) || activeSessionAddons.length > 0 || sendingToPos === st.id || cancelling === st.id || reconciling === st.id}
-                          title={activeSessionAddons.length > 0
+                          disabled={Boolean(cancellationBlock) || !sessionOwned || billingMissing || paidExtensionLifecycleBlocked || Boolean(addonCreatePersistenceError) || addonMutationPending || !addonListReady || Boolean(addonLoadError) || activeSessionAddons.length > 0 || sendingToPos === st.id || cancelling === st.id || reconciling === st.id}
+                          title={cancellationBlock ?? (activeSessionAddons.length > 0
                             ? 'Void every staged drink or snack before cancelling this session'
-                            : 'Cancel with an audit reason'}
-                          onClick={() => setCancelStationTarget(st)}>
+                            : 'Cancel with an audit reason')}
+                          onClick={() => setCancelStationTarget({ station: st, reviewed: { ...session } })}>
                           {cancelling === st.id
                             ? <Loader2 className="animate-spin" size={14}/>
-                            : <Ban size={14}/>} Cancel
+                            : <Ban size={14}/>} Void
                         </GamingMutationButton>
                       </div>
+                      {cancellationBlock && <p className="text-xs text-fg-muted">{cancellationBlock}</p>}
                       {(canOfferGamingReconciliation({
                         auditAccess: Boolean(me?.audit_access),
                         rejectionCode: sendErrors[st.id]?.code,
@@ -4513,7 +4609,18 @@ export default function GamingScreen() {
                           {changingPause === st.id ? <Loader2 size={14} className="animate-spin"/> : <PlayCircle size={14}/>} Resume
                         </GamingMutationButton>
                       )}
+                      <GamingMutationButton
+                        canManageSessions={canManageStations}
+                        className="btn btn-ghost flex-1 text-accent-bad"
+                        disabled={Boolean(cancellationBlock || cancelling || sendingToPos || reconciling)}
+                        title={cancellationBlock ?? 'Cancel a mistaken session with a required audit reason'}
+                        onClick={() => setCancelStationTarget({ station: st, reviewed: { ...session } })}
+                      >
+                        {cancelling === st.id ? <Loader2 size={14} className="animate-spin"/> : <Ban size={14}/>}
+                        Cancel session
+                      </GamingMutationButton>
                     </div>
+                    {cancellationBlock && <p className="mt-2 text-xs text-fg-muted">{cancellationBlock}</p>}
                     {LIVE_MODE && session.status === 'active' && !session.pause_available && (
                       <p className="mt-2 text-xs text-fg-muted">Shared pause is unavailable. Update active tablets before the owner enables it.</p>
                     )}
@@ -4901,13 +5008,15 @@ export default function GamingScreen() {
         )}
         {cancelStationTarget && (
           <PromptModal
-            title={`Cancel ${cancelStationTarget.name}`}
-            label="Audit reason (required). This removes the stopped session from billing."
+            title={`${cancelStationTarget.reviewed.status === 'ended' ? 'Void' : 'Cancel'} ${cancelStationTarget.station.name}`}
+            label={cancelStationTarget.reviewed.status === 'ended'
+              ? `Void ${inr(cancelStationTarget.reviewed.amount_minor ?? 0)} before POS. Attendance and billing evidence stay in the audit trail. Enter the required reason.`
+              : 'Audit reason (required). Cancel a mistaken session without creating a POS bill.'}
             placeholder="Why is this session being cancelled?"
-            confirmLabel="Cancel session"
+            confirmLabel={cancelStationTarget.reviewed.status === 'ended' ? 'Void session' : 'Cancel session'}
             danger
-            busy={cancelling === cancelStationTarget.id}
-            onSubmit={(reason) => { void cancelSession(cancelStationTarget, reason); }}
+            busy={cancelling === cancelStationTarget.station.id}
+            onSubmit={(reason) => { void cancelSession(cancelStationTarget.station, reason, cancelStationTarget.reviewed); }}
             onCancel={() => { if (!cancelling) setCancelStationTarget(null); }}
           />
         )}

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from typing import Literal, cast
 from uuid import UUID  # noqa: TC003 - Pydantic resolves this model type at runtime.
 
 from fastapi import APIRouter, Query, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, select, text
 
 from app.core.config import get_settings
@@ -17,7 +18,13 @@ from app.core.release_control import (  # noqa: TC001 - FastAPI runtime dependen
     ReleaseControllerDep,
 )
 from app.core.tenant import TenantContext  # noqa: TC001 - audit DTO runtime type.
-from app.models import AndroidRelease, AuditLog
+from app.models import AndroidRelease, AndroidUpdatePolicy, AuditLog
+from app.services.client_updates.policy import (
+    DIRECT_RELEASE_LOCK_KEY,
+    POLICY_INTEGER_MAX,
+    policy_snapshot,
+    release_fingerprint,
+)
 from app.services.client_updates.releases import (
     AndroidReleaseFingerprint,
     ArtifactVerificationError,
@@ -31,7 +38,9 @@ from app.services.client_updates.runtime_parity import (
 
 router = APIRouter()
 
-_DIRECT_RELEASE_LOCK_KEY = 7_310_042_021
+
+_DIRECT_RELEASE_LOCK_KEY = DIRECT_RELEASE_LOCK_KEY
+_REQUIRED_POLICY_VERIFY_DEADLINE_SECONDS = 120
 
 
 class AndroidReleaseRead(BaseModel):
@@ -58,6 +67,7 @@ class AndroidReleaseRead(BaseModel):
     withdrawn_at: datetime | None
     withdrawn_by: UUID | None
     updated_at: datetime
+    policy_fingerprint: str
 
 
 class AndroidReleaseList(BaseModel):
@@ -88,6 +98,7 @@ def _read(release: AndroidRelease) -> AndroidReleaseRead:
         withdrawn_at=release.withdrawn_at,
         withdrawn_by=release.withdrawn_by,
         updated_at=release.updated_at,
+        policy_fingerprint=release_fingerprint(release),
     )
 
 
@@ -148,6 +159,223 @@ def _audit_transition(
             "manifest_sha256": release.manifest_sha256,
         },
     )
+
+
+class AndroidUpdatePolicyRead(BaseModel):
+    mode: Literal["inherit", "optional", "required"]
+    revision: int
+    environment_minimum_version_code: int
+    minimum_supported_version_code: int
+    required_release_id: UUID | None
+    required_release_fingerprint: str | None
+    active_release: AndroidReleaseRead | None
+    reason: str | None
+    updated_at: datetime | None
+
+
+class AndroidUpdatePolicyWrite(BaseModel):
+    mode: Literal["optional", "required"]
+    expected_revision: int = Field(ge=1, le=POLICY_INTEGER_MAX)
+    release_id: UUID | None = None
+    expected_release_fingerprint: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    reason: str = Field(min_length=3, max_length=500)
+
+    @model_validator(mode="after")
+    def target_matches_mode(self) -> AndroidUpdatePolicyWrite:
+        self.reason = self.reason.strip()
+        if len(self.reason) < 3:
+            raise ValueError("Give a reason of at least three characters")
+        if self.mode == "required" and (
+            not self.release_id or not self.expected_release_fingerprint
+        ):
+            raise ValueError("Review the exact active release before requiring it")
+        if self.mode == "optional" and (self.release_id or self.expected_release_fingerprint):
+            raise ValueError("Optional policy cannot select an artifact")
+        return self
+
+
+async def _policy_read(session: SessionDep) -> AndroidUpdatePolicyRead:
+    row = (
+        await session.execute(select(AndroidUpdatePolicy).where(AndroidUpdatePolicy.id == 1))
+    ).scalar_one_or_none()
+    active = (
+        await session.execute(
+            select(AndroidRelease).where(
+                AndroidRelease.channel == "direct", AndroidRelease.status == "active"
+            )
+        )
+    ).scalar_one_or_none()
+    settings = get_settings()
+    snapshot = policy_snapshot(
+        settings, row, active if row and row.release_id == getattr(active, "id", None) else None
+    )
+    return AndroidUpdatePolicyRead(
+        mode=snapshot.mode,
+        revision=snapshot.revision,
+        environment_minimum_version_code=settings.android_min_supported_version_code,
+        minimum_supported_version_code=snapshot.minimum,
+        required_release_id=row.release_id if row else None,
+        required_release_fingerprint=row.release_fingerprint if row else None,
+        active_release=_read(active) if active else None,
+        reason=row.reason if row else None,
+        updated_at=row.updated_at if row else None,
+    )
+
+
+async def _guard_required_target(
+    session: SessionDep, *, replacing_with: UUID | None = None, withdrawing: UUID | None = None
+) -> None:
+    policy = (
+        await session.execute(
+            select(AndroidUpdatePolicy).where(AndroidUpdatePolicy.id == 1).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if (
+        policy
+        and policy.mode == "required"
+        and (
+            policy.release_id == withdrawing
+            or (replacing_with is not None and policy.release_id != replacing_with)
+        )
+    ):
+        raise ConflictError(
+            "This release is required. Set updates to Optional before withdrawing or replacing its recovery target."
+        )
+
+
+@router.get("/android/policy", response_model=AndroidUpdatePolicyRead)
+async def get_android_update_policy(
+    response: Response, session: SessionDep, _tenant: ReleaseControllerDep
+) -> AndroidUpdatePolicyRead:
+    response.headers["Cache-Control"] = "private, no-store"
+    return await _policy_read(session)
+
+
+@router.put("/android/policy", response_model=AndroidUpdatePolicyRead)
+async def set_android_update_policy(
+    payload: AndroidUpdatePolicyWrite,
+    response: Response,
+    session: SessionDep,
+    tenant: ReleaseControllerDep,
+) -> AndroidUpdatePolicyRead:
+    response.headers["Cache-Control"] = "private, no-store"
+    settings = get_settings()
+    verified = None
+    state = None
+    if payload.mode == "required":
+        candidate = (
+            await session.execute(
+                select(AndroidRelease).where(AndroidRelease.id == payload.release_id)
+            )
+        ).scalar_one_or_none()
+        if (
+            candidate is None
+            or candidate.status != "active"
+            or candidate.channel != "direct"
+            or release_fingerprint(candidate) != payload.expected_release_fingerprint
+        ):
+            raise ConflictError(
+                "The reviewed active release has changed. Refresh and review it again."
+            )
+        verified, state = _fingerprint(candidate), _state_token(candidate)
+        await session.rollback()
+        try:
+            async with asyncio.timeout(_REQUIRED_POLICY_VERIFY_DEADLINE_SECONDS):
+                await verify_public_apk(
+                    verified,
+                    configured_update_url=(
+                        str(settings.android_update_allowed_origin)
+                        if settings.android_update_allowed_origin
+                        else None
+                    ),
+                )
+                await verify_runtime_parity(
+                    version_name=verified.version_name,
+                    source_git_sha=verified.source_git_sha,
+                    settings=settings,
+                )
+        except (ArtifactVerificationError, RuntimeParityError, TimeoutError) as exc:
+            raise ServiceUnavailableError(
+                "Required update was not changed because its public APK and live release could not be verified."
+            ) from exc
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(:key)"), {"key": _DIRECT_RELEASE_LOCK_KEY}
+    )
+    row = (
+        await session.execute(
+            select(AndroidUpdatePolicy).where(AndroidUpdatePolicy.id == 1).with_for_update()
+        )
+    ).scalar_one_or_none()
+    effective_revision = max(
+        settings.client_compatibility_policy_revision, row.revision if row else 0
+    )
+    if effective_revision != payload.expected_revision:
+        raise ConflictError(
+            "Update policy changed. Refresh and review the current policy before retrying."
+        )
+    if effective_revision >= POLICY_INTEGER_MAX:
+        raise ConflictError("Update policy revision limit reached. No policy was changed.")
+    if verified:
+        candidate = (
+            await session.execute(
+                select(AndroidRelease)
+                .where(AndroidRelease.id == payload.release_id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if (
+            candidate is None
+            or _fingerprint(candidate) != verified
+            or _state_token(candidate) != state
+        ):
+            raise ConflictError("The verified release changed. Refresh and review it again.")
+    before = {
+        "mode": row.mode if row else "inherit",
+        "revision": effective_revision,
+        "release_id": str(row.release_id) if row and row.release_id else None,
+    }
+    if row is None:
+        row = AndroidUpdatePolicy(id=1)
+        session.add(row)
+    row.mode, row.revision = payload.mode, effective_revision + 1
+    row.release_id = payload.release_id
+    row.release_fingerprint = payload.expected_release_fingerprint
+    row.reason, row.updated_by, row.updated_at = payload.reason, tenant.user_id, datetime.now(UTC)
+    session.add(
+        AuditLog(
+            actor_user_id=tenant.user_id,
+            company_id=tenant.company_id,
+            terminal_id=tenant.terminal_id,
+            action="android_update_policy_changed",
+            entity_type="AndroidUpdatePolicy",
+            entity_id="1",
+            business_details={
+                "update_mode_before": before["mode"],
+                "update_mode_after": row.mode,
+                "policy_revision": row.revision,
+                "minimum_supported_build": max(
+                    settings.android_min_supported_version_code,
+                    verified.version_code
+                    if verified
+                    else settings.android_min_supported_version_code,
+                ),
+                "environment_safety_floor": settings.android_min_supported_version_code,
+                "global_installations": True,
+                "reason": row.reason,
+            },
+            before=before,
+            after={
+                "mode": row.mode,
+                "revision": row.revision,
+                "release_id": str(row.release_id) if row.release_id else None,
+                "release_fingerprint": row.release_fingerprint,
+                "reason": row.reason,
+                "environment_minimum_version_code": settings.android_min_supported_version_code,
+            },
+        )
+    )
+    await session.flush()
+    return await _policy_read(session)
 
 
 @router.get("/android/releases", response_model=AndroidReleaseList)
@@ -247,6 +475,8 @@ async def activate_android_release(
             "Android release state changed while it was being verified. Review and retry."
         )
 
+    await _guard_required_target(session, replacing_with=candidate.id)
+
     if candidate.status == "active":
         await record_verified_runtime_parity_for_public_offer(
             version_name=before_network.version_name,
@@ -334,6 +564,7 @@ async def withdraw_android_release(
     ).scalar_one_or_none()
     if release is None:
         raise NotFoundError("Android release not found")
+    await _guard_required_target(session, withdrawing=release.id)
     if release.status == "withdrawn":
         return _read(release)
 

@@ -10,17 +10,25 @@ RUN sh /tmp/dcompany-zlib/build-patched-zlib.sh
 # --- Python dependency builder ---
 FROM python:3.14.8-alpine3.24@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72 AS builder
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+COPY infra/scripts/bootstrap-verified-pip.py /tmp/bootstrap-verified-pip.py
 RUN apk add --no-cache --upgrade \
       'libcrypto3=3.5.9-r0' \
       'libssl3=3.5.9-r0' \
       'libuuid=2.42.3-r1' \
+      'ca-certificates=20261020-r0' \
+      'ca-certificates-bundle=20261020-r0' \
     && installed_packages="$(apk info -v)" \
     && printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r0' \
     && printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0' \
     && printf '%s\n' "$installed_packages" | grep -Fx 'libuuid-2.42.3-r1' \
+    && printf '%s\n' "$installed_packages" | grep -Fx 'ca-certificates-20261020-r0' \
+    && printf '%s\n' "$installed_packages" | grep -Fx 'ca-certificates-bundle-20261020-r0' \
+    && update-ca-certificates \
+    && python -I -B /tmp/bootstrap-verified-pip.py --verify-system-ca \
     && python -c 'import ssl; assert ssl.OPENSSL_VERSION_INFO == (3, 5, 0, 9, 0), (ssl.OPENSSL_VERSION_INFO, ssl.OPENSSL_VERSION)'
 WORKDIR /app
 COPY backend/requirements.lock .
+RUN python -I -B /tmp/bootstrap-verified-pip.py && rm /tmp/bootstrap-verified-pip.py
 RUN pip install --prefix=/install --only-binary=:all: --require-hashes -r requirements.lock
 
 # --- runtime ---
@@ -42,6 +50,7 @@ LABEL org.opencontainers.image.title="D Company ERP Backend" \
       com.dcompany.zlib.followup.commit="7235b0a581227c56a79a43ff828f8ef6794194c8" \
       com.dcompany.zlib.followup.sha256="96040ee84d0d187905283912dbd3f7b66ac2033976a2ceefe9b8cca63143d9c2"
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+COPY infra/scripts/bootstrap-verified-pip.py /tmp/bootstrap-verified-pip.py
 COPY --from=zlib-builder /out/usr/lib/libz.so.1.3.2 /usr/lib/libz.so.1.3.2
 COPY --from=zlib-builder /out/etc/dcompany/zlib-patch-evidence.env /etc/dcompany/zlib-patch-evidence.env
 COPY --from=zlib-builder /out/zlib-runtime-probe /tmp/zlib-runtime-probe
@@ -50,16 +59,23 @@ RUN apk add --no-cache --upgrade \
       'libcrypto3=3.5.9-r0' \
       'libssl3=3.5.9-r0' \
       'libuuid=2.42.3-r1' \
+      'ca-certificates=20261020-r0' \
+      'ca-certificates-bundle=20261020-r0' \
     && installed_packages="$(apk info -v)" \
     && printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r0' \
     && printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0' \
     && printf '%s\n' "$installed_packages" | grep -Fx 'libuuid-2.42.3-r1' \
+    && printf '%s\n' "$installed_packages" | grep -Fx 'ca-certificates-20261020-r0' \
+    && printf '%s\n' "$installed_packages" | grep -Fx 'ca-certificates-bundle-20261020-r0' \
+    && update-ca-certificates \
+    && python -I -B /tmp/bootstrap-verified-pip.py --verify-system-ca \
     && python -c 'import ssl; assert ssl.OPENSSL_VERSION_INFO == (3, 5, 0, 9, 0), (ssl.OPENSSL_VERSION_INFO, ssl.OPENSSL_VERSION)' \
     && test "$(python --version)" = 'Python 3.14.8' \
     && sh /tmp/verify-patched-zlib.sh \
     && rm -f /tmp/zlib-runtime-probe /tmp/verify-patched-zlib.sh \
     && addgroup -S -g 1001 erp \
     && adduser -S -D -u 1001 -G erp -h /home/erp erp
+RUN python -I -B /tmp/bootstrap-verified-pip.py && rm /tmp/bootstrap-verified-pip.py
 WORKDIR /app
 COPY --from=builder /install /usr/local
 COPY backend/ .

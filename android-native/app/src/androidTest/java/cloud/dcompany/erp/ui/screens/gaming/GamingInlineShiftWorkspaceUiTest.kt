@@ -8,12 +8,14 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -23,6 +25,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import cloud.dcompany.erp.core.auth.GamingAccess
 import cloud.dcompany.erp.core.auth.ShiftAccess
@@ -121,8 +124,18 @@ class GamingInlineShiftWorkspaceUiTest {
             if (runCatching { icon.fetchSemanticsNode() }.isSuccess) icon.performScrollTo().performClick()
             else compose.onNodeWithText("Add player").performScrollTo().performClick()
         }
-        // Select duration AFTER the intentional tariff-change default selection.
-        compose.onNodeWithContentDescription("Choose 60 minutes, ₹210.00").performClick()
+        // The hour is revealed only after clockwise travel beyond thirty.
+        compose.onNodeWithContentDescription("Choose 60 minutes, ₹210.00").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Session duration dial").performTouchInput {
+            down(Offset(width * 0.50f, height * 0.90f))
+            repeat(12) { step ->
+                val angle = Math.toRadians((90f + (step + 1) * 15f).toDouble())
+                moveTo(Offset(width * (0.5f + 0.4f * kotlin.math.cos(angle).toFloat()),
+                    height * (0.5f + 0.4f * kotlin.math.sin(angle).toFloat())), delayMillis = 16)
+            }
+            up()
+        }
+        compose.onNodeWithContentDescription("Choose 60 minutes, ₹210.00").assertIsDisplayed()
         compose.onNodeWithContentDescription("Search saved customers by name or phone")
             .performScrollTo().performTextInput("Retained")
         compose.onNodeWithText("Retained Customer").performScrollTo().performClick()
@@ -155,6 +168,9 @@ class GamingInlineShiftWorkspaceUiTest {
         compose.onNodeWithText("Open shift confirmed", substring = true).assertDoesNotExist()
         compose.onNodeWithText("Return to work").performScrollTo().performClick()
         compose.onNodeWithText("Retained Customer").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Dual 4").performScrollTo().assertIsDisplayed().assertIsSelected()
+        compose.onNodeWithContentDescription("Add player").performScrollTo().assertIsDisplayed().assertIsNotEnabled()
+        compose.onNodeWithText("2 extra controllers · ₹60.00 surcharge").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Start 60 min · ₹210.00").assertIsDisplayed().assertIsNotEnabled()
         assertEquals(ring, compose.onNodeWithTag("gaming-control-ring").getUnclippedBoundsInRoot())
         assertEquals(footer, compose.onNodeWithTag("gaming-primary-action-host").getUnclippedBoundsInRoot())

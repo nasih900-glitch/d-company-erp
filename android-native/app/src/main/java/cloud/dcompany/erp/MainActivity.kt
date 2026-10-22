@@ -1212,9 +1212,20 @@ private fun SessionViewModelScope(
     CompositionLocalProvider(LocalViewModelStoreOwner provides owner, content = content)
 }
 
+internal fun optionalUpdateMayDismiss(
+    notice: ClientUpdateNotice,
+    state: AppUpdateUiState,
+    installedVersionCode: Int = BuildConfig.VERSION_CODE,
+): Boolean {
+    val descriptor = (validateDirectUpdateMetadata(notice, installedVersionCode) as? DirectUpdateMetadataResult.Valid)
+        ?.descriptor ?: return true
+    val active = state is AppUpdateUiState.Downloading || state is AppUpdateUiState.Verifying
+    return !active || !state.matchesDescriptor(descriptor)
+}
+
 /** A banner, not a dialog: staff can keep using the till without dismissing it. */
 @Composable
-private fun OptionalUpdateBanner(
+internal fun OptionalUpdateBanner(
     notice: ClientUpdateNotice,
     updateState: AppUpdateUiState,
     outboxWorkStatus: OutboxWorkStatus,
@@ -1243,7 +1254,10 @@ private fun OptionalUpdateBanner(
                     Text(notice.message, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                         UpdateVersionAndNotes(notice, compact = true)
                     }
-                    TextButton(onClick = onDismiss) { Text("Later") }
+                    TextButton(
+                        onClick = onDismiss,
+                        enabled = optionalUpdateMayDismiss(notice, updateState),
+                    ) { Text("Later") }
                 }
                 UpdateActionArea(
                     notice = notice,

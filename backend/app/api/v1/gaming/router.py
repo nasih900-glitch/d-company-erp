@@ -390,6 +390,9 @@ class SessionRead(BaseModel):
     rate_per_hour_minor: int | None = None
     order_id: UUID | None = None
     cancel_reason: str | None = None
+    cancellation_receipt_id: UUID | None = None
+    cancellation_idempotency_key: str | None = None
+    cancellation_request_hash: str | None = None
     # package_id is a nullable catalog reference (ON DELETE SET NULL), not the
     # financial billing-mode source of truth. Package snapshots remain locked
     # on the session after a catalog row is retired or hard-deleted.
@@ -529,7 +532,12 @@ class SessionPackageAmend(BaseModel):
 
 
 class SessionCancel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     reason: str = Field(min_length=1, max_length=500)
+    expected_participant_revision: int | None = Field(default=None, ge=0, strict=True)
+    expected_billing_revision: int | None = Field(default=None, ge=0, strict=True)
+    expected_amount_minor: int | None = Field(default=None, ge=0, le=9_999_999_999, strict=True)
 
     @field_validator("reason")
     @classmethod
@@ -538,6 +546,36 @@ class SessionCancel(BaseModel):
         if not value:
             raise ValueError("cancellation reason cannot be blank")
         return value
+
+
+class ParticipantVoidOriginal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    station_id: UUID
+    shift_id: UUID
+    amount_minor: int = Field(ge=0, strict=True)
+    billable_minutes: int = Field(ge=0, strict=True)
+    timer_minutes: int | None
+    start_at: datetime
+    end_at: datetime
+    participant_revision: int = Field(gt=0, strict=True)
+    billing_revision: int = Field(ge=0, strict=True)
+    settlement_id: UUID
+    settlement_amount_minor: int = Field(ge=0, strict=True)
+    settlement_revision: int = Field(gt=0, strict=True)
+    settlement_final_play_elapsed_ms: int = Field(ge=0, strict=True)
+
+
+class ParticipantVoidReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal[1]
+    receipt_id: UUID
+    idempotency_key: str = Field(min_length=1, max_length=160)
+    request_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    request: SessionCancel
+    original: ParticipantVoidOriginal
+    response: SessionRead
 
 
 class SessionAddonModifierSelection(BaseModel):
@@ -3068,6 +3106,11 @@ async def get_session(
     ).scalar_one_or_none()
     if gaming_session is None:
         raise NotFoundError("session not found")
+    if gaming_session.status == "cancelled" and int(gaming_session.participant_revision or 0) > 0:
+        await _assert_participant_settlement_consistent(session, gaming_session)
+        await _assert_package_amendment_consistent(session, gaming_session)
+        _audit, receipt = await _participant_void_receipt(session, gaming_session)
+        return receipt.response
     return session_read(gaming_session)
 
 
@@ -3949,10 +3992,16 @@ async def _assert_package_amendment_consistent(
                 )
             )
         ).scalar_one_or_none()
+        projected_amount = gs.amount_minor
+        if gs.status == "cancelled" and int(gs.participant_revision or 0) > 0:
+            await _assert_participant_settlement_consistent(session, gs)
+            _audit, void_receipt = await _participant_void_receipt(session, gs)
+            projected_amount = void_receipt.original.amount_minor
         if (
             settlement is None
             or int(settlement.base_amount_minor) != expected_amount
-            or int(settlement.amount_after_minor) != int(gs.amount_minor or -1)
+            or projected_amount is None
+            or int(settlement.amount_after_minor) != int(projected_amount)
         ):
             raise GamingBillingRepairRequiredError(
                 "The session amount no longer matches its amendment and settlement receipts."
@@ -5027,6 +5076,87 @@ def _participant_totals(rows: list[GamingSessionParticipant]) -> dict[UUID, tupl
     return totals
 
 
+async def _participant_void_receipt(session, gs: GamingSession) -> tuple[AuditLog, ParticipantVoidReceipt]:
+    rows = list((await session.execute(select(AuditLog).where(
+        AuditLog.company_id == gs.company_id,
+        AuditLog.action == "gaming_session_voided",
+        AuditLog.entity_type == "GamingSession",
+        AuditLog.entity_id == str(gs.id),
+    ))).scalars().all())
+    if len(rows) != 1:
+        raise GamingBillingRepairRequiredError("The cancelled participant session requires one immutable Void receipt.")
+    audit = rows[0]
+    try:
+        receipt = ParticipantVoidReceipt.model_validate(audit.after)
+    except ValidationError as exc:
+        raise GamingBillingRepairRequiredError("The participant Void receipt is incomplete or inconsistent.") from exc
+    original, request, response = receipt.original, receipt.request, receipt.response
+    facts = audit.business_details if isinstance(audit.business_details, dict) else {}
+    if (
+        gs.status != "cancelled" or gs.order_id is not None
+        or gs.amount_minor != 0 or gs.billable_minutes != 0
+        or gs.cancelled_at is None or gs.cancelled_by is None or not (gs.cancel_reason or "").strip()
+        or audit.actor_user_id != gs.cancelled_by or audit.terminal_id is None
+        or audit.operation_id != receipt.idempotency_key or audit.reason != gs.cancel_reason
+        or audit.created_at != gs.cancelled_at
+        or request.reason != gs.cancel_reason
+        or request.expected_amount_minor != original.amount_minor
+        or request.expected_participant_revision != original.participant_revision
+        or request.expected_billing_revision != original.billing_revision
+        or original.station_id != gs.station_id or original.shift_id != gs.shift_id
+        or original.start_at != gs.start_at or original.end_at != gs.end_at
+        or original.timer_minutes != gs.timer_minutes
+        or original.participant_revision != int(gs.participant_revision or 0)
+        or original.billing_revision != _billing_revision(gs)
+        or original.billable_minutes != billable_whole_minutes(gs, gs.end_at)
+        or original.amount_minor != original.settlement_amount_minor
+        or original.participant_revision != original.settlement_revision
+        or response.id != gs.id or response.station_id != gs.station_id or response.shift_id != gs.shift_id
+        or response.status != "cancelled" or response.order_id is not None
+        or response.amount_minor != 0 or response.billable_minutes != 0
+        or response.cancel_reason != gs.cancel_reason or response.end_at != gs.end_at
+        or response.start_at != gs.start_at or response.timer_minutes != gs.timer_minutes
+        or facts.get("voided_amount_minor") != original.amount_minor
+        or facts.get("amount_after_void_minor") != 0
+        or facts.get("original_billable_minutes") != original.billable_minutes
+        or facts.get("attendance_retained") is not True
+        or facts.get("reason") != gs.cancel_reason
+        or type(facts.get("added_player_interval_count")) is not int
+        or response.participant_revision != original.participant_revision
+        or response.billing_revision != original.billing_revision
+        or response.cancellation_receipt_id != receipt.receipt_id
+        or response.cancellation_idempotency_key != receipt.idempotency_key
+        or response.cancellation_request_hash != receipt.request_hash
+    ):
+        raise GamingBillingRepairRequiredError("The participant Void receipt does not match the cancelled session projection.")
+    return audit, receipt
+
+
+async def _assert_participant_void_extension_chain(session, gs: GamingSession, settlement: GamingParticipantSettlement) -> None:
+    """A Void must not legitimise a corrupt base/amendment/extension projection."""
+    expected_timer = _effective_base_duration_minutes(gs)
+    expected_amount = _effective_base_price_minor(gs) + extra_controller_surcharge_minor(
+        extra_controllers=int(gs.extra_controllers or 0), duration_minutes=expected_timer,
+    )
+    extensions = list((await session.execute(select(GamingSessionExtension).where(
+        GamingSessionExtension.company_id == gs.company_id,
+        GamingSessionExtension.gaming_session_id == gs.id,
+    ).order_by(GamingSessionExtension.created_at, GamingSessionExtension.id))).scalars().all())
+    for extension in extensions:
+        if (
+            int(extension.billing_revision) != _billing_revision(gs)
+            or int(extension.timer_before_minutes) != expected_timer
+            or int(extension.amount_before_minor) != expected_amount
+            or int(extension.timer_after_minutes) != expected_timer + int(extension.duration_minutes)
+            or int(extension.amount_after_minor) != expected_amount + int(extension.total_minor)
+            or int(extension.total_minor) != int(extension.package_price_minor) + int(extension.controller_surcharge_minor)
+        ):
+            raise GamingBillingRepairRequiredError("The participant Void extension chain is inconsistent.")
+        expected_timer, expected_amount = int(extension.timer_after_minutes), int(extension.amount_after_minor)
+    if gs.timer_minutes != expected_timer or int(settlement.base_amount_minor) != expected_amount:
+        raise GamingBillingRepairRequiredError("The participant Void base amount or timer is inconsistent.")
+
+
 async def _assert_participant_settlement_consistent(session, gs: GamingSession) -> None:
     revision = int(getattr(gs, "participant_revision", 0) or 0)
     if revision == 0:
@@ -5083,6 +5213,20 @@ async def _assert_participant_settlement_consistent(session, gs: GamingSession) 
         ):
             raise GamingBillingRepairRequiredError("Participant settlement calculation is inconsistent.")
         expected_charge += hours * 3000
+    projected_amount = gs.amount_minor
+    if gs.status == "cancelled":
+        audit, void_receipt = await _participant_void_receipt(session, gs)
+        original = void_receipt.original
+        if (
+            original.settlement_id != settlement.id
+            or original.settlement_amount_minor != int(settlement.amount_after_minor)
+            or original.settlement_revision != int(settlement.participant_revision)
+            or original.settlement_final_play_elapsed_ms != int(settlement.final_play_elapsed_ms)
+            or audit.business_details.get("added_player_interval_count") != sum(int(line.interval_count) for line in lines)
+        ):
+            raise GamingBillingRepairRequiredError("The Void receipt does not match the immutable participant settlement.")
+        await _assert_participant_void_extension_chain(session, gs, settlement)
+        projected_amount = original.amount_minor
     if (
         any(row.left_at is None for row in rows)
         or any(int(row.left_play_elapsed_ms or 0) > int(settlement.final_play_elapsed_ms) for row in rows)
@@ -5093,8 +5237,8 @@ async def _assert_participant_settlement_consistent(session, gs: GamingSession) 
         or int(settlement.base_amount_minor) != expected_base
         or int(settlement.guest_charge_minor) != expected_charge
         or int(settlement.amount_after_minor) != int(settlement.base_amount_minor) + expected_charge
-        or gs.amount_minor is None
-        or int(gs.amount_minor) != int(settlement.amount_after_minor)
+        or projected_amount is None
+        or int(projected_amount) != int(settlement.amount_after_minor)
     ):
         raise GamingBillingRepairRequiredError("Participant settlement total is inconsistent. POS and repair are blocked.")
 
@@ -5958,6 +6102,7 @@ async def cancel_session(
     session_id: UUID,
     payload: SessionCancel,
     session: SessionDep,
+    request: Request,
     tenant: TenantContext = Depends(requires("gaming.write")),
 ) -> SessionRead:
     """Cancel a mistaken/unbillable session with an auditable reason.
@@ -5967,6 +6112,13 @@ async def cancel_session(
     legacy ended session whose shift was already closed, but cannot cancel a
     session that already produced an order.
     """
+    key = getattr(request.state, "idempotency_key", None)
+    request_hash = getattr(request.state, "idempotency_request_hash", None)
+    cached = None
+    if key:
+        key, request_hash = _require_idempotency(request)
+        cached = await check_or_reserve(session, key=key, request_hash=request_hash,
+            user_id=tenant.user_id, terminal_id=tenant.terminal_id)
     gs = (
         await session.execute(
             select(GamingSession).where(GamingSession.id == session_id).with_for_update()
@@ -5989,19 +6141,44 @@ async def cancel_session(
         resource_branch_id=station.branch_id,
         resource_name="gaming station",
     )
-    if gs.status == "cancelled":
-        # Safe response-loss replay, including after the original shift closes.
-        return session_read(gs)
     has_participant_evidence = (
         int(getattr(gs, "participant_revision", 0) or 0) > 0
         or await _has_participant_evidence(session, gs)
     )
-    if has_participant_evidence:
-        if gs.status == "ended":
+    if gs.status == "cancelled":
+        if has_participant_evidence:
             await _assert_participant_settlement_consistent(session, gs)
-        raise BusinessRuleError(
-            "A session with saved friend presence cannot be cancelled; settle it through Stop and POS."
-        )
+            await _assert_package_amendment_consistent(session, gs, lock=True)
+            audit, receipt = await _participant_void_receipt(session, gs)
+            if (
+                key is None or key != receipt.idempotency_key or request_hash != receipt.request_hash
+                or payload.model_dump(mode="json") != receipt.request.model_dump(mode="json")
+                or audit.actor_user_id != tenant.user_id or audit.terminal_id != tenant.terminal_id
+            ):
+                raise IdempotencyConflict("This session already has a different immutable Void receipt. Refresh to review the recorded result.")
+            await store_response(session, key=key, status_code=200, body=receipt.response.model_dump(mode="json"))
+            return receipt.response
+        response = session_read(gs)
+        if key:
+            await store_response(session, key=key, status_code=200, body=response.model_dump(mode="json"))
+        return response
+    if cached is not None:
+        raise ConflictError("A stored Void response does not match this session's current state. Nothing was changed.")
+    if has_participant_evidence:
+        if gs.status != "ended":
+            raise BusinessRuleError("Player joins are recorded. Stop this session, then Void it here. No POS bill is required.")
+        await _assert_participant_settlement_consistent(session, gs)
+        await _assert_package_amendment_consistent(session, gs, lock=True)
+        if key is None or request_hash is None or any(value is None for value in (
+            payload.expected_participant_revision, payload.expected_billing_revision, payload.expected_amount_minor,
+        )):
+            raise BusinessRuleError("Void requires the reviewed participant revision, billing revision, amount and Idempotency-Key. Update the app and refresh Gaming.")
+        if (
+            payload.expected_participant_revision != int(gs.participant_revision or 0)
+            or payload.expected_billing_revision != _billing_revision(gs)
+            or payload.expected_amount_minor != gs.amount_minor
+        ):
+            raise ConflictError("The stopped session changed after review. Refresh and review Void again.")
     if gs.order_id is not None:
         raise BusinessRuleError("cannot cancel a session that was already sent to POS")
     if gs.status not in ("active", "paused", "ended"):
@@ -6040,6 +6217,27 @@ async def cancel_session(
         operation="cancel a gaming or shisha session on this shift",
     )
 
+    settlement = None
+    original = None
+    if has_participant_evidence:
+        await _assert_participant_settlement_consistent(session, gs)
+        await _assert_package_amendment_consistent(session, gs, lock=True)
+        settlement = (await session.execute(select(GamingParticipantSettlement).where(
+            GamingParticipantSettlement.company_id == gs.company_id,
+            GamingParticipantSettlement.gaming_session_id == gs.id,
+        ))).scalar_one()
+        await _assert_participant_void_extension_chain(session, gs, settlement)
+        if gs.end_at is None or gs.billable_minutes != billable_whole_minutes(gs, gs.end_at):
+            raise GamingBillingRepairRequiredError("The stopped session's played minutes are inconsistent. Void was not applied.")
+        original = ParticipantVoidOriginal(
+            station_id=gs.station_id, shift_id=gs.shift_id,
+            amount_minor=gs.amount_minor, billable_minutes=gs.billable_minutes,
+            timer_minutes=gs.timer_minutes, start_at=gs.start_at, end_at=gs.end_at,
+            participant_revision=int(gs.participant_revision), billing_revision=_billing_revision(gs),
+            settlement_id=settlement.id, settlement_amount_minor=int(settlement.amount_after_minor),
+            settlement_revision=int(settlement.participant_revision),
+            settlement_final_play_elapsed_ms=int(settlement.final_play_elapsed_ms),
+        )
     now = datetime.now(timezone.utc)
     finish_pause(gs, now)
     gs.status = "cancelled"
@@ -6049,8 +6247,43 @@ async def cancel_session(
     gs.cancelled_at = now
     gs.cancelled_by = tenant.user_id
     gs.cancel_reason = payload.reason
+    response = session_read(gs)
+    if original is not None:
+        receipt_id = uuid4()
+        response = response.model_copy(update={
+            "cancellation_receipt_id": receipt_id,
+            "cancellation_idempotency_key": key,
+            "cancellation_request_hash": request_hash,
+        })
+        receipt = ParticipantVoidReceipt(version=1, receipt_id=receipt_id,
+            idempotency_key=key, request_hash=request_hash, request=payload,
+            original=original, response=response)
+        audit = record_operation(session, company_id=tenant.company_id, actor_user_id=tenant.user_id,
+            terminal_id=tenant.terminal_id, action="gaming_session_voided",
+            entity_type="GamingSession", entity_id=gs.id, operation_id=key,
+            before={"status": "ended", **original.model_dump(mode="json")},
+            after=receipt.model_dump(mode="json"), reason=payload.reason)
+        audit.created_at = now
+        audit.business_details = {
+            "voided_amount_minor": original.amount_minor,
+            "amount_after_void_minor": 0,
+            "original_billable_minutes": original.billable_minutes,
+            "added_player_interval_count": sum(
+                int(line.interval_count) for line in (await session.execute(
+                    select(GamingParticipantSettlementLine).where(
+                        GamingParticipantSettlementLine.company_id == gs.company_id,
+                        GamingParticipantSettlementLine.settlement_id == settlement.id,
+                    )
+                )).scalars().all()
+            ),
+            "attendance_retained": True,
+            "status": "cancelled",
+            "reason": payload.reason,
+        }
     await session.flush()
-    return session_read(gs)
+    if key:
+        await store_response(session, key=key, status_code=200, body=response.model_dump(mode="json"))
+    return response
 
 
 @router.post("/sessions/{session_id}/resolve-legacy-pause", response_model=SessionRead)

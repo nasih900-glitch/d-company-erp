@@ -14,6 +14,7 @@ import {
   XCircle,
 } from 'lucide-react';
 
+import AndroidUpdatePolicyPanel from './AndroidUpdatePolicyPanel';
 import { ConfirmModal } from '@/components/ui/ConfirmDialog';
 import { Skeleton, SkeletonCard } from '@/components/ui/Skeleton';
 import { useNotifications } from '@/components/ui/Notifications';
@@ -278,6 +279,8 @@ export default function DevicesUpdatesTab() {
       {actionError ? (
         <ErrorPanel title="Release action needs attention" message={actionError} />
       ) : null}
+
+      <AndroidUpdatePolicyPanel />
 
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Device update summary">
         <SummaryCard

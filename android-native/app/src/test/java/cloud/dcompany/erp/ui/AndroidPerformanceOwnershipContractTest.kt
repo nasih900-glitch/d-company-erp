@@ -211,10 +211,36 @@ class AndroidPerformanceOwnershipContractTest {
             "@Composable\nprivate fun GamingAmbientBackdrop(",
         )
 
-        assertTrue(
-            "Active, available, payment-due, and shift status must remain on the station board",
-            "GamingBoardHeadline(state, onRefresh)" in workspace,
+        val headline = gaming.between(
+            "private fun GamingBoardHeadline(",
+            "@Composable\nprivate fun GamingCommandPanel(",
         )
+        val compactHeader = gaming.between(
+            "private fun GamingCompactBoardHeader(",
+            "@Composable\ninternal fun GamingStationCard(",
+        )
+        assertTrue(
+            "Both board sizes must render their status header and optional attention action",
+            "GamingBoardHeadline(state, onRefresh, attentionAction)" in workspace &&
+                "GamingCompactBoardHeader(" in workspace,
+        )
+        assertTrue(
+            "Normal board status must retain authoritative active, available, payment-due and shift values",
+            "operationalActiveGamingSessionCount(state.sessions)" in headline &&
+                "state.stations.count { it.isActive && state.activeFor(it.id) == null }" in headline &&
+                "\"Active\" to active.toString()" in headline &&
+                "\"Available\" to available.toString()" in headline &&
+                "\"Payment due\" to state.readyForPos.size.toString()" in headline &&
+                "gamingShiftSummary(" in headline && "\"POS shift\" to shift.label" in headline,
+        )
+        assertTrue(
+            "The compact board must retain its fixed-height status or actionable attention header",
+            "height(48.dp).testTag(\"gaming-board-header\")" in compactHeader &&
+                "operationalActiveGamingSessionCount(state.sessions)" in compactHeader &&
+                "if (attentionAction != null) attentionAction() else Row(" in compactHeader,
+        )
+        assertFalse("Neither status header may own the one-second clock",
+            "wallClock.value" in headline || "wallClock.value" in compactHeader)
         assertFalse(
             "The whole station board must not observe the one-second clock",
             "wallClock.value" in workspace,

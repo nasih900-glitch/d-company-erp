@@ -49,6 +49,14 @@ RUN set -eux; \
     go version -m /out/caddy | grep -F 'github.com/caddyserver/caddy/v2'; \
     go version -m /out/caddy | grep -F 'v2.11.4'
 
+COPY infra/docker/caddy-build/verify-system-ca/ /tmp/dcompany-verify-system-ca/
+RUN set -eux; \
+    export CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" GOMAXPROCS=1 GOMEMLIMIT=256MiB; \
+    go test -p=1 -mod=readonly -count=1 -v \
+      /tmp/dcompany-verify-system-ca/main.go /tmp/dcompany-verify-system-ca/main_test.go; \
+    go build -p=1 -mod=readonly -buildvcs=false -trimpath -ldflags='-s -w -buildid=' \
+      -o /out/verify-caddy-system-ca /tmp/dcompany-verify-system-ca/main.go
+
 FROM caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648 AS zlib-builder
 WORKDIR /tmp/dcompany-zlib
 RUN apk add --no-cache --virtual .zlib-build-deps build-base patch
@@ -79,18 +87,32 @@ LABEL org.opencontainers.image.title="D Company ERP Caddy" \
       com.dcompany.zlib.followup.commit="7235b0a581227c56a79a43ff828f8ef6794194c8" \
       com.dcompany.zlib.followup.sha256="96040ee84d0d187905283912dbd3f7b66ac2033976a2ceefe9b8cca63143d9c2"
 
+COPY --from=caddy-builder /out/verify-caddy-system-ca /tmp/verify-caddy-system-ca
+
 RUN set -eux; \
     apk add --no-cache --upgrade \
-      'c-ares=1.34.8-r0' \
-      'curl=8.22.0-r0' \
-      'libcurl=8.22.0-r0' \
+      'ca-certificates=20261020-r0' \
+      'ca-certificates-bundle=20261020-r0' \
+      'c-ares=1.34.9-r0' \
       'libcrypto3=3.5.9-r0' \
       'libssl3=3.5.9-r0' \
       'zlib=1.3.2-r1'; \
+    update-ca-certificates --fresh; \
+    /tmp/verify-caddy-system-ca; \
+    rm -f /tmp/verify-caddy-system-ca; \
+    retained_apk_constraints="$(awk -F: '$1 == "P" { name = $2 } $1 == "V" && name != "curl" && name != "libcurl" { print name "=" $2 }' /lib/apk/db/installed | LC_ALL=C sort)"; \
+    test -n "$retained_apk_constraints"; \
+    apk add --no-network --repositories-file /dev/null $retained_apk_constraints; \
+    apk del --no-network --repositories-file /dev/null curl libcurl; \
+    remaining_apk_constraints="$(awk -F: '$1 == "P" { name = $2 } $1 == "V" { print name "=" $2 }' /lib/apk/db/installed | LC_ALL=C sort)"; \
+    test "$remaining_apk_constraints" = "$retained_apk_constraints"; \
+    if command -v curl >/dev/null 2>&1 || command -v wcurl >/dev/null 2>&1; then exit 1; fi; \
+    test ! -e /usr/lib/libcurl.so.4; \
+    test ! -e /usr/lib/libcurl.so.4.8.0; \
     installed_packages="$(apk info -v)"; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'c-ares-1.34.8-r0'; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'curl-8.22.0-r0'; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'libcurl-8.22.0-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'ca-certificates-20261020-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'ca-certificates-bundle-20261020-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'c-ares-1.34.9-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'zlib-1.3.2-r1'

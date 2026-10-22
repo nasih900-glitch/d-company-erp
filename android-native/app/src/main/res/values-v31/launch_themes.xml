@@ -3,18 +3,18 @@
     <!-- Stable names: Android persists the chosen app-only splash theme by name.
          Keep the original manifest launcher icon; System resets to that manifest. -->
     <style name="Theme.DCompany.Start.Day" parent="Theme.DCompany">
-        <item name="android:windowSplashScreenBackground">#FAFAFA</item>
-        <item name="android:windowBackground">#FAFAFA</item>
-        <item name="android:statusBarColor">#FAFAFA</item>
-        <item name="android:navigationBarColor">#FAFAFA</item>
+        <item name="android:windowSplashScreenBackground">#F7F7F7</item>
+        <item name="android:windowBackground">#F7F7F7</item>
+        <item name="android:statusBarColor">#F7F7F7</item>
+        <item name="android:navigationBarColor">#F7F7F7</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowLightNavigationBar">true</item>
     </style>
     <style name="Theme.DCompany.Start.Night" parent="Theme.DCompany">
-        <item name="android:windowSplashScreenBackground">#050505</item>
-        <item name="android:windowBackground">#050505</item>
-        <item name="android:statusBarColor">#050505</item>
-        <item name="android:navigationBarColor">#050505</item>
+        <item name="android:windowSplashScreenBackground">#08131B</item>
+        <item name="android:windowBackground">#08131B</item>
+        <item name="android:statusBarColor">#08131B</item>
+        <item name="android:navigationBarColor">#08131B</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
     </style>

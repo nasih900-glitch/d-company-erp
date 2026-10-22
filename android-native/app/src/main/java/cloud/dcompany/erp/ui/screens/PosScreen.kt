@@ -116,6 +116,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cloud.dcompany.erp.core.db.HeldOrderCacheEntity
 import cloud.dcompany.erp.core.db.HeldOrderPaymentState
+import cloud.dcompany.erp.core.db.PosReceiptSource
 import cloud.dcompany.erp.core.db.MenuCategoryEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
 import cloud.dcompany.erp.core.db.MenuModifierEntity
@@ -1098,6 +1099,11 @@ internal fun shouldDismissPosVoidTarget(
     targetOrderId != preparedDirectOrderId &&
     targetOrderId != preparedHeldOrderId
 
+internal fun posReceiptConfirmationTitle(sourceKind: String): String = when (sourceKind) {
+    PosReceiptSource.ZERO_DIRECT, PosReceiptSource.ZERO_HELD -> "Bill completed — no payment due"
+    else -> "Payment confirmed"
+}
+
 @Composable
 private fun PosReceiptDialog(
     receipt: PosReceiptEntity,
@@ -1116,7 +1122,7 @@ private fun PosReceiptDialog(
             ) {
                 item {
                     OperationalBanner(
-                        title = "Payment confirmed",
+                        title = posReceiptConfirmationTitle(receipt.sourceKind),
                         detail = buildString {
                             append(receipt.method.paymentMethodLabel())
                             receipt.paidAt?.let { append(" · ${it.receiptDateTime()}") }
@@ -2681,6 +2687,7 @@ private fun CategoryStrip(
                 label = { Text("All") },
                 shape = Radius.shapeMd,
                 colors = colors,
+                modifier = Modifier.heightIn(min = 48.dp),
             )
         }
         items(categories, key = { it.id }) { category ->
@@ -2690,6 +2697,7 @@ private fun CategoryStrip(
                 label = { Text(category.name, maxLines = 1) },
                 shape = Radius.shapeMd,
                 colors = colors,
+                modifier = Modifier.heightIn(min = 48.dp),
             )
         }
     }
@@ -2707,11 +2715,11 @@ private fun MenuTile(
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(if (pressed) 0.94f else 1f, tween(Motion.fast, easing = Motion.emphasized), label = "tileScale")
+    val scale by animateFloatAsState(if (pressed) 0.98f else 1f, tween(Motion.fast, easing = Motion.emphasized), label = "tileScale")
     val icon = remember(item.type, item.name, categoryName) { posProductIcon(item, categoryName) }
     Column(
         modifier = modifier
-            .height(if (compact) 124.dp else 156.dp)
+            .height(if (compact) 112.dp else 128.dp)
             .testTag("pos-product-${item.id}")
             .graphicsLayer {
                 scaleX = scale
@@ -2744,28 +2752,35 @@ private fun MenuTile(
             .padding(Spacing.sm),
         verticalArrangement = Arrangement.spacedBy(Spacing.xs),
     ) {
-        Box(
-            Modifier.fillMaxWidth().weight(1f).clip(Radius.shapeSm)
-                .background(MaterialTheme.colorScheme.surfaceContainerLow),
-            contentAlignment = Alignment.Center,
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
-                Modifier.size(if (compact) 44.dp else 68.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape),
+                Modifier.size(32.dp).clip(Radius.shapeSm)
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     icon,
                     contentDescription = null,
                     tint = if (enabled) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(if (compact) 27.dp else 36.dp),
+                    modifier = Modifier.size(21.dp),
                 )
             }
+            Text(
+                item.sku.takeIf(String::isNotBlank) ?: categoryName.orEmpty(),
+                modifier = Modifier.weight(1f),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         Text(
             item.name,
+            modifier = Modifier.weight(1f),
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface,
@@ -2946,7 +2961,7 @@ internal fun CartPanel(
             DesignedEmptyState(
                 title = if (canWrite) "Build this order" else "View-only POS",
                 body = if (canWrite) {
-                    "Choose a product from the menu. Quantity controls, the running estimate, and payment stay together here."
+                    "Choose products from the menu. Review quantities and payment here."
                 } else {
                     "You can browse the menu and current order, but this role cannot add items or collect payment."
                 },

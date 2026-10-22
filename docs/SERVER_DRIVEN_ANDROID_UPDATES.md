@@ -26,20 +26,58 @@ Play/managed update contract and both signing lineages have been proven.
   alone is deliberately insufficient for this global, pre-login registry.
   Activation re-fetches and re-hashes the public APK before changing the one
   active release under a database lock.
-- `ANDROID_MIN_SUPPORTED_VERSION_CODE` remains the separate mandatory-update
-  policy. Staging and activation never raise or lower it.
-- `CLIENT_COMPATIBILITY_POLICY_REVISION` is the monotonic generation for that
-  mandatory policy. Increment it for every minimum change, including an
-  emergency rollback; never decrement or reuse a revision.
+- `ANDROID_MIN_SUPPORTED_VERSION_CODE` remains the deployment safety floor.
+  Staging and activation never change that floor. The protected Build55 policy
+  may require an exact verified active release above it; Optional returns to
+  the deployment floor and can never lower it.
+- `CLIENT_COMPATIBILITY_POLICY_REVISION` remains the deployment revision floor.
+  The effective policy revision is the maximum of this value and the stored
+  singleton revision. Every owner policy change compares the reviewed effective
+  revision, increments it, and records actor, reason and before/after evidence.
 - `ANDROID_UPDATE_ALLOWED_ORIGIN=https://dcompany.duckdns.org` pins registry
   URLs to the production origin and controlled `/downloads/android/` path even
   while no optional release is active.
 
-There is deliberately no HTTP upload, signing, metadata-edit, or minimum-policy
-endpoint. A compromised owner browser therefore cannot replace APK bytes,
-change their identity, or lower the compatibility floor.
+There is no HTTP upload, signing or artifact-metadata-edit endpoint. The protected
+`GET/PUT /client-updates/android/policy` control accepts only Optional/Required,
+reviewed revision, reason and the exact server-provided active release identity.
+It cannot replace APK bytes, supply another URL/hash or lower the deployment
+safety floor. It uses the same advisory lock as activation/withdrawal. A pinned
+Required target cannot be withdrawn or implicitly replaced until the controller
+explicitly selects Optional. Policy and artifact evidence remain separate from
+signing and deployment approvals.
 
-## Current rollout boundary
+## Build55 policy behavior
+
+Web and Android expose the control inline in the existing Devices & Updates
+workspace to the exact configured deployment controller. It affects all direct
+Android installations, including the controller's own app. Android still asks
+for normal package-install approval. Build55 polls roughly once per second only
+while online and in the foreground, using a bounded single request and failure
+backoff. The fifteen-minute telemetry cadence is unchanged. Offline/background
+and older apps cannot be made to react instantly; they respond at their next
+server check. Saved Room/outbox/ambiguous/rejected work is not erased.
+
+The policy table is not seeded: an empty row set preserves existing deployment
+behavior and optional offers. Explicit Optional produces a newer definitive
+Supported response for allowed builds below55, because those clients cannot
+clear a saved Required block from an update_available response. This suppresses
+their optional banner until they upgrade; Build55 can safely show an optional
+offer after relaxation. All clients remain subject to the deployment floor.
+
+Required policy delivery checks both immutable registry identity and bounded,
+cached live runtime parity. Policy read or live-identity failures return503;
+they do not invent Supported or discard a stored requirement. New clients retain
+the highest policy revision across every state and process recreation, so late
+old 426 responses cannot undo a newer Optional decision.
+
+Before business writes on a new release, rollback still uses the guarded
+installer and reviewed compatibility/backup evidence. Changing Optional is not
+a database rollback, does not undo business activity and grants no pending-work
+or migration exception.
+
+
+## Historical Code30.3 rollout boundary
 
 Code30.2 `v3.1.29` / version code `37` at commit
 `3ea84be4718a794d5a2e8efc7ac9bcacbc0cee01` is the immutable direct-channel

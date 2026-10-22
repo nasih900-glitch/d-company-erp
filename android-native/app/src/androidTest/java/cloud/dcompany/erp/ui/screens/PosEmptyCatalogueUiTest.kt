@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
@@ -23,19 +25,24 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
@@ -49,8 +56,12 @@ import cloud.dcompany.erp.core.db.MenuCategoryEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
 import cloud.dcompany.erp.core.db.SyncState
 import cloud.dcompany.erp.core.net.CustomerRewardEligibility
+import cloud.dcompany.erp.core.sync.OutboxWorkStatus
+import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.WorkspaceScaffold
 import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
+import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
 import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.screens.settings.LoyaltyProgramRulesDto
 import cloud.dcompany.erp.ui.screens.settings.LoyaltyRankRuleDto
@@ -296,6 +307,8 @@ class PosEmptyCatalogueUiTest {
         )
 
         compose.onAllNodesWithText("Cold drinks").assertCountEquals(1)
+        compose.onNodeWithText(longDrink.sku).assertIsDisplayed()
+        compose.onNodeWithTag("pos-product-${longDrink.id}").assertHeightIsAtLeast(48.dp)
         val nameBounds = compose.onNodeWithText(longDrink.name)
             .assertIsDisplayed().getUnclippedBoundsInRoot()
         assertTrue(
@@ -449,6 +462,86 @@ class PosEmptyCatalogueUiTest {
             "Focused cash entry must keep the payment action fully visible after IME resize",
             action.bottom <= viewport.bottom && action.bottom - action.top >= 48.dp,
         )
+    }
+
+    @Test
+    fun posCartQueryCategoryAndScrollSurviveRealWorkspaceTabNavigation() {
+        val drinksCategory = MenuCategoryEntity("drinks", "Drinks", 0, false)
+        val snacksCategory = MenuCategoryEntity("snacks", "Snacks", 1, false)
+        val drinks = (1..30).map { index ->
+            menuItem(
+                id = "drink-$index",
+                name = "Audit Drink ${index.toString().padStart(2, '0')}",
+                priceMinor = 1_000L + index,
+            ).copy(categoryId = drinksCategory.id)
+        }
+        val snack = menuItem("snack-1", "Audit Snack", 2_000L)
+            .copy(categoryId = snacksCategory.id)
+        val state = mutableStateOf(
+            PosUiState(
+                categories = listOf(drinksCategory, snacksCategory),
+                items = drinks + snack,
+                operationalCategories = listOf(drinksCategory, snacksCategory),
+                operationalItems = drinks + snack,
+                online = true,
+                activeShiftId = "shift-retention",
+                canCollectPayment = true,
+                draftState = SyncState.DRAFT,
+                draftLocalId = "draft-retention",
+                draftRevision = 1L,
+            ),
+        )
+        val destination = mutableStateOf(Destination.Pos)
+
+        renderDynamic(
+            state = state,
+            onAddItem = { item ->
+                state.value = state.value.copy(
+                    cart = state.value.cart + CartLine(
+                        lineId = "line-${item.id}",
+                        item = item,
+                        qty = 1,
+                        unitPriceMinor = item.basePriceMinor,
+                    ),
+                )
+            },
+            onSelectCategory = { categoryId ->
+                state.value = state.value.copy(selectedCategoryId = categoryId)
+            },
+            workspaceDestination = destination,
+        )
+
+        compose.onNodeWithText("Drinks").performClick().assertIsSelected()
+        compose.onNode(
+            hasSetTextAction() and hasText("Search items…"),
+        ).performTextReplacement("Audit Drink")
+        val productGrid = hasScrollToIndexAction() and
+            hasAnyAncestor(hasTestTag("pos-catalog")) and
+            SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange)
+        compose.onAllNodes(productGrid).assertCountEquals(1)
+        compose.onNode(productGrid).performScrollToIndex(29)
+        compose.onNodeWithTag("pos-product-drink-30").assertIsDisplayed().performClick()
+        compose.onAllNodesWithText("Audit Drink 30").assertCountEquals(2)
+
+        compose.onNodeWithContentDescription("Shift. Open, review and close today's shift").performClick()
+        compose.onNodeWithTag("workspace-away-from-pos").assertIsDisplayed()
+        compose.onNodeWithContentDescription("POS. Take orders and payments").performClick()
+
+        compose.onNodeWithText("Drinks").assertIsSelected()
+        compose.onNode(
+            hasSetTextAction() and SemanticsMatcher.expectValue(
+                SemanticsProperties.EditableText,
+                AnnotatedString("Audit Drink"),
+            ),
+        ).assertIsDisplayed()
+        // This assertion deliberately does not scroll. The last tile is visible only if
+        // WorkspaceScaffold restored the product grid's non-zero LazyGrid position.
+        compose.onNodeWithTag("pos-product-drink-30").assertIsDisplayed()
+        compose.onAllNodesWithText("Audit Drink 30").assertCountEquals(2)
+        compose.runOnIdle {
+            assertEquals("drinks", state.value.selectedCategoryId)
+            assertEquals(listOf("drink-30"), state.value.cart.map { it.item.id })
+        }
     }
 
     private fun menuItem(id: String, name: String, priceMinor: Long) = MenuItemEntity(
@@ -941,8 +1034,10 @@ class PosEmptyCatalogueUiTest {
         eligibleRewardCatalog: EligibleRewardCatalogState = EligibleRewardCatalogState(),
         onAddItem: (MenuItemEntity) -> Unit = {},
         onIncrementLine: (String) -> Unit = {},
+        onSelectCategory: (String?) -> Unit = {},
         onClearCart: () -> Unit = {},
         viewportSize: State<Pair<Int, Int>>? = null,
+        workspaceDestination: MutableState<Destination>? = null,
     ) {
         compose.setContent {
             DCompanyTheme {
@@ -954,7 +1049,11 @@ class PosEmptyCatalogueUiTest {
                     // direct child. A loose parent lets this test exercise the
                     // requested content viewport instead of silently using 1280x900.
                     Box(Modifier.fillMaxSize()) {
-                    Box(viewportModifier.background(MaterialTheme.colorScheme.background).testTag("pos-layout-root")) {
+                    Box(
+                        viewportModifier.background(MaterialTheme.colorScheme.background)
+                            .testTag("pos-layout-root"),
+                    ) {
+                        val posScreen: @Composable () -> Unit = {
                         PosScreen(
                             state = state.value,
                             recentReceipts = emptyList(),
@@ -974,7 +1073,7 @@ class PosEmptyCatalogueUiTest {
                             onRemove = {},
                             onIncrementLine = onIncrementLine,
                             onDecrementLine = {},
-                            onSelectCategory = {},
+                            onSelectCategory = onSelectCategory,
                             onClearCart = onClearCart,
                             onUpdateDraftDetails = { _, _, _, _ -> },
                             onRefresh = {},
@@ -1009,6 +1108,34 @@ class PosEmptyCatalogueUiTest {
                             eligibleRewardCatalog = eligibleRewardCatalog,
                             presentation = presentation,
                         )
+                        }
+                        val activeDestination = workspaceDestination
+                        if (activeDestination == null) {
+                            posScreen()
+                        } else {
+                            WorkspaceScaffold(
+                                destinations = listOf(Destination.Pos, Destination.Shift),
+                                currentDestination = activeDestination.value,
+                                employeeName = "Fixture cashier",
+                                locationLabel = "Fixture till",
+                                connectivityProblem = SyncAvailabilityProblem.NONE,
+                                outboxWorkStatus = OutboxWorkStatus(),
+                                syncing = false,
+                                canChangeTill = false,
+                                onOpenSupport = {},
+                                onChangeTill = {},
+                                onSignOut = {},
+                                onDestinationChanged = { activeDestination.value = it },
+                            ) { destination, _ ->
+                                when (destination) {
+                                    Destination.Pos -> posScreen()
+                                    Destination.Shift -> Box(
+                                        Modifier.fillMaxSize().testTag("workspace-away-from-pos"),
+                                    )
+                                    else -> error("Unexpected fixture destination: $destination")
+                                }
+                            }
+                        }
                     }
                     }
                 }

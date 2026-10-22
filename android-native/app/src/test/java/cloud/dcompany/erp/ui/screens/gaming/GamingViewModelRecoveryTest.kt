@@ -11,6 +11,8 @@ import cloud.dcompany.erp.core.net.MeResponse
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import java.time.Instant
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
@@ -664,6 +666,60 @@ class GamingViewModelRecoveryTest {
 
         assertSame(cancellation, thrown)
         assertFalse(refreshed)
+    }
+
+    @Test
+    fun activeCancellationRetainsPendingWorkAndRequiresCurrentOnlineShift() {
+        val active = session("active-cancel", "active", GamingSessionState.START_SYNCED)
+            .copy(shiftId = "shift-1", lastError = null)
+        val state = GamingUiState(sessions = listOf(active), activeShiftId = "shift-1", online = true)
+        assertTrue(active.canCancelUnbilled())
+        assertTrue(active.copy(status = "paused").canCancelUnbilled())
+        assertNull(state.cancellationBlockFor(active, false))
+        assertNotNull(state.copy(online = false).cancellationBlockFor(active, false))
+        assertNotNull(state.copy(activeShiftId = "other-shift").cancellationBlockFor(active, true))
+        assertNotNull(state.cancellationBlockFor(active.copy(participantRevision = 1), false))
+        assertFalse(active.copy(localState = GamingSessionState.STOP_PENDING).canCancelUnbilled())
+        assertFalse(active.copy(localState = GamingSessionState.START_PENDING).canCancelUnbilled())
+        assertFalse(active.copy(localState = GamingSessionState.SEND_PENDING).canCancelUnbilled())
+        assertFalse(active.copy(orderId = "paid-order").canCancelUnbilled())
+        assertTrue(state.needsCancellation.isEmpty())
+    }
+
+    @Test
+    fun stoppedPlayerVoidBindsReviewedRevisionsAmountAndStableRequestIdentity() {
+        for (status in listOf("active", "paused")) {
+            val active = session("participant", status, GamingSessionState.START_SYNCED).copy(participantRevision = 2)
+            assertTrue(participantCancellationGuidance(status).contains("Stop this session, then Void it here"))
+            assertNull(participantVoidBody(active, "Mistake"))
+        }
+        val ended = session("participant", "ended", GamingSessionState.ENDED_UNBILLED)
+            .copy(shiftId = "shift-1", participantRevision = 3, billingRevision = 1, amountMinor = 18_000)
+        val state = GamingUiState(sessions = listOf(ended), activeShiftId = "shift-1", online = true)
+        assertNull(state.cancellationBlockFor(ended, false))
+        val body = requireNotNull(participantVoidBody(ended, "  Entered by mistake  "))
+        assertEquals("Entered by mistake", body.reason)
+        assertEquals(3, body.expectedParticipantRevision)
+        assertEquals(1, body.expectedBillingRevision)
+        assertEquals(18_000L, body.expectedAmountMinor)
+        assertEquals("gaming-session-void:participant", participantVoidKey(ended.id))
+        assertTrue(participantCancellationGuidance("ended").contains("No POS bill is required"))
+    }
+
+    @Test
+    fun cancellationReceiptMustMatchSessionStationShiftAndTerminalState() {
+        val original = session("original", "active", GamingSessionState.START_SYNCED).copy(shiftId = "shift-1")
+        val cancelled = original.copy(status = "cancelled", localState = null,
+            amountMinor = 0, billableMinutes = 0, cancelReason = "Recorded mistake")
+        assertTrue(cancelled.isConfirmedCancellation(original.id, original))
+        assertFalse(cancelled.copy(id = "other").isConfirmedCancellation(original.id, original))
+        assertFalse(cancelled.copy(stationId = "other").isConfirmedCancellation(original.id, original))
+        assertFalse(cancelled.copy(shiftId = "other").isConfirmedCancellation(original.id, original))
+        assertFalse(original.isConfirmedCancellation(original.id, original))
+        assertFalse(cancelled.copy(orderId = "paid-order").isConfirmedCancellation(original.id, original))
+        assertFalse(cancelled.copy(amountMinor = 1).isConfirmedCancellation(original.id, original))
+        assertFalse(cancelled.copy(billableMinutes = 1).isConfirmedCancellation(original.id, original))
+        assertFalse(cancelled.copy(cancelReason = " ").isConfirmedCancellation(original.id, original))
     }
 
     private fun session(

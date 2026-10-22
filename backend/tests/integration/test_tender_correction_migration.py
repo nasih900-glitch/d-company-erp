@@ -118,7 +118,7 @@ def test_direct_sql_guards_sources_mutation_and_config():
 @pytest.mark.parametrize("commit_writer", [True, False])
 def test_pending_receipt_writer_is_fenced_before_downgrade(commit_writer):
     with _disposable_database("erp_tender_pending") as url:
-        migration = _run_alembic(url, "upgrade", "head")
+        migration = _run_alembic(url, "upgrade", "0091")
         assert migration.returncode == 0, migration.stderr
         dsn = url.replace("postgresql+psycopg://", "postgresql://", 1)
         with psycopg.connect(dsn) as writer, psycopg.connect(dsn, autocommit=True) as observer:

@@ -137,18 +137,10 @@ def test_backend_write_surface_is_bounded_to_reviewed_audit_delta():
                 "diff",
                 "--name-only",
                 "f78d567b2093671992be289133af22637e6d7b0d",
+                "8506c7abdf15c92029226849f42b1b71fd6878d6",
                 "--",
                 "backend/app",
             ],
-            cwd=ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.splitlines()
-    )
-    changed.update(
-        subprocess.run(
-            ["git", "diff", "--name-only", "--", "backend/app"],
             cwd=ROOT,
             check=True,
             capture_output=True,

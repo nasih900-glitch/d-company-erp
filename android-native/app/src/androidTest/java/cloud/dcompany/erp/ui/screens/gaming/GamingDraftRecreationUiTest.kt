@@ -15,14 +15,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import cloud.dcompany.erp.core.auth.CacheScope
 import cloud.dcompany.erp.core.auth.CacheScopeLease
@@ -94,13 +98,23 @@ class GamingDraftRecreationUiTest {
 
     private fun chooseDualFourSixty() {
         compose.onNodeWithTag("gaming-station-ps5-2").performClick()
-        compose.onNodeWithText("Dual", substring = true).performScrollTo().performClick()
-        repeat(2) {
-            val icon = compose.onNodeWithContentDescription("Add player")
-            if (runCatching { icon.fetchSemanticsNode() }.isSuccess) icon.performScrollTo().performClick()
-            else compose.onNodeWithText("Add player").performScrollTo().performClick()
+        compose.onNodeWithText("Dual · 2+ players").performScrollTo().performClick()
+        repeat(2) { compose.onNodeWithText("Add player").performScrollTo().performClick() }
+        compose.onNodeWithText("Dual · 2+ players").performScrollTo().assertIsDisplayed().assertIsSelected()
+        compose.onNodeWithTag("gaming-booked-player-count").performScrollTo().assertTextEquals("4/4")
+        compose.onNodeWithText("Add player").performScrollTo().assertIsDisplayed().assertIsNotEnabled()
+        compose.onNodeWithText("2 extra controllers · ₹60.00 surcharge").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("Choose 60 minutes, ₹210.00").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Session duration dial").performTouchInput {
+            down(Offset(width * 0.50f, height * 0.90f))
+            repeat(12) { step ->
+                val angle = Math.toRadians((90f + (step + 1) * 15f).toDouble())
+                moveTo(Offset(width * (0.5f + 0.4f * kotlin.math.cos(angle).toFloat()),
+                    height * (0.5f + 0.4f * kotlin.math.sin(angle).toFloat())), delayMillis = 16)
+            }
+            up()
         }
-        compose.onNodeWithContentDescription("Choose 60 minutes, ₹210.00").performClick()
+        compose.onNodeWithContentDescription("Choose 60 minutes, ₹210.00").assertIsDisplayed()
         compose.onNodeWithText("Start 60 min · ₹210.00").assertIsDisplayed()
         compose.runOnIdle { assertEquals("ps5-2", selectedId) }
     }
@@ -130,6 +144,10 @@ class GamingDraftRecreationUiTest {
         compose.onNodeWithTag("gaming-start-action").assertDoesNotExist()
         compose.runOnIdle { assertEquals("ps5-2", selectedId); projection.value = loaded }
         compose.onNodeWithText("Start 60 min · ₹210.00").assertIsDisplayed()
+        compose.onNodeWithText("Dual · 2+ players").performScrollTo().assertIsDisplayed().assertIsSelected()
+        compose.onNodeWithTag("gaming-booked-player-count").performScrollTo().assertTextEquals("4/4")
+        compose.onNodeWithText("Add player").performScrollTo().assertIsDisplayed().assertIsNotEnabled()
+        compose.onNodeWithText("2 extra controllers · ₹60.00 surcharge").performScrollTo().assertIsDisplayed()
         compose.runOnIdle {
             assertEquals("ps5-2", selectedId)
             projection.value = loaded.copy(stations = listOf(stations.first()))

@@ -298,6 +298,83 @@ def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> No
         "    go version -m /out/caddy | grep -F 'go1.26.8'; \\\n",
         "    go version -m /out/caddy | grep -F 'go1.26.9'; \\\n",
     )
+    # Build55 advances only the signed Alpine c-ares security package. Keep
+    # the complete inherited graph/pins and full-file equality assertion.
+    expected = _replace_once(
+        expected, "'c-ares=1.34.8-r0'", "'c-ares=1.34.9-r0'"
+    )
+    expected = _replace_once(
+        expected, "'c-ares-1.34.8-r0'", "'c-ares-1.34.9-r0'"
+    )
+    # Build55 removes unused vulnerable curl/libcurl. Retain the exact
+    # Caddy/base/other-package contract and full-file equality; no scan exception.
+    expected = _replace_once(
+        expected,
+        "      'curl=8.22.0-r0' \\\n"
+        "      'libcurl=8.22.0-r0' \\\n",
+        '',
+    )
+    expected = _replace_once(
+        expected,
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'curl-8.22.0-r0\'; \\\n'
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'libcurl-8.22.0-r0\'; \\\n',
+        '',
+    )
+    expected = _replace_once(
+        expected,
+        '    installed_packages="$(apk info -v)"; \\\n',
+        '    retained_apk_constraints="$(awk -F: \'$1 == "P" { name = $2 } $1 == "V" && name != "curl" && name != "libcurl" { print name "=" $2 }\' /lib/apk/db/installed | LC_ALL=C sort)"; \\\n'
+        '    test -n "$retained_apk_constraints"; \\\n'
+        '    apk add --no-network --repositories-file /dev/null $retained_apk_constraints; \\\n'
+        '    apk del --no-network --repositories-file /dev/null curl libcurl; \\\n'
+        '    remaining_apk_constraints="$(awk -F: \'$1 == "P" { name = $2 } $1 == "V" { print name "=" $2 }\' /lib/apk/db/installed | LC_ALL=C sort)"; \\\n'
+        '    test "$remaining_apk_constraints" = "$retained_apk_constraints"; \\\n'
+        '    if command -v curl >/dev/null 2>&1 || command -v wcurl >/dev/null 2>&1; then exit 1; fi; \\\n'
+        '    test ! -e /usr/lib/libcurl.so.4; \\\n'
+        '    test ! -e /usr/lib/libcurl.so.4.8.0; \\\n'
+        '    installed_packages="$(apk info -v)"; \\\n',
+    )
+    # Build55 restores both signed CA packages and checks the effective Go pool.
+    # Preserve complete inherited file equality and all unrelated pins/guards.
+    expected = _replace_once(
+        expected,
+        'FROM caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648 AS zlib-builder',
+        'COPY infra/docker/caddy-build/verify-system-ca/ /tmp/dcompany-verify-system-ca/\n'
+        'RUN set -eux; \\\n'
+        '    export CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" GOMAXPROCS=1 GOMEMLIMIT=256MiB; \\\n'
+        '    go test -p=1 -mod=readonly -count=1 -v \\\n'
+        '      /tmp/dcompany-verify-system-ca/main.go /tmp/dcompany-verify-system-ca/main_test.go; \\\n'
+        "    go build -p=1 -mod=readonly -buildvcs=false -trimpath -ldflags='-s -w -buildid=' \\\n"
+        '      -o /out/verify-caddy-system-ca /tmp/dcompany-verify-system-ca/main.go\n'
+        '\n'
+        'FROM caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648 AS zlib-builder',
+    )
+    expected = _replace_once(
+        expected,
+        'RUN set -eux; \\\n'
+        '    apk add --no-cache --upgrade \\\n',
+        'COPY --from=caddy-builder /out/verify-caddy-system-ca /tmp/verify-caddy-system-ca\n'
+        '\n'
+        'RUN set -eux; \\\n'
+        '    apk add --no-cache --upgrade \\\n'
+        "      'ca-certificates=20261020-r0' \\\n"
+        "      'ca-certificates-bundle=20261020-r0' \\\n",
+    )
+    expected = _replace_once(
+        expected,
+        "      'zlib=1.3.2-r1'; \\\n",
+        "      'zlib=1.3.2-r1'; \\\n"
+        '    update-ca-certificates --fresh; \\\n'
+        '    /tmp/verify-caddy-system-ca; \\\n'
+        '    rm -f /tmp/verify-caddy-system-ca; \\\n',
+    )
+    expected = _replace_once(
+        expected,
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'c-ares-1.34.9-r0\'; \\\n',
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'ca-certificates-20261020-r0\'; \\\n'
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'ca-certificates-bundle-20261020-r0\'; \\\n'
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'c-ares-1.34.9-r0\'; \\\n',
+    )
     assert CADDY_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
@@ -387,6 +464,29 @@ def test_backend_image_changes_only_reviewed_openssl_runtime_controls() -> None:
         + " \\\n"
         + "    && test \"$(python --version)\" = 'Python 3.14.8' \\\n",
     )
+    # Build55 adds only the reviewed Python/system-CA trust correction. Keep
+    # every historical transform above and full-file equality below intact.
+    helper_copy = "COPY infra/scripts/bootstrap-verified-pip.py /tmp/bootstrap-verified-pip.py\n"
+    helper_install = "RUN python -I -B /tmp/bootstrap-verified-pip.py && rm /tmp/bootstrap-verified-pip.py\n"
+    for environment in (
+        "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1\n",
+        "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1\n",
+    ):
+        expected = _replace_once(expected, environment, environment + helper_copy)
+    ca_install = _replace_once(
+        package_install,
+        "      'libuuid=2.42.3-r1' \\\n",
+        "      'libuuid=2.42.3-r1' \\\n      'ca-certificates=20261020-r0' \\\n      'ca-certificates-bundle=20261020-r0' \\\n",
+    )
+    ca_install = _replace_once(
+        ca_install,
+        '    && printf \'%s\\n\' "$installed_packages" | grep -Fx \'libuuid-2.42.3-r1\' \\\n',
+        '    && printf \'%s\\n\' "$installed_packages" | grep -Fx \'libuuid-2.42.3-r1\' \\\n    && printf \'%s\\n\' "$installed_packages" | grep -Fx \'ca-certificates-20261020-r0\' \\\n    && printf \'%s\\n\' "$installed_packages" | grep -Fx \'ca-certificates-bundle-20261020-r0\' \\\n    && update-ca-certificates \\\n    && python -I -B /tmp/bootstrap-verified-pip.py --verify-system-ca \\\n',
+    )
+    assert expected.count(package_install) == 2
+    expected = expected.replace(package_install, ca_install)
+    expected = _replace_once(expected, "COPY backend/requirements.lock .\n", "COPY backend/requirements.lock .\n" + helper_install)
+    expected = _replace_once(expected, "WORKDIR /app\nCOPY --from=builder /install", helper_install + "WORKDIR /app\nCOPY --from=builder /install")
     assert BACKEND_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
@@ -473,6 +573,37 @@ def test_frontend_image_changes_only_reviewed_security_controls() -> None:
         "    && rm /tmp/write-release-identity.sh \\\n"
         "    && find /usr/share/nginx/html -type d -exec chmod 0755 {} + \\\n"
         "    && find /usr/share/nginx/html -type f -exec chmod 0644 {} +\n",
+    )
+    # Build55 upgrades only the signed nginx APK; retain the pinned base,
+    # r0 zlib overlay and full inherited-file equality. No scan exception.
+    expected = _replace_once(
+        expected,
+        'FROM nginx:alpine-slim@sha256:3b171d7224b669faa3cc2137fea0a65301791df1ec1f271ebd2a2b7461f7fade\n'
+        'ARG APP_VERSION=dev\n',
+        'FROM nginx:alpine-slim@sha256:3b171d7224b669faa3cc2137fea0a65301791df1ec1f271ebd2a2b7461f7fade\n'
+        'ENV NGINX_VERSION=1.31.8\n'
+        'ARG APP_VERSION=dev\n',
+    )
+    expected = _replace_once(
+        expected,
+        "      'pcre2=10.49-r0'; \\\n"
+        '    installed_packages="$(apk info -v)"; \\\n',
+        "      'pcre2=10.49-r0'; \\\n"
+        '    test "$(apk --print-arch)" = \'x86_64\'; \\\n'
+        "    printf '%s\\n' 'e09fa32f0a0eab2b879ccbbc4d0e4fb9751486eedda75e35fac65802cc9faa266425edf83e261137a2f4d16281ce2c1a5f4502930fe75154723da014214f0655  /etc/apk/keys/nginx_signing.rsa.pub' | sha512sum -c -; \\\n"
+        "    wget -T 30 -qO /tmp/dcompany-nginx-1.31.8-r1.apk 'https://nginx.org/packages/mainline/alpine/v3.24/main/x86_64/nginx-1.31.8-r1.apk'; \\\n"
+        "    printf '%s\\n' '51bb8ca7072b422c9355656e45a1aafec24eb1606adb3a84c562f80731d3f848  /tmp/dcompany-nginx-1.31.8-r1.apk' | sha256sum -c -; \\\n"
+        '    apk add --no-cache --no-network --upgrade --repositories-file /dev/null /tmp/dcompany-nginx-1.31.8-r1.apk; \\\n'
+        '    rm /tmp/dcompany-nginx-1.31.8-r1.apk; \\\n'
+        '    installed_packages="$(apk info -v)"; \\\n',
+    )
+    expected = _replace_once(
+        expected,
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'pcre2-10.49-r0\'; \\\n',
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'pcre2-10.49-r0\'; \\\n'
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'nginx-1.31.8-r1\'; \\\n'
+        '    test "$NGINX_VERSION" = \'1.31.8\'; \\\n'
+        "    nginx -v 2>&1 | grep -Fx 'nginx version: nginx/1.31.8'; \\\n",
     )
     assert FRONTEND_DOCKERFILE.read_text(encoding="utf-8") == expected
 
