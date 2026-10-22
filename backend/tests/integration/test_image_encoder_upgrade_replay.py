@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 import pytest
 from PIL import Image, PngImagePlugin
 from sqlalchemy import select
+from sqlalchemy.orm import undefer
 
 from app.api.v1.bug_reports import router as bug_router
 from app.models import BugReportAttachment
@@ -59,7 +60,7 @@ async def test_original_upload_replays_after_encoder_changes_canonical_bytes(
     )
     assert replay.status_code == 201, replay.text
     assert replay.json() == original
-    retained = (await session.execute(select(BugReportAttachment).where(
+    retained = (await session.execute(select(BugReportAttachment).options(undefer(BugReportAttachment.payload)).where(
         BugReportAttachment.company_id == seed_owner["company"].id,
         BugReportAttachment.bug_report_id == UUID(report_id),
     ))).scalars().all()
