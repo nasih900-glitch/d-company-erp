@@ -298,6 +298,14 @@ def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> No
         "    go version -m /out/caddy | grep -F 'go1.26.8'; \\\n",
         "    go version -m /out/caddy | grep -F 'go1.26.9'; \\\n",
     )
+    # Build55 advances only the signed Alpine c-ares security package. Keep
+    # the complete inherited graph/pins and full-file equality assertion.
+    expected = _replace_once(
+        expected, "'c-ares=1.34.8-r0'", "'c-ares=1.34.9-r0'"
+    )
+    expected = _replace_once(
+        expected, "'c-ares-1.34.8-r0'", "'c-ares-1.34.9-r0'"
+    )
     assert CADDY_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
