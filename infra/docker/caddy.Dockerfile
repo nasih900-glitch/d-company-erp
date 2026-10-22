@@ -82,15 +82,20 @@ LABEL org.opencontainers.image.title="D Company ERP Caddy" \
 RUN set -eux; \
     apk add --no-cache --upgrade \
       'c-ares=1.34.9-r0' \
-      'curl=8.22.0-r0' \
-      'libcurl=8.22.0-r0' \
       'libcrypto3=3.5.9-r0' \
       'libssl3=3.5.9-r0' \
       'zlib=1.3.2-r1'; \
+    retained_apk_constraints="$(awk -F: '$1 == "P" { name = $2 } $1 == "V" && name != "curl" && name != "libcurl" { print name "=" $2 }' /lib/apk/db/installed | LC_ALL=C sort)"; \
+    test -n "$retained_apk_constraints"; \
+    apk add --no-network --repositories-file /dev/null $retained_apk_constraints; \
+    apk del --no-network --repositories-file /dev/null curl libcurl; \
+    remaining_apk_constraints="$(awk -F: '$1 == "P" { name = $2 } $1 == "V" { print name "=" $2 }' /lib/apk/db/installed | LC_ALL=C sort)"; \
+    test "$remaining_apk_constraints" = "$retained_apk_constraints"; \
+    if command -v curl >/dev/null 2>&1 || command -v wcurl >/dev/null 2>&1; then exit 1; fi; \
+    test ! -e /usr/lib/libcurl.so.4; \
+    test ! -e /usr/lib/libcurl.so.4.8.0; \
     installed_packages="$(apk info -v)"; \
     printf '%s\n' "$installed_packages" | grep -Fx 'c-ares-1.34.9-r0'; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'curl-8.22.0-r0'; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'libcurl-8.22.0-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'zlib-1.3.2-r1'

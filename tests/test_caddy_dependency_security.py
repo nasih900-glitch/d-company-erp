@@ -306,6 +306,34 @@ def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> No
     expected = _replace_once(
         expected, "'c-ares-1.34.8-r0'", "'c-ares-1.34.9-r0'"
     )
+    # Build55 removes unused vulnerable curl/libcurl. Retain the exact
+    # Caddy/base/other-package contract and full-file equality; no scan exception.
+    expected = _replace_once(
+        expected,
+        "      'curl=8.22.0-r0' \\\n"
+        "      'libcurl=8.22.0-r0' \\\n",
+        '',
+    )
+    expected = _replace_once(
+        expected,
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'curl-8.22.0-r0\'; \\\n'
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'libcurl-8.22.0-r0\'; \\\n',
+        '',
+    )
+    expected = _replace_once(
+        expected,
+        '    installed_packages="$(apk info -v)"; \\\n',
+        '    retained_apk_constraints="$(awk -F: \'$1 == "P" { name = $2 } $1 == "V" && name != "curl" && name != "libcurl" { print name "=" $2 }\' /lib/apk/db/installed | LC_ALL=C sort)"; \\\n'
+        '    test -n "$retained_apk_constraints"; \\\n'
+        '    apk add --no-network --repositories-file /dev/null $retained_apk_constraints; \\\n'
+        '    apk del --no-network --repositories-file /dev/null curl libcurl; \\\n'
+        '    remaining_apk_constraints="$(awk -F: \'$1 == "P" { name = $2 } $1 == "V" { print name "=" $2 }\' /lib/apk/db/installed | LC_ALL=C sort)"; \\\n'
+        '    test "$remaining_apk_constraints" = "$retained_apk_constraints"; \\\n'
+        '    if command -v curl >/dev/null 2>&1 || command -v wcurl >/dev/null 2>&1; then exit 1; fi; \\\n'
+        '    test ! -e /usr/lib/libcurl.so.4; \\\n'
+        '    test ! -e /usr/lib/libcurl.so.4.8.0; \\\n'
+        '    installed_packages="$(apk info -v)"; \\\n',
+    )
     assert CADDY_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
