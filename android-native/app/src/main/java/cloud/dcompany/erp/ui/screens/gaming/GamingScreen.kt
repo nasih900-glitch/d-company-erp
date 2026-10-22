@@ -44,6 +44,8 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -119,6 +121,7 @@ import androidx.compose.runtime.saveable.mapSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.structuralEqualityPolicy
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
@@ -136,6 +139,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
@@ -154,6 +159,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
 import kotlin.math.cos
 import kotlin.math.sin
 import androidx.compose.ui.window.DialogProperties
@@ -6604,7 +6610,7 @@ private fun gamingDurationChoices(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 internal fun StartSessionEditor(
     station: Station,
@@ -6643,6 +6649,24 @@ internal fun StartSessionEditor(
     var customerQuery by effectiveSelectionState.customerQuery
     var selectedCustomer by effectiveSelectionState.customer
     var selectedVariant by effectiveSelectionState.selectedVariant
+    val customerSearchView = remember(station.id) { BringIntoViewRequester() }
+    val customerNameView = remember(station.id) { BringIntoViewRequester() }
+    val customerPhoneView = remember(station.id) { BringIntoViewRequester() }
+    var focusedCustomerInput by remember(
+        station.id, customerMode, selectedCustomer != null, showInlineBlocker,
+    ) { mutableStateOf<BringIntoViewRequester?>(null) }
+    var customerViewportSize by remember(
+        station.id, embedded, externallyHostedDial, pinActions,
+    ) { mutableStateOf(IntSize.Zero) }
+    LaunchedEffect(focusedCustomerInput, customerViewportSize) {
+        val focused = focusedCustomerInput ?: return@LaunchedEffect
+        if (customerViewportSize.width > 0 && customerViewportSize.height > 0) {
+            // IME resizing can finish after focus relocation. Request the whole
+            // field again in its measured viewport, without changing focus.
+            withFrameNanos { }
+            focused.bringIntoView()
+        }
+    }
     val supportsPlayerModes = stationFilterId(station.type) == "ps5" &&
         basePackages.any { it.variant in setOf("single", "dual") }
     var playerCount by effectiveSelectionState.playerCount
@@ -7000,9 +7024,13 @@ internal fun StartSessionEditor(
                         }
                     } else null,
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth().semantics {
-                        contentDescription = "Search saved customers by name or phone"
-                    },
+                    modifier = Modifier.fillMaxWidth()
+                        .bringIntoViewRequester(customerSearchView)
+                        .onFocusChanged { focus ->
+                            if (focus.isFocused) focusedCustomerInput = customerSearchView
+                            else if (focusedCustomerInput === customerSearchView) focusedCustomerInput = null
+                        }
+                        .semantics { contentDescription = "Search saved customers by name or phone" },
                 )
                 customerResults.forEach { option ->
                     TextButton(
@@ -7063,9 +7091,13 @@ internal fun StartSessionEditor(
                         }
                     } else null,
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth().semantics {
-                        contentDescription = "Customer name (optional)"
-                    },
+                    modifier = Modifier.fillMaxWidth()
+                        .bringIntoViewRequester(customerNameView)
+                        .onFocusChanged { focus ->
+                            if (focus.isFocused) focusedCustomerInput = customerNameView
+                            else if (focusedCustomerInput === customerNameView) focusedCustomerInput = null
+                        }
+                        .semantics { contentDescription = "Customer name (optional)" },
                 )
                 OutlinedTextField(
                     value = phone,
@@ -7076,9 +7108,13 @@ internal fun StartSessionEditor(
                     },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                    modifier = Modifier.fillMaxWidth().semantics {
-                        contentDescription = "Customer phone (optional)"
-                    },
+                    modifier = Modifier.fillMaxWidth()
+                        .bringIntoViewRequester(customerPhoneView)
+                        .onFocusChanged { focus ->
+                            if (focus.isFocused) focusedCustomerInput = customerPhoneView
+                            else if (focusedCustomerInput === customerPhoneView) focusedCustomerInput = null
+                        }
+                        .semantics { contentDescription = "Customer phone (optional)" },
                 )
             }
         }
@@ -7153,6 +7189,7 @@ internal fun StartSessionEditor(
     if (embedded && externallyHostedDial) {
         Column(
             modifier.fillMaxSize().testTag("gaming-start-inline")
+                .then(if (pinActions) Modifier else Modifier.onSizeChanged { customerViewportSize = it })
                 // Match the shared starting/active footer baseline. A draft-
                 // only bottom inset moved Start four pixels above Stop even
                 // though both actions use the same reserved support region.
@@ -7161,7 +7198,9 @@ internal fun StartSessionEditor(
         ) {
             if (pinActions) {
                 Column(
-                    Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+                    Modifier.weight(1f).fillMaxWidth()
+                        .onSizeChanged { customerViewportSize = it }
+                        .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                 ) {
                     // Keep the editor and its draft state mounted, but give the
@@ -7260,6 +7299,7 @@ internal fun StartSessionEditor(
                     val availableFormHeight = maxHeight
                     Column(
                         Modifier.widthIn(max = 760.dp).fillMaxWidth()
+                            .onSizeChanged { customerViewportSize = it }
                             .verticalScroll(rememberScrollState())
                             .padding(vertical = if (embedded) Spacing.xs else Spacing.md),
                         verticalArrangement = Arrangement.spacedBy(if (embedded) Spacing.xs else Spacing.md),

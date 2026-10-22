@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableLongState
 import androidx.compose.runtime.mutableLongStateOf
@@ -1922,6 +1923,140 @@ class GamingDialogUiTest {
     }
 
     @Test
+    fun startSession_focusedInputsRelocateAfterCompactViewportResizeWithImeOpen() {
+        val viewportHeight = mutableStateOf(520.dp)
+        var submittedName: String? = null
+        var submittedPhone: String? = null
+        var starts = 0
+        compose.setContent {
+            DCompanyTheme {
+                Box(Modifier.width(600.dp).height(viewportHeight.value)) {
+                    StartSessionEditor(
+                        station = testStation().copy(type = "streaming"),
+                        embedded = true,
+                        onDismiss = {},
+                        onConfirm = { _, name, phone, _, _, _ ->
+                            starts += 1
+                            submittedName = name
+                            submittedPhone = phone
+                        },
+                    )
+                }
+            }
+        }
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val originalFlags = automation.serviceInfo.flags
+        try {
+            automation.serviceInfo = automation.serviceInfo.apply {
+                flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            }
+            val search = compose.onNodeWithContentDescription("Search saved customers by name or phone")
+            search.performScrollTo().performAndroidScreenTouchWithOptionalIme().assertIsFocused()
+                .performTextReplacement("A guest")
+            compose.runOnIdle { viewportHeight.value = 342.dp }
+            // No test scroll after shrinking: the focused field must relocate
+            // itself, including the outline and its complete touch target.
+            search.assertIsFocused().performAndroidScreenTouch().assertIsFocused()
+
+            compose.onNodeWithText("Add new").bringIntoViewIfNeeded().performClick()
+            compose.runOnIdle { viewportHeight.value = 520.dp }
+            val name = compose.onNodeWithContentDescription("Customer name (optional)")
+            name.performScrollTo().performAndroidScreenTouchWithOptionalIme().assertIsFocused()
+                .performTextReplacement("Booking guest")
+            compose.runOnIdle { viewportHeight.value = 342.dp }
+            name.assertIsFocused().performAndroidScreenTouch().assertIsFocused()
+
+            compose.runOnIdle { viewportHeight.value = 520.dp }
+            val phone = compose.onNodeWithContentDescription("Customer phone (optional)")
+            phone.performScrollTo().performAndroidScreenTouch().assertIsFocused()
+                .performTextReplacement("+91 98765 43210")
+            compose.runOnIdle { viewportHeight.value = 342.dp }
+            phone.assertIsFocused().performAndroidScreenTouch().assertIsFocused()
+            compose.runOnIdle { assertEquals(0, starts) }
+            compose.onNodeWithTag("gaming-start-action")
+                .assertIsDisplayed().assertIsEnabled().performAndroidScreenTouch()
+        } finally {
+            automation.serviceInfo = automation.serviceInfo.apply { flags = originalFlags }
+        }
+        compose.runOnIdle {
+            assertEquals(1, starts)
+            assertEquals("Booking guest", submittedName)
+            assertEquals("+91 98765 43210", submittedPhone)
+        }
+    }
+
+    @Test
+    fun startSession_removedInputNeverStealsFocusAfterModeSelectionOrDismissal() {
+        val viewportHeight = mutableStateOf(520.dp)
+        val visible = mutableStateOf(true)
+        val restoration = StateRestorationTester(compose)
+        val customer = GamingCustomerOption(
+            customerId = "customer-focus-review",
+            name = "QA Customer",
+            phone = "9876543210",
+            pending = false,
+        )
+        restoration.setContent {
+            DCompanyTheme {
+                if (visible.value) Box(Modifier.width(600.dp).height(viewportHeight.value)) {
+                    StartSessionEditor(
+                        station = testStation().copy(type = "streaming"),
+                        customers = listOf(customer),
+                        embedded = true,
+                        externallyHostedDial = true,
+                        pinActions = true,
+                        onDismiss = { visible.value = false },
+                        onConfirm = { _, _, _, _, _, _ -> error("No booking should be submitted") },
+                    )
+                } else Text("Booking editor dismissed")
+            }
+        }
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val originalFlags = automation.serviceInfo.flags
+        try {
+            automation.serviceInfo = automation.serviceInfo.apply {
+                flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            }
+            compose.onNodeWithText("Add new").bringIntoViewIfNeeded().performClick()
+            val name = compose.onNodeWithContentDescription("Customer name (optional)")
+            name.performScrollTo().performAndroidScreenTouchWithOptionalIme().assertIsFocused()
+                .performTextReplacement("Unlinked note")
+            compose.runOnIdle { viewportHeight.value = 342.dp }
+            name.assertIsFocused().performAndroidScreenTouch()
+
+            compose.onNodeWithText("Saved customer").bringIntoViewIfNeeded().performClick()
+            val search = compose.onNodeWithContentDescription("Search saved customers by name or phone")
+            search.assertIsNotFocused()
+            search.performScrollTo().performAndroidScreenTouchWithOptionalIme().assertIsFocused()
+                .performTextReplacement("QA Customer")
+            compose.runOnIdle { viewportHeight.value = 520.dp }
+            compose.onNodeWithText("QA Customer").bringIntoViewIfNeeded().performClick()
+            compose.onNodeWithContentDescription("Search saved customers by name or phone").assertDoesNotExist()
+            compose.runOnIdle { viewportHeight.value = 342.dp }
+            compose.onNodeWithText("Change").bringIntoViewIfNeeded().performClick()
+            compose.onNodeWithContentDescription("Search saved customers by name or phone")
+                .assertIsNotFocused()
+                .performScrollTo().performAndroidScreenTouchWithOptionalIme().assertIsFocused()
+                .performTextReplacement("Another guest").performAndroidScreenTouch()
+            restoration.emulateSavedInstanceStateRestore()
+            compose.onNodeWithContentDescription("Search saved customers by name or phone")
+                .assertIsNotFocused()
+                .performScrollTo().performAndroidScreenTouchWithOptionalIme().assertIsFocused()
+                .performTextReplacement("After recreation").performAndroidScreenTouch()
+            // Removing the editor cancels relocation; no stale requester may
+            // reopen focus while the parent resizes or renders another screen.
+            compose.runOnIdle {
+                visible.value = false
+                viewportHeight.value = 520.dp
+            }
+            compose.onNodeWithText("Booking editor dismissed").assertIsDisplayed()
+            compose.waitForIdle()
+        } finally {
+            automation.serviceInfo = automation.serviceInfo.apply { flags = originalFlags }
+        }
+    }
+
+    @Test
     fun startSession_savedCustomerSearchSelectAndChangeNeverLeakHiddenSnapshots() {
         var submittedCustomerId: String? = "not-submitted"
         var submittedName: String? = "not-submitted"
@@ -2340,7 +2475,8 @@ down(Offset(width * 0.50f, height * 0.90f))
         val windowFocused: Boolean,
         val layoutPending: Boolean,
     ) {
-        val ready: Boolean get() = imeVisible && imeBottom > 0 && windowFocused &&
+        val ready: Boolean get() = imeVisible && imeBottom > 0 && touchTargetReady
+        val touchTargetReady: Boolean get() = windowFocused &&
             !layoutPending && bounds.width >= minimumTouchSize && bounds.height >= minimumTouchSize &&
             abs(bounds.left - clippedBounds.left) <= 1 && abs(bounds.top - clippedBounds.top) <= 1 &&
             abs(bounds.right - clippedBounds.right) <= 1 && abs(bounds.bottom - clippedBounds.bottom) <= 1 &&
@@ -2381,7 +2517,7 @@ down(Offset(width * 0.50f, height * 0.90f))
                 usableBounds = Rect(
                     visibleFrame.left.toFloat(), visibleFrame.top.toFloat(),
                     visibleFrame.right.toFloat(),
-                    minOf(visibleFrame.bottom, keyboardBounds?.top ?: 0).toFloat(),
+                    minOf(visibleFrame.bottom, keyboardBounds?.top ?: visibleFrame.bottom).toFloat(),
                 ),
                 minimumTouchSize = 48 * view.resources.displayMetrics.density,
                 imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime()) && keyboardBounds != null,
@@ -2457,6 +2593,35 @@ down(Offset(width * 0.50f, height * 0.90f))
         instrumentation.uiAutomation.executeShellCommand(
             "cp ${file.absolutePath} /sdcard/Download/gaming-saved-customer-review.png",
         ).use { command -> FileInputStream(command.fileDescriptor).use { it.readBytes() } }
+    }
+
+    /** Initial real input touch; the keyboard need not be open before focus. */
+    private fun SemanticsNodeInteraction.performAndroidScreenTouchWithOptionalIme(): SemanticsNodeInteraction {
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val originalFlags = automation.serviceInfo.flags
+        try {
+            automation.serviceInfo = automation.serviceInfo.apply {
+                flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            }
+            var previous: DialogTouchSnapshot? = null
+            var stableSamples = 0
+            compose.waitUntil(timeoutMillis = 5_000) {
+                awaitAndroidFrame()
+                val snapshot = dialogTouchSnapshot()
+                stableSamples = if (snapshot.touchTargetReady && snapshot == previous) stableSamples + 1 else 0
+                previous = snapshot
+                stableSamples >= 2
+            }
+            val target = checkNotNull(previous)
+            check(target.touchTargetReady && target == dialogTouchSnapshot()) {
+                "Initial input target moved before touch"
+            }
+            injectAndroidTap(target.bounds.center.x, target.bounds.center.y)
+            compose.waitForIdle()
+        } finally {
+            automation.serviceInfo = automation.serviceInfo.apply { flags = originalFlags }
+        }
+        return this
     }
 
     private fun SemanticsNodeInteraction.performAndroidScreenTouch(): SemanticsNodeInteraction {
