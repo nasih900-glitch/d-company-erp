@@ -334,6 +334,47 @@ def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> No
         '    test ! -e /usr/lib/libcurl.so.4.8.0; \\\n'
         '    installed_packages="$(apk info -v)"; \\\n',
     )
+    # Build55 restores both signed CA packages and checks the effective Go pool.
+    # Preserve complete inherited file equality and all unrelated pins/guards.
+    expected = _replace_once(
+        expected,
+        'FROM caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648 AS zlib-builder',
+        'COPY infra/docker/caddy-build/verify-system-ca/ /tmp/dcompany-verify-system-ca/\n'
+        'RUN set -eux; \\\n'
+        '    export CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" GOMAXPROCS=1 GOMEMLIMIT=256MiB; \\\n'
+        '    go test -p=1 -mod=readonly -count=1 -v \\\n'
+        '      /tmp/dcompany-verify-system-ca/main.go /tmp/dcompany-verify-system-ca/main_test.go; \\\n'
+        "    go build -p=1 -mod=readonly -buildvcs=false -trimpath -ldflags='-s -w -buildid=' \\\n"
+        '      -o /out/verify-caddy-system-ca /tmp/dcompany-verify-system-ca/main.go\n'
+        '\n'
+        'FROM caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648 AS zlib-builder',
+    )
+    expected = _replace_once(
+        expected,
+        'RUN set -eux; \\\n'
+        '    apk add --no-cache --upgrade \\\n',
+        'COPY --from=caddy-builder /out/verify-caddy-system-ca /tmp/verify-caddy-system-ca\n'
+        '\n'
+        'RUN set -eux; \\\n'
+        '    apk add --no-cache --upgrade \\\n'
+        "      'ca-certificates=20261020-r0' \\\n"
+        "      'ca-certificates-bundle=20261020-r0' \\\n",
+    )
+    expected = _replace_once(
+        expected,
+        "      'zlib=1.3.2-r1'; \\\n",
+        "      'zlib=1.3.2-r1'; \\\n"
+        '    update-ca-certificates --fresh; \\\n'
+        '    /tmp/verify-caddy-system-ca; \\\n'
+        '    rm -f /tmp/verify-caddy-system-ca; \\\n',
+    )
+    expected = _replace_once(
+        expected,
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'c-ares-1.34.9-r0\'; \\\n',
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'ca-certificates-20261020-r0\'; \\\n'
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'ca-certificates-bundle-20261020-r0\'; \\\n'
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'c-ares-1.34.9-r0\'; \\\n',
+    )
     assert CADDY_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
