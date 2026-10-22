@@ -2043,12 +2043,16 @@ class GamingDialogUiTest {
             compose.onNodeWithContentDescription("Search saved customers by name or phone")
                 .assertIsNotFocused()
                 .performScrollTo().performAndroidScreenTouchWithOptionalIme().assertIsFocused()
-                .performTextReplacement("Another guest").performAndroidScreenTouch()
+                .performTextReplacement("Another guest")
+            compose.onNodeWithContentDescription("Search saved customers by name or phone")
+                .performAndroidScreenTouch()
             restoration.emulateSavedInstanceStateRestore()
             compose.onNodeWithContentDescription("Search saved customers by name or phone")
                 .assertIsNotFocused()
                 .performScrollTo().performAndroidScreenTouchWithOptionalIme().assertIsFocused()
-                .performTextReplacement("After recreation").performAndroidScreenTouch()
+                .performTextReplacement("After recreation")
+            compose.onNodeWithContentDescription("Search saved customers by name or phone")
+                .performAndroidScreenTouch()
             // Removing the editor cancels relocation; no stale requester may
             // reopen focus while the parent resizes or renders another screen.
             compose.runOnIdle {
