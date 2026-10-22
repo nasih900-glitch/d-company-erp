@@ -35,6 +35,7 @@ import androidx.compose.ui.test.click
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.junit4.StateRestorationTester
@@ -1969,11 +1970,11 @@ class GamingDialogUiTest {
             assertMeasuredCompactInputFixtureHeight()
             name.assertIsFocused().performAndroidScreenTouch().assertIsFocused()
 
-            compose.runOnIdle { viewportHeight.value = 520.dp }
+            // Keep the next touch in the compact pane while the keyboard stays open.
             val phone = compose.onNodeWithContentDescription("Customer phone (optional)")
             phone.performScrollTo().performAndroidScreenTouch().assertIsFocused()
                 .performTextReplacement("+91 98765 43210")
-            compose.runOnIdle { viewportHeight.value = 342.dp }
+            compose.runOnIdle { viewportHeight.value = 320.dp }
             assertMeasuredCompactInputFixtureHeight()
             phone.assertIsFocused().performAndroidScreenTouch().assertIsFocused()
             compose.runOnIdle { assertEquals(0, starts) }
@@ -2035,7 +2036,8 @@ class GamingDialogUiTest {
             search.performScrollTo().performAndroidScreenTouchWithOptionalIme().assertIsFocused()
                 .performTextReplacement("QA Customer")
             compose.runOnIdle { viewportHeight.value = 520.dp }
-            compose.onNodeWithText("QA Customer").bringIntoViewIfNeeded().performClick()
+            compose.onNode(hasText("QA Customer") and hasText(customer.phone) and hasClickAction())
+                .bringIntoViewIfNeeded().performClick()
             compose.onNodeWithContentDescription("Search saved customers by name or phone").assertDoesNotExist()
             compose.runOnIdle { viewportHeight.value = 342.dp }
             assertMeasuredCompactInputFixtureHeight()
