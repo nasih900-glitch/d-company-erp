@@ -387,6 +387,29 @@ def test_backend_image_changes_only_reviewed_openssl_runtime_controls() -> None:
         + " \\\n"
         + "    && test \"$(python --version)\" = 'Python 3.14.8' \\\n",
     )
+    # Build55 adds only the reviewed Python/system-CA trust correction. Keep
+    # every historical transform above and full-file equality below intact.
+    helper_copy = "COPY infra/scripts/bootstrap-verified-pip.py /tmp/bootstrap-verified-pip.py\n"
+    helper_install = "RUN python -I -B /tmp/bootstrap-verified-pip.py && rm /tmp/bootstrap-verified-pip.py\n"
+    for environment in (
+        "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1\n",
+        "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1\n",
+    ):
+        expected = _replace_once(expected, environment, environment + helper_copy)
+    ca_install = _replace_once(
+        package_install,
+        "      'libuuid=2.42.3-r1' \\\n",
+        "      'libuuid=2.42.3-r1' \\\n      'ca-certificates=20261020-r0' \\\n      'ca-certificates-bundle=20261020-r0' \\\n",
+    )
+    ca_install = _replace_once(
+        ca_install,
+        '    && printf \'%s\\n\' "$installed_packages" | grep -Fx \'libuuid-2.42.3-r1\' \\\n',
+        '    && printf \'%s\\n\' "$installed_packages" | grep -Fx \'libuuid-2.42.3-r1\' \\\n    && printf \'%s\\n\' "$installed_packages" | grep -Fx \'ca-certificates-20261020-r0\' \\\n    && printf \'%s\\n\' "$installed_packages" | grep -Fx \'ca-certificates-bundle-20261020-r0\' \\\n    && update-ca-certificates \\\n    && python -I -B /tmp/bootstrap-verified-pip.py --verify-system-ca \\\n',
+    )
+    assert expected.count(package_install) == 2
+    expected = expected.replace(package_install, ca_install)
+    expected = _replace_once(expected, "COPY backend/requirements.lock .\n", "COPY backend/requirements.lock .\n" + helper_install)
+    expected = _replace_once(expected, "WORKDIR /app\nCOPY --from=builder /install", helper_install + "WORKDIR /app\nCOPY --from=builder /install")
     assert BACKEND_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 

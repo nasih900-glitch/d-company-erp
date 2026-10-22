@@ -51,6 +51,7 @@ jobs:
       # Exercise the application/CI closure and the isolated host-backup runtime
       # from their independently reviewed hash locks.
       - run: |
+          python -I -B infra/scripts/bootstrap-verified-pip.py
           pip install --only-binary=:all: --require-hashes -r backend/requirements-ci.lock
           pip install --only-binary=:all: --require-hashes -r ops/backup-requirements.lock
       - name: Verify production installer lock metadata
@@ -133,6 +134,7 @@ jobs:
       - name: Install hash-pinned Android contract dependency
         run: |
           printf '%s\n' 'pyyaml==6.0.3 --hash=sha256:c458b6d084f9b935061bc36216e8a69a7e293a2f1e68bf956dcd9e6cbcd143f5' > "$RUNNER_TEMP/android-contract-requirements.txt"
+          python3 -I -B infra/scripts/bootstrap-verified-pip.py
           python3 -m pip install --only-binary=:all: --require-hashes -r "$RUNNER_TEMP/android-contract-requirements.txt"
       - name: Test Android release and server-delivery contracts
         run: python3 -m unittest discover -s tests -p 'test_android_*.py'

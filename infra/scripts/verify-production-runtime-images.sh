@@ -119,6 +119,25 @@ candidate_images=$(python3 ops/runtime_release_parity.py candidate \
   --version-name "$APP_VERSION" --source-git-sha "$APP_REVISION" \
   --project-name "$PROJECT_NAME")
 
+# Build55 proves the actual final-image trust stores and image encoders offline.
+# Bind the helper from this exact source checkout read-only; never install or
+# download while checking a runtime image, and never run a mutable image tag.
+if [ "$APP_VERSION" = 3.1.47 ]; then
+  TRUST_BACKEND_IMAGE_ID=$(python3 -c \
+    'import json,sys; print(json.loads(sys.argv[1])["services"]["backend"]["image_id"])' \
+    "$candidate_images")
+  if ! [[ "$TRUST_BACKEND_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || \
+     [ "$(docker image inspect --format '{{.Id}}' "$TRUST_BACKEND_IMAGE_ID")" != "$TRUST_BACKEND_IMAGE_ID" ]; then
+    echo "Build55 trust verification requires the attested backend image ID." >&2
+    exit 1
+  fi
+  docker run --rm --pull never --network none --read-only --cap-drop ALL \
+    --security-opt no-new-privileges \
+    --mount "type=bind,src=$ROOT/infra/scripts/bootstrap-verified-pip.py,dst=/tmp/verify-runtime-trust.py,readonly" \
+    --entrypoint python "$TRUST_BACKEND_IMAGE_ID" \
+    -I -B /tmp/verify-runtime-trust.py --verify-runtime
+fi
+
 # Build52/53/54 exact pending-data transitions run Alembic from the attested backend
 # image before its normal entrypoint or any other application runtime starts.
 # Exercise that same Compose/image boundary here; the later full runtime check

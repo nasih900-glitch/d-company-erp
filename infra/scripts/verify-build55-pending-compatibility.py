@@ -90,8 +90,8 @@ BACKEND_UVICORN_ENTRYPOINT = [
 # Independent review fills these final closure values; the helper cannot hash
 # its own enclosing archive. Historical release maps remain immutable.
 CANDIDATE_RELEASE_FROZEN = True
-CANDIDATE_BACKEND_MANIFEST_SHA256: str | None = "09e8fd6265989186b810595d9e3310237d80a40d67a659ca217916e7460b84df"
-CANDIDATE_PROTECTED_SOURCE_SHA256: str | None = "f277f276db3350af43125b7a9515b51807d4392093ddec70b1751233679d8a94"
+CANDIDATE_BACKEND_MANIFEST_SHA256: str | None = 'c3ab36ac45cef02c586771bb60d14cf9ca12a65e9f759fe1135f68cd920f7ae8'
+CANDIDATE_PROTECTED_SOURCE_SHA256: str | None = '19e57d03fa45830d05db8d3d1eaf7d7639e5ae5e3cb2ad52357587494664180b'
 EXPECTED_POLICY_SCHEMA_ROWS: tuple[str, ...] = (
     "column|android_update_policy|1|id|integer|NO||||32|2|0||||||||||pg_catalog|int4|NO||||||NO|NEVER||YES",
     "column|android_update_policy|2|mode|character varying|NO||20|80|||||||||||||pg_catalog|varchar|NO||||||NO|NEVER||YES",
@@ -137,7 +137,7 @@ RESTORE_CONSTRAINT_PAIRS = (
     ),
 )
 
-PROTECTED_SCOPES = (
+PRIOR_PROTECTED_SCOPES = (
     "backend",
     "android-native/app/src/main",
     "android-native/app/schemas",
@@ -183,6 +183,56 @@ PROTECTED_SCOPES = (
     "infra/scripts/verify-build55-transition-state.sql",
     "infra/scripts/verify-build55-authenticated-acceptance.py",
     "infra/scripts/capture-build55-runtime.py",
+)
+# The deployed54 closure retains its original scope/hash. Only55 expands it.
+PROTECTED_SCOPES = (
+    'backend',
+    'android-native/app/src/main',
+    'android-native/app/schemas',
+    'android-native/app/build.gradle.kts',
+    'android-native/app/gradle.lockfile',
+    'android-native/build.gradle.kts',
+    'android-native/settings.gradle.kts',
+    'android-native/gradle.properties',
+    'android-native/gradle/verification-metadata.xml',
+    'infra/docker',
+    'infra/caddy',
+    'infra/nginx',
+    '.dockerignore',
+    '.env.production.example',
+    'docker-compose.prod.yml',
+    'infra/scripts/install-on-vm.sh',
+    'infra/scripts/prepare-production-env.sh',
+    'infra/scripts/generate-secrets.sh',
+    'infra/scripts/validate-production-env.sh',
+    'infra/scripts/verify-code30-2-post-cleanup-state.py',
+    'infra/scripts/verify-code30-2-post-cleanup-state.sql',
+    'infra/scripts/verify-build45-pending-state.sql',
+    'infra/scripts/verify-build46-pending-compatibility.py',
+    'infra/scripts/verify-build47-pending-compatibility.py',
+    'infra/scripts/verify-build48-pending-compatibility.py',
+    'infra/scripts/verify-build49-pending-compatibility.py',
+    'infra/scripts/verify-build50-pending-compatibility.py',
+    'infra/scripts/verify-build50-post-migration-state.py',
+    'infra/scripts/verify-build51-post-migration-state.py',
+    'infra/scripts/verify-build51-post-migration-state.sql',
+    'infra/scripts/verify-build52-transition-state.sql',
+    'ops/runtime_release_parity.py',
+    'ops/verify_web_public_assets.py',
+    'infra/scripts/verify-production-runtime-images.sh',
+    'tests/test_caddy_dependency_security.py',
+    'frontend/src',
+    'frontend/public',
+    'frontend/scripts',
+    'frontend/.env.example',
+    'frontend/package.json',
+    'frontend/package-lock.json',
+    'frontend/vite.config.ts',
+    'infra/scripts/verify-build55-transition-state.sql',
+    'infra/scripts/verify-build55-authenticated-acceptance.py',
+    'infra/scripts/capture-build55-runtime.py',
+    'infra/scripts/bootstrap-verified-pip.py',
+    'infra/scripts/install-operations-monitor.sh',
 )
 MAX_DOCUMENT_BYTES = 16 * 1024 * 1024
 SHA256 = re.compile(r"[a-f0-9]{64}")
@@ -800,14 +850,16 @@ def verify_pre_bindings(args) -> None:
         raise CompatibilityError(
             "five immutable candidate images were not independently attested"
         )
-    for source_root, expected_hash, expected_backend in (
+    for source_root, scopes, expected_hash, expected_backend in (
         (
             args.prior_source_root,
+            PRIOR_PROTECTED_SCOPES,
             PRIOR_PROTECTED_SOURCE_SHA256,
             PRIOR_BACKEND_MANIFEST_SHA256,
         ),
         (
             args.candidate_source_root,
+            PROTECTED_SCOPES,
             CANDIDATE_PROTECTED_SOURCE_SHA256,
             CANDIDATE_BACKEND_MANIFEST_SHA256,
         ),
@@ -819,7 +871,7 @@ def verify_pre_bindings(args) -> None:
             or stat.S_IMODE(source_root.stat().st_mode) != 0o700
         ):
             raise CompatibilityError("source snapshot must be private and root-owned")
-        if inventory_hash(inventory(source_root, PROTECTED_SCOPES)) != expected_hash:
+        if inventory_hash(inventory(source_root, scopes)) != expected_hash:
             raise CompatibilityError(
                 "protected source changed after independent review"
             )

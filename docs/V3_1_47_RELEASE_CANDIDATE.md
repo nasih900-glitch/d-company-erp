@@ -110,3 +110,30 @@ the tablet's previous requirement instead of falsely declaring it supported.
 This source feature still requires independent authorization, concurrency, client
 lifecycle and release validation before any signing or offer. Final retained-build
 upgrade checks must explicitly include45,49,50 and54 to55.
+
+
+## Runtime trust and image-library security correction
+
+The runtime lock raises only certifi to 2026.10.19 and Pillow to 13.0.0; the CI
+lock also raises pip to 26.2.2. Runtime source requirements declare the same
+minimum security floors. Unrelated package versions and hash sets stay fixed.
+These locks were regenerated with pip-tools 7.6.2 and pip 26.2.2 because the
+previous pip-tools 7.5.1 is incompatible with the corrected pip API. Complete
+release-file hash sets come from official PyPI metadata; selected host/Linux
+wheels are separately hash checked. This is not a claim that every platform
+artifact was downloaded or that host tests establish Alpine compatibility.
+
+A fixed official pip wheel is independently size/SHA256 verified before offline
+installation, including both backend stages, CI prerequisites and operations
+venv reuse. Both backend stages pin Alpine's ca-certificates and
+ca-certificates-bundle to 20261020-r0, rebuild the default store with Alpine's
+updater, then check the actual default bundle and lazy hashed CA directory for
+the advisory-specific emSign G3 root before pip networking. Other image bases,
+OpenSSL/zlib fixes and host operating-system trust are unchanged.
+
+The production-image gate runs the exact attested backend image offline and
+checks the installed pip/vendor CA, application certifi, system CA package/store
+identity and small PNG/JPEG/WebP codec round trips. Final Linux image checks and
+full exact-lock backend regressions must pass before release. A separate image
+replay regression preserves raw-upload idempotency when canonical PNG encoding
+changes. No application image upload, authentication or financial logic changes.
