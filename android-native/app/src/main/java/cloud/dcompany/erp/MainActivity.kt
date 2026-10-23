@@ -95,6 +95,7 @@ import cloud.dcompany.erp.ui.screens.gaming.GamingDraftScope
 import cloud.dcompany.erp.ui.screens.gaming.gamingDraftAuthority
 import cloud.dcompany.erp.ui.screens.shift.ShiftScreen
 import cloud.dcompany.erp.ui.screens.LoginScreen
+import cloud.dcompany.erp.ui.screens.ExecutiveEntrySplash
 import cloud.dcompany.erp.ui.screens.PosScreen
 import cloud.dcompany.erp.ui.screens.PosViewModel
 import cloud.dcompany.erp.ui.screens.TerminalSelectionScreen
@@ -367,28 +368,11 @@ private fun AppRoot(
     }
 
     when (val s = state) {
-        is AuthState.Loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-        }
+        is AuthState.Loading -> ExecutiveEntrySplash()
 
-        is AuthState.VerifyingCached -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.padding(24.dp),
-            ) {
-                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                Text("Checking access", style = MaterialTheme.typography.titleLarge)
-                Text(
-                    "Restoring ${s.me.name}'s workspace safely…",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    "If the server is unavailable, the last verified offline workspace will open automatically.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
+        is AuthState.VerifyingCached -> ExecutiveEntrySplash(
+            statusText = "Restoring ${s.me.name}'s workspace safely",
+        )
 
         is AuthState.SigningOut -> Box(Modifier.fillMaxSize(), Alignment.Center) {
             Column(

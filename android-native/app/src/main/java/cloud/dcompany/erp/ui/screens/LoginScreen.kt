@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -27,8 +28,8 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -46,6 +47,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
@@ -60,6 +62,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.verticalScroll
@@ -133,95 +136,124 @@ internal fun LoginWorkspace(
         }
     }
 
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).imePadding()) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            DCompanyBrandMark(size = 44.dp, contentDescription = "D Company logo")
-            Column(Modifier.weight(1f)) {
-                Text("D COMPANY", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text(
-                    "BUSINESS OPERATIONS",
-                    style = MaterialTheme.typography.labelSmall,
-                    letterSpacing = 1.2.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            AppearanceControl(
-                preference = appearancePreference,
-                onChange = onAppearancePreferenceChanged,
-                modifier = Modifier.testTag("login-appearance"),
-                compactLabel = true,
-            )
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-            val wide = maxWidth >= 840.dp
-            val form: @Composable () -> Unit = {
-                LoginForm(
-                    email = email,
-                    password = password,
-                    showPassword = showPassword,
-                    signingIn = signingIn,
-                    canSubmit = canSubmit,
-                    error = error,
-                    successNotice = successNotice,
-                    onEmailChanged = { email = it },
-                    onPasswordChanged = { password = it },
-                    onTogglePassword = { showPassword = !showPassword },
-                    onNext = { focus.moveFocus(FocusDirection.Next) },
-                    onSubmit = ::submit,
-                    onRecover = {
-                        password = ""
-                        showPassword = false
-                        onRecover(email)
-                    },
-                    onDismissSuccess = onDismissSuccess,
-                )
-            }
-            if (wide) {
-                Row(
-                    Modifier.widthIn(max = 1120.dp).fillMaxWidth()
+    val form: @Composable () -> Unit = {
+        LoginForm(
+            email = email,
+            password = password,
+            showPassword = showPassword,
+            signingIn = signingIn,
+            canSubmit = canSubmit,
+            error = error,
+            successNotice = successNotice,
+            onEmailChanged = { email = it },
+            onPasswordChanged = { password = it },
+            onTogglePassword = { showPassword = !showPassword },
+            onNext = { focus.moveFocus(FocusDirection.Next) },
+            onSubmit = ::submit,
+            onRecover = {
+                password = ""
+                showPassword = false
+                onRecover(email)
+            },
+            onDismissSuccess = onDismissSuccess,
+        )
+    }
+
+    BoxWithConstraints(
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).imePadding(),
+    ) {
+        val wide = maxWidth >= 840.dp
+        if (wide) {
+            Row(Modifier.fillMaxSize().testTag("login-layout-wide")) {
+                Column(
+                    Modifier.fillMaxHeight().weight(0.4f)
+                        .testTag("login-form-zone")
+                        .background(MaterialTheme.colorScheme.background)
                         .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 48.dp, vertical = 40.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(72.dp),
+                        .padding(horizontal = 40.dp, vertical = 28.dp),
                 ) {
-                    Column(Modifier.weight(1f).testTag("login-brand-panel")) {
-                        Text(
-                            "THE DAILY WORKSPACE",
-                            style = MaterialTheme.typography.labelMedium,
-                            letterSpacing = 1.8.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(24.dp))
-                        Text(
-                            "Every session.\nEvery sale.\nOne place.",
-                            style = MaterialTheme.typography.displayLarge.copy(fontSize = 48.sp, lineHeight = 56.sp),
-                        )
-                        Spacer(Modifier.height(24.dp))
-                        Text(
-                            "A clear view of your gaming lounge,\nfrom the first game to the day’s close.",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(40.dp))
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                        Spacer(Modifier.height(16.dp))
-                        Text("Gaming  /  POS  /  Shift", style = MaterialTheme.typography.labelLarge)
-                    }
-                    Box(Modifier.weight(1f).widthIn(max = 440.dp)) { form() }
+                    LoginBrandHeader(appearancePreference, onAppearancePreferenceChanged)
+                    Spacer(Modifier.height(56.dp))
+                    Box(
+                        Modifier.widthIn(max = 390.dp).fillMaxWidth()
+                            .align(Alignment.CenterHorizontally),
+                    ) { form() }
+                    Spacer(Modifier.height(32.dp))
                 }
-            } else {
+                Box(
+                    Modifier.fillMaxHeight().weight(0.6f).testTag("login-photo-zone"),
+                ) {
+                    AuthorizedLoungePhoto(
+                        modifier = Modifier.fillMaxSize().testTag("login-photo"),
+                        contentDescription = "D Company gaming lounge",
+                    )
+                    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.28f)))
+                }
+            }
+        } else {
+            val showPhoto = maxHeight >= 600.dp
+            Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                    .testTag("login-layout-compact"),
+            ) {
+                LoginBrandHeader(
+                    appearancePreference = appearancePreference,
+                    onAppearancePreferenceChanged = onAppearancePreferenceChanged,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
+                )
+                if (showPhoto) {
+                    Box(Modifier.fillMaxWidth().height(168.dp).testTag("login-photo-zone")) {
+                        AuthorizedLoungePhoto(
+                            modifier = Modifier.fillMaxSize().testTag("login-photo"),
+                            contentDescription = "D Company gaming lounge",
+                        )
+                        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.34f)))
+                    }
+                }
                 Box(
                     Modifier.widthIn(max = 488.dp).fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 24.dp, vertical = 32.dp),
+                        .align(Alignment.CenterHorizontally)
+                        .padding(horizontal = 24.dp, vertical = 28.dp)
+                        .testTag("login-form-zone"),
                 ) { form() }
             }
         }
+    }
+}
+
+@Composable
+private fun LoginBrandHeader(
+    appearancePreference: AppearancePreference,
+    onAppearancePreferenceChanged: (AppearancePreference) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier.fillMaxWidth().testTag("login-brand-panel"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        DCompanyBrandMark(size = 44.dp, contentDescription = "D Company logo")
+        Column(Modifier.weight(1f)) {
+            Text(
+                "D COMPANY",
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                "BUSINESS OPERATIONS",
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.labelSmall,
+                letterSpacing = 1.2.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        AppearanceControl(
+            preference = appearancePreference,
+            onChange = onAppearancePreferenceChanged,
+            modifier = Modifier.testTag("login-appearance"),
+            compactLabel = true,
+        )
     }
 }
 
@@ -253,7 +285,11 @@ private fun LoginForm(
         unfocusedTextColor = colors.onSurface,
     )
     Column(Modifier.fillMaxWidth().testTag("login-form")) {
-        Text("Welcome back.", style = MaterialTheme.typography.headlineLarge)
+        Text(
+            "Welcome back.",
+            modifier = Modifier.fillMaxWidth(),
+            style = MaterialTheme.typography.headlineLarge,
+        )
         Spacer(Modifier.height(8.dp))
         Text("Sign in to your workspace.", style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant)
         Spacer(Modifier.height(32.dp))
@@ -301,12 +337,14 @@ private fun LoginForm(
         TextButton(
             onClick = onRecover,
             enabled = !signingIn,
-            modifier = Modifier.align(Alignment.End).heightIn(min = 48.dp).testTag("login-recover"),
-        ) { Text("Forgot password?") }
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("login-recover"),
+        ) {
+            Text("Forgot password?", Modifier.fillMaxWidth(), textAlign = TextAlign.End)
+        }
         successNotice?.let {
             LoginNotice(it, success = true)
-            TextButton(onClick = onDismissSuccess, modifier = Modifier.align(Alignment.End).heightIn(min = 48.dp)) {
-                Text("Dismiss")
+            TextButton(onClick = onDismissSuccess, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                Text("Dismiss", Modifier.fillMaxWidth(), textAlign = TextAlign.End)
             }
         }
         error?.let {
@@ -318,13 +356,25 @@ private fun LoginForm(
             onClick = onSubmit,
             enabled = canSubmit,
             shape = Radius.shapeLg,
+            colors = if (signingIn) {
+                ButtonDefaults.buttonColors(disabledContentColor = colors.onSurface)
+            } else {
+                ButtonDefaults.buttonColors()
+            },
             modifier = Modifier.fillMaxWidth().heightIn(min = 60.dp).testTag("login-submit")
                 .semantics { if (signingIn) stateDescription = "Signing in" },
         ) {
-            Text(if (signingIn) "Signing in…" else "Sign in", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.weight(1f))
+            Text(
+                if (signingIn) "Signing in…" else "Sign in",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleMedium,
+            )
             if (signingIn) {
-                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = colors.onPrimary)
+                CircularProgressIndicator(
+                    Modifier.size(20.dp).testTag("login-progress"),
+                    strokeWidth = 2.dp,
+                    color = colors.onSurface,
+                )
             } else {
                 Icon(Icons.AutoMirrored.Filled.ArrowForward, null, Modifier.size(20.dp))
             }
