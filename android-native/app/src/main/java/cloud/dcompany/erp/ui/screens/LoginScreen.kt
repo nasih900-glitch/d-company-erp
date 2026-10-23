@@ -1,6 +1,7 @@
 package cloud.dcompany.erp.ui.screens
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.CheckCircleOutline
@@ -47,10 +49,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -63,15 +69,78 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.verticalScroll
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cloud.dcompany.erp.BuildConfig
+import cloud.dcompany.erp.R
 import cloud.dcompany.erp.ui.components.AppearanceControl
 import cloud.dcompany.erp.ui.components.DCompanyBrandMark
 import cloud.dcompany.erp.ui.theme.AppearancePreference
 import cloud.dcompany.erp.ui.theme.Radius
+import kotlin.math.roundToInt
+
+internal const val LoginReferenceAssetSha256 =
+    "679707186d15f553b719ec0313a906f3ce2ce49303ea3ddf2b9a19a59930d49a"
+
+private val LoginPurple = Color(0xFFBF32FF)
+private val LoginButtonInk = Color(0xFF16051F)
+private val LoginPanelBackground = Color(0xFF0E061F)
+
+internal data class LoginArtworkSourceCrop(
+    val left: Int,
+    val top: Int,
+    val width: Int,
+    val height: Int,
+) {
+    val right: Int get() = left + width
+    val bottom: Int get() = top + height
+}
+
+internal val LoginReferenceArtworkBounds = LoginArtworkSourceCrop(
+    left = 221,
+    top = 42,
+    width = 266,
+    height = 261,
+)
+
+internal val LoginReferencePalmBounds = LoginArtworkSourceCrop(
+    left = 221,
+    top = 42,
+    width = 112,
+    height = 50,
+)
+
+/** Center-crops only the clean artwork region inside the supplied Login reference. */
+internal fun loginReferenceArtworkSourceCrop(
+    destinationWidthPx: Int,
+    destinationHeightPx: Int,
+): LoginArtworkSourceCrop {
+    require(destinationWidthPx > 0 && destinationHeightPx > 0) {
+        "Destination dimensions must be positive"
+    }
+    val bounds = LoginReferenceArtworkBounds
+    val destinationRatio = destinationWidthPx.toDouble() / destinationHeightPx.toDouble()
+    val sourceRatio = bounds.width.toDouble() / bounds.height.toDouble()
+    val cropWidth: Int
+    val cropHeight: Int
+    if (destinationRatio >= sourceRatio) {
+        cropWidth = bounds.width
+        cropHeight = (bounds.width / destinationRatio).roundToInt().coerceIn(1, bounds.height)
+    } else {
+        cropHeight = bounds.height
+        cropWidth = (bounds.height * destinationRatio).roundToInt().coerceIn(1, bounds.width)
+    }
+    return LoginArtworkSourceCrop(
+        left = bounds.left + (bounds.width - cropWidth) / 2,
+        top = bounds.top + (bounds.height - cropHeight) / 2,
+        width = cropWidth,
+        height = cropHeight,
+    )
+}
 
 @Composable
 fun LoginScreen(
@@ -164,52 +233,68 @@ internal fun LoginWorkspace(
     ) {
         val wide = maxWidth >= 840.dp
         if (wide) {
+            val brandToFormGap = if (maxHeight >= 720.dp) 148.dp else 88.dp
             Row(Modifier.fillMaxSize().testTag("login-layout-wide")) {
-                Column(
-                    Modifier.fillMaxHeight().weight(0.4f)
-                        .testTag("login-form-zone")
-                        .background(MaterialTheme.colorScheme.background)
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 40.dp, vertical = 28.dp),
+                Box(
+                    Modifier.fillMaxHeight().weight(0.4f).testTag("login-form-zone")
+                        .background(LoginPanelBackground),
                 ) {
-                    LoginBrandHeader(appearancePreference, onAppearancePreferenceChanged)
-                    Spacer(Modifier.height(56.dp))
+                    LoginReferencePalmAmbience(
+                        Modifier.fillMaxWidth().height(260.dp).align(Alignment.TopStart),
+                    )
                     Box(
-                        Modifier.widthIn(max = 390.dp).fillMaxWidth()
-                            .align(Alignment.CenterHorizontally),
-                    ) { form() }
-                    Spacer(Modifier.height(32.dp))
+                        Modifier.fillMaxSize().background(
+                            if (appearancePreference == AppearancePreference.Night) {
+                                Color(0xC90A0419)
+                            } else {
+                                MaterialTheme.colorScheme.background.copy(alpha = 0.94f)
+                            },
+                        ),
+                    )
+                    Column(
+                        Modifier.fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(start = 40.dp, top = 88.dp, end = 40.dp, bottom = 24.dp),
+                    ) {
+                        LoginBrandHeader(appearancePreference, onAppearancePreferenceChanged)
+                        Spacer(Modifier.height(brandToFormGap))
+                        Box(
+                            Modifier.widthIn(max = 390.dp).fillMaxWidth()
+                                .align(Alignment.CenterHorizontally),
+                        ) { form() }
+                        Spacer(Modifier.height(24.dp))
+                    }
+                    Text(
+                        text = "v${BuildConfig.VERSION_NAME}",
+                        modifier = Modifier.fillMaxWidth()
+                            .align(Alignment.BottomCenter)
+                            .padding(horizontal = 24.dp, vertical = 12.dp)
+                            .testTag("login-version"),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.72f),
+                        textAlign = TextAlign.Center,
+                    )
                 }
                 Box(
                     Modifier.fillMaxHeight().weight(0.6f).testTag("login-photo-zone"),
                 ) {
-                    AuthorizedLoungePhoto(
+                    LoginReferenceArtwork(
                         modifier = Modifier.fillMaxSize().testTag("login-photo"),
-                        contentDescription = "D Company gaming lounge",
+                        contentDescription = "D Company illustrated login artwork",
                     )
-                    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.28f)))
                 }
             }
         } else {
-            val showPhoto = maxHeight >= 600.dp
             Column(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                    .background(MaterialTheme.colorScheme.background)
                     .testTag("login-layout-compact"),
             ) {
                 LoginBrandHeader(
                     appearancePreference = appearancePreference,
                     onAppearancePreferenceChanged = onAppearancePreferenceChanged,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp),
                 )
-                if (showPhoto) {
-                    Box(Modifier.fillMaxWidth().height(168.dp).testTag("login-photo-zone")) {
-                        AuthorizedLoungePhoto(
-                            modifier = Modifier.fillMaxSize().testTag("login-photo"),
-                            contentDescription = "D Company gaming lounge",
-                        )
-                        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.34f)))
-                    }
-                }
                 Box(
                     Modifier.widthIn(max = 488.dp).fillMaxWidth()
                         .align(Alignment.CenterHorizontally)
@@ -227,34 +312,91 @@ private fun LoginBrandHeader(
     onAppearancePreferenceChanged: (AppearancePreference) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier.fillMaxWidth().testTag("login-brand-panel"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        DCompanyBrandMark(size = 44.dp, contentDescription = "D Company logo")
-        Column(Modifier.weight(1f)) {
+    Box(modifier.fillMaxWidth()) {
+        Column(
+            Modifier.fillMaxWidth().testTag("login-brand-panel"),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            DCompanyBrandMark(size = 52.dp, contentDescription = "D Company logo")
+            Spacer(Modifier.height(8.dp))
             Text(
                 "D COMPANY",
                 modifier = Modifier.fillMaxWidth(),
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 3.sp,
+                color = MaterialTheme.colorScheme.onBackground,
+                textAlign = TextAlign.Center,
             )
             Text(
-                "BUSINESS OPERATIONS",
+                "GAMING LOUNGE",
                 modifier = Modifier.fillMaxWidth(),
                 style = MaterialTheme.typography.labelSmall,
-                letterSpacing = 1.2.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                letterSpacing = 2.sp,
+                color = MaterialTheme.colorScheme.primary,
+                textAlign = TextAlign.Center,
             )
         }
         AppearanceControl(
             preference = appearancePreference,
             onChange = onAppearancePreferenceChanged,
-            modifier = Modifier.testTag("login-appearance"),
+            modifier = Modifier.align(Alignment.TopEnd).testTag("login-appearance"),
             compactLabel = true,
         )
     }
+}
+
+@Composable
+private fun LoginReferencePalmAmbience(modifier: Modifier) {
+    val bitmap = ImageBitmap.imageResource(R.drawable.login_reference_original)
+    Canvas(modifier) {
+        val width = size.width.roundToInt()
+        val height = size.height.roundToInt()
+        if (width <= 0 || height <= 0) return@Canvas
+        drawImage(
+            image = bitmap,
+            srcOffset = IntOffset(LoginReferencePalmBounds.left, LoginReferencePalmBounds.top),
+            srcSize = IntSize(LoginReferencePalmBounds.width, LoginReferencePalmBounds.height),
+            dstOffset = IntOffset.Zero,
+            dstSize = IntSize(width, height),
+        )
+        drawRect(
+            brush = Brush.verticalGradient(
+                0.45f to Color.Transparent,
+                1f to LoginPanelBackground,
+            ),
+        )
+    }
+}
+
+@Composable
+private fun LoginReferenceArtwork(
+    modifier: Modifier,
+    contentDescription: String?,
+) {
+    val bitmap = ImageBitmap.imageResource(R.drawable.login_reference_original)
+    val semantics = if (contentDescription == null) {
+        Modifier
+    } else {
+        Modifier.semantics { this.contentDescription = contentDescription }
+    }
+    Canvas(modifier.then(semantics)) {
+        drawLoginReferenceArtwork(bitmap)
+    }
+}
+
+private fun DrawScope.drawLoginReferenceArtwork(bitmap: ImageBitmap) {
+    val width = size.width.roundToInt()
+    val height = size.height.roundToInt()
+    if (width <= 0 || height <= 0) return
+    val crop = loginReferenceArtworkSourceCrop(width, height)
+    drawImage(
+        image = bitmap,
+        srcOffset = IntOffset(crop.left, crop.top),
+        srcSize = IntSize(crop.width, crop.height),
+        dstOffset = IntOffset.Zero,
+        dstSize = IntSize(width, height),
+    )
 }
 
 @Composable
@@ -276,39 +418,32 @@ private fun LoginForm(
 ) {
     val colors = MaterialTheme.colorScheme
     val inputColors = OutlinedTextFieldDefaults.colors(
-        focusedBorderColor = colors.onSurface,
+        focusedBorderColor = LoginPurple,
         unfocusedBorderColor = colors.onSurfaceVariant.copy(alpha = 0.72f),
-        focusedContainerColor = colors.surface,
-        unfocusedContainerColor = colors.surfaceContainerHigh,
-        cursorColor = colors.onSurface,
+        focusedContainerColor = colors.surface.copy(alpha = 0.78f),
+        unfocusedContainerColor = colors.surfaceContainerHigh.copy(alpha = 0.78f),
+        disabledContainerColor = colors.surfaceContainerHigh.copy(alpha = 0.62f),
+        cursorColor = LoginPurple,
         focusedTextColor = colors.onSurface,
         unfocusedTextColor = colors.onSurface,
     )
     Column(Modifier.fillMaxWidth().testTag("login-form")) {
-        Text(
-            "Welcome back.",
-            modifier = Modifier.fillMaxWidth(),
-            style = MaterialTheme.typography.headlineLarge,
-        )
-        Spacer(Modifier.height(8.dp))
-        Text("Sign in to your workspace.", style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant)
-        Spacer(Modifier.height(32.dp))
         Text("Email", style = MaterialTheme.typography.labelLarge)
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
             value = email,
             onValueChange = onEmailChanged,
             enabled = !signingIn,
-            placeholder = { Text("Your work email", color = colors.onSurfaceVariant) },
+            placeholder = { Text("Enter email", color = colors.onSurfaceVariant) },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 60.dp).testTag("login-email")
+            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("login-email")
                 .semantics { contentDescription = "Email" },
-            shape = Radius.shapeLg,
+            shape = Radius.shapeSm,
             colors = inputColors,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
             keyboardActions = KeyboardActions(onNext = { onNext() }),
         )
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(16.dp))
         Text("Password", style = MaterialTheme.typography.labelLarge)
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
@@ -326,9 +461,9 @@ private fun LoginForm(
                 }
             },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 60.dp).testTag("login-password")
+            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("login-password")
                 .semantics { contentDescription = "Password" },
-            shape = Radius.shapeLg,
+            shape = Radius.shapeSm,
             colors = inputColors,
             visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
@@ -355,36 +490,47 @@ private fun LoginForm(
         Button(
             onClick = onSubmit,
             enabled = canSubmit,
-            shape = Radius.shapeLg,
+            shape = Radius.shapeSm,
             colors = if (signingIn) {
-                ButtonDefaults.buttonColors(disabledContentColor = colors.onSurface)
-            } else {
-                ButtonDefaults.buttonColors()
-            },
-            modifier = Modifier.fillMaxWidth().heightIn(min = 60.dp).testTag("login-submit")
-                .semantics { if (signingIn) stateDescription = "Signing in" },
-        ) {
-            Text(
-                if (signingIn) "Signing in…" else "Sign in",
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            if (signingIn) {
-                CircularProgressIndicator(
-                    Modifier.size(20.dp).testTag("login-progress"),
-                    strokeWidth = 2.dp,
-                    color = colors.onSurface,
+                ButtonDefaults.buttonColors(
+                    containerColor = LoginPurple,
+                    contentColor = LoginButtonInk,
+                    disabledContainerColor = colors.surfaceContainerHigh,
+                    disabledContentColor = colors.onSurface,
                 )
             } else {
-                Icon(Icons.AutoMirrored.Filled.ArrowForward, null, Modifier.size(20.dp))
+                ButtonDefaults.buttonColors(
+                    containerColor = LoginPurple,
+                    contentColor = LoginButtonInk,
+                )
+            },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("login-submit")
+                .semantics { if (signingIn) stateDescription = "Signing in" },
+        ) {
+            Box(Modifier.fillMaxWidth()) {
+                Text(
+                    if (signingIn) "Signing in…" else "Login",
+                    modifier = Modifier.fillMaxWidth()
+                        .padding(horizontal = 32.dp)
+                        .align(Alignment.Center),
+                    style = MaterialTheme.typography.titleMedium,
+                    textAlign = TextAlign.Center,
+                )
+                if (signingIn) {
+                    CircularProgressIndicator(
+                        Modifier.align(Alignment.CenterEnd).size(20.dp).testTag("login-progress"),
+                        strokeWidth = 2.dp,
+                        color = colors.onSurface,
+                    )
+                } else {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowForward,
+                        null,
+                        Modifier.align(Alignment.CenterEnd).size(20.dp),
+                    )
+                }
             }
         }
-        Spacer(Modifier.height(20.dp))
-        Text(
-            "Use the account assigned to you by your shop owner.",
-            style = MaterialTheme.typography.bodySmall,
-            color = colors.onSurfaceVariant,
-        )
     }
 }
 

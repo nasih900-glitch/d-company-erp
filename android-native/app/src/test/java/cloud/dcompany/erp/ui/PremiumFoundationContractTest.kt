@@ -27,7 +27,7 @@ class PremiumFoundationContractTest {
     }
 
     @Test
-    fun `login uses the real brand mark and neutral business language`() {
+    fun `login uses the real brand mark and supplied reference artwork`() {
         val login = read("src/main/java/cloud/dcompany/erp/ui/screens/LoginScreen.kt")
         val navigation = read("src/main/java/cloud/dcompany/erp/ui/Nav.kt")
         val brandMark = read("src/main/java/cloud/dcompany/erp/ui/components/DCompanyBrandMark.kt")
@@ -37,11 +37,18 @@ class PremiumFoundationContractTest {
         assertTrue("clip(CircleShape)" in brandMark)
         assertTrue("contentScale = ContentScale.Crop" in brandMark)
         assertTrue("scaleX = 1.5f" in brandMark)
-        assertTrue("BUSINESS OPERATIONS" in login)
+        assertTrue("GAMING LOUNGE" in login)
+        assertTrue("R.drawable.login_reference_original" in login)
+        assertTrue("LoginReferenceArtworkBounds" in login)
+        assertTrue("srcOffset = IntOffset(crop.left, crop.top)" in login)
+        assertTrue("srcSize = IntSize(crop.width, crop.height)" in login)
         assertTrue("OPERATIONS" in navigation)
         assertFalse("GAMING CENTRE" in login)
         assertFalse("GAMING CENTRE" in navigation)
         assertFalse("Cafe + Gaming Lounge" in login)
+        assertFalse("Remember me" in login)
+        assertFalse("R.drawable.ref_login_art" in login)
+        assertFalse("painterResource(" in login)
     }
 
     @Test

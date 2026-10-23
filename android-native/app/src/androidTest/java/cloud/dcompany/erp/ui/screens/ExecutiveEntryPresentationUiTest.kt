@@ -46,6 +46,7 @@ import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import java.io.File
 import java.security.MessageDigest
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -139,11 +140,11 @@ class ExecutiveEntryPresentationUiTest {
     }
 
     @Test
-    fun landscapeLoginUsesFortyPercentFormAndSafePhoto() {
+    fun landscapeLoginMatchesReferenceSplitBrandAndIllustratedArtwork() {
         renderLogin(widthDp = 1_280, heightDp = 800)
         captureRoot(
             name = "entry-login-landscape-1280x800",
-            testName = "landscapeLoginUsesFortyPercentFormAndSafePhoto",
+            testName = "landscapeLoginMatchesReferenceSplitBrandAndIllustratedArtwork",
             widthDp = 1_280,
             heightDp = 800,
             fontScale = 1.0f,
@@ -154,6 +155,7 @@ class ExecutiveEntryPresentationUiTest {
         val formZone = compose.onNodeWithTag("login-form-zone").getUnclippedBoundsInRoot()
         val photoZone = compose.onNodeWithTag("login-photo-zone").getUnclippedBoundsInRoot()
         val form = compose.onNodeWithTag("login-form").getUnclippedBoundsInRoot()
+        val brand = compose.onNodeWithTag("login-brand-panel").getUnclippedBoundsInRoot()
         val formZoneWidth = formZone.right - formZone.left
         val rootWidth = root.right - root.left
         val formWidth = form.right - form.left
@@ -161,28 +163,38 @@ class ExecutiveEntryPresentationUiTest {
         assertTrue("Form zone must occupy 38–42%: $formFraction", formFraction in 0.38f..0.42f)
         assertTrue("Form width must stay within 360–400dp: $formWidth", formWidth in 360.dp..400.dp)
         assertTrue("Photo must begin after the form zone", photoZone.left >= formZone.right)
-        compose.onNodeWithContentDescription("D Company gaming lounge").assertIsDisplayed()
+        val brandCenterOffset = abs(
+            ((brand.left.value + brand.right.value) / 2f) -
+                ((formZone.left.value + formZone.right.value) / 2f),
+        )
+        assertTrue("Brand must stay centered in the form panel: $brandCenterOffset", brandCenterOffset <= 1f)
+        assertTrue("Brand must begin below the top reference breathing room", brand.top >= 80.dp)
+        compose.onNodeWithTag("login-version").assertIsDisplayed()
+        assertTextDoesNotOverflow("v${BuildConfig.VERSION_NAME}", scrollIntoView = false)
+        compose.onNodeWithContentDescription("D Company illustrated login artwork").assertIsDisplayed()
         assertEssentialTargets()
     }
 
     @Test
-    fun compactFontScaleKeepsPhotoAndActionsReachableWithoutSideBySideLayout() {
+    fun compactFontScalePrioritizesActionsWithoutClippingOrDecorativeArtwork() {
         renderLogin(widthDp = 600, heightDp = 800, fontScale = 1.3f)
         captureRoot(
             name = "entry-login-portrait-600x800-font1_3",
-            testName = "compactFontScaleKeepsPhotoAndActionsReachableWithoutSideBySideLayout",
+            testName = "compactFontScalePrioritizesActionsWithoutClippingOrDecorativeArtwork",
             widthDp = 600,
             heightDp = 800,
             fontScale = 1.3f,
-            photoExpected = true,
+            photoExpected = false,
         )
 
         compose.onNodeWithTag("login-layout-compact").assertIsDisplayed()
         compose.onNodeWithTag("login-layout-wide").assertDoesNotExist()
-        compose.onNodeWithTag("login-photo").assertIsDisplayed()
+        compose.onNodeWithTag("login-photo").assertDoesNotExist()
+        compose.onNodeWithTag("login-photo-zone").assertDoesNotExist()
+        compose.onNodeWithTag("login-version").assertDoesNotExist()
         compose.onNodeWithTag("login-submit").performScrollTo().assertIsDisplayed()
         assertEssentialTargets()
-        listOf("D COMPANY", "BUSINESS OPERATIONS", "Welcome back.", "Forgot password?", "Sign in")
+        listOf("D COMPANY", "GAMING LOUNGE", "Forgot password?", "Login")
             .forEach(::assertTextDoesNotOverflow)
     }
 
@@ -238,7 +250,7 @@ class ExecutiveEntryPresentationUiTest {
         )
         compose.onNodeWithTag("login-email").assertIsNotEnabled()
         compose.onNodeWithTag("login-recover").assertIsNotEnabled()
-        listOf("D COMPANY", "BUSINESS OPERATIONS", "Welcome back.", "Signing in…", error)
+        listOf("D COMPANY", "GAMING LOUNGE", "Signing in…", error)
             .forEach(::assertTextDoesNotOverflow)
     }
 
@@ -532,11 +544,11 @@ class ExecutiveEntryPresentationUiTest {
 
     private fun formatContrast(value: Double): String = "%.3f".format(Locale.US, value)
 
-    private fun assertTextDoesNotOverflow(text: String) {
+    private fun assertTextDoesNotOverflow(text: String, scrollIntoView: Boolean = true) {
         val layouts = mutableListOf<TextLayoutResult>()
-        compose.onNodeWithText(text, useUnmergedTree = true)
-            .performScrollTo()
-            .assertIsDisplayed()
+        val node = compose.onNodeWithText(text, useUnmergedTree = true)
+        if (scrollIntoView) node.performScrollTo()
+        node.assertIsDisplayed()
             .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
         assertEquals("$text must expose one text layout", 1, layouts.size)
         val layout = layouts.single()
@@ -610,18 +622,31 @@ class ExecutiveEntryPresentationUiTest {
                 check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
             }
             val requested = host.requestedDisplayId?.toString() ?: "null"
-            val photoCropJson = if (photoExpected) {
-                val photoTag = if (name.startsWith("entry-splash")) {
-                    "entry-lounge-photo"
-                } else {
-                    "login-photo"
-                }
-                val bounds = compose.onNodeWithTag(photoTag, useUnmergedTree = true)
+            val splashExpected = photoExpected && name.startsWith("entry-splash")
+            val loginArtworkExpected = photoExpected && !splashExpected
+            val loungeCropJson = if (splashExpected) {
+                val bounds = compose.onNodeWithTag("entry-lounge-photo", useUnmergedTree = true)
                     .getUnclippedBoundsInRoot()
                 val crop = authorizedLoungeSourceCrop(
                     destinationWidthPx = ((bounds.right - bounds.left).value * host.density).roundToInt(),
                     destinationHeightPx = ((bounds.bottom - bounds.top).value * host.density).roundToInt(),
                 )
+                "{\"left\":${crop.left},\"top\":${crop.top},\"right\":${crop.right}," +
+                    "\"bottom\":${crop.bottom}}"
+            } else {
+                "null"
+            }
+            val loginArtworkCropJson = if (loginArtworkExpected) {
+                val bounds = compose.onNodeWithTag("login-photo", useUnmergedTree = true)
+                    .getUnclippedBoundsInRoot()
+                val crop = if (name.contains("portrait")) {
+                    LoginReferenceArtworkBounds
+                } else {
+                    loginReferenceArtworkSourceCrop(
+                        destinationWidthPx = ((bounds.right - bounds.left).value * host.density).roundToInt(),
+                        destinationHeightPx = ((bounds.bottom - bounds.top).value * host.density).roundToInt(),
+                    )
+                }
                 "{\"left\":${crop.left},\"top\":${crop.top},\"right\":${crop.right}," +
                     "\"bottom\":${crop.bottom}}"
             } else {
@@ -643,7 +668,9 @@ class ExecutiveEntryPresentationUiTest {
                   "device": "${Build.MANUFACTURER} ${Build.MODEL}",
                   "android_api": ${Build.VERSION.SDK_INT},
                   "authorized_lounge_sha256": "$AuthorizedLoungeAssetSha256",
-                  "authorized_lounge_source_crop": $photoCropJson,
+                  "authorized_lounge_source_crop": $loungeCropJson,
+                  "login_reference_sha256": "$LoginReferenceAssetSha256",
+                  "login_reference_artwork_source_crop": $loginArtworkCropJson,
                   "requested_display_id": $requested,
                   "observed_display_id": ${host.observedDisplayId},
                   "display_mode_width_px": ${host.modeWidthPx},
@@ -674,7 +701,7 @@ class ExecutiveEntryPresentationUiTest {
     private fun outputDirectory(): File {
         val profile = if (RequestedEntryDisplayId == null) "default-display" else "display-2-hd"
         return InstrumentationRegistry.getInstrumentation().targetContext.filesDir
-            .resolve("phase-c1-entry-screenshots-v1")
+            .resolve("phase-c1-login-reference-r2-screenshots-v1")
             .resolve(profile)
             .resolve(CaptureRunId)
             .apply { check(isDirectory || mkdirs()) }
@@ -705,7 +732,7 @@ class ExecutiveEntryPresentationUiTest {
     }
 
     private companion object {
-        const val BaseCommit = "18c230b1887431777dd145cd8a095575c9856103"
+        const val BaseCommit = "8a5039fdefcaa4aed24335546134c7a77ff88ef6"
         val CaptureRunId = "${System.currentTimeMillis()}-${android.os.Process.myPid()}"
     }
 }
