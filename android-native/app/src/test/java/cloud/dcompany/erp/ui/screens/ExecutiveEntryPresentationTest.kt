@@ -31,45 +31,75 @@ class ExecutiveEntryPresentationTest {
         assertTrue(LoginReferenceArtworkBounds.right < 512)
         assertTrue(LoginReferenceArtworkBounds.top > 30)
         assertTrue(LoginReferenceArtworkBounds.bottom < 341)
-        assertEquals(
-            LoginArtworkSourceCrop(left = 221, top = 42, width = 112, height = 50),
-            LoginReferencePalmBounds,
-        )
-        assertTrue(LoginReferencePalmBounds.right <= LoginReferenceArtworkBounds.right)
-        assertTrue(LoginReferencePalmBounds.bottom < 100)
     }
 
     @Test
-    fun `login artwork fill crop remains inside the supplied artwork region`() {
-        listOf(
-            loginReferenceArtworkSourceCrop(768, 800),
-            loginReferenceArtworkSourceCrop(1_280, 800),
-            loginReferenceArtworkSourceCrop(600, 220),
-        ).forEach { crop ->
-            assertTrue(crop.left >= LoginReferenceArtworkBounds.left)
-            assertTrue(crop.top >= LoginReferenceArtworkBounds.top)
-            assertTrue(crop.right <= LoginReferenceArtworkBounds.right)
-            assertTrue(crop.bottom <= LoginReferenceArtworkBounds.bottom)
+    fun `wide composition follows measured viewport and form proportions`() {
+        val geometry = loginWideGeometry(containerWidth = 1_280f, containerHeight = 800f)
+        val imeGeometry = loginWideGeometry(containerWidth = 1_280f, containerHeight = 420f)
+        val heightSequence = listOf(800f, 720f, 600f, 550f, 500f, 474f, 472f, 420f)
+            .map { height ->
+                loginWideGeometry(
+                    containerWidth = 1_280f,
+                    containerHeight = height,
+                    fontScale = 1.3f,
+                )
+            }
+
+        assertTrue(useWideLoginLayout(containerWidth = 1_280f))
+        assertFalse(useWideLoginLayout(containerWidth = 600f))
+        assertEquals(1_280f, geometry.compositionWidth, 0.01f)
+        assertEquals(720f, geometry.compositionHeight, 0.01f)
+        assertEquals(0f, geometry.compositionLeft, 0.01f)
+        assertEquals(40f, geometry.compositionTop, 0.01f)
+        assertEquals(0.43f, geometry.formZoneWidth / geometry.compositionWidth, 0.001f)
+        assertEquals(0.57f, geometry.artworkZoneWidth / geometry.compositionWidth, 0.001f)
+        assertEquals(0.79f, geometry.controlWidth / geometry.formZoneWidth, 0.001f)
+        assertEquals(0.12f, geometry.brandTop / geometry.compositionHeight, 0.001f)
+        assertEquals(0.36f, (geometry.brandTop + geometry.brandHeight) / geometry.compositionHeight, 0.001f)
+        assertEquals(0.43f, geometry.formTop / geometry.compositionHeight, 0.001f)
+        assertFalse(geometry.condensedForIme)
+        assertTrue(geometry.showIdentity)
+        assertTrue(imeGeometry.condensedForIme)
+        assertFalse(imeGeometry.showIdentity)
+        assertEquals(1_280f, imeGeometry.compositionWidth, 0.01f)
+        assertEquals(420f, imeGeometry.compositionHeight, 0.01f)
+        assertEquals(0.79f, imeGeometry.controlWidth / imeGeometry.formZoneWidth, 0.001f)
+        assertEquals(64f, imeGeometry.formTop, 0.01f)
+        heightSequence.forEach { candidate ->
+            assertEquals(1_280f, candidate.compositionWidth, 0.01f)
+            assertEquals(1_280f * 0.43f, candidate.formZoneWidth, 0.01f)
+            assertEquals(1_280f * 0.43f * 0.79f, candidate.controlWidth, 0.01f)
         }
+        heightSequence.zipWithNext().forEach { (before, after) ->
+            assertEquals(before.formZoneWidth, after.formZoneWidth, 0.01f)
+            assertEquals(before.controlWidth, after.controlWidth, 0.01f)
+        }
+        val beforeFormerThreshold = loginWideGeometry(1_280f, 474f)
+        val afterFormerThreshold = loginWideGeometry(1_280f, 472f)
+        assertEquals(2f, beforeFormerThreshold.formTop - afterFormerThreshold.formTop, 0.01f)
+        val intermediateLargeText = loginWideGeometry(1_280f, 550f, fontScale = 1.3f)
+        assertFalse(intermediateLargeText.showIdentity)
+        assertTrue(intermediateLargeText.compositionHeight - intermediateLargeText.formTop >= 0f)
+        val veryShort = loginWideGeometry(1_280f, 40f, fontScale = 1.3f)
+        assertEquals(40f, veryShort.formTop, 0.01f)
+        assertEquals(0f, veryShort.compositionHeight - veryShort.formTop, 0.01f)
     }
 
     @Test
-    fun `login presentation uses allocated brand width real version and a native ambience fade`() {
-        val source = Files.newBufferedReader(
-            projectRoot().resolve("src/main/java/cloud/dcompany/erp/ui/screens/LoginScreen.kt"),
-        ).use { it.readText() }
-        val brandHeader = source.substring(
-            startIndex = source.indexOf("private fun LoginBrandHeader"),
-            endIndex = source.indexOf("private fun LoginReferencePalmAmbience"),
-        )
+    fun `generated HD scene bytes are exact and remain effectively sixteen by nine`() {
+        val image = projectRoot().resolve("src/main/res/drawable-nodpi/login_scene_hd_r1.png")
+        val bytes = Files.readAllBytes(image)
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { byte -> "%02x".format(byte) }
+        val dimensions = ByteBuffer.wrap(bytes, 16, 8).order(ByteOrder.BIG_ENDIAN)
+        val width = dimensions.int
+        val height = dimensions.int
 
-        assertTrue("Both brand lines must fill their allocated column",
-            brandHeader.split("modifier = Modifier.fillMaxWidth()").size - 1 >= 2)
-        assertTrue("Footer must derive from the packaged version", "v\${BuildConfig.VERSION_NAME}" in source)
-        assertTrue("Palm ambience must blend into the native panel", "Brush.verticalGradient(" in source)
-        assertTrue("Centered action text must receive finite width",
-            "padding(horizontal = 32.dp)" in source)
-        assertFalse("Version must not be hard-coded", "v3.1.47" in source)
+        assertEquals(LoginSceneHdR1Sha256, digest)
+        assertEquals(1_672, width)
+        assertEquals(941, height)
+        assertEquals(16f / 9f, width.toFloat() / height, 0.002f)
     }
 
     @Test

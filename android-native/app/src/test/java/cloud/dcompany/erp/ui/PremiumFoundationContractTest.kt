@@ -1,8 +1,12 @@
 package cloud.dcompany.erp.ui
 
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.security.MessageDigest
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -27,28 +31,28 @@ class PremiumFoundationContractTest {
     }
 
     @Test
-    fun `login uses the real brand mark and supplied reference artwork`() {
-        val login = read("src/main/java/cloud/dcompany/erp/ui/screens/LoginScreen.kt")
-        val navigation = read("src/main/java/cloud/dcompany/erp/ui/Nav.kt")
-        val brandMark = read("src/main/java/cloud/dcompany/erp/ui/components/DCompanyBrandMark.kt")
+    fun `login production resources preserve the approved scene and standalone mark`() {
+        val root = projectRoot()
+        val scene = root.resolve("src/main/res/drawable-nodpi/login_scene_hd_r1.png")
+        val reference = root.resolve("src/main/res/drawable-nodpi/login_reference_original.png")
+        val mark = root.resolve("src/main/res/drawable/login_logo_d.xml")
+        val retiredGeneratedArt = root.resolve("src/main/res/drawable-nodpi/ref_login_art.png")
 
-        assertTrue("DCompanyBrandMark(" in login)
-        assertTrue("painterResource(R.mipmap.ic_launcher_foreground)" in brandMark)
-        assertTrue("clip(CircleShape)" in brandMark)
-        assertTrue("contentScale = ContentScale.Crop" in brandMark)
-        assertTrue("scaleX = 1.5f" in brandMark)
-        assertTrue("GAMING LOUNGE" in login)
-        assertTrue("R.drawable.login_reference_original" in login)
-        assertTrue("LoginReferenceArtworkBounds" in login)
-        assertTrue("srcOffset = IntOffset(crop.left, crop.top)" in login)
-        assertTrue("srcSize = IntSize(crop.width, crop.height)" in login)
-        assertTrue("OPERATIONS" in navigation)
-        assertFalse("GAMING CENTRE" in login)
-        assertFalse("GAMING CENTRE" in navigation)
-        assertFalse("Cafe + Gaming Lounge" in login)
-        assertFalse("Remember me" in login)
-        assertFalse("R.drawable.ref_login_art" in login)
-        assertFalse("painterResource(" in login)
+        assertEquals(
+            "13aa59b3860110f143b0b0a0bba6e84a6847667bacc2e01ae0b3b5990cef2844",
+            sha256(scene),
+        )
+        assertEquals(1_672 to 941, pngDimensions(scene))
+        assertEquals(
+            "679707186d15f553b719ec0313a906f3ce2ce49303ea3ddf2b9a19a59930d49a",
+            sha256(reference),
+        )
+        assertEquals(512 to 341, pngDimensions(reference))
+        assertEquals(
+            "94adb2de76f0b76ba72684718bf88d87890f79ef9f7ce6e14900525ee4bc4148",
+            sha256(mark),
+        )
+        assertFalse("The retired generated Login artwork must not return", Files.exists(retiredGeneratedArt))
     }
 
     @Test
@@ -81,6 +85,17 @@ class PremiumFoundationContractTest {
 
     private fun read(relativePath: String): String =
         Files.newBufferedReader(projectRoot().resolve(relativePath)).use { it.readText() }
+
+    private fun sha256(path: Path): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(Files.readAllBytes(path))
+            .joinToString("") { byte -> "%02x".format(byte) }
+
+    private fun pngDimensions(path: Path): Pair<Int, Int> {
+        val bytes = Files.readAllBytes(path)
+        val dimensions = ByteBuffer.wrap(bytes, 16, 8).order(ByteOrder.BIG_ENDIAN)
+        return dimensions.int to dimensions.int
+    }
 
     private fun projectRoot(): Path {
         val candidates = listOf(
