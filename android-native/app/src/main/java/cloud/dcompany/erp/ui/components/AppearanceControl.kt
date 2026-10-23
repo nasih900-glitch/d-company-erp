@@ -48,7 +48,11 @@ internal fun AppearanceControl(
     val label = when (preference) {
         AppearancePreference.Day -> if (compactLabel) "Day" else "Day mode"
         AppearancePreference.Night -> if (compactLabel) "Night" else "Night mode"
-        AppearancePreference.System -> "System · ${if (resolvedNight) "Night" else "Day"}"
+        AppearancePreference.System -> if (compactLabel) {
+            "System"
+        } else {
+            "System · ${if (resolvedNight) "Night" else "Day"}"
+        }
     }
     Box {
         Surface(

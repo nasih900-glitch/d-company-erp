@@ -13,21 +13,26 @@ import org.junit.Test
 
 class ThemeContrastTest {
     @Test
-    fun `classic night palette restores Build 45 identity and keeps the original mark`() {
-        assertEquals(Color(0xFF08131B), NightPalette.Background)
-        assertEquals(Color(0xFF0B1821), NightPalette.BackgroundSecondary)
-        assertEquals(Color(0xFF0F1D26), NightPalette.Surface)
-        assertEquals(Color(0xFF162832), NightPalette.SurfaceRaised)
-        assertEquals(Color(0xFFF4F6F7), NightPalette.Foreground)
-        assertEquals(Color(0xFFC6A15B), NightPalette.Gold)
-        assertEquals(Color(0xFFD2B675), NightPalette.GoldBright)
+    fun `executive dark palette uses approved material roles and keeps the original mark`() {
+        assertEquals(Color(0xFF080E17), NightPalette.Background)
+        assertEquals(Color(0xFF0B1421), NightPalette.BackgroundSecondary)
+        assertEquals(Color(0xFF0F1A29), NightPalette.Surface)
+        assertEquals(Color(0xFF142235), NightPalette.SurfaceRaised)
+        assertEquals(Color(0xFF19283A), NightPalette.SurfaceHover)
+        assertEquals(Color(0xFFF3F5F7), NightPalette.Foreground)
+        assertEquals(Color(0xFFAAB5C5), NightPalette.ForegroundMuted)
+        assertEquals(Color(0xFFEBC577), NightPalette.Gold)
+        assertEquals(Color(0xFFF4D895), NightPalette.GoldBright)
+        assertEquals(Color(0xFF273344), NightPalette.BorderSubtle)
         assertEquals(Color(0xFFC6A15B), DayPalette.BrandAccent)
         assertEquals(DayPalette.BrandAccent, NightPalette.BrandAccent)
     }
 
     @Test
-    fun `classic semantic colours stay readable on their paired containers`() {
-        assertEquals(Color(0xFFF3A83B), NightPalette.Warning)
+    fun `executive semantic colours stay readable on their paired containers`() {
+        assertEquals(Color(0xFF42C49A), NightPalette.Good)
+        assertEquals(Color(0xFFE7B95B), NightPalette.Warning)
+        assertEquals(Color(0xFFE26970), NightPalette.Danger)
         assertEquals(Color(0xFF5AA7FF), NightPalette.Information)
         listOf(NightPalette, DayPalette).forEach { palette ->
             assertTrue(contrastRatio(palette.Warning, palette.WarningMuted) >= 4.5f)

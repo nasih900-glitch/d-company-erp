@@ -52,7 +52,7 @@ class PremiumFoundationContractTest {
 
         val nativeNightColors = read("src/main/res/values-night/colors.xml")
         assertTrue("Day launch must match the Android Compose background", "#F7F7F7" in nativeColors)
-        assertTrue("Night launch must match the Android Compose background", "#08131B" in nativeNightColors)
+        assertTrue("Night launch must match the Android Compose background", "#080E17" in nativeNightColors)
         assertFalse("linearGradient" in theme)
         assertFalse("verticalGradient" in theme)
         assertFalse("GoldSheen" in theme)
@@ -61,10 +61,12 @@ class PremiumFoundationContractTest {
     }
 
     @Test
-    fun `target tablet uses compact shell with full size action targets`() {
+    fun `target tablet uses executive rail and retains full size action targets`() {
         val navigation = read("src/main/java/cloud/dcompany/erp/ui/Nav.kt")
 
-        assertTrue("maxWidth <= 1_280.dp" in navigation)
+        assertTrue("usesExecutiveNavigationRail(maxWidth, maxHeight)" in navigation)
+        assertTrue("Modifier.width(80.dp).fillMaxHeight()" in navigation)
+        assertTrue("rememberSaveableStateHolder()" in navigation)
         assertTrue(".height(56.dp)" in navigation)
         assertTrue("private fun HeaderIconAction(" in navigation)
         assertTrue("modifier = Modifier.size(48.dp)" in navigation)

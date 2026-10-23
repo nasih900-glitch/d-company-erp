@@ -150,6 +150,22 @@ android {
             // this QA build without weakening the production API contract.
             buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("managed"))
         }
+        // Visual QA only. This package uses an inert Application and a
+        // permission-free manifest, and cannot start the production activity.
+        create("executiveReview") {
+            initWith(getByName("debug"))
+            matchingFallbacks += "debug"
+            signingConfig = signingConfigs.getByName("debug")
+            applicationIdSuffix = ".executivereview"
+            versionNameSuffix = "-executive-review"
+            buildConfigField(
+                "String",
+                "API_BASE_URL",
+                buildConfigString("https://invalid.dcompany.test/api/v1/"),
+            )
+            buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "false")
+            buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("managed"))
+        }
     }
 
     // Debug remains the normal developer/CI target. Physical QA opts into the

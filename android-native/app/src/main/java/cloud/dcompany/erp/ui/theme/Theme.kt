@@ -30,9 +30,9 @@ import androidx.core.view.WindowCompat
 /**
  * D Company executive palette.
  *
- * The classic navy and brass identity restores the Build 45 palette while
- * retaining the current layout and appearance controls. Semantic colours
- * accompany operational labels or icons; the original company mark is unchanged.
+ * The Executive Dark roles are shared by every native workspace. Semantic
+ * colours accompany operational labels or icons; the original company mark is
+ * unchanged.
  */
 @Immutable
 data class BrandPalette(
@@ -66,19 +66,20 @@ data class BrandPalette(
 )
 
 internal val NightPalette = BrandPalette(
-    Background = Color(0xFF08131B), BackgroundSecondary = Color(0xFF0B1821),
-    Surface = Color(0xFF0F1D26), SurfaceRaised = Color(0xFF162832),
-    SurfaceHover = Color(0xFF1A2E39), SurfaceOverlay = Color(0xFF1D333F),
-    Gold = Color(0xFFC6A15B), BrandAccent = Color(0xFFC6A15B),
-    GoldBright = Color(0xFFD2B675), GoldMuted = Color(0xFFB99A5F),
-    Foreground = Color(0xFFF4F6F7), ForegroundMuted = Color(0xFF9BA8B0),
-    ForegroundFaint = Color(0xFF8D9AA2), Disabled = Color(0xFF65727A),
-    Good = Color(0xFF43D17A), GoodMuted = Color(0xFF123826),
-    Warning = Color(0xFFF3A83B), WarningMuted = Color(0xFF3D2B12),
-    Danger = Color(0xFFFF6B70), DangerMuted = Color(0xFF471F25),
+    Background = Color(0xFF080E17), BackgroundSecondary = Color(0xFF0B1421),
+    Surface = Color(0xFF0F1A29), SurfaceRaised = Color(0xFF142235),
+    SurfaceHover = Color(0xFF19283A), SurfaceOverlay = Color(0xFF1D2D41),
+    Gold = Color(0xFFEBC577), BrandAccent = Color(0xFFC6A15B),
+    GoldBright = Color(0xFFF4D895), GoldMuted = Color(0xFFC9AA68),
+    Foreground = Color(0xFFF3F5F7), ForegroundMuted = Color(0xFFAAB5C5),
+    // #718096 is decorative-only: it is 3.99:1 on the raised surface.
+    ForegroundFaint = Color(0xFF96A3B5), Disabled = Color(0xFF8E9AAC),
+    Good = Color(0xFF42C49A), GoodMuted = Color(0xFF12382F),
+    Warning = Color(0xFFE7B95B), WarningMuted = Color(0xFF3B301B),
+    Danger = Color(0xFFE26970), DangerMuted = Color(0xFF3B1D24),
     Information = Color(0xFF5AA7FF), InformationMuted = Color(0xFF142F4B),
-    Border = Color(0xFF314752), BorderSubtle = Color(0xFF223640),
-    ControlBorder = Color(0xFF527483), FocusRing = Color(0xFFC6A15B),
+    Border = Color(0xFF273344), BorderSubtle = Color(0xFF273344),
+    ControlBorder = Color(0xFF708199), FocusRing = Color(0xFFEBC577),
 )
 
 // Build 45 had a dark palette only. The retained Day option uses the same brass
@@ -103,12 +104,12 @@ private val LocalBrandPalette = staticCompositionLocalOf { NightPalette }
 
 /** Semantic colours stay stable across appearances and always accompany text or an icon. */
 object Brand {
-    val Good = Color(0xFF2B9B5C)
-    val GoodMuted = Color(0xFFDCEFE4)
-    val Warning = Color(0xFFD17B0F)
-    val WarningMuted = Color(0xFFFFE8C4)
-    val Danger = Color(0xFFD94B51)
-    val DangerMuted = Color(0xFFF9DFE0)
+    val Good = Color(0xFF42C49A)
+    val GoodMuted = Color(0xFF12382F)
+    val Warning = Color(0xFFE7B95B)
+    val WarningMuted = Color(0xFF3B301B)
+    val Danger = Color(0xFFE26970)
+    val DangerMuted = Color(0xFF3B1D24)
     val Information = Color(0xFF4A83C2)
     val InformationMuted = Color(0xFFDCEAF8)
 }
@@ -154,9 +155,9 @@ object Spacing {
 /** Corner-radius scale — small controls vs. cards vs. dialogs vs. pills. */
 object Radius {
     val sm = 8.dp
-    val md = 10.dp
-    val lg = 14.dp
-    val xl = 18.dp
+    val md = 12.dp
+    val lg = 16.dp
+    val xl = 20.dp
     val pill = 999.dp
 
     val shapeSm = RoundedCornerShape(sm)
@@ -227,20 +228,20 @@ private val DCompanyTypography = Typography(
         letterSpacing = (-0.6).sp,
     ),
     headlineLarge = PreciseTextStyle.copy(
-        fontSize = 30.sp,
-        lineHeight = 36.sp,
+        fontSize = 28.sp,
+        lineHeight = 34.sp,
         fontWeight = FontWeight.SemiBold,
         letterSpacing = (-0.4).sp,
     ),
     headlineMedium = PreciseTextStyle.copy(
-        fontSize = 26.sp,
-        lineHeight = 32.sp,
+        fontSize = 24.sp,
+        lineHeight = 30.sp,
         fontWeight = FontWeight.SemiBold,
         letterSpacing = (-0.3).sp,
     ),
     headlineSmall = PreciseTextStyle.copy(
-        fontSize = 21.sp,
-        lineHeight = 27.sp,
+        fontSize = 20.sp,
+        lineHeight = 26.sp,
         fontWeight = FontWeight.SemiBold,
         letterSpacing = (-0.1).sp,
     ),

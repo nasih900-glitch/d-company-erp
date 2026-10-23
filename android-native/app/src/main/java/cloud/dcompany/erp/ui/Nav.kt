@@ -31,8 +31,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.automirrored.filled.Logout
@@ -86,7 +88,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -97,9 +99,11 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.window.DialogProperties
 import cloud.dcompany.erp.BuildConfig
 import cloud.dcompany.erp.core.sync.OutboxWorkStatus
@@ -149,10 +153,25 @@ enum class Destination(
     Help("Help", "Report a problem or ask what to do next", Icons.AutoMirrored.Filled.HelpOutline),
 }
 
+private val ExecutiveRailOrder = listOf(
+    Destination.Dashboard,
+    Destination.Gaming,
+    Destination.Pos,
+    Destination.Shift,
+    Destination.Customers,
+    Destination.Inventory,
+    Destination.Reports,
+)
+
+internal fun executiveRailDestinations(destinations: List<Destination>): List<Destination> =
+    ExecutiveRailOrder.filter(destinations::contains)
+
+internal fun usesExecutiveNavigationRail(width: Dp, height: Dp): Boolean =
+    width >= 960.dp && width > height
+
 /**
- * Responsive workspace shell. Daily Gaming, POS, Shift and Customers screens
- * get a full-width control deck and permission-filtered bottom navigation;
- * the other modules retain their compact or expanded sidebar.
+ * Responsive workspace shell. Landscape tablet workspaces use the shared
+ * Executive Dark rail; compact and portrait windows retain the bottom dock.
  */
 @Composable
 fun WorkspaceScaffold(
@@ -188,9 +207,10 @@ fun WorkspaceScaffold(
     var commandMode by remember { mutableStateOf<String?>(null) }
     val destinationStateHolder = rememberSaveableStateHolder()
     BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        // Every module shares the same header and bottom dock. Module state is
-        // retained by the saveable-state holder while route changes are instant.
+        // Every module shares the same header and navigation shell. Module state
+        // is retained by the saveable-state holder while route changes are instant.
         val compact = maxWidth <= 1_280.dp
+        val showNavigationRail = usesExecutiveNavigationRail(maxWidth, maxHeight)
         val contentPane: @Composable (Modifier) -> Unit = { modifier ->
             Column(modifier) {
                 WorkspaceHeader(
@@ -230,14 +250,26 @@ fun WorkspaceScaffold(
                 }
             }
         }
-        Column(Modifier.fillMaxSize()) {
-            contentPane(Modifier.weight(1f).fillMaxWidth())
-            ControlDeckBottomNavigation(
-                destinations = destinations,
-                current = current,
-                onSelect = onDestinationChanged,
-                onOpenMore = { commandMode = "more" },
-            )
+        if (showNavigationRail) {
+            Row(Modifier.fillMaxSize()) {
+                ExecutiveNavigationRail(
+                    destinations = destinations,
+                    current = current,
+                    onSelect = onDestinationChanged,
+                    onOpenMore = { commandMode = "more" },
+                )
+                contentPane(Modifier.weight(1f).fillMaxHeight())
+            }
+        } else {
+            Column(Modifier.fillMaxSize()) {
+                contentPane(Modifier.weight(1f).fillMaxWidth())
+                ControlDeckBottomNavigation(
+                    destinations = destinations,
+                    current = current,
+                    onSelect = onDestinationChanged,
+                    onOpenMore = { commandMode = "more" },
+                )
+            }
         }
     }
 
@@ -254,6 +286,99 @@ fun WorkspaceScaffold(
     }
 }
 
+@Composable
+private fun ExecutiveNavigationRail(
+    destinations: List<Destination>,
+    current: Destination,
+    onSelect: (Destination) -> Unit,
+    onOpenMore: () -> Unit,
+) {
+    val primary = executiveRailDestinations(destinations)
+    val moreSelected = current !in primary
+    Column(
+        Modifier.width(80.dp).fillMaxHeight()
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            .testTag("workspace-navigation-rail"),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(Modifier.fillMaxWidth().height(64.dp), contentAlignment = Alignment.Center) {
+            DCompanyBrandMark(size = 42.dp, contentDescription = "D Company")
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Column(
+            Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            primary.forEach { destination ->
+                ExecutiveRailItem(
+                    icon = destination.icon,
+                    label = if (destination == Destination.Dashboard) "Home" else destination.label,
+                    description = destination.description,
+                    selected = destination == current,
+                    testTag = "workspace-rail-${destination.name}",
+                    onClick = { onSelect(destination) },
+                )
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        ExecutiveRailItem(
+            icon = Icons.Filled.MoreVert,
+            label = "More",
+            description = if (moreSelected) "${current.label} selected" else "Open more modules",
+            selected = moreSelected,
+            testTag = "workspace-more-modules",
+            onClick = onOpenMore,
+        )
+    }
+}
+
+@Composable
+private fun ExecutiveRailItem(
+    icon: ImageVector,
+    label: String,
+    description: String,
+    selected: Boolean,
+    testTag: String,
+    onClick: () -> Unit,
+) {
+    Column(
+        Modifier.fillMaxWidth().height(64.dp)
+            .padding(horizontal = 6.dp, vertical = 4.dp)
+            .clip(Radius.shapeMd)
+            .background(
+                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                else Color.Transparent,
+            )
+            .selectable(selected = selected, role = Role.Tab, onClick = onClick)
+            .testTag(testTag)
+            .semantics {
+                contentDescription = "$label. $description"
+                this.selected = selected
+            },
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = if (selected) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(21.dp),
+        )
+        Spacer(Modifier.height(3.dp))
+        Text(
+            label,
+            color = if (selected) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
 /** The four daily workflows stay one tap away; all permitted modules remain in More. */
 @Composable
 private fun ControlDeckBottomNavigation(
@@ -262,6 +387,16 @@ private fun ControlDeckBottomNavigation(
     onSelect: (Destination) -> Unit,
     onOpenMore: () -> Unit,
 ) {
+    val density = LocalDensity.current
+    val scaledLabelLineHeight = with(density) {
+        MaterialTheme.typography.labelLarge.lineHeight.toDp()
+    }
+    // The 8dp reserve keeps scaled glyph metrics and pixel rounding from being
+    // constrained after the icon, label line height, gap, and item padding.
+    val dockHeight = maxOf(
+        68.dp,
+        22.dp + 2.dp + scaledLabelLineHeight + 16.dp + 8.dp,
+    )
     val primary = listOf(
         Destination.Gaming,
         Destination.Pos,
@@ -270,16 +405,17 @@ private fun ControlDeckBottomNavigation(
     ).filter(destinations::contains)
     val moreSelected = current !in primary
     Row(
-        Modifier.fillMaxWidth().height(68.dp).background(MaterialTheme.colorScheme.surfaceContainerLow)
+        Modifier.fillMaxWidth().height(dockHeight).background(MaterialTheme.colorScheme.surfaceContainerLow)
             .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.28f))
             .testTag("workspace-bottom-dock"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         primary.forEach { destination ->
             val selected = destination == current
-            Row(
+            Column(
                 Modifier.weight(1f).fillMaxHeight()
                     .selectable(selected = selected, role = Role.Tab) { onSelect(destination) }
+                    .testTag("workspace-dock-${destination.name}")
                     .semantics {
                         contentDescription = "${destination.label}. ${destination.description}"
                         this.selected = selected
@@ -290,9 +426,9 @@ private fun ControlDeckBottomNavigation(
                         if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
                         else Color.Transparent,
                     )
-                    .padding(horizontal = Spacing.md),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
+                    .padding(horizontal = Spacing.xs),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
             ) {
                 Icon(
                     destination.icon,
@@ -300,17 +436,21 @@ private fun ControlDeckBottomNavigation(
                     tint = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(22.dp),
                 )
-                Spacer(Modifier.width(Spacing.sm))
+                Spacer(Modifier.height(2.dp))
                 Text(
                     destination.label,
                     color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                        .testTag("workspace-dock-label-${destination.name}"),
                 )
             }
         }
-        Row(
+        Column(
             Modifier.weight(1f).fillMaxHeight()
                 .selectable(selected = moreSelected, role = Role.Tab, onClick = onOpenMore)
                 .testTag("workspace-more-modules")
@@ -328,9 +468,9 @@ private fun ControlDeckBottomNavigation(
                     if (moreSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
                     else Color.Transparent,
                 )
-                .padding(horizontal = Spacing.md),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(horizontal = Spacing.xs),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
         ) {
             Icon(
                 Icons.Filled.MoreVert,
@@ -339,13 +479,17 @@ private fun ControlDeckBottomNavigation(
                 else MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(22.dp),
             )
-            Spacer(Modifier.width(Spacing.sm))
+            Spacer(Modifier.height(2.dp))
             Text(
                 "More",
                 color = if (moreSelected) MaterialTheme.colorScheme.onPrimaryContainer
                 else MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = if (moreSelected) FontWeight.Bold else FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().testTag("workspace-dock-label-More"),
             )
         }
     }
@@ -597,87 +741,115 @@ private fun WorkspaceHeader(
         Destination.Customers,
     )
 
-    Row(
+    BoxWithConstraints(
         Modifier.fillMaxWidth()
             .height(56.dp)
             .background(MaterialTheme.colorScheme.surfaceContainerLow)
             .border(width = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
-            .testTag("workspace-header")
-            .padding(horizontal = if (compact) Spacing.md else Spacing.lg),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+            .testTag("workspace-header"),
     ) {
+        val headerWidth = maxWidth
+        val narrowHeader = headerWidth < 720.dp
         Row(
-            Modifier.weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            Modifier.fillMaxSize().padding(
+                horizontal = if (narrowHeader) Spacing.sm else if (compact) Spacing.md else Spacing.lg,
+            ),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(if (narrowHeader) Spacing.xs else Spacing.md),
         ) {
-            if (controlDeckDestination) {
-                DCompanyBrandMark(size = 32.dp, contentDescription = "D Company")
-            }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    if (controlDeckDestination) "D COMPANY" else destination.label,
-                    color = if (controlDeckDestination) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = if (controlDeckDestination) FontWeight.Bold else FontWeight.Normal,
-                    letterSpacing = if (controlDeckDestination) 1.sp else 0.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    if (controlDeckDestination) "GAMING LOUNGE" else destination.description,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-
-        if (!compact) {
             Row(
-                Modifier.widthIn(min = 280.dp, max = 380.dp).heightIn(min = 48.dp)
-                    .clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surface)
-                    .border(1.dp, MaterialTheme.colorScheme.outline, Radius.shapeMd)
-                    .clickable(onClick = onOpenCommand)
-                    .semantics { role = Role.Button; contentDescription = "Find a module" }
-                    .padding(horizontal = Spacing.md),
-                verticalAlignment = Alignment.CenterVertically,
+                Modifier.weight(1f).testTag("workspace-header-identity"),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(Icons.Filled.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
-                Text(
-                    "Find a module…",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.weight(1f),
+                if (controlDeckDestination) {
+                    DCompanyBrandMark(
+                        size = if (narrowHeader) 28.dp else 32.dp,
+                        contentDescription = "D Company",
+                    )
+                }
+                if (narrowHeader) {
+                    Text(
+                        destination.label,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            if (controlDeckDestination) "D COMPANY" else destination.label,
+                            color = if (controlDeckDestination) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = if (controlDeckDestination) FontWeight.Bold else FontWeight.Normal,
+                            letterSpacing = if (controlDeckDestination) 1.sp else 0.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            if (controlDeckDestination) "GAMING LOUNGE" else destination.description,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+
+            if (!compact) {
+                Row(
+                    Modifier.widthIn(min = 280.dp, max = 380.dp).heightIn(min = 48.dp)
+                        .clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surface)
+                        .border(1.dp, MaterialTheme.colorScheme.outline, Radius.shapeMd)
+                        .clickable(onClick = onOpenCommand)
+                        .semantics { role = Role.Button; contentDescription = "Find a module" }
+                        .padding(horizontal = Spacing.md),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                ) {
+                    Icon(Icons.Filled.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                    Text(
+                        "Find a module…",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            } else {
+                HeaderIconAction(
+                    icon = Icons.Filled.Search,
+                    accessibilityLabel = "Find a module",
+                    onClick = onOpenCommand,
                 )
             }
-        } else {
-            HeaderIconAction(
-                icon = Icons.Filled.Search,
-                accessibilityLabel = "Find a module",
-                onClick = onOpenCommand,
+
+            ConnectivityStatus(
+                problem = connectivityProblem,
+                expanded = !compact,
+                narrow = narrowHeader,
+                onOpenSupport = onOpenSupport,
             )
-        }
+            // A clear queue carries no information in the narrow header. Hide
+            // that empty reserve, while every pending/review/sync state keeps
+            // its stable compact status slot.
+            if (!narrowHeader || !outboxWorkStatus.isClear || syncing) {
+                OutboxWorkStatusPill(
+                    status = outboxWorkStatus,
+                    syncing = syncing,
+                    showDetail = !compact || headerWidth >= 900.dp,
+                )
+            }
 
-        ConnectivityStatus(
-            problem = connectivityProblem,
-            expanded = !compact,
-            onOpenSupport = onOpenSupport,
-        )
-        OutboxWorkStatusPill(
-            status = outboxWorkStatus,
-            syncing = syncing,
-            showDetail = !compact || LocalConfiguration.current.screenWidthDp >= 900,
-        )
-
-        AppearanceControl(
-            preference = appearancePreference,
-            onChange = onAppearancePreferenceChanged,
-            modifier = Modifier.testTag("workspace-day-night-toggle"),
-        )
+            AppearanceControl(
+                preference = appearancePreference,
+                onChange = onAppearancePreferenceChanged,
+                modifier = Modifier.testTag("workspace-day-night-toggle"),
+                compactLabel = narrowHeader,
+            )
 
         val supportDescription = if (pendingSupportCount > 0) {
             "Help and support. $pendingSupportCount saved request${if (pendingSupportCount == 1) "" else "s"} waiting"
@@ -814,6 +986,8 @@ private fun WorkspaceHeader(
     }
 }
 
+}
+
 @Composable
 private fun HeaderIconAction(
     icon: ImageVector,
@@ -861,6 +1035,7 @@ private fun HeaderIconAction(
 private fun ConnectivityStatus(
     problem: SyncAvailabilityProblem,
     expanded: Boolean,
+    narrow: Boolean,
     onOpenSupport: () -> Unit,
 ) {
     var detailsOpen by remember { mutableStateOf(false) }
@@ -881,6 +1056,11 @@ private fun ConnectivityStatus(
     } else {
         color.copy(alpha = 0.42f)
     }
+    val visibleLabel = if (!expanded && problem == SyncAvailabilityProblem.NO_NETWORK) {
+        "Offline"
+    } else {
+        label
+    }
 
     Surface(
         color = background,
@@ -889,7 +1069,7 @@ private fun ConnectivityStatus(
         modifier = Modifier
             // Width is fixed for each breakpoint. A status transition changes
             // neither the header geometry nor the active workflow below it.
-            .width(if (expanded) 136.dp else 124.dp)
+            .width(if (expanded) 136.dp else if (narrow) 104.dp else 124.dp)
             .height(48.dp)
             .clickable { detailsOpen = true }
             .semantics {
@@ -900,9 +1080,9 @@ private fun ConnectivityStatus(
             },
     ) {
         Row(
-            Modifier.fillMaxSize().padding(horizontal = Spacing.md),
+            Modifier.fillMaxSize().padding(horizontal = if (narrow) Spacing.sm else Spacing.md),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            horizontalArrangement = Arrangement.spacedBy(if (narrow) Spacing.xs else Spacing.sm),
         ) {
             Icon(
                 imageVector = icon,
@@ -911,12 +1091,13 @@ private fun ConnectivityStatus(
                 modifier = Modifier.size(19.dp),
             )
             Text(
-                label,
+                visibleLabel,
                 color = if (problem == SyncAvailabilityProblem.NONE) MaterialTheme.colorScheme.onSurfaceVariant else color,
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = if (problem == SyncAvailabilityProblem.NONE) FontWeight.Normal else FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).testTag("workspace-connectivity-label"),
             )
         }
     }
