@@ -25,7 +25,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -44,6 +43,9 @@ import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import cloud.dcompany.erp.ui.theme.Spacing
 import cloud.dcompany.erp.ui.screens.ExecutiveEntrySplash
 import cloud.dcompany.erp.ui.screens.LoginWorkspace
+import cloud.dcompany.erp.ui.screens.analytics.AnalyticsUiState
+import cloud.dcompany.erp.ui.screens.analytics.DashboardKpis
+import cloud.dcompany.erp.ui.screens.home.ExecutiveHomeWorkspace
 import androidx.core.view.WindowCompat
 
 private const val ReviewSceneExtra = "dcompany.review.scene"
@@ -57,6 +59,7 @@ private enum class ReviewScene {
         fun from(raw: String?): ReviewScene = when (raw?.lowercase()) {
             "splash" -> Splash
             "login" -> Login
+            "home", "foundation" -> Foundation
             else -> Foundation
         }
     }
@@ -89,38 +92,40 @@ private fun ExecutiveReview(scene: ReviewScene) {
 
     DCompanyTheme(appearance) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-                when (scene) {
-                    ReviewScene.Foundation -> WorkspaceScaffold(
-                        destinations = destinations,
-                        currentDestination = destination,
-                        employeeName = "Review only",
-                        locationLabel = "OFFLINE · UNKNOWN OPERATIONAL STATE",
-                        connectivityProblem = SyncAvailabilityProblem.NO_NETWORK,
-                        outboxWorkStatus = OutboxWorkStatus(),
-                        syncing = false,
-                        canChangeTill = false,
-                        appearancePreference = appearance,
-                        onAppearancePreferenceChanged = { appearance = it },
-                        onOpenSupport = {},
-                        onChangeTill = {},
-                        onSignOut = {},
-                        onDestinationChanged = { destination = it },
-                    ) { route, _ ->
-                        FoundationSpecimen(route)
-                    }
+            Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    when (scene) {
+                        ReviewScene.Foundation -> WorkspaceScaffold(
+                            destinations = destinations,
+                            currentDestination = destination,
+                            employeeName = "Review only",
+                            locationLabel = "OFFLINE · UNKNOWN OPERATIONAL STATE",
+                            connectivityProblem = SyncAvailabilityProblem.NO_NETWORK,
+                            outboxWorkStatus = OutboxWorkStatus(),
+                            syncing = false,
+                            canChangeTill = false,
+                            appearancePreference = appearance,
+                            onAppearancePreferenceChanged = { appearance = it },
+                            onOpenSupport = {},
+                            onChangeTill = {},
+                            onSignOut = {},
+                            onDestinationChanged = { destination = it },
+                        ) { route, navigateTo ->
+                            FoundationSpecimen(route, destinations, navigateTo)
+                        }
 
-                    ReviewScene.Splash -> ExecutiveEntrySplash()
-                    ReviewScene.Login -> LoginWorkspace(
-                        signingIn = false,
-                        error = null,
-                        onSignIn = { _, _ -> },
-                        appearancePreference = appearance,
-                        onAppearancePreferenceChanged = { appearance = it },
-                        onRecover = {},
-                    )
+                        ReviewScene.Splash -> ExecutiveEntrySplash()
+                        ReviewScene.Login -> LoginWorkspace(
+                            signingIn = false,
+                            error = null,
+                            onSignIn = { _, _ -> },
+                            appearancePreference = appearance,
+                            onAppearancePreferenceChanged = { appearance = it },
+                            onRecover = {},
+                        )
+                    }
                 }
-                ReviewDisclosure(Modifier.align(Alignment.BottomCenter))
+                ReviewDisclosure()
             }
         }
     }
@@ -142,7 +147,34 @@ private fun ReviewDisclosure(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun FoundationSpecimen(destination: Destination) {
+private fun FoundationSpecimen(
+    destination: Destination,
+    destinations: List<Destination>,
+    navigateTo: (Destination) -> Unit,
+) {
+    if (destination == Destination.Dashboard) {
+        ExecutiveHomeWorkspace(
+            employeeName = "Review operator",
+            locationLabel = "Synthetic visual fixture · no business connection",
+            state = AnalyticsUiState(
+                todayLoading = false,
+                dashboard = DashboardKpis(
+                    branchId = "review-only",
+                    date = "2026-10-23",
+                    revenueTotalMinor = 2_458_000,
+                    ordersCount = 48,
+                    openSessions = 6,
+                ),
+                dashboardFetchedAtMillis = 1_792_758_600_000L,
+            ),
+            destinations = destinations,
+            navigateTo = navigateTo,
+            onRetry = {},
+            hour = 18,
+            reviewFixtureLabel = "Synthetic review values · disconnected from business systems",
+        )
+        return
+    }
     Column(
         Modifier.fillMaxSize().padding(horizontal = Spacing.xl, vertical = Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.lg),

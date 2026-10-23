@@ -69,6 +69,7 @@ import cloud.dcompany.erp.ui.usesAdvancedTerminalWorkflow
 import cloud.dcompany.erp.ui.screens.accesscontrol.AccessControlScreen
 import cloud.dcompany.erp.ui.screens.audit.AuditLogScreen
 import cloud.dcompany.erp.ui.screens.analytics.AnalyticsScreen
+import cloud.dcompany.erp.ui.screens.home.ExecutiveHomeScreen
 import cloud.dcompany.erp.ui.screens.customers.CustomersScreen
 import cloud.dcompany.erp.ui.screens.events.EventsScreen
 import cloud.dcompany.erp.ui.screens.memberships.MembershipsScreen
@@ -728,7 +729,12 @@ private fun AppRoot(
                     },
                 ) { destination, navigateTo ->
                     when (destination) {
-                            Destination.Dashboard -> AnalyticsScreen()
+                            Destination.Dashboard -> ExecutiveHomeScreen(
+                                employeeName = s.me.name,
+                                locationLabel = locationLabel,
+                                destinations = destinations,
+                                navigateTo = navigateTo,
+                            )
                             Destination.Pos -> {
                                 // Constructing a feature ViewModel starts its
                                 // initial API pulls. Keep it inside its allowed

@@ -344,7 +344,7 @@ private fun ExecutiveRailItem(
 ) {
     Column(
         Modifier.fillMaxWidth().height(64.dp)
-            .padding(horizontal = 6.dp, vertical = 4.dp)
+            .padding(horizontal = 3.dp, vertical = 4.dp)
             .clip(Radius.shapeMd)
             .background(
                 if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
@@ -375,6 +375,8 @@ private fun ExecutiveRailItem(
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().testTag("$testTag-label"),
         )
     }
 }
