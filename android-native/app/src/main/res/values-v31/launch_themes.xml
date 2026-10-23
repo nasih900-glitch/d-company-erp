@@ -1,20 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Android 12+ manifest fallback. Keep the platform-owned launch surface
+         visually continuous with the native Splash while System is selected. -->
+    <style name="Theme.DCompany" parent="Base.Theme.DCompany">
+        <item name="android:windowSplashScreenBackground">#0E061F</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/login_logo_d</item>
+        <item name="android:windowBackground">#0E061F</item>
+        <item name="android:statusBarColor">#0E061F</item>
+        <item name="android:navigationBarColor">#0E061F</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
     <!-- Stable names: Android persists the chosen app-only splash theme by name.
-         Keep the original manifest launcher icon; System resets to that manifest. -->
+         System resets to the aligned manifest fallback above. -->
     <style name="Theme.DCompany.Start.Day" parent="Theme.DCompany">
-        <item name="android:windowSplashScreenBackground">#F7F7F7</item>
-        <item name="android:windowBackground">#F7F7F7</item>
-        <item name="android:statusBarColor">#F7F7F7</item>
-        <item name="android:navigationBarColor">#F7F7F7</item>
-        <item name="android:windowLightStatusBar">true</item>
-        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowSplashScreenBackground">#0E061F</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/login_logo_d</item>
+        <item name="android:windowBackground">#0E061F</item>
+        <item name="android:statusBarColor">#0E061F</item>
+        <item name="android:navigationBarColor">#0E061F</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
     </style>
     <style name="Theme.DCompany.Start.Night" parent="Theme.DCompany">
-        <item name="android:windowSplashScreenBackground">#08131B</item>
-        <item name="android:windowBackground">#08131B</item>
-        <item name="android:statusBarColor">#08131B</item>
-        <item name="android:navigationBarColor">#08131B</item>
+        <item name="android:windowSplashScreenBackground">#0E061F</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/login_logo_d</item>
+        <item name="android:windowBackground">#0E061F</item>
+        <item name="android:statusBarColor">#0E061F</item>
+        <item name="android:navigationBarColor">#0E061F</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
     </style>

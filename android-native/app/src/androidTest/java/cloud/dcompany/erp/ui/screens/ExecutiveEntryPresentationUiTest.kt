@@ -138,13 +138,13 @@ class ExecutiveEntryPresentationUiTest {
     val compose = createEntryComposeRule()
 
     @Test
-    fun splashUsesOriginalMarkSafePhotoAndHonestInitializationCopy() {
+    fun splashUsesSelectedSceneStandaloneMarkAndHonestInitializationCopy() {
         render(widthDp = 1_280, heightDp = 800) {
             ExecutiveEntrySplash()
         }
         captureRoot(
             name = "entry-splash-1280x800",
-            testName = "splashUsesOriginalMarkSafePhotoAndHonestInitializationCopy",
+            testName = "splashUsesSelectedSceneStandaloneMarkAndHonestInitializationCopy",
             widthDp = 1_280,
             heightDp = 800,
             fontScale = 1.0f,
@@ -152,9 +152,76 @@ class ExecutiveEntryPresentationUiTest {
         )
 
         compose.onNodeWithTag("executive-entry-splash").assertIsDisplayed()
-        compose.onNodeWithTag("entry-lounge-photo").assertIsDisplayed()
+        compose.onNodeWithTag("entry-splash-scene").assertIsDisplayed()
         compose.onNodeWithContentDescription("D Company logo").assertIsDisplayed()
         compose.onNodeWithText("Preparing your workspace").assertIsDisplayed()
+        assertSplashGeometryAndText()
+    }
+
+    @Test
+    fun compactLargeTextSplashKeepsBrandAndCachedVerificationCopySeparate() {
+        val availableHeight = mutableStateOf(800)
+        val statusText = mutableStateOf("Preparing your workspace")
+        val status = "Restoring Avery's workspace safely"
+        val fixedBrandTags = listOf(
+            "entry-splash-brand-mark",
+            "entry-splash-brand-name",
+            "entry-splash-brand-tagline",
+        )
+        assertHost()
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, 1.3f)) {
+                DCompanyTheme(AppearancePreference.Night) {
+                    Surface(color = MaterialTheme.colorScheme.background) {
+                        Box(Modifier.width(600.dp).height(availableHeight.value.dp)) {
+                            ExecutiveEntrySplash(statusText = statusText.value)
+                        }
+                    }
+                }
+            }
+        }
+        captureRoot(
+            name = "entry-splash-portrait-600x800-font1_3",
+            testName = "compactLargeTextSplashKeepsBrandAndCachedVerificationCopySeparate",
+            widthDp = 600,
+            heightDp = 800,
+            fontScale = 1.3f,
+            photoExpected = true,
+        )
+        assertSplashGeometryAndText()
+        val loadingBrandGeometry = controlGeometry(fixedBrandTags)
+        compose.runOnUiThread { statusText.value = status }
+        compose.waitForIdle()
+        assertEquals(
+            "Loading and cached verification must retain identical Splash brand geometry",
+            loadingBrandGeometry,
+            controlGeometry(fixedBrandTags),
+        )
+        captureRoot(
+            name = "entry-splash-cached-600x800-font1_3",
+            testName = "compactLargeTextSplashKeepsBrandAndCachedVerificationCopySeparate",
+            widthDp = 600,
+            heightDp = 800,
+            fontScale = 1.3f,
+            photoExpected = true,
+        )
+        assertSplashGeometryAndText(status)
+
+        compose.runOnUiThread { availableHeight.value = 360 }
+        compose.waitForIdle()
+        captureRoot(
+            name = "entry-splash-compact-600x360-font1_3",
+            testName = "compactLargeTextSplashKeepsBrandAndCachedVerificationCopySeparate",
+            widthDp = 600,
+            heightDp = 360,
+            fontScale = 1.3f,
+            photoExpected = true,
+        )
+
+        compose.onNodeWithTag("entry-splash-scene").assertIsDisplayed()
+        compose.onNodeWithText(status).assertIsDisplayed()
+        assertSplashGeometryAndText(status)
     }
 
     @Test
@@ -209,6 +276,23 @@ class ExecutiveEntryPresentationUiTest {
         assertTextDoesNotOverflow("v${BuildConfig.VERSION_NAME}", scrollIntoView = false)
         compose.onNodeWithContentDescription("D Company illustrated login artwork").assertIsDisplayed()
         assertEssentialTargets()
+
+        compose.onNodeWithTag("login-email").performTextReplacement("splash-preview@example.test")
+        compose.onNodeWithTag("login-password").performTextReplacement("dummy-secret")
+        closeSoftKeyboard()
+        compose.waitUntil(timeoutMillis = 5_000) {
+            ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+                ?.isVisible(WindowInsetsCompat.Type.ime()) != true
+        }
+        compose.onNodeWithTag("login-submit").assertIsEnabled()
+        captureRoot(
+            name = "entry-login-landscape-enabled-1280x800",
+            testName = "landscapeLoginMatchesMeasuredCompositionAndPreservesArtworkAspect",
+            widthDp = 1_280,
+            heightDp = 800,
+            fontScale = 1.0f,
+            photoExpected = true,
+        )
     }
 
     @Test
@@ -534,6 +618,25 @@ class ExecutiveEntryPresentationUiTest {
             .assertWidthIsAtLeast(48.dp)
             .assertHeightIsAtLeast(48.dp)
         assertFullyInsideRoot("login-appearance")
+    }
+
+    private fun assertSplashGeometryAndText(status: String = "Preparing your workspace") {
+        val root = mainEntryRoot().getUnclippedBoundsInRoot()
+        val mark = compose.onNodeWithTag("entry-splash-brand-mark").getUnclippedBoundsInRoot()
+        val name = compose.onNodeWithTag("entry-splash-brand-name").getUnclippedBoundsInRoot()
+        val tagline = compose.onNodeWithTag("entry-splash-brand-tagline").getUnclippedBoundsInRoot()
+        val footer = compose.onNodeWithTag("entry-status").getUnclippedBoundsInRoot()
+        val rootHeight = root.bottom - root.top
+        val markCenter = (((mark.top + mark.bottom) / 2f) - root.top) / rootHeight
+        assertTrue("Splash D must stay near 33% height: $markCenter", markCenter in 0.32f..0.34f)
+        assertTrue("Splash D and company name must not overlap: mark=$mark name=$name", mark.bottom <= name.top)
+        assertTrue("Splash company name and tagline must not overlap: name=$name tagline=$tagline", name.bottom <= tagline.top)
+        assertTrue("Splash tagline and status must not overlap: tagline=$tagline footer=$footer", tagline.bottom <= footer.top)
+        listOf("entry-splash-brand-mark", "entry-splash-brand-name", "entry-splash-brand-tagline", "entry-status")
+            .forEach(::assertFullyInsideRoot)
+        listOf("D COMPANY", "GAMING LOUNGE", status).forEach { text ->
+            assertTextDoesNotOverflow(text, scrollIntoView = false)
+        }
     }
 
     private fun assertFullyInsideRoot(tag: String) {
@@ -918,10 +1021,10 @@ class ExecutiveEntryPresentationUiTest {
             val requested = host.requestedDisplayId?.toString() ?: "null"
             val splashExpected = photoExpected && name.startsWith("entry-splash")
             val loginArtworkExpected = photoExpected && !splashExpected
-            val loungeCropJson = if (splashExpected) {
-                val bounds = compose.onNodeWithTag("entry-lounge-photo", useUnmergedTree = true)
+            val splashCropJson = if (splashExpected) {
+                val bounds = compose.onNodeWithTag("entry-splash-scene", useUnmergedTree = true)
                     .getUnclippedBoundsInRoot()
-                val crop = authorizedLoungeSourceCrop(
+                val crop = splashSceneSourceCrop(
                     destinationWidthPx = ((bounds.right - bounds.left).value * host.density).roundToInt(),
                     destinationHeightPx = ((bounds.bottom - bounds.top).value * host.density).roundToInt(),
                 )
@@ -936,7 +1039,7 @@ class ExecutiveEntryPresentationUiTest {
             directory.resolve("$name.provenance.json").writeText(
                 """
                 {
-                  "phase": "C1",
+                  "phase": "C1_SPLASH",
                   "capture_api": "ComposeTestRule.onNode(isRoot + entry descendant).captureToImage()",
                   "test_class": "cloud.dcompany.erp.ui.screens.ExecutiveEntryPresentationUiTest",
                   "test_name": "$testName",
@@ -948,14 +1051,16 @@ class ExecutiveEntryPresentationUiTest {
                   "application_id": "${BuildConfig.APPLICATION_ID}",
                   "device": "${Build.MANUFACTURER} ${Build.MODEL}",
                   "android_api": ${Build.VERSION.SDK_INT},
-                  "authorized_lounge_sha256": "$AuthorizedLoungeAssetSha256",
-                  "authorized_lounge_source_crop": $loungeCropJson,
+                  "splash_lounge_hd_r1_sha256": "$SplashLoungeHdR1Sha256",
+                  "splash_lounge_hd_r1_source_crop": $splashCropJson,
+                  "splash_lounge_hd_r1_dimensions_px": "1672x941",
+                  "splash_lounge_provenance": "Prepared clean scene derived from the selected Splash reference; no baked application UI and not 4K",
                   "login_reference_sha256": "$LoginReferenceAssetSha256",
                   "login_scene_hd_r1_sha256": "$LoginSceneHdR1Sha256",
                   "login_scene_hd_r1_source_rect": $loginSceneSourceJson,
                   "login_scene_hd_r1_dimensions_px": "1672x941",
                   "login_scene_provenance": "AI reconstruction from supplied Login reference; clean scene with no baked controls or branding; not original pixels and not 4K",
-                  "login_scene_rendering": "entire generated scene, aspect-preserving fit across centered 16:9 composition with native legibility and outer-edge scrims",
+                  "login_scene_rendering": "entire generated scene, width-locked canonical 16:9 framing with vertical clipping at reduced height and native overlays",
                   "requested_display_id": $requested,
                   "observed_display_id": ${host.observedDisplayId},
                   "display_mode_width_px": ${host.modeWidthPx},
@@ -995,7 +1100,7 @@ class ExecutiveEntryPresentationUiTest {
     private fun outputDirectory(): File {
         val profile = if (RequestedEntryDisplayId == null) "default-display" else "display-2-hd"
         return InstrumentationRegistry.getInstrumentation().targetContext.filesDir
-            .resolve("phase-c1-login-fidelity-r3-screenshots-v1")
+            .resolve("phase-c1-splash-screenshots-v1")
             .resolve(profile)
             .resolve(CaptureRunId)
             .apply { check(isDirectory || mkdirs()) }
@@ -1026,7 +1131,7 @@ class ExecutiveEntryPresentationUiTest {
     }
 
     private companion object {
-        const val BaseCommit = "175009232e6dd64c9a0188e06ef0d7c9b49b9515"
+        const val BaseCommit = "72f3d8aaf51ec2b69d76b8cb8aa18d339c3459c0"
         val CaptureRunId = "${System.currentTimeMillis()}-${android.os.Process.myPid()}"
     }
 }

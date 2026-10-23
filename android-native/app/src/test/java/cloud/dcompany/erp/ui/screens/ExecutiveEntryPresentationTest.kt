@@ -103,40 +103,47 @@ class ExecutiveEntryPresentationTest {
     }
 
     @Test
-    fun `authorized image bytes remain exact`() {
-        val image = projectRoot().resolve("src/main/res/drawable-nodpi/authorized_lounge_original.png")
+    fun `selected splash scene bytes remain exact and effectively sixteen by nine`() {
+        val image = projectRoot().resolve("src/main/res/drawable-nodpi/splash_lounge_hd_r1.png")
         val bytes = Files.readAllBytes(image)
         val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
             .joinToString("") { byte -> "%02x".format(byte) }
         val dimensions = ByteBuffer.wrap(bytes, 16, 8).order(ByteOrder.BIG_ENDIAN)
+        val width = dimensions.int
+        val height = dimensions.int
 
-        assertEquals(AuthorizedLoungeAssetSha256, digest)
-        assertEquals(960, dimensions.int)
-        assertEquals(1_280, dimensions.int)
+        assertEquals(SplashLoungeHdR1Sha256, digest)
+        assertEquals(1_672, width)
+        assertEquals(941, height)
+        assertEquals(16f / 9f, width.toFloat() / height, 0.002f)
     }
 
     @Test
-    fun `landscape and split panel crops stay entirely below television`() {
+    fun `landscape splash crops preserve the selected scene without stretching`() {
         assertEquals(
-            LoungeSourceCrop(left = 96, top = 800, width = 768, height = 480),
-            authorizedLoungeSourceCrop(destinationWidthPx = 1_280, destinationHeightPx = 800),
+            SplashSceneSourceCrop(left = 83, top = 0, width = 1_506, height = 941),
+            splashSceneSourceCrop(destinationWidthPx = 1_280, destinationHeightPx = 800),
         )
         assertEquals(
-            LoungeSourceCrop(left = 249, top = 800, width = 461, height = 480),
-            authorizedLoungeSourceCrop(destinationWidthPx = 768, destinationHeightPx = 800),
+            SplashSceneSourceCrop(left = 0, top = 0, width = 1_672, height = 941),
+            splashSceneSourceCrop(destinationWidthPx = 1_600, destinationHeightPx = 900),
         )
     }
 
     @Test
-    fun `portrait and panoramic crops remain inside approved lower scene`() {
+    fun `portrait and panoramic splash crops remain centered inside selected scene`() {
         listOf(
-            authorizedLoungeSourceCrop(destinationWidthPx = 600, destinationHeightPx = 800),
-            authorizedLoungeSourceCrop(destinationWidthPx = 1_000, destinationHeightPx = 200),
+            splashSceneSourceCrop(destinationWidthPx = 600, destinationHeightPx = 800),
+            splashSceneSourceCrop(destinationWidthPx = 1_000, destinationHeightPx = 200),
         ).forEach { crop ->
             assertTrue(crop.left >= 0)
-            assertTrue(crop.top >= 800)
-            assertTrue(crop.right <= 960)
-            assertTrue(crop.bottom <= 1_280)
+            assertTrue(crop.top >= 0)
+            assertTrue(crop.right <= 1_672)
+            assertTrue(crop.bottom <= 941)
+            assertTrue(kotlin.math.abs(
+                crop.width.toDouble() / crop.height -
+                    if (crop.height == 941) 0.75 else 5.0,
+            ) <= 0.01)
         }
     }
 
@@ -162,9 +169,11 @@ class ExecutiveEntryPresentationTest {
 
         listOf("DCompanyApp", "ApiClient", "ViewModel", "CoroutineScope", "NavController")
             .forEach { forbidden -> assertFalse("Pure entry presentation must exclude $forbidden", forbidden in source) }
-        assertTrue("Renderer must pass the approved source offset", "srcOffset = IntOffset(crop.left, crop.top)" in source)
-        assertTrue("Renderer must pass the approved source size", "srcSize = IntSize(crop.width, crop.height)" in source)
-        assertFalse("Renderer must never use a painter fallback", "painterResource(" in source)
+        assertTrue("Renderer must pass the selected scene source offset", "srcOffset = IntOffset(crop.left, crop.top)" in source)
+        assertTrue("Renderer must pass the selected scene source size", "srcSize = IntSize(crop.width, crop.height)" in source)
+        assertTrue("Splash must load the exact scene drawable", "R.drawable.splash_lounge_hd_r1" in source)
+        assertFalse("Retired lower-photo crop must not remain active", "R.drawable.authorized_lounge_original" in source)
+        assertFalse("Splash must use the standalone D, not the shared seal", "DCompanyBrandMark" in source)
         assertFalse("Renderer must never use a full-bitmap ContentScale fallback", "ContentScale." in source)
     }
 
