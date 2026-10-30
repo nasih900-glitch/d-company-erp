@@ -1,6 +1,5 @@
 package cloud.dcompany.erp.ui.screens.settings
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,6 +19,7 @@ import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.components.OperationalBanner
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.UiTone
+import cloud.dcompany.erp.ui.components.workspaceContentCanvas
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Spacing
 
@@ -30,7 +30,7 @@ fun HelpScreen(
     onOpenMyRequests: () -> Unit,
 ) {
     Column(
-        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(Spacing.lgPlus),
+        Modifier.fillMaxSize().workspaceContentCanvas().padding(Spacing.lgPlus),
         verticalArrangement = Arrangement.spacedBy(Spacing.lg),
     ) {
         OperationalBanner(

@@ -5,10 +5,10 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 
 from app.api.v1.gaming import router as gaming_router
-from app.core.security import issue_access_token
+from app.core.security import hash_password, issue_access_token
 from app.core.config import get_settings
 from app.core.db import AsyncSessionLocal
 from app.models import (
@@ -20,11 +20,12 @@ from app.models import (
     Shift,
     Station,
     Terminal,
+    User,
 )
 from app.models.gaming import GamingPauseEvent, GamingSessionExtension
 
 
-async def fixture(session, seed_owner, monkeypatch, *, package=False):
+async def fixture(session, seed_owner, monkeypatch, *, package=False, opened_by=None):
     monkeypatch.setattr(get_settings(), 'gaming_pause_enabled', True)
     t0 = datetime.now(UTC)
     clock = {"at": t0}
@@ -35,7 +36,8 @@ async def fixture(session, seed_owner, monkeypatch, *, package=False):
     monkeypatch.setattr(gaming_router, "datetime", Clock)
     company, branch, terminal, owner = [seed_owner[name] for name in ("company", "branch", "terminal", "owner")]
     shift = Shift(id=uuid4(), company_id=company.id, branch_id=branch.id, terminal_id=terminal.id,
-                  opened_by=owner.id, opened_at=t0, opening_float_minor=50_000, expected_minor=50_000, status="open")
+                  opened_by=opened_by or owner.id, opened_at=t0, opening_float_minor=50_000,
+                  expected_minor=50_000, status="open")
     station = Station(id=uuid4(), company_id=company.id, branch_id=branch.id, code=f"PAUSE-{uuid4().hex[:8]}",
                       name="Pause audit VR", type="vr", rate_per_hour_minor=60_000, tax_rate=0)
     session.add_all([shift, station])
@@ -56,6 +58,33 @@ async def change(client, game, headers, action, version, *, key=None, reason="Co
     return await client.post(f"/api/v1/gaming/sessions/{game.id}/{action}",
         json={"reason":reason, "expected_pause_version":version},
         headers=headers | {"Idempotency-Key": key or f"pause-test:{uuid4()}"} | (extra or {}))
+
+
+async def _actor_headers(session, seed_owner, *, role: str, terminal=None, branch=None):
+    actor = User(
+        id=uuid4(),
+        company_id=seed_owner["company"].id,
+        email=f"{role}-{uuid4().hex[:10]}@test.local",
+        name=f"Void {role}",
+        password_hash=hash_password("password1234"),
+        status="active",
+    )
+    session.add(actor)
+    await session.commit()
+    await session.refresh(actor)
+    branch = branch or seed_owner["branch"]
+    terminal = terminal or seed_owner["terminal"]
+    token = issue_access_token(
+        user_id=actor.id,
+        company_id=seed_owner["company"].id,
+        branch_id=branch.id,
+        roles=[role],
+        auth_version=actor.auth_version,
+    )
+    return actor, {
+        "Authorization": f"Bearer {token}",
+        "X-Terminal-Id": str(terminal.id),
+    }
 
 
 def legacy_resolution_payload(
@@ -179,6 +208,208 @@ async def test_pause_rejects_offline_and_blank_reasons_and_cancel_clears_paused_
     assert cancelled.status_code==200,cancelled.text
     assert cancelled.json()['paused_at'] is None
     assert cancelled.json()['status']=='cancelled'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("elapsed", "reason_required"),
+    [
+        (timedelta(minutes=29, seconds=59, milliseconds=999), False),
+        (timedelta(minutes=30), True),
+    ],
+)
+async def test_live_void_uses_server_playtime_for_optional_and_required_reason(
+    client,
+    session,
+    seed_owner,
+    monkeypatch,
+    elapsed,
+    reason_required,
+):
+    clock, t0, game, headers = await fixture(session, seed_owner, monkeypatch)
+    clock['at'] = t0 + elapsed
+    key = f'gaming-session-void:{game.id}'
+    result = await client.post(
+        f'/api/v1/gaming/sessions/{game.id}/cancel',
+        json={'expected_billing_revision': 0},
+        headers=headers | {'Idempotency-Key': key},
+    )
+    if not reason_required:
+        assert result.status_code == 200, result.text
+        assert result.json()['cancel_reason'] == 'Voided before 30 minutes; no user reason supplied'
+        assert result.json()['server_play_elapsed_ms'] == 29 * 60_000 + 59_999
+        assert result.json()['void_reason_required'] is False
+        audits = (await session.execute(select(AuditLog).where(
+            AuditLog.company_id == seed_owner['company'].id,
+            AuditLog.entity_id == str(game.id),
+            AuditLog.action.in_(['gaming_session_stopped', 'gaming_session_voided']),
+        ))).scalars().all()
+        audits_by_action = {audit.action: audit for audit in audits}
+        assert set(audits_by_action) == {
+            'gaming_session_stopped',
+            'gaming_session_voided',
+        }
+        assert audits_by_action['gaming_session_voided'].before['status'] == 'ended'
+        assert audits_by_action['gaming_session_voided'].business_details['pre_stop_status'] == 'active'
+        return
+
+    assert result.status_code == 422, result.text
+    assert result.json()['error']['details'] == {
+        'issue': 'gaming_void_reason_required',
+        'server_play_elapsed_ms': 30 * 60_000,
+        'reason_required_after_ms': 30 * 60_000,
+    }
+    accepted = await client.post(
+        f'/api/v1/gaming/sessions/{game.id}/cancel',
+        json={
+            'reason': 'Customer disputed the booking after thirty minutes',
+            'expected_billing_revision': 0,
+        },
+        headers=headers | {'Idempotency-Key': f'{key}:reasoned'},
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()['cancel_reason'] == 'Customer disputed the booking after thirty minutes'
+    assert accepted.json()['void_reason_required'] is True
+    audits = (await session.execute(select(AuditLog).where(
+        AuditLog.company_id == seed_owner['company'].id,
+        AuditLog.entity_id == str(game.id),
+        AuditLog.action.in_(['gaming_session_stopped', 'gaming_session_voided']),
+    ))).scalars().all()
+    audits_by_action = {audit.action: audit for audit in audits}
+    assert set(audits_by_action) == {
+        'gaming_session_stopped',
+        'gaming_session_voided',
+    }
+    assert audits_by_action['gaming_session_voided'].before['status'] == 'ended'
+    assert audits_by_action['gaming_session_voided'].business_details['pre_stop_status'] == 'active'
+
+
+@pytest.mark.asyncio
+async def test_open_shift_void_requires_shift_opener_for_non_owner(
+    client,
+    session,
+    seed_owner,
+    monkeypatch,
+):
+    opener, opener_headers = await _actor_headers(
+        session, seed_owner, role="gaming_supervisor",
+    )
+    _clock, _t0, denied_game, _headers = await fixture(
+        session, seed_owner, monkeypatch, opened_by=opener.id,
+    )
+    _staff, staff_headers = await _actor_headers(
+        session, seed_owner, role="gaming_supervisor",
+    )
+    denied = await client.post(
+        f'/api/v1/gaming/sessions/{denied_game.id}/cancel',
+        json={'reason': 'Wrong station selected', 'expected_billing_revision': 0},
+        headers=staff_headers | {'Idempotency-Key': f'gaming-session-void:{denied_game.id}'},
+    )
+    assert denied.status_code == 422, denied.text
+    assert 'opened this shift' in denied.text
+
+    allowed_opener = await client.post(
+        f'/api/v1/gaming/sessions/{denied_game.id}/cancel',
+        json={'reason': 'Wrong station selected', 'expected_billing_revision': 0},
+        headers=opener_headers | {'Idempotency-Key': f'gaming-session-void:{denied_game.id}:opener'},
+    )
+    assert allowed_opener.status_code == 200, allowed_opener.text
+    cancelled_projection = allowed_opener.json()
+
+    current = await client.get(
+        f'/api/v1/gaming/sessions/{denied_game.id}',
+        headers=opener_headers,
+    )
+    assert current.status_code == 200
+    assert current.json() == cancelled_projection
+    assert await session.scalar(select(func.count(AuditLog.id)).where(
+        AuditLog.company_id == seed_owner['company'].id,
+        AuditLog.entity_id == str(denied_game.id),
+        AuditLog.action == 'gaming_session_voided',
+    )) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner_role", ["owner", "co_owner", "super_owner"])
+async def test_owner_roles_may_void_without_being_shift_opener(
+    client,
+    session,
+    seed_owner,
+    monkeypatch,
+    owner_role,
+):
+    _clock, _t0, owner_game, _headers = await fixture(session, seed_owner, monkeypatch)
+    owner, owner_headers = await _actor_headers(
+        session, seed_owner, role=owner_role,
+    )
+    key = f'gaming-session-void:{owner_game.id}:owner'
+    payload = {'reason': 'Owner reviewed mistaken booking', 'expected_billing_revision': 0}
+    owner_void = await client.post(
+        f'/api/v1/gaming/sessions/{owner_game.id}/cancel',
+        json=payload,
+        headers=owner_headers | {'Idempotency-Key': key},
+    )
+    assert owner_void.status_code == 200, owner_void.text
+    shift = await session.get(Shift, owner_game.shift_id)
+    assert shift is not None
+    shift.status = 'closed'
+    shift.closed_by = owner.id
+    shift.closed_at = datetime.now(UTC)
+    await session.execute(text('DELETE FROM idempotency_keys WHERE key=:key'), {'key': key})
+    await session.commit()
+    replay = await client.post(
+        f'/api/v1/gaming/sessions/{owner_game.id}/cancel',
+        json=payload,
+        headers=owner_headers | {'Idempotency-Key': key},
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json() == owner_void.json()
+    assert await session.scalar(select(func.count(AuditLog.id)).where(
+        AuditLog.company_id == seed_owner['company'].id,
+        AuditLog.entity_id == str(owner_game.id),
+        AuditLog.action == 'gaming_session_voided',
+    )) == 1
+
+
+@pytest.mark.asyncio
+async def test_void_preserves_terminal_and_branch_scope(
+    client,
+    session,
+    seed_owner,
+    monkeypatch,
+):
+    _clock, _t0, game, _headers = await fixture(session, seed_owner, monkeypatch)
+    other_branch = Branch(
+        id=uuid4(),
+        company_id=seed_owner['company'].id,
+        name='Other branch',
+        invoice_series_code='OV',
+    )
+    session.add(other_branch)
+    await session.flush()
+    other_branch_terminal = Terminal(
+        id=uuid4(),
+        branch_id=other_branch.id,
+        name='Other branch Gaming',
+        device_id=f'gaming-other-branch-{uuid4()}',
+        purpose='hybrid',
+    )
+    session.add(other_branch_terminal)
+    await session.commit()
+
+    _other_owner, wrong_branch_headers = await _actor_headers(
+        session,
+        seed_owner,
+        role='owner',
+        terminal=other_branch_terminal,
+        branch=other_branch,
+    )
+    wrong_branch = await client.post(
+        f'/api/v1/gaming/sessions/{game.id}/cancel',
+        json={'reason': 'Scope probe', 'expected_billing_revision': 0},
+        headers=wrong_branch_headers | {'Idempotency-Key': f'gaming-session-void:{game.id}:branch'},
+    )
+    assert wrong_branch.status_code in {404, 422}, wrong_branch.text
 
 
 @pytest.mark.asyncio

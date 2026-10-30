@@ -49,11 +49,13 @@ from app.core.errors import (
     BusinessRuleError,
     ConflictError,
     ForbiddenError,
+    IdempotencyConflict,
     NotFoundError,
 )
 from app.core.idempotency import check_or_reserve, store_response
 from app.core.logging import get_logger
 from app.core.permissions import require_permission, requires
+from app.core.roles import has_owner_role
 from app.core.tenant import TenantContext
 from app.core.timezone import company_timezone, local_date_bounds_utc, local_today
 from app.models import (
@@ -67,8 +69,12 @@ from app.models import (
     Floor,
     GamingParticipantSettlement,
     GamingSession,
+    GamingSessionAddon,
     GamingSessionExtension,
     GamingSessionPackageAmendment,
+    GamingVoidAddonLine,
+    GamingVoidReceipt,
+    MembershipBenefitReservation,
     MembershipPayment,
     MembershipPaymentRequest,
     MembershipPaymentRequestResolution,
@@ -105,6 +111,10 @@ from app.services.customers.deletion_fence import (
     lock_customer_directory,
 )
 from app.services.gaming.billing_mode import is_package_billed
+from app.services.gaming.void import (
+    require_exact_addon_line_mapping,
+    require_exact_reviewed_order_aggregate,
+)
 from app.services.integrations.google_sheets_mirror import (
     enqueue_google_sheets_event_if_enabled,
 )
@@ -4803,6 +4813,39 @@ class VoidOrderLineRequest(BaseModel):
         return clean
 
 
+async def _reject_generic_gaming_bill_void(session, *, order_id: UUID) -> None:
+    """Keep every Gaming source/retained bill on its reviewed Void route."""
+
+    linked = (
+        await session.execute(
+            select(GamingSession.id)
+            .where(
+                or_(
+                    GamingSession.order_id == order_id,
+                    GamingSession.retained_addon_order_id == order_id,
+                )
+            )
+            .limit(1)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    receipt = (
+        await session.execute(
+            select(GamingVoidReceipt.id).where(
+                or_(
+                    GamingVoidReceipt.source_order_id == order_id,
+                    GamingVoidReceipt.retained_order_id == order_id,
+                )
+            ).limit(1)
+        )
+    ).scalar_one_or_none()
+    if linked is not None or receipt is not None:
+        raise BusinessRuleError(
+            "This bill belongs to a Gaming Void review. Open its Gaming session; "
+            "generic order and line Void actions are disabled."
+        )
+
+
 @router.post("/orders/{order_id}/lines/{line_id}/void", response_model=OrderRead)
 async def void_order_line(
     order_id: UUID,
@@ -4843,6 +4886,7 @@ async def void_order_line(
         terminal_id=tenant.terminal_id,
         operation="cancelling a table item",
     )
+    await _reject_generic_gaming_bill_void(session, order_id=order.id)
     if order.status != "open" or order.table_id is None:
         if order.status == "held":
             raise BusinessRuleError(
@@ -5421,6 +5465,414 @@ class VoidOrderRequest(BaseModel):
         return clean
 
 
+class GamingOrderVoidRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: UUID
+    reason: str = Field(min_length=1, max_length=500)
+    expected_order_status: Literal["held"]
+    expected_checkout_version: int = Field(ge=1, strict=True)
+    expected_order_total_minor: int = Field(ge=0, strict=True)
+    expected_session_status: Literal["ended"]
+    expected_billing_revision: int = Field(ge=0, strict=True)
+    expected_participant_revision: int = Field(ge=0, strict=True)
+    expected_amount_minor: int = Field(ge=0, strict=True)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        clean = value.strip()
+        if not clean:
+            raise ValueError("reason must not be blank")
+        return clean
+
+
+class GamingOrderVoidRead(BaseModel):
+    receipt_id: UUID
+    session_id: UUID
+    source_order_id: UUID
+    retained_order_id: UUID | None
+    retained_total_minor: int
+    retained_addon_count: int
+    session_status: Literal["cancelled"]
+    source_order_status: Literal["held", "void"]
+
+
+@router.post(
+    "/orders/{order_id}/gaming-void",
+    response_model=GamingOrderVoidRead,
+)
+async def void_linked_gaming_charge(
+    order_id: UUID,
+    payload: GamingOrderVoidRequest,
+    session: SessionDep,
+    request: Request,
+    checkout_claim_token: Annotated[
+        str,
+        Header(alias="X-Checkout-Claim"),
+    ],
+    tenant: TenantContext = Depends(requires("pos.void", "gaming.write")),
+) -> GamingOrderVoidRead:
+    """Owner-reviewed Void of one unpaid Gaming charge already held in POS."""
+
+    if tenant.terminal_id is None or tenant.branch_id is None:
+        raise BusinessRuleError(
+            "Select the exact branch and POS terminal holding this Gaming bill."
+        )
+    if not has_owner_role(tenant.roles):
+        raise ForbiddenError(
+            "Only an Owner can void a Gaming charge after it reaches POS."
+        )
+
+    idempotency_key, request_hash = _require_idempotency(request)
+    reviewed_payload = payload.model_dump(mode="json")
+    durable_receipts = list(
+        (
+            await session.execute(
+            select(GamingVoidReceipt).where(
+                GamingVoidReceipt.company_id == tenant.company_id,
+                or_(
+                    GamingVoidReceipt.source_order_id == order_id,
+                    GamingVoidReceipt.idempotency_key == idempotency_key,
+                ),
+            )
+        )
+        ).scalars().all()
+    )
+    if durable_receipts:
+        if len(durable_receipts) != 1:
+            raise IdempotencyConflict(
+                "The immutable Gaming Void identity matches more than one receipt. "
+                "Protected reconciliation is required; nothing was mutated.",
+                details={"order_id": str(order_id)},
+            )
+        durable_receipt = durable_receipts[0]
+        if (
+            durable_receipt.mode != "linked_pos"
+            or durable_receipt.source_order_id != order_id
+            or durable_receipt.idempotency_key != idempotency_key
+            or durable_receipt.request_hash != request_hash
+            or durable_receipt.actor_user_id != tenant.user_id
+            or durable_receipt.terminal_id != tenant.terminal_id
+            or durable_receipt.request_payload != reviewed_payload
+        ):
+            raise IdempotencyConflict(
+                "This Gaming charge already has a different immutable Owner Void receipt. "
+                "Reload POS history; no new mutation was applied.",
+                details={"order_id": str(order_id)},
+            )
+        return GamingOrderVoidRead.model_validate(durable_receipt.response_payload)
+    existing_response = await check_or_reserve(
+        session,
+        key=idempotency_key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if existing_response:
+        return GamingOrderVoidRead.model_validate(existing_response["body"])
+
+    # Payment, checkout and this action all serialize on the Order row first.
+    order = (
+        await session.execute(
+            select(Order)
+            .where(Order.id == order_id, Order.company_id == tenant.company_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    order = require_operational_order(
+        order,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="voiding the reviewed Gaming charge",
+    )
+    if order.status in {"paid", "refunded"} or order.invoice_no is not None:
+        raise BusinessRuleError(
+            "This Gaming bill has entered issued or settled financial history. "
+            "Keep it intact and use the protected refund/reconciliation workflow."
+        )
+    if (
+        order.status != payload.expected_order_status
+        or order.status != "held"
+        or int(order.checkout_version) != payload.expected_checkout_version
+        or int(order.total_minor or 0) != payload.expected_order_total_minor
+    ):
+        raise ConflictError(
+            "The held order changed after review. Refresh POS; nothing was voided."
+        )
+
+    paid_minor = await _paid_total(session, order.id)
+    refunded_minor = await _refunded_total(session, order.id)
+    if (
+        paid_minor != 0
+        or refunded_minor != 0
+        or order.invoice_no is not None
+        or order.invoice_issued_at is not None
+        or order.irn is not None
+        or int(order.tip_minor or 0) != 0
+    ):
+        raise BusinessRuleError(
+            "This Gaming bill has payment, invoice, tip, or refund evidence. "
+            "Keep it intact and use the protected refund/reconciliation workflow."
+        )
+    if int(order.manual_discount_minor or 0) != 0 or int(order.points_redeemed_minor or 0) != 0:
+        raise BusinessRuleError(
+            "This bill has a manual discount or loyalty redemption whose allocation is ambiguous. "
+            "Nothing was voided."
+        )
+
+    checkout_claim = await validate_checkout_claim(
+        session,
+        order=order,
+        claimant_user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+        paid_minor=paid_minor,
+        token=checkout_claim_token,
+    )
+    shift = (
+        await session.execute(
+            select(Shift)
+            .where(Shift.id == order.shift_id, Shift.company_id == tenant.company_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    shift = require_open_operational_shift(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="voiding the reviewed Gaming charge",
+    )
+
+    gaming_session = (
+        await session.execute(
+            select(GamingSession)
+            .where(
+                GamingSession.id == payload.session_id,
+                GamingSession.company_id == tenant.company_id,
+                GamingSession.order_id == order.id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if gaming_session is None:
+        raise ConflictError(
+            "This order is no longer linked to the reviewed Gaming session. Nothing was voided."
+        )
+    station = await session.get(Station, gaming_session.station_id)
+    if station is None or station.company_id != tenant.company_id or station.branch_id != order.branch_id:
+        raise BusinessRuleError("Gaming station and POS order scope do not match.")
+    if (
+        gaming_session.status != payload.expected_session_status
+        or gaming_session.status != "ended"
+        or int(gaming_session.billing_revision or 0) != payload.expected_billing_revision
+        or int(gaming_session.participant_revision or 0) != payload.expected_participant_revision
+        or gaming_session.amount_minor != payload.expected_amount_minor
+    ):
+        raise ConflictError(
+            "The Gaming session changed after review. Refresh Gaming and POS; nothing was voided."
+        )
+
+    reservations = (
+        await session.execute(
+            select(MembershipBenefitReservation)
+            .where(MembershipBenefitReservation.order_id == order.id)
+            .with_for_update()
+        )
+    ).scalars().all()
+    if reservations:
+        raise BusinessRuleError(
+            "This Gaming bill has a membership-benefit reservation. Protected allocation "
+            "review is required so Gaming minutes cannot remain reserved on the add-on bill."
+        )
+
+    active_lines = (
+        await session.execute(
+            select(OrderLine)
+            .where(OrderLine.order_id == order.id, OrderLine.voided_at.is_(None))
+            .order_by(OrderLine.id)
+            .with_for_update()
+        )
+    ).scalars().all()
+    active_addons = (
+        await session.execute(
+            select(GamingSessionAddon)
+            .where(
+                GamingSessionAddon.company_id == tenant.company_id,
+                GamingSessionAddon.gaming_session_id == gaming_session.id,
+                GamingSessionAddon.voided_at.is_(None),
+            )
+            .order_by(GamingSessionAddon.created_at, GamingSessionAddon.id)
+            .with_for_update()
+        )
+    ).scalars().all()
+    require_exact_reviewed_order_aggregate(
+        order=order,
+        active_lines=list(active_lines),
+    )
+    gaming_charge_line, addon_lines, charge_snapshot = require_exact_addon_line_mapping(
+        addons=list(active_addons),
+        active_lines=list(active_lines),
+        expected_charge_item_type={
+            "hookah": "hookah",
+            "streaming": "streaming",
+        }.get(station.type, "gaming"),
+        original_session_amount_minor=int(gaming_session.amount_minor),
+    )
+
+    original_checkout_version = int(order.checkout_version)
+    original_total_minor = int(order.total_minor or 0)
+    original_amount_minor = int(gaming_session.amount_minor or 0)
+    now = datetime.now(timezone.utc)
+    receipt_id = uuid4()
+
+    if addon_lines:
+        gaming_session.retained_addon_order_id = order.id
+        gaming_session.order_id = None
+        retained_order_id: UUID | None = order.id
+        retained_total_minor = sum(
+            int(line.line_total_minor or 0) for _addon, line in addon_lines
+        )
+        retained_total_minor, _retained_round_off = _round_to_rupee(
+            retained_total_minor
+        )
+        source_status: Literal["held", "void"] = "held"
+    else:
+        gaming_session.order_id = None
+        order.status = "void"
+        order.notes = (
+            f"{order.notes + ' — ' if order.notes else ''}"
+            f"Gaming charge voided: {payload.reason}"
+        )[:500]
+        retained_order_id = None
+        retained_total_minor = 0
+        source_status = "void"
+
+    gaming_session.status = "cancelled"
+    gaming_session.billable_minutes = 0
+    gaming_session.amount_minor = 0
+    gaming_session.cancelled_at = now
+    gaming_session.cancelled_by = tenant.user_id
+    gaming_session.cancel_reason = payload.reason
+
+    response = GamingOrderVoidRead(
+        receipt_id=receipt_id,
+        session_id=gaming_session.id,
+        source_order_id=order.id,
+        retained_order_id=retained_order_id,
+        retained_total_minor=retained_total_minor,
+        retained_addon_count=len(addon_lines),
+        session_status="cancelled",
+        source_order_status=source_status,
+    )
+    receipt = GamingVoidReceipt(
+        id=receipt_id,
+        company_id=tenant.company_id,
+        gaming_session_id=gaming_session.id,
+        source_order_id=order.id,
+        retained_order_id=retained_order_id,
+        gaming_charge_line_id=gaming_charge_line.id,
+        charge_unit_price_minor=charge_snapshot.unit_price_minor,
+        charge_line_total_minor=charge_snapshot.line_total_minor,
+        charge_discount_minor=charge_snapshot.discount_minor,
+        charge_taxable_value_minor=charge_snapshot.taxable_value_minor,
+        charge_cgst_minor=charge_snapshot.cgst_minor,
+        charge_sgst_minor=charge_snapshot.sgst_minor,
+        charge_igst_minor=charge_snapshot.igst_minor,
+        charge_cess_minor=charge_snapshot.cess_minor,
+        actor_user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+        mode="linked_pos",
+        original_session_status=payload.expected_session_status,
+        original_amount_minor=original_amount_minor,
+        session_billing_revision=payload.expected_billing_revision,
+        session_participant_revision=payload.expected_participant_revision,
+        source_order_status=payload.expected_order_status,
+        source_checkout_version=original_checkout_version,
+        source_total_minor=original_total_minor,
+        retained_total_minor=retained_total_minor,
+        addon_count=len(addon_lines),
+        reason=payload.reason,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        request_payload=reviewed_payload,
+        response_payload=response.model_dump(mode="json"),
+        voided_at=now,
+    )
+
+    # Stage the mutable financial transition before its immutable receipt
+    # exists.  The receipt/line/session constraints are deferred and validate
+    # the complete cohort at commit, while the immediate evidence guards can
+    # never mistake this transaction's first charge void or reaggregation for
+    # a later attempt to rewrite frozen evidence.
+    gaming_charge_line.voided_at = now
+    gaming_charge_line.voided_by = tenant.user_id
+    gaming_charge_line.void_reason = payload.reason
+    gaming_charge_line.kitchen_void_acknowledged_at = None
+    gaming_charge_line.kitchen_void_acknowledged_by = None
+    await session.flush()
+    if addon_lines:
+        await _reaggregate_active_order_lines(
+            session,
+            order=order,
+            company_id=tenant.company_id,
+        )
+        if int(order.total_minor or 0) != retained_total_minor:
+            raise BusinessRuleError(
+                "The retained Gaming add-on total changed during locked review. "
+                "Nothing was voided."
+            )
+        await session.flush()
+
+    # SQLAlchemy has no ORM relationship between the immutable receipt and its
+    # mapping rows.  Flush the FK parent explicitly, then its children.  There
+    # is still one transaction and every later failure rolls all stages back.
+    session.add(receipt)
+    await session.flush([receipt])
+    for addon, line in addon_lines:
+        session.add(
+            GamingVoidAddonLine(
+                id=uuid4(),
+                receipt_id=receipt_id,
+                addon_id=addon.id,
+                order_line_id=line.id,
+                source_order_id=order.id,
+                retained_order_id=order.id,
+            )
+        )
+    if addon_lines:
+        await session.flush()
+    record_operation(
+        session,
+        company_id=tenant.company_id,
+        actor_user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+        action="gaming_pos_charge_voided",
+        entity_type="GamingSession",
+        entity_id=gaming_session.id,
+        operation_id=idempotency_key,
+        before={
+            "session_status": payload.expected_session_status,
+            "session_amount_minor": original_amount_minor,
+            "source_order_status": payload.expected_order_status,
+            "source_order_total_minor": original_total_minor,
+            "gaming_charge_line_id": str(gaming_charge_line.id),
+        },
+        after=response.model_dump(mode="json"),
+        reason=payload.reason,
+    )
+    await consume_checkout_claim(session, checkout_claim)
+    await session.flush()
+    await store_response(
+        session,
+        key=idempotency_key,
+        status_code=status.HTTP_200_OK,
+        body=response.model_dump(mode="json"),
+    )
+    return response
+
+
 @router.delete("/orders/{order_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def void_held_order(
     order_id: UUID,
@@ -5446,6 +5898,7 @@ async def void_held_order(
         terminal_id=tenant.terminal_id,
         operation="voiding an order",
     )
+    await _reject_generic_gaming_bill_void(session, order_id=order.id)
     if order.status == "void":
         # A lost response followed by the same command is harmless, but a new
         # reason is not the same business action. Compare against the latest

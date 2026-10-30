@@ -23,6 +23,9 @@ interface HeldOrderDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(rows: List<HeldOrderCacheEntity>)
 
+    @Query("DELETE FROM held_order_cache WHERE id = :orderId")
+    suspend fun deleteById(orderId: String)
+
     @Query("DELETE FROM held_order_cache WHERE id NOT IN (:keepIds)")
     suspend fun deleteNotIn(keepIds: List<String>)
 

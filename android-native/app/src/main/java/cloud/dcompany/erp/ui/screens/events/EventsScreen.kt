@@ -32,11 +32,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -73,6 +72,7 @@ import cloud.dcompany.erp.core.money.minorToRupeesInput
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.PricingUnlockDialog
+import cloud.dcompany.erp.ui.components.LiquidDropdownMenu
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import cloud.dcompany.erp.ui.components.ActionBar
 import cloud.dcompany.erp.ui.components.ActionIntent
@@ -84,8 +84,10 @@ import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.components.FormDialog
 import cloud.dcompany.erp.ui.components.OperationalStatusBadge
 import cloud.dcompany.erp.ui.components.PickerField
+import cloud.dcompany.erp.ui.components.workspaceContentCanvas
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.UiTone
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
 import cloud.dcompany.erp.ui.components.ConfirmDialog
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
@@ -108,7 +110,7 @@ fun EventsScreen(access: EventsAccess = EventsAccess()) {
 @Composable
 private fun EventsContent(state: EventsUiState, vm: EventsViewModel, access: EventsAccess) {
     Column(
-        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(Spacing.lg),
+        Modifier.fillMaxSize().workspaceContentCanvas().padding(Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
         Header(state, vm, access)
@@ -472,7 +474,7 @@ private fun EventManagementMenu(event: Event, vm: EventsViewModel) {
             intent = ActionIntent.Secondary,
             leadingIcon = Icons.Default.MoreVert,
         )
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        LiquidDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
                 text = { Text("Edit") },
                 onClick = {
@@ -546,7 +548,7 @@ private fun PendingEventChangesPanel(
 ) {
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeMd)
-            .background(MaterialTheme.colorScheme.surface).padding(12.dp),
+            .liquidWorkspaceSurface(Radius.shapeMd).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text("Pending event changes", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)

@@ -1,10 +1,10 @@
 # v3.1.47 / Android build 55 release candidate
 
-This candidate contains the corrective Gaming and workflow changes reviewed in
-the local emulator and approved by the owner on 22 October 2026. Approval of
-that preview is separate from release signing, in-place upgrades, production
-installation and offering an update. This document does not assert those
-later gates have passed.
+This candidate implements the owner-directed liquid-glass workspace and Gaming
+workflow corrections. The local core-screen review is separate from final
+performance acceptance, release signing, in-place upgrades, production
+installation and offering an update. This document records scope and required
+evidence; it does not assert those later gates have passed.
 
 ## Reviewed corrections
 
@@ -12,13 +12,13 @@ later gates have passed.
   with 60 minutes revealed after clockwise movement past 30. Published package
   identity, price and Start remain aligned; jitter cannot wrap the hour to
   thirty. The ring retains its geometry through the session states.
-- Eligible clean active or paused sessions can be cancelled with a reason.
-  A stopped, unpaid session with player history can be voided directly before
-  POS. Its original amount, attendance, settlement and attribution remain
-  recorded in immutable audit evidence; current billability becomes zero.
-  Exact review metadata, idempotency, workspace identity, open-shift, item and
-  pending-work safeguards remain enforced. Linked POS bills retain their
-  established POS workflow.
+- Gaming Void covers eligible active, paused and stopped unpaid sessions before
+  POS. Below 30 minutes a reason is optional; at or above 30 minutes it is
+  required. POS-linked void operations require the Owner. Original amounts,
+  attendance, settlement and attribution remain in immutable audit/void evidence;
+  the voided Gaming charge becomes non-billable. Served add-ons remain payable
+  through a separately retained bill and immutable line snapshots. Exact review
+  revisions, idempotency, workspace, shift and pending-work guards remain enforced.
 - Inline player and drink drafts are bound to the exact session. Drink reviews
   retain the selected catalogue snapshot and require a new review if it changes.
   Valid offline pending Starts permit anonymous joins through the existing
@@ -27,18 +27,25 @@ later gates have passed.
   Checkout controls remain reachable, and explicit zero-total completions do not
   claim a payment was collected. Shift exposes saved close blockers without
   claiming complete server approval or assuming a physical drawer count.
-- Android restores the familiar navy/brass appearance with readable Day/Night
-  surfaces. The agreed layout and original logo remain; Web colours and layout
-  are unchanged. Optional updater progress remains visible while the exact
-  current download or verification is running; Pause/Resume behavior is retained.
+- Android uses the approved transparent liquid-glass sidebar, cards, controls,
+  dialogs and additional workspaces. One selectable 3840 × 2160 background is
+  shared by Home and the other workspace pages; the original Web logo appears
+  once in the shared sidebar. Login and Splash keep their approved artwork
+  (1672 × 941 assets), so this is not an assertion that every asset is native 4K.
+  The sidebar supports hide/reveal swipes and held-touch sliding navigation;
+  successful Login offers the upward swipe into Home. Existing login methods
+  and real POS catalogue data remain in use. Optional updater progress stays
+  visible during the exact current download or verification; Pause/Resume remains.
 
 ## Release identity and preservation boundaries
 
 The coordinated product version is `3.1.47`, Android installation code `55`.
-Room remains `56`. Alembic `0092` adds the protected global Android update-policy
-singleton; it changes no financial history or tablet queues. Existing business
-records, authentication policy, financial arithmetic and outbox protocols are
-preserved.
+Room advances to `58`. Alembic `0092` adds the protected global Android
+update-policy singleton; `0093` adds immutable Gaming Void/served-addon evidence
+and the nullable retained-addon bill link. The guarded transition preserves all
+legacy rows, including an exact pre-column Gaming-session projection, sequences
+and tablet fleet/queue evidence. Financial arithmetic and outbox protocols remain
+subject to the existing regression and idempotency checks.
 
 The repository's latest/minimum Android template defaults remain `8`, and its
 compatibility-policy defaults are unchanged. Deployed required-update settings
@@ -51,7 +58,7 @@ validated; this note grants no pending-work exception and does not repurpose a
 previous build's signing, compatibility or deployment evidence.
 
 The source-to-requirement map is in [Build55 acceptance](BUILD55_ACCEPTANCE.md).
-The exact54/0091→55/0092 preservation and recovery procedure is documented in
+The exact54/0091→55/0093 preservation and recovery procedure is documented in
 [the guarded deployment runbook](BUILD55_GUARDED_DEPLOYMENT.md). These documents
 record scope and gates, not a claim that deployment has completed.
 

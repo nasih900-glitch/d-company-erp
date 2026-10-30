@@ -99,7 +99,12 @@ data class GameSession(
     @SerialName("customer_name") val customerName: String? = null,
     @SerialName("customer_phone") val customerPhone: String? = null,
     @SerialName("order_id") val orderId: String? = null,
+    /** Payable add-on bill retained after the Gaming charge is voided. */
+    @SerialName("retained_addon_order_id") val retainedAddonOrderId: String? = null,
     @SerialName("cancel_reason") val cancelReason: String? = null,
+    @SerialName("cancelled_by") val cancelledBy: String? = null,
+    @SerialName("server_play_elapsed_ms") val serverPlayElapsedMs: Long? = null,
+    @SerialName("void_reason_required") val voidReasonRequired: Boolean? = null,
     @SerialName("cancellation_receipt_id") val cancellationReceiptId: String? = null,
     @SerialName("cancellation_idempotency_key") val cancellationIdempotencyKey: String? = null,
     @SerialName("cancellation_request_hash") val cancellationRequestHash: String? = null,
@@ -540,10 +545,38 @@ data class SessionPosHandoffResult(
 
 @Serializable
 data class SessionCancelBody(
-    val reason: String,
+    val reason: String? = null,
+    /** Required compare-and-swap fence: V1 can only void a session still outside POS. */
+    @SerialName("expected_order_id") val expectedOrderId: JsonElement,
+    @SerialName("retained_target_shift_id") val retainedTargetShiftId: String? = null,
     @SerialName("expected_participant_revision") val expectedParticipantRevision: Int? = null,
     @SerialName("expected_billing_revision") val expectedBillingRevision: Int? = null,
     @SerialName("expected_amount_minor") val expectedAmountMinor: Long? = null,
+)
+
+@Serializable
+data class GamingOrderVoidRequest(
+    @SerialName("session_id") val sessionId: String,
+    val reason: String,
+    @SerialName("expected_order_status") val expectedOrderStatus: String,
+    @SerialName("expected_checkout_version") val expectedCheckoutVersion: Long,
+    @SerialName("expected_order_total_minor") val expectedOrderTotalMinor: Long,
+    @SerialName("expected_session_status") val expectedSessionStatus: String,
+    @SerialName("expected_billing_revision") val expectedBillingRevision: Int,
+    @SerialName("expected_participant_revision") val expectedParticipantRevision: Int,
+    @SerialName("expected_amount_minor") val expectedAmountMinor: Long,
+)
+
+@Serializable
+data class GamingOrderVoidRead(
+    @SerialName("receipt_id") val receiptId: String,
+    @SerialName("session_id") val sessionId: String,
+    @SerialName("source_order_id") val sourceOrderId: String,
+    @SerialName("retained_order_id") val retainedOrderId: String? = null,
+    @SerialName("retained_total_minor") val retainedTotalMinor: Long,
+    @SerialName("retained_addon_count") val retainedAddonCount: Int,
+    @SerialName("session_status") val sessionStatus: String,
+    @SerialName("source_order_status") val sourceOrderStatus: String,
 )
 
 @Serializable
@@ -668,6 +701,10 @@ internal interface GamingApi {
         // Asking for exactly that set prevents a busy venue's paid history
         // from pushing an older unresolved blocker out of the default page.
         @Query("unbilled_only") unbilledOnly: Boolean = true,
+        // Explicit Owner-only projection of current held POS review work. The
+        // backend rejects this flag unless role, permissions and terminal scope
+        // all match; ordinary clients retain the historical board contract.
+        @Query("include_pos_linked_reviewable") includePosLinkedReviewable: Boolean = false,
         @Query("limit") limit: Int = 500,
     ): List<GameSession>
 
@@ -799,6 +836,14 @@ internal interface GamingApi {
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): GameSession
 
+    @POST("pos/orders/{orderId}/gaming-void")
+    suspend fun voidLinkedOrder(
+        @Path("orderId") orderId: String,
+        @Body body: GamingOrderVoidRequest,
+        @Header("Idempotency-Key") key: String,
+        @Header("X-Checkout-Claim") checkoutClaimToken: String,
+    ): GamingOrderVoidRead
+
     /** Natural idempotency: the backend locks the session and reuses gs.order_id on retry. */
     @POST("gaming/sessions/{id}/send-to-pos")
     suspend fun sendToPos(
@@ -809,6 +854,10 @@ internal interface GamingApi {
     /** Live, permission-scoped destinations; an empty list never authorises fallback. */
     @GET("gaming/sessions/{id}/pos-target-shifts")
     suspend fun posTargetShifts(@Path("id") id: String): List<PosTargetShift>
+
+    /** Void retention includes active sessions and the same eligible Hybrid shift. */
+    @GET("gaming/sessions/{id}/void-retention-targets")
+    suspend fun voidRetentionTargets(@Path("id") id: String): List<PosTargetShift>
 
     /**
      * Natural idempotency: retrying the same session/target returns the linked

@@ -32,6 +32,7 @@ import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasSetTextAction
@@ -47,6 +48,8 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -861,15 +864,64 @@ class PosEmptyCatalogueUiTest {
 
         compose.onNodeWithTag("pos-inline-notice").assertIsDisplayed()
         compose.onNodeWithTag("pos-payment-confirmation-inline").assertIsDisplayed()
-        val preset = compose.onNodeWithContentDescription(
+        val presetNode = compose.onNodeWithContentDescription(
             "Set Cash received (₹) to ₹270.00",
-        ).assertIsDisplayed().assertHeightIsAtLeast(48.dp).getUnclippedBoundsInRoot()
-        val actions = compose.onNodeWithTag("pos-payment-confirmation-actions")
-            .assertIsDisplayed().getUnclippedBoundsInRoot()
+        ).assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        val bodyViewportNode = compose.onNodeWithTag(
+            "pos-payment-confirmation-body-viewport",
+            useUnmergedTree = true,
+        ).assertIsDisplayed()
+        val bodyScrollNode = compose.onNode(
+            hasScrollAction() and hasAnyAncestor(
+                hasTestTag("pos-payment-confirmation-body-viewport"),
+            ),
+            useUnmergedTree = true,
+        ).assertIsDisplayed()
+        val initialScroll = bodyScrollNode.fetchSemanticsNode()
+            .config[SemanticsProperties.VerticalScrollAxisRange].value()
+        for (attempt in 0 until 3) {
+            val presetBounds = presetNode.getUnclippedBoundsInRoot()
+            val viewportBounds = bodyViewportNode.getUnclippedBoundsInRoot()
+            if (presetBounds.top >= viewportBounds.top && presetBounds.bottom <= viewportBounds.bottom) {
+                break
+            }
+            bodyViewportNode.performTouchInput { swipeUp(durationMillis = 250) }
+            compose.waitForIdle()
+        }
+        val finalScroll = bodyScrollNode.fetchSemanticsNode()
+            .config[SemanticsProperties.VerticalScrollAxisRange].value()
         assertTrue(
-            "Held cash presets must be fully visible above pinned actions: " +
-                "preset=$preset actions=$actions",
-            preset.bottom <= actions.top,
+            "Physical reveal must advance the actual inline payment body: " +
+                "initial=$initialScroll final=$finalScroll",
+            finalScroll > initialScroll,
+        )
+        writeLayoutScreenshot("pos-held-cash-presets-visible.png")
+
+        val preset = presetNode.assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+            .getUnclippedBoundsInRoot()
+        val bodyViewport = bodyViewportNode.getUnclippedBoundsInRoot()
+        val actions = compose.onNodeWithTag("pos-payment-confirmation-actions")
+            .assertIsDisplayed().assertHeightIsAtLeast(48.dp).getUnclippedBoundsInRoot()
+        val root = compose.onNodeWithTag("pos-layout-root").getUnclippedBoundsInRoot()
+        assertTrue(
+            "Held cash preset must be fully visible in the clipped payment body: " +
+                "preset=$preset viewport=$bodyViewport",
+            preset.top >= bodyViewport.top && preset.bottom <= bodyViewport.bottom,
+        )
+        assertTrue(
+            "The clipped payment body must end above pinned actions: " +
+                "viewport=$bodyViewport actions=$actions",
+            bodyViewport.bottom <= actions.top,
+        )
+        assertTrue(
+            "Pinned payment actions must remain inside the POS root: actions=$actions root=$root",
+            actions.left >= root.left && actions.top >= root.top &&
+                actions.right <= root.right && actions.bottom <= root.bottom,
+        )
+        assertTrue(
+            "The clipped payment body must remain inside the POS root: viewport=$bodyViewport root=$root",
+            bodyViewport.left >= root.left && bodyViewport.top >= root.top &&
+                bodyViewport.right <= root.right && bodyViewport.bottom <= root.bottom,
         )
         compose.onNodeWithText("Enter cash received").assertIsDisplayed().assertIsNotEnabled()
     }

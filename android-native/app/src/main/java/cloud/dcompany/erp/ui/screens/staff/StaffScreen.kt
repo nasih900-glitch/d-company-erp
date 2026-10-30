@@ -31,9 +31,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -80,6 +79,7 @@ import androidx.compose.material.icons.filled.SyncProblem
 import cloud.dcompany.erp.core.auth.StaffAccess
 import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.LiquidDropdownMenu
 import cloud.dcompany.erp.ui.components.ActionBar
 import cloud.dcompany.erp.ui.components.AdaptiveStatGrid
 import cloud.dcompany.erp.ui.components.CompactStatCard
@@ -91,9 +91,12 @@ import cloud.dcompany.erp.ui.components.OperationalStatusBadge
 import cloud.dcompany.erp.ui.components.PanelDivider
 import cloud.dcompany.erp.ui.components.SearchInput
 import cloud.dcompany.erp.ui.components.SectionCard
+import cloud.dcompany.erp.ui.components.workspaceContentCanvas
 import cloud.dcompany.erp.ui.components.UiTone
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -116,7 +119,7 @@ fun StaffScreen(profile: MeResponse, access: StaffAccess) {
     val state by vm.state.collectAsStateWithLifecycle()
 
     Column(
-        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(16.dp),
+        Modifier.fillMaxSize().workspaceContentCanvas().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Header(
@@ -403,7 +406,7 @@ private fun AttendanceCard(
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(state.onShift, key = { it.id }) { row ->
                     Column(
-                        Modifier.width(220.dp).clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surfaceVariant)
+                        Modifier.width(220.dp).clip(Radius.shapeMd).liquidWorkspaceSurface(Radius.shapeMd)
                             .padding(horizontal = 12.dp, vertical = 10.dp),
                     ) {
                         Text(
@@ -506,7 +509,9 @@ private fun StaffRowCard(
         else -> row.status.ifBlank { "Unknown" }
     }
 
-    Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
+    Column(
+        Modifier.fillMaxWidth().clip(Radius.shapeMd).liquidWorkspaceSurface(Radius.shapeMd),
+    ) {
         DataListRow(
             content = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -610,7 +615,7 @@ private fun StaffActionsMenu(
         IconButton(onClick = { expanded = true }) {
             Icon(Icons.Default.MoreVert, contentDescription = "More staff actions", tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        LiquidDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
                 text = { Text("Edit staff") },
                 leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
@@ -734,7 +739,11 @@ private fun RoleDropdown(roles: List<StaffRole>, selectedCode: String, onSelect:
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true),
         )
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        LiquidDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            role = WorkspaceGlassRole.CONTROL,
+        ) {
             roles.forEach { r ->
                 DropdownMenuItem(text = { Text(r.name) }, onClick = { onSelect(r.code); expanded = false })
             }

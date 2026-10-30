@@ -5,12 +5,14 @@ import cloud.dcompany.erp.core.diagnostics.ApiFailureObservation
 import cloud.dcompany.erp.core.diagnostics.DiagnosticConnectivity
 import cloud.dcompany.erp.core.diagnostics.DiagnosticsRuntime
 import cloud.dcompany.erp.core.auth.PricingLock
+import cloud.dcompany.erp.core.auth.SessionRefreshLease
 import cloud.dcompany.erp.core.auth.TerminalStore
 import cloud.dcompany.erp.core.auth.TokenStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -24,6 +26,14 @@ import java.util.concurrent.TimeUnit
 internal const val TERMINAL_ID_HEADER = "X-Terminal-Id"
 internal const val CLIENT_COMPATIBILITY_POLICY_REVISION_HEADER =
     "X-Client-Compatibility-Policy-Revision"
+
+internal fun isExactManualLoopbackOrigin(debug: Boolean, rawUrl: String): Boolean {
+    if (!debug) return false
+    val url = rawUrl.toHttpUrlOrNull() ?: return false
+    return url.scheme == "http" && url.host == "127.0.0.1" && url.port == 8041 &&
+        url.encodedPath == "/api/v1/" && url.username.isEmpty() && url.password.isEmpty() &&
+        url.query == null && url.fragment == null
+}
 
 /** A 426 body may be unavailable; preserve the monotonic header authority. */
 internal fun resolvedCompatibilityPolicyRevision(
@@ -192,6 +202,41 @@ object ApiClient {
 
     fun <T> createApi(service: Class<T>): T = retrofit.create(service)
 
+    internal fun isExactDebugLoopback(): Boolean =
+        isExactManualLoopbackOrigin(BuildConfig.DEBUG, BuildConfig.API_BASE_URL)
+
+    /**
+     * A one-operation client for the explicitly reviewed local QA backend.
+     * It never refreshes credentials or publishes reachability/diagnostic state.
+     */
+    internal fun <T> createManualDirectApi(service: Class<T>): T {
+        check(isExactDebugLoopback()) { "Manual backend admission is unavailable for this build." }
+        val accessToken = authenticatedSession.tokenStore.refreshLease()?.accessToken
+            ?: error("The current authenticated session is unavailable.")
+        val client = baseClientBuilder()
+            .retryOnConnectionFailure(false)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .addInterceptor(ClientIdentityInterceptor())
+            .addInterceptor(TerminalInterceptor())
+            .addInterceptor { chain ->
+                chain.proceed(
+                    chain.request().newBuilder()
+                        .removeHeader("Authorization")
+                        .header("Authorization", "Bearer $accessToken")
+                        .build(),
+                )
+            }
+            .addInterceptor(ManualErrorInterceptor(json))
+            .build()
+        return Retrofit.Builder()
+            .baseUrl(BuildConfig.API_BASE_URL)
+            .client(client)
+            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+            .build()
+            .create(service)
+    }
+
     /** A bounded, unauthenticated DB/Redis readiness proof for recovery only. */
     internal suspend fun probeBackendReadiness(): Boolean = withContext(Dispatchers.IO) {
         val url = BuildConfig.API_BASE_URL.toHttpUrl().resolve("/readyz")
@@ -207,6 +252,19 @@ object ApiClient {
                     if (ready) backendReachability.recordReadinessProof()
                 }
             }
+        } catch (_: IOException) {
+            false
+        }
+    }
+
+    /** Exact-loopback proof which deliberately does not alter global reachability. */
+    internal suspend fun probeManualDirectReadiness(): Boolean = withContext(Dispatchers.IO) {
+        if (!isExactDebugLoopback()) return@withContext false
+        val url = BuildConfig.API_BASE_URL.toHttpUrl().resolve("/readyz")
+            ?: return@withContext false
+        val request = Request.Builder().url(url).get().header("Cache-Control", "no-cache").build()
+        try {
+            readinessClient.newCall(request).execute().use { it.isSuccessful }
         } catch (_: IOException) {
             false
         }
@@ -391,6 +449,12 @@ object ApiClient {
         val tokenStore: TokenStore,
         val refreshCoordinator: SessionRefreshCoordinator,
     )
+
+    /** WebSocket rejection shares the HTTP flight and its conditional session installation. */
+    internal suspend fun refreshRejectedSession(lease: SessionRefreshLease): String? =
+        withContext(Dispatchers.IO) {
+            authenticatedSession.refreshCoordinator.refresh(lease)
+        }
 
     private fun baseClientBuilder(): OkHttpClient.Builder = OkHttpClient.Builder()
         // Cafe wifi is congested, not dead. These are deliberately generous:
@@ -592,6 +656,37 @@ object ApiClient {
                 ),
             )
             throw classified
+        }
+    }
+
+    /** Parse server envelopes without feeding a manual local operation into global runtime state. */
+    private class ManualErrorInterceptor(private val json: Json) : Interceptor {
+        override fun intercept(chain: Interceptor.Chain): Response {
+            val response = try {
+                chain.proceed(chain.request())
+            } catch (failure: IOException) {
+                throw ApiException(
+                    "The local test backend did not answer.",
+                    status = null,
+                    code = "network_error",
+                ).also { it.initCause(failure) }
+            }
+            if (response.isSuccessful) return response
+            val body = response.body?.string().orEmpty()
+            val status = response.code
+            response.close()
+            val envelope = runCatching {
+                json.decodeFromString(ApiErrorEnvelope.serializer(), body)
+            }.getOrNull()
+            throw ApiException(
+                message = envelope?.error?.message
+                    ?: fastApiValidationMessage(json, body)
+                    ?: "Request failed (HTTP $status).",
+                status = status,
+                code = envelope?.error?.code,
+                diagnosticConflictEventId = envelope?.error?.details?.clientEventId,
+                retryable = envelope?.error?.details?.retryable,
+            )
         }
     }
 }

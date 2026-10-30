@@ -9,6 +9,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -25,10 +26,12 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
@@ -40,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import cloud.dcompany.erp.ui.theme.AppearancePreference
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
+import cloud.dcompany.erp.ui.theme.LocalWorkspaceGlassScene
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -178,6 +182,51 @@ class LoginWorkspaceUiTest {
         compose.runOnIdle { portrait.value = true }
         compose.onNodeWithTag("login-submit").assertIsDisplayed()
         capture("login51-night-portrait")
+    }
+
+    @Test
+    fun recoveryDialogObservesTheRequestedEntrySceneAndProjectedMaterialOwner() {
+        var observedSceneContentId: String? = null
+        compose.setContent {
+            LoginTestTheme(AppearancePreference.Night) {
+                Box(Modifier.width(1_280.dp).height(800.dp)) {
+                    LoginWorkspace(
+                        signingIn = false,
+                        error = null,
+                        onSignIn = { _, _ -> },
+                        appearancePreference = AppearancePreference.Night,
+                        onAppearancePreferenceChanged = {},
+                        onRecover = {},
+                        overlay = {
+                            val scene = LocalWorkspaceGlassScene.current
+                            SideEffect {
+                                observedSceneContentId = scene?.frame?.actualKey?.contentId
+                            }
+                            PasswordRecoveryDialog(
+                                state = PasswordRecoveryState(open = true),
+                                onEmailChanged = {},
+                                onCodeChanged = {},
+                                onNewPasswordChanged = {},
+                                onConfirmPasswordChanged = {},
+                                onRequestCode = {},
+                                onConfirm = {},
+                                onUseDifferentEmail = {},
+                                onCancel = {},
+                            )
+                        },
+                    )
+                }
+            }
+        }
+        compose.waitUntil(timeoutMillis = 8_000) {
+            compose.onAllNodes(hasTestTag("login-scene-glass-ready-workspace"))
+                .fetchSemanticsNodes().size == 1
+        }
+        compose.onNodeWithTag("password-recovery-dialog").assertIsDisplayed()
+        compose.onNodeWithText("Reset password").assertIsDisplayed()
+        compose.onNodeWithText("Login email").assertIsDisplayed()
+        compose.onNodeWithTag("login-scene-glass-ready-workspace").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(LoginSceneHdR1Sha256, observedSceneContentId) }
     }
 
     private fun capture(name: String) {

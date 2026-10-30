@@ -1,5 +1,7 @@
 package cloud.dcompany.erp.ui.screens.settings
 
+import android.net.Uri
+
 import cloud.dcompany.erp.ui.theme.operationalDanger
 import cloud.dcompany.erp.ui.theme.operationalDangerContainer
 import cloud.dcompany.erp.ui.theme.operationalGood
@@ -38,7 +40,7 @@ import androidx.compose.material.icons.filled.PointOfSale
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Store
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -77,6 +79,8 @@ import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.WorkspaceBackgroundSlot
+import cloud.dcompany.erp.ui.theme.WorkspaceBackgroundUiState
 import cloud.dcompany.erp.core.diagnostics.AppHealthRecorder
 import cloud.dcompany.erp.core.diagnostics.healthCaptureInsight
 import cloud.dcompany.erp.core.money.minorToRupeesInput
@@ -86,13 +90,20 @@ import java.text.DateFormat
 import java.util.Date
 
 @Composable
-fun SettingsScreen(
+internal fun SettingsScreen(
     canManageSystem: Boolean,
     statusProfile: cloud.dcompany.erp.core.net.MeResponse? = null,
     onPasswordChanged: () -> Unit = {},
     onReportProblem: () -> Unit = {},
     onStartHealthRecording: () -> Boolean = { false },
     remoteAssistanceContent: (@Composable () -> Unit)? = null,
+    workspaceBackgroundState: WorkspaceBackgroundUiState = WorkspaceBackgroundUiState(),
+    onImportWorkspaceBackground: (WorkspaceBackgroundSlot, Uri) -> Unit = { _, _ -> },
+    onResetWorkspaceBackground: (WorkspaceBackgroundSlot) -> Unit = {},
+    onSelectWorkspaceBackgroundPreset: (String) -> Unit = {},
+    onUseSavedWorkspaceBackground: () -> Unit = {},
+    onCancelWorkspaceBackgroundOperation: () -> Unit = {},
+    onClearWorkspaceBackgroundNotice: () -> Unit = {},
     vm: SettingsViewModel = viewModel(),
     presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
 ) {
@@ -146,6 +157,13 @@ fun SettingsScreen(
                     onReportProblem,
                     onStartHealthRecording,
                     remoteAssistanceContent,
+                    workspaceBackgroundState,
+                    onImportWorkspaceBackground,
+                    onResetWorkspaceBackground,
+                    onSelectWorkspaceBackgroundPreset,
+                    onUseSavedWorkspaceBackground,
+                    onCancelWorkspaceBackgroundOperation,
+                    onClearWorkspaceBackgroundNotice,
                 )
                 SettingsTab.Company -> CompanyTab(state, vm, presentation)
                 SettingsTab.Branches -> BranchesTab(state, vm, presentation)
@@ -474,6 +492,13 @@ private fun AccountTab(
     onReportProblem: () -> Unit,
     onStartHealthRecording: () -> Boolean,
     remoteAssistanceContent: (@Composable () -> Unit)?,
+    workspaceBackgroundState: WorkspaceBackgroundUiState,
+    onImportWorkspaceBackground: (WorkspaceBackgroundSlot, Uri) -> Unit,
+    onResetWorkspaceBackground: (WorkspaceBackgroundSlot) -> Unit,
+    onSelectWorkspaceBackgroundPreset: (String) -> Unit,
+    onUseSavedWorkspaceBackground: () -> Unit,
+    onCancelWorkspaceBackgroundOperation: () -> Unit,
+    onClearWorkspaceBackgroundNotice: () -> Unit,
 ) {
     var code by remember { mutableStateOf("") }
     var pwd by remember { mutableStateOf("") }
@@ -574,6 +599,15 @@ private fun AccountTab(
             }
             }
         }
+        WorkspaceBackgroundSettingsCard(
+            state = workspaceBackgroundState,
+            onImport = onImportWorkspaceBackground,
+            onReset = onResetWorkspaceBackground,
+            onSelectPreset = onSelectWorkspaceBackgroundPreset,
+            onUseSavedCustom = onUseSavedWorkspaceBackground,
+            onCancelOperation = onCancelWorkspaceBackgroundOperation,
+            onClearNotice = onClearWorkspaceBackgroundNotice,
+        )
         remoteAssistanceContent?.invoke()
         SectionCard(
             title = "App health",

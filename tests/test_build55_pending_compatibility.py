@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import hashlib
 import importlib.util
 import json
 import subprocess
@@ -37,10 +39,12 @@ def inventories(verifier, monkeypatch):
         "daily_tender_reconciliations",
         "client_installations",
         "collection_source_guards",
+        "gaming_sessions",
     )
     schema = [
         "column|audit_log|1|id|bigint",
         "index|audit_log|audit_log_pkey|synthetic",
+        "function|old_void_guard|old reviewed body",
     ]
     monkeypatch.setattr(
         verifier,
@@ -50,9 +54,24 @@ def inventories(verifier, monkeypatch):
     monkeypatch.setattr(
         verifier, "PRIOR_SCHEMA_SHA256", verifier.sha("\n".join(schema).encode())
     )
+    schema.sort()
+    monkeypatch.setattr(
+        verifier, "PRIOR_SCHEMA_SHA256", verifier.sha("\n".join(schema).encode())
+    )
+    old_function = "function|old_void_guard|old reviewed body"
+    new_function = "function|retained_void_guard|new reviewed body"
+    old_trigger = "trigger_binding|gaming_sessions|old_guard|O|false|false|BEFORE UPDATE OF status"
+    new_trigger = "trigger_binding|gaming_sessions|retained_guard|O|true|true|AFTER UPDATE OF status"
+    monkeypatch.setattr(verifier, "EXPECTED_0093_SCHEMA_REMOVED_ROWS", (old_function,))
+    monkeypatch.setattr(verifier, "EXPECTED_0093_SCHEMA_ADDED_ROWS", (new_function,))
+    monkeypatch.setattr(verifier, "EXPECTED_TRIGGER_REMOVED_ROWS", (old_trigger,))
+    monkeypatch.setattr(verifier, "EXPECTED_TRIGGER_ADDED_ROWS", (new_trigger,))
+    monkeypatch.setattr(
+        verifier, "PRIOR_TRIGGER_CATALOG_SHA256", verifier.sha(old_trigger.encode())
+    )
     before = {
-        "schema_version": 1,
-        "kind": "build55-full-transition-v1",
+        "schema_version": 2,
+        "kind": "build55-full-transition-v2",
         "database_revision": "0091",
         "database_identity": {
             "database_name": "erp",
@@ -84,17 +103,41 @@ def inventories(verifier, monkeypatch):
         "row_count": 1,
         "row_sha256": verifier.sha(b'{"version_num": "0091"}'),
     }
+    before["gaming_sessions_legacy_projection"] = {
+        "column_present": False,
+        "row_count": 3,
+        "row_sha256": before["tables"]["gaming_sessions"]["row_sha256"],
+        "nonnull_count": 0,
+    }
+    before.update(
+        trigger_catalog_rows=[old_trigger],
+        trigger_catalog_row_count=1,
+        trigger_catalog_sha256=verifier.sha(old_trigger.encode()),
+    )
     after = deepcopy(before)
-    after["database_revision"] = "0092"
+    after["database_revision"] = "0093"
     after["tables"]["alembic_version"]["row_sha256"] = verifier.sha(
-        b'{"version_num": "0092"}'
+        b'{"version_num": "0093"}'
     )
     after["tables"]["android_update_policy"] = {
         "row_count": 0,
         "row_sha256": verifier.EMPTY_SHA256,
     }
+    for name in verifier.NEW_TABLES:
+        after["tables"][name] = {"row_count": 0, "row_sha256": verifier.EMPTY_SHA256}
+    after["gaming_sessions_legacy_projection"]["column_present"] = True
+    after["tables"]["gaming_sessions"]["row_sha256"] = verifier.sha(
+        b"full rows with NULL new column"
+    )
+    after.update(
+        trigger_catalog_rows=[new_trigger],
+        trigger_catalog_row_count=1,
+        trigger_catalog_sha256=verifier.sha(new_trigger.encode()),
+    )
     after["schema_catalog_rows"] = sorted(
-        schema + list(verifier.EXPECTED_POLICY_SCHEMA_ROWS)
+        [row for row in schema if row != old_function]
+        + list(verifier.EXPECTED_POLICY_SCHEMA_ROWS)
+        + [new_function]
     )
     after["schema_catalog_row_count"] = len(after["schema_catalog_rows"])
     after["schema_catalog_sha256"] = verifier.sha(
@@ -103,9 +146,7 @@ def inventories(verifier, monkeypatch):
     return before, after
 
 
-def test_exact_additive_policy_schema_keeps_full_nonempty_legacy_rows(
-    verifier, inventories
-):
+def test_exact_reviewed0093_delta_keeps_nonempty_legacy_rows(verifier, inventories):
     before, after = inventories
     assert len(verifier.EXPECTED_POLICY_SCHEMA_ROWS) == 18
     assert verifier.sha("\n".join(verifier.EXPECTED_POLICY_SCHEMA_ROWS).encode()) == (
@@ -555,6 +596,57 @@ def test_main_installer_orders_preservation_before_any_writer_and_never_reopens_
     assert 'sha256sum "$BUILD55_ACCEPTANCE_CREDENTIAL_FILE"' not in source
 
 
+def test_installer_backend_manifest_uses_verifier_posix_name_order(tmp_path, verifier):
+    files = {
+        "alembic.ini": b"predecessor migration configuration",
+        "alembic/env.py": b"migration environment",
+        "app.py": b"application entry",
+        "app/worker.py": b"worker entry",
+    }
+    for name, data in files.items():
+        path = tmp_path / "backend" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    source = (ROOT / "infra/scripts/install-on-vm.sh").read_text()
+    identity = (
+        source.split("<<'PYIDENTITY'", 1)[1]
+        .split("\n", 1)[1]
+        .split("\nPYIDENTITY", 1)[0]
+    )
+    parsed = ast.parse(identity)
+    loop = next(node for node in parsed.body if isinstance(node, ast.For))
+    digest = next(
+        node
+        for node in parsed.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "candidate_manifest"
+            for target in node.targets
+        )
+    )
+    namespace = {"root": tmp_path, "manifest_rows": [], "hashlib": hashlib}
+    exec(
+        compile(
+            ast.Module(body=[loop, digest], type_ignores=[]),
+            "installer-PYIDENTITY",
+            "exec",
+        ),
+        namespace,
+    )
+    inventory = verifier.inventory(tmp_path, ("backend",))
+    canonical = "".join(
+        f"{digest}\t{name.removeprefix('backend/')}\n"
+        for name, digest in sorted(inventory.items())
+    )
+    old_component_order = "".join(
+        f"{hashlib.sha256(path.read_bytes()).hexdigest()}\t{path.relative_to(tmp_path / 'backend').as_posix()}\n"
+        for path in sorted((tmp_path / "backend").rglob("*"))
+        if path.is_file()
+    )
+    assert namespace["candidate_manifest"] == verifier.sha(canonical.encode())
+    assert verifier.sha(old_component_order.encode()) != namespace["candidate_manifest"]
+
+
 def test_installer_and_extractable_legacy_guard_have_complete_shell_syntax(tmp_path):
     installer = ROOT / "infra/scripts/install-on-vm.sh"
     source = installer.read_text()
@@ -565,7 +657,9 @@ def test_installer_and_extractable_legacy_guard_have_complete_shell_syntax(tmp_p
     fragment = tmp_path / "legacy-pending-guard.sh"
     fragment.write_text(source[start:end])
     for path in (installer, fragment):
-        result = subprocess.run(["bash", "-n", str(path)], capture_output=True, text=True)
+        result = subprocess.run(
+            ["bash", "-n", str(path)], capture_output=True, text=True
+        )
         assert result.returncode == 0, result.stderr
 
 
@@ -600,33 +694,61 @@ def test_build55_backend_write_surface_is_bounded_to_reviewed_corrections(verifi
     changed = set(
         subprocess.run(
             [
-                "git", "diff", "--name-only", verifier.PRIOR_REVISION,
-                "--", "backend/app", "backend/alembic",
+                "git",
+                "diff",
+                "--name-only",
+                verifier.PRIOR_REVISION,
+                "--",
+                "backend/app",
+                "backend/alembic",
             ],
-            cwd=ROOT, check=True, capture_output=True, text=True,
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
         ).stdout.splitlines()
     )
     changed.update(
         subprocess.run(
             [
-                "git", "ls-files", "--others", "--exclude-standard",
-                "--", "backend/app", "backend/alembic",
+                "git",
+                "ls-files",
+                "--others",
+                "--exclude-standard",
+                "--",
+                "backend/app",
+                "backend/alembic",
             ],
-            cwd=ROOT, check=True, capture_output=True, text=True,
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
         ).stdout.splitlines()
     )
     assert changed == {
+        "backend/alembic/versions/0092_android_update_policy.py",
+        "backend/alembic/versions/0093_gaming_void_retained_addons.py",
         "backend/app/__init__.py",
+        "backend/app/api/v1/analytics/router.py",
         "backend/app/api/v1/client_updates/router.py",
         "backend/app/api/v1/gaming/router.py",
+        "backend/app/api/v1/pos/router.py",
         "backend/app/api/v1/public/router.py",
+        "backend/app/api/v1/reports/router.py",
         "backend/app/core/middleware.py",
+        "backend/app/core/permissions.py",
+        "backend/app/core/roles.py",
         "backend/app/main.py",
         "backend/app/models/__init__.py",
         "backend/app/models/client_update.py",
+        "backend/app/models/gaming.py",
+        "backend/app/services/analytics/home_read_model.py",
         "backend/app/services/audit/catalogue.py",
         "backend/app/services/client_updates/policy.py",
-        "backend/alembic/versions/0092_android_update_policy.py",
+        "backend/app/services/gaming/void.py",
+        "backend/app/services/pos/pricing.py",
+        "backend/app/services/reports/overview.py",
+        "backend/app/services/reports/overview_csv.py",
     }
 
 
@@ -719,5 +841,77 @@ def test_live_post_migration_never_normalizes_restore_aliases(verifier, inventor
     ]
     _catalogue_hash(verifier, before)
     _catalogue_hash(verifier, after)
-    with pytest.raises(verifier.CompatibilityError, match="more than"):
+    with pytest.raises(verifier.CompatibilityError, match="exact reviewed"):
+        verifier.verify_pair(before, after, mode="post")
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "legacy_session",
+        "nonnull_link",
+        "missing_column",
+        "receipt_seed",
+        "mapping_seed",
+        "extra_table",
+        "removed_function",
+        "altered_function",
+        "trigger_columns",
+        "trigger_enabled",
+        "trigger_deferral",
+        "trigger_hash",
+        "projection_count",
+    ],
+)
+def test_0093_projection_and_exact_schema_reject_drift(verifier, inventories, change):
+    before, after = inventories
+    if change == "legacy_session":
+        after["gaming_sessions_legacy_projection"]["row_sha256"] = "f" * 64
+    elif change == "nonnull_link":
+        after["gaming_sessions_legacy_projection"]["nonnull_count"] = 1
+    elif change == "missing_column":
+        after["gaming_sessions_legacy_projection"]["column_present"] = False
+    elif change == "projection_count":
+        after["gaming_sessions_legacy_projection"]["row_count"] += 1
+    elif change in {"receipt_seed", "mapping_seed"}:
+        name = (
+            "gaming_void_receipts"
+            if change == "receipt_seed"
+            else "gaming_void_addon_lines"
+        )
+        after["tables"][name] = {"row_count": 1, "row_sha256": "a" * 64}
+    elif change == "extra_table":
+        after["tables"]["unreviewed"] = {
+            "row_count": 0,
+            "row_sha256": verifier.EMPTY_SHA256,
+        }
+    elif change in {"removed_function", "altered_function"}:
+        row = verifier.EXPECTED_0093_SCHEMA_ADDED_ROWS[0]
+        after["schema_catalog_rows"].remove(row)
+        if change == "altered_function":
+            after["schema_catalog_rows"].append(row + " changed")
+        _catalogue_hash(verifier, after)
+    elif change == "trigger_hash":
+        after["trigger_catalog_sha256"] = "f" * 64
+    else:
+        row = after["trigger_catalog_rows"][0]
+        row = (
+            row.replace("UPDATE OF status", "UPDATE OF amount_minor")
+            if change == "trigger_columns"
+            else (
+                row.replace("|O|", "|D|")
+                if change == "trigger_enabled"
+                else row.replace("|true|true|", "|false|false|")
+            )
+        )
+        after["trigger_catalog_rows"] = [row]
+        after["trigger_catalog_sha256"] = verifier.sha(row.encode())
+    with pytest.raises(verifier.CompatibilityError):
+        verifier.verify_pair(before, after, mode="post")
+
+
+def test_0093_unreviewed_schema_delta_stays_closed(verifier, inventories, monkeypatch):
+    before, after = inventories
+    monkeypatch.setattr(verifier, "EXPECTED_0093_SCHEMA_REMOVED_ROWS", ())
+    with pytest.raises(verifier.CompatibilityError, match="unreviewed"):
         verifier.verify_pair(before, after, mode="post")

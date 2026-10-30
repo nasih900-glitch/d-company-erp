@@ -2,17 +2,23 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import func, select, text
 
+import app.api.v1.gaming.router as gaming_router
+from app.core.errors import GamingBillingRepairRequiredError
+from app.core.config import get_settings
 from app.models import (
     AuditLog, Batch, Branch, Customer, CustomerGamingRankAward,
     GamingParticipantSettlement, GamingParticipantSettlementLine, GamingSession,
     GamingSessionExtension, GamingSessionParticipant, IdempotencyKey, JournalEntry,
     JournalLine, Order, OrderLine, OrderLoyaltySettlement, Payment, PointsRedemption,
     Refund, RefundLoyaltyAdjustment, Role, StockMovement, User, UserRole,
+    MenuCategory, MenuItem, GamingVoidReceipt, GamingVoidAddonLine,
 )
 from tests.integration.test_gaming_session_participants import _headers, _setup, _start, _login
 from app.core.security import hash_password
@@ -21,7 +27,7 @@ from tests.integration.test_gaming_package_amendments import _amend_payload
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 
-async def _stopped(client, session, seed_owner, *, returner=False, amended=False, extended=False):
+async def _stopped(client, session, seed_owner, *, returner=False, amended=False, extended=False, served_addon=False, lifecycle="ended"):
     token, shift_id, station, friends, packages = await _setup(client, session, seed_owner)
     started = await _start(client, seed_owner, token, shift_id, station,
         packages['standard-single-session-60m' if amended else 'standard-single-session-30m'])
@@ -65,6 +71,29 @@ async def _stopped(client, session, seed_owner, *, returner=False, amended=False
         }, headers=_headers(seed_owner, token, f'rejoin:{uuid4()}'))
         assert rejoined.status_code == 200, rejoined.text
         revision = rejoined.json()['participant_revision']
+    if served_addon:
+        category = MenuCategory(id=uuid4(), company_id=seed_owner['company'].id, name='Void regression drinks')
+        session.add(category)
+        await session.flush()
+        item = MenuItem(id=uuid4(), company_id=seed_owner['company'].id, category_id=category.id,
+            sku=f'VOID-{uuid4().hex[:8]}', name='Served participant drink', type='drink',
+            base_price_minor=1249, tax_rate=0, price_includes_tax=True, is_available=True)
+        session.add(item)
+        await session.commit()
+        added = await client.post(f'/api/v1/gaming/sessions/{sid}/addons', json={
+            'client_line_id': str(uuid4()), 'menu_item_id': str(item.id),
+            'qty': 1, 'expected_unit_price_minor': 1249,
+        }, headers=_headers(seed_owner, token, f'participant-void-addon:{uuid4()}'))
+        assert added.status_code == 201, added.text
+    if lifecycle != "ended":
+        if lifecycle == "paused":
+            paused = await client.post(f'/api/v1/gaming/sessions/{sid}/pause',
+                json={'reason': 'Player break', 'expected_pause_version': 0},
+                headers=_headers(seed_owner, token, f'pause:{uuid4()}'))
+            assert paused.status_code == 200, paused.text
+        current = await client.get(f'/api/v1/gaming/sessions/{sid}', headers=_headers(seed_owner, token))
+        assert current.status_code == 200 and current.json()['status'] == lifecycle, current.text
+        return token, current.json()
     stop_key = f'stop:{uuid4()}'
     stop_body = {'expected_participant_revision': revision, 'expected_billing_revision': started['billing_revision']}
     stopped = await client.post(f'/api/v1/gaming/sessions/{sid}/stop', json=stop_body,
@@ -81,6 +110,140 @@ def _void_body(ended):
         'expected_participant_revision': ended['participant_revision'],
         'expected_billing_revision': ended['billing_revision'],
         'expected_amount_minor': ended['amount_minor']}
+
+
+async def test_nonparticipant_cancelled_get_projects_exact_void_identity(
+    client,
+    session,
+    seed_owner,
+):
+    token, shift_id, station, _friends, packages = await _setup(
+        client, session, seed_owner,
+    )
+    started = await _start(
+        client,
+        seed_owner,
+        token,
+        shift_id,
+        station,
+        packages['standard-single-session-30m'],
+    )
+    stopped = await client.post(
+        f"/api/v1/gaming/sessions/{started['id']}/stop",
+        json={},
+        headers=_headers(seed_owner, token, f"stop:{uuid4()}"),
+    )
+    assert stopped.status_code == 200, stopped.text
+    key = f"gaming-session-void:{started['id']}:nonparticipant"
+    payload = {
+        'reason': 'Mistaken empty session reviewed by opener',
+        'expected_order_id': None,
+        'expected_participant_revision': stopped.json()['participant_revision'],
+        'expected_billing_revision': stopped.json()['billing_revision'],
+        'expected_amount_minor': stopped.json()['amount_minor'],
+    }
+    cancelled = await client.post(
+        f"/api/v1/gaming/sessions/{started['id']}/cancel",
+        json=payload,
+        headers=_headers(seed_owner, token, key),
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    body = cancelled.json()
+    assert body['cancellation_receipt_id']
+    assert body['cancellation_idempotency_key'] == key
+    assert len(body['cancellation_request_hash']) == 64
+    assert body['cancelled_by'] == str(seed_owner['owner'].id)
+    assert body['cancelled_at'] is not None
+
+    current = await client.get(
+        f"/api/v1/gaming/sessions/{started['id']}",
+        headers=_headers(seed_owner, token),
+    )
+    assert current.status_code == 200, current.text
+    assert current.json() == body
+
+
+async def test_linked_participant_void_get_uses_relational_receipt(
+    client,
+    session,
+    seed_owner,
+):
+    token, shift_id, station, _friends, packages = await _setup(
+        client, session, seed_owner,
+    )
+    started = await _start(
+        client,
+        seed_owner,
+        token,
+        shift_id,
+        station,
+        packages['standard-single-session-30m'],
+    )
+    joined = await client.post(
+        f"/api/v1/gaming/sessions/{started['id']}/participants/join",
+        json={'expected_participant_revision': 0},
+        headers=_headers(seed_owner, token, f"join:{uuid4()}"),
+    )
+    assert joined.status_code == 200, joined.text
+    stopped = await client.post(
+        f"/api/v1/gaming/sessions/{started['id']}/stop",
+        json={
+            'expected_participant_revision': joined.json()['participant_revision'],
+            'expected_billing_revision': started['billing_revision'],
+        },
+        headers=_headers(seed_owner, token, f"stop:{uuid4()}"),
+    )
+    assert stopped.status_code == 200, stopped.text
+    sent = await client.post(
+        f"/api/v1/gaming/sessions/{started['id']}/send-to-pos",
+        headers=_headers(seed_owner, token),
+    )
+    assert sent.status_code == 201, sent.text
+    order = await client.get(
+        f"/api/v1/pos/orders/{sent.json()['order_id']}",
+        headers=_headers(seed_owner, token),
+    )
+    assert order.status_code == 200, order.text
+    claim = await client.post(
+        f"/api/v1/pos/orders/{sent.json()['order_id']}/checkout-claim",
+        headers=_headers(seed_owner, token),
+    )
+    assert claim.status_code == 201, claim.text
+    key = f"gaming-linked-player-void:{uuid4()}"
+    reason = 'Owner reviewed participant Gaming charge'
+    reviewed = await client.post(
+        f"/api/v1/pos/orders/{sent.json()['order_id']}/gaming-void",
+        json={
+            'session_id': started['id'],
+            'reason': reason,
+            'expected_order_status': 'held',
+            'expected_checkout_version': order.json()['checkout_version'],
+            'expected_order_total_minor': order.json()['total_minor'],
+            'expected_session_status': 'ended',
+            'expected_billing_revision': stopped.json()['billing_revision'],
+            'expected_participant_revision': stopped.json()['participant_revision'],
+            'expected_amount_minor': stopped.json()['amount_minor'],
+        },
+        headers={
+            **_headers(seed_owner, token, key),
+            'X-Checkout-Claim': claim.json()['claim_token'],
+        },
+    )
+    assert reviewed.status_code == 200, reviewed.text
+
+    current = await client.get(
+        f"/api/v1/gaming/sessions/{started['id']}",
+        headers=_headers(seed_owner, token),
+    )
+    assert current.status_code == 200, current.text
+    body = current.json()
+    assert body['status'] == 'cancelled'
+    assert body['cancellation_receipt_id'] == reviewed.json()['receipt_id']
+    assert body['cancellation_idempotency_key'] == key
+    assert len(body['cancellation_request_hash']) == 64
+    assert body['cancel_reason'] == reason
+    assert body['cancelled_by'] == str(seed_owner['owner'].id)
+    assert body['cancelled_at'] is not None
 
 
 async def _evidence(session, sid):
@@ -121,6 +284,233 @@ async def _business_history(session, company_id):
         rows = (await session.execute(query)).mappings().all()
         snapshot[name] = sorted([dict(row) for row in rows], key=lambda row: str(row['id']))
     return snapshot
+
+
+async def test_active_player_void_atomically_stops_settles_and_preserves_receipt(
+    client,
+    session,
+    seed_owner,
+):
+    token, shift_id, station, _friends, packages = await _setup(
+        client, session, seed_owner,
+    )
+    started = await _start(
+        client,
+        seed_owner,
+        token,
+        shift_id,
+        station,
+        packages['standard-single-session-30m'],
+    )
+    sid = started['id']
+    joined = await client.post(
+        f'/api/v1/gaming/sessions/{sid}/participants/join',
+        json={'expected_participant_revision': 0},
+        headers=_headers(seed_owner, token, f'join:{uuid4()}'),
+    )
+    assert joined.status_code == 200, joined.text
+    reviewed = joined.json()
+    current = await client.get(
+        f'/api/v1/gaming/sessions/{sid}',
+        headers=_headers(seed_owner, token),
+    )
+    assert current.status_code == 200, current.text
+    reviewed_session = current.json()
+    key = f'gaming-session-void:{sid}:active'
+    payload = {
+        'reason': 'Active booking opened by mistake',
+        'expected_participant_revision': reviewed['participant_revision'],
+        'expected_billing_revision': reviewed_session['billing_revision'],
+    }
+    payload['expected_amount_minor'] = reviewed_session['amount_minor']
+
+    result = await client.post(
+        f'/api/v1/gaming/sessions/{sid}/cancel',
+        json=payload,
+        headers=_headers(seed_owner, token, key),
+    )
+    assert result.status_code == 200, result.text
+    cancelled = result.json()
+    assert cancelled['status'] == 'cancelled'
+    assert cancelled['amount_minor'] == cancelled['billable_minutes'] == 0
+    assert cancelled['cancellation_idempotency_key'] == key
+
+    evidence = await _evidence(session, sid)
+    participants, settlements, settlement_lines = evidence
+    assert len(participants) == len(settlement_lines) == 1
+    assert len(settlements) == 1
+    assert participants[0]['left_at'] is not None
+    assert settlements[0]['stop_idempotency_key'] == key
+    assert settlement_lines[0]['gaming_session_id'] == UUID(sid)
+
+    audits = (await session.execute(select(AuditLog).where(
+        AuditLog.company_id == seed_owner['company'].id,
+        AuditLog.entity_id == sid,
+        AuditLog.action.in_([
+            'gaming_session_stopped',
+            'gaming_participants_settled',
+            'gaming_session_voided',
+        ]),
+    ))).scalars().all()
+    audits_by_action = {audit.action: audit for audit in audits}
+    assert set(audits_by_action) == {
+        'gaming_session_stopped',
+        'gaming_participants_settled',
+        'gaming_session_voided',
+    }
+    stop_audit = audits_by_action['gaming_session_stopped']
+    void_audit = audits_by_action['gaming_session_voided']
+    assert stop_audit.operation_id == void_audit.operation_id == key
+    assert void_audit.before['status'] == 'ended'
+    assert void_audit.business_details['pre_stop_status'] == 'active'
+    assert void_audit.after['request_hash'] == settlements[0]['stop_request_hash']
+    assert void_audit.after['original']['amount_minor'] == settlements[0]['amount_after_minor']
+    assert void_audit.after['original']['amount_minor'] > 0
+    assert void_audit.after['original']['settlement_id'] == str(settlements[0]['id'])
+
+    immutable_evidence = await _evidence(session, sid)
+    stale = await client.post(
+        f'/api/v1/gaming/sessions/{sid}/cancel',
+        json={
+            **payload,
+            'expected_participant_revision': payload['expected_participant_revision'] - 1,
+        },
+        headers=_headers(seed_owner, token, f'{key}:stale'),
+    )
+    assert stale.status_code == 409, stale.text
+    assert await _evidence(session, sid) == immutable_evidence
+    assert await session.scalar(select(func.count(AuditLog.id)).where(
+        AuditLog.company_id == seed_owner['company'].id,
+        AuditLog.entity_id == sid,
+        AuditLog.action == 'gaming_session_voided',
+    )) == 1
+
+
+async def test_active_player_void_rolls_back_every_staged_stop_fact_when_post_flush_validation_fails(
+    client,
+    session,
+    seed_owner,
+    monkeypatch,
+):
+    token, shift_id, station, _friends, packages = await _setup(
+        client, session, seed_owner,
+    )
+    started = await _start(
+        client,
+        seed_owner,
+        token,
+        shift_id,
+        station,
+        packages['standard-single-session-30m'],
+    )
+    sid = started['id']
+    joined = await client.post(
+        f'/api/v1/gaming/sessions/{sid}/participants/join',
+        json={'expected_participant_revision': 0},
+        headers=_headers(seed_owner, token, f'join:{uuid4()}'),
+    )
+    assert joined.status_code == 200, joined.text
+    reviewed = joined.json()
+    current = await client.get(
+        f'/api/v1/gaming/sessions/{sid}',
+        headers=_headers(seed_owner, token),
+    )
+    assert current.status_code == 200, current.text
+    reviewed_session = current.json()
+    session_id = UUID(sid)
+    company_id = seed_owner['company'].id
+    key = f'gaming-session-void:{sid}:rollback'
+    payload = {
+        'reason': 'Rollback proof after staged participant settlement',
+        'expected_participant_revision': reviewed['participant_revision'],
+        'expected_billing_revision': reviewed_session['billing_revision'],
+        'expected_amount_minor': reviewed_session['amount_minor'],
+    }
+
+    before_session = dict((await session.execute(
+        select(GamingSession.__table__).where(GamingSession.id == session_id)
+    )).mappings().one())
+    before_evidence = await _evidence(session, sid)
+    before_audits = sorted(
+        [dict(row) for row in (await session.execute(select(AuditLog.__table__).where(
+            AuditLog.company_id == company_id,
+            AuditLog.entity_id == sid,
+        ))).mappings().all()],
+        key=lambda row: str(row['id']),
+    )
+    assert await session.get(IdempotencyKey, key) is None
+
+    original_assert = gaming_router._assert_participant_settlement_consistent
+    staged = {}
+
+    async def reject_after_database_consistency_proof(db, gaming_session):
+        await original_assert(db, gaming_session)
+        staged['status'] = gaming_session.status
+        staged['participant_revision'] = int(gaming_session.participant_revision or 0)
+        staged['settlements'] = int(await db.scalar(select(func.count(
+            GamingParticipantSettlement.id,
+        )).where(GamingParticipantSettlement.gaming_session_id == gaming_session.id)) or 0)
+        staged['settlement_lines'] = int(await db.scalar(select(func.count(
+            GamingParticipantSettlementLine.id,
+        )).where(GamingParticipantSettlementLine.gaming_session_id == gaming_session.id)) or 0)
+        staged['left_participants'] = int(await db.scalar(select(func.count(
+            GamingSessionParticipant.id,
+        )).where(
+            GamingSessionParticipant.gaming_session_id == gaming_session.id,
+            GamingSessionParticipant.left_at.is_not(None),
+        )) or 0)
+        staged['audits'] = int(await db.scalar(select(func.count(AuditLog.id)).where(
+            AuditLog.company_id == gaming_session.company_id,
+            AuditLog.entity_id == str(gaming_session.id),
+            AuditLog.action.in_([
+                'gaming_session_stopped',
+                'gaming_participants_settled',
+                'gaming_session_voided',
+            ]),
+        )) or 0)
+        raise GamingBillingRepairRequiredError(
+            'Injected post-flush validation failure for transaction rollback proof.'
+        )
+
+    monkeypatch.setattr(
+        gaming_router,
+        '_assert_participant_settlement_consistent',
+        reject_after_database_consistency_proof,
+    )
+    refused = await client.post(
+        f'/api/v1/gaming/sessions/{sid}/cancel',
+        json=payload,
+        headers=_headers(seed_owner, token, key),
+    )
+    assert refused.status_code == 409, refused.text
+    assert refused.json()['error']['code'] == 'gaming_billing_repair_required'
+    assert staged == {
+        'status': 'ended',
+        'participant_revision': reviewed['participant_revision'] + 1,
+        'settlements': 1,
+        'settlement_lines': 1,
+        'left_participants': 1,
+        'audits': 2,
+    }
+
+    session.expire_all()
+    after_session = dict((await session.execute(
+        select(GamingSession.__table__).where(GamingSession.id == session_id)
+    )).mappings().one())
+    after_audits = sorted(
+        [dict(row) for row in (await session.execute(select(AuditLog.__table__).where(
+            AuditLog.company_id == company_id,
+            AuditLog.entity_id == sid,
+        ))).mappings().all()],
+        key=lambda row: str(row['id']),
+    )
+    assert after_session == before_session
+    assert after_session['status'] == 'active'
+    assert after_session['end_at'] is None
+    assert after_session['participant_revision'] == reviewed['participant_revision']
+    assert await _evidence(session, sid) == before_evidence
+    assert after_audits == before_audits
+    assert await session.get(IdempotencyKey, key) is None
 
 
 @pytest.mark.parametrize('returner,amended', [(False, False), (True, True)])
@@ -251,7 +641,7 @@ async def test_void_and_pos_handoff_have_only_one_atomic_winner(client, session,
             headers=_headers(seed_owner, token, f'gaming-session-void:{sid}')),
         client.post(f'/api/v1/gaming/sessions/{sid}/send-to-pos', headers=_headers(seed_owner, token)),
     )
-    assert (voided.status_code, sent.status_code) in {(200, 422), (422, 201)}, (voided.text, sent.text)
+    assert (voided.status_code, sent.status_code) in {(200, 422), (409, 201)}, (voided.text, sent.text)
     current = await client.get(f'/api/v1/gaming/sessions/{sid}', headers=_headers(seed_owner, token))
     assert current.status_code == 200, current.text
     if current.json()['status'] == 'cancelled':
@@ -328,3 +718,109 @@ async def test_durable_void_replay_cannot_be_claimed_by_another_actor(client, se
     assert replay.status_code == 409, replay.text
     original = await client.post(path, json=payload, headers=_headers(seed_owner, token, key))
     assert original.status_code == 200 and original.json() == accepted.json()
+
+
+@pytest.mark.parametrize("served_addon", [False, True])
+@pytest.mark.parametrize("reason", [None, "   "])
+@pytest.mark.parametrize("lifecycle", ["ended", "active", "paused"])
+async def test_under30_participant_blank_void_canonical_get_and_durable_replay(
+    client, session, seed_owner, monkeypatch, served_addon, reason, lifecycle,
+):
+    monkeypatch.setattr(get_settings(), 'gaming_pause_enabled', True)
+    token, ended = await _stopped(client, session, seed_owner, served_addon=served_addon,
+        lifecycle=lifecycle)
+    sid = ended['id']; path = f'/api/v1/gaming/sessions/{sid}'; key = f'blank-player-void:{uuid4()}'
+    attendance_before = await _evidence(session, sid)
+    payload = dict(_void_body(ended), reason=reason, expected_order_id=None)
+    if served_addon:
+        targets = await client.get(path + '/void-retention-targets', headers=_headers(seed_owner, token))
+        assert targets.status_code == 200 and len(targets.json()) == 1, targets.text
+        payload['retained_target_shift_id'] = targets.json()[0]['shift_id']
+    response = await client.post(path + '/cancel', json=payload, headers=_headers(seed_owner, token, key))
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data['cancel_reason'] == 'Voided before 30 minutes; no user reason supplied'
+    assert data['status'] == 'cancelled' and data['amount_minor'] == data['billable_minutes'] == 0
+    assert (data['retained_addon_order_id'] is not None) is served_addon
+    finalized_evidence = await _evidence(session, sid)
+    if lifecycle == 'ended':
+        assert finalized_evidence == attendance_before
+    else:
+        participants, settlements, lines = finalized_evidence
+        assert len(participants) == len(settlements) == len(lines) == 1
+        assert participants[0]['left_at'] is not None
+        assert settlements[0]['participant_revision_before'] == ended['participant_revision']
+        assert settlements[0]['participant_revision'] == data['participant_revision']
+        assert settlements[0]['stop_idempotency_key'] == key
+        assert settlements[0]['stop_request_hash'] == data['cancellation_request_hash']
+    current = await client.get(path, headers=_headers(seed_owner, token))
+    assert current.status_code == 200 and current.json() == data, current.text
+    warm = await client.post(path + '/cancel', json=payload, headers=_headers(seed_owner, token, key))
+    assert warm.status_code == 200 and warm.json() == data, warm.text
+    await session.execute(text('DELETE FROM idempotency_keys WHERE key=:key'), {'key': key})
+    await session.commit()
+    cold = await client.post(path + '/cancel', json=payload, headers=_headers(seed_owner, token, key))
+    assert cold.status_code == 200 and cold.json() == data, cold.text
+    reread = await client.get(path, headers=_headers(seed_owner, token))
+    assert reread.status_code == 200 and reread.json() == data, reread.text
+    assert await _evidence(session, sid) == finalized_evidence
+    audits = (await session.execute(select(AuditLog).where(
+        AuditLog.entity_id == sid, AuditLog.action == 'gaming_session_voided'))).scalars().all()
+    assert len(audits) == 1
+    audit = audits[0]
+    assert audit.after['request']['reason'] is None
+    assert audit.business_details['request']['reason'] is None
+    assert audit.business_details['user_reason_supplied'] is False
+    assert 0 <= audit.business_details['server_play_elapsed_ms'] < 1_800_000
+    assert audit.after['idempotency_key'] == key
+    assert audit.after['request_hash'] == data['cancellation_request_hash']
+    assert await session.scalar(select(func.count(Order.id)).where(
+        Order.company_id == seed_owner['company'].id)) == int(served_addon)
+    assert await session.scalar(select(func.count(GamingVoidReceipt.id)).where(
+        GamingVoidReceipt.gaming_session_id == UUID(sid))) == int(served_addon)
+    assert await session.scalar(select(func.count(GamingVoidAddonLine.id)).where(
+        GamingVoidAddonLine.receipt_id.in_(select(GamingVoidReceipt.id).where(
+            GamingVoidReceipt.gaming_session_id == UUID(sid))))) == int(served_addon)
+    if lifecycle == 'active' and reason is None and not served_addon:
+        # Corrupt only the validator's read result, never immutable database evidence.
+        gs = (await session.execute(select(GamingSession).where(GamingSession.id == UUID(sid))
+            .execution_options(populate_existing=True))).scalar_one()
+        settlement = (await session.execute(select(GamingParticipantSettlement).where(
+            GamingParticipantSettlement.gaming_session_id == UUID(sid)))).scalar_one()
+        for field, value in [('stop_idempotency_key', 'unrelated-stop'),
+                             ('participant_revision_before', ended['participant_revision'] + 1)]:
+            altered = SimpleNamespace(**{column.key: getattr(settlement, column.key)
+                for column in GamingParticipantSettlement.__table__.columns})
+            setattr(altered, field, value)
+            class ReadResult:
+                def scalars(self):
+                    return self
+                def all(self):
+                    return [audit]
+                def scalar_one_or_none(self):
+                    return altered
+            async def read_only_result(_statement):
+                return ReadResult()
+            with pytest.raises(GamingBillingRepairRequiredError):
+                await gaming_router._participant_void_receipt(SimpleNamespace(execute=read_only_result), gs)
+        assert await _evidence(session, sid) == finalized_evidence
+
+
+async def test_hourly_session_rejects_participant_join_without_attendance_or_settlement(
+    client, session, seed_owner,
+):
+    token, shift_id, station, _friends, _packages = await _setup(client, session, seed_owner)
+    # Legacy hourly rows can still be read; they do not admit package-only attendance.
+    gs = GamingSession(id=uuid4(), company_id=seed_owner['company'].id,
+        station_id=station.id, opened_by=seed_owner['owner'].id, shift_id=shift_id,
+        start_at=datetime.now(UTC) - timedelta(minutes=10), status='active',
+        billing_mode='hourly', rate_per_hour_minor=station.rate_per_hour_minor,
+        extra_controllers=0, paused_minutes=0, tax_rate=0, sac_code='999692', rate_includes_tax=True)
+    session.add(gs)
+    await session.commit()
+    result = await client.post(f'/api/v1/gaming/sessions/{gs.id}/participants/join',
+        json={'expected_participant_revision': 0},
+        headers=_headers(seed_owner, token, f'hourly-player-rejected:{uuid4()}'))
+    assert result.status_code == 422, result.text
+    assert 'fixed-price PS5 package' in result.json()['error']['message']
+    assert await _evidence(session, str(gs.id)) == [[], [], []]

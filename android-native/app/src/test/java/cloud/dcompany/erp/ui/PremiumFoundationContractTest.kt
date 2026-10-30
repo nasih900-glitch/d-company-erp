@@ -6,6 +6,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.security.MessageDigest
+import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -31,11 +32,11 @@ class PremiumFoundationContractTest {
     }
 
     @Test
-    fun `login production resources preserve the approved scene and standalone mark`() {
+    fun `login production resources preserve the approved scene and web-authoritative mark`() {
         val root = projectRoot()
         val scene = root.resolve("src/main/res/drawable-nodpi/login_scene_hd_r1.png")
         val reference = root.resolve("src/main/res/drawable-nodpi/login_reference_original.png")
-        val mark = root.resolve("src/main/res/drawable/login_logo_d.xml")
+        val mark = root.resolve("src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png")
         val retiredGeneratedArt = root.resolve("src/main/res/drawable-nodpi/ref_login_art.png")
 
         assertEquals(
@@ -49,9 +50,10 @@ class PremiumFoundationContractTest {
         )
         assertEquals(512 to 341, pngDimensions(reference))
         assertEquals(
-            "94adb2de76f0b76ba72684718bf88d87890f79ef9f7ce6e14900525ee4bc4148",
+            "40ae02d5f61217704a15805b50b1e11a8322a7c2ae600a0eed8183e42fc16639",
             sha256(mark),
         )
+        assertEquals(432 to 432, pngDimensions(mark))
         assertFalse("The retired generated Login artwork must not return", Files.exists(retiredGeneratedArt))
     }
 
@@ -72,15 +74,10 @@ class PremiumFoundationContractTest {
     }
 
     @Test
-    fun `target tablet uses executive rail and retains full size action targets`() {
-        val navigation = read("src/main/java/cloud/dcompany/erp/ui/Nav.kt")
-
-        assertTrue("usesExecutiveNavigationRail(maxWidth, maxHeight)" in navigation)
-        assertTrue("Modifier.width(80.dp).fillMaxHeight()" in navigation)
-        assertTrue("rememberSaveableStateHolder()" in navigation)
-        assertTrue(".height(56.dp)" in navigation)
-        assertTrue("private fun HeaderIconAction(" in navigation)
-        assertTrue("modifier = Modifier.size(48.dp)" in navigation)
+    fun `target tablet shell keeps approved wide proportions`() {
+        assertTrue(usesExecutiveNavigationRail(1280.dp, 800.dp))
+        assertEquals(184.dp, ExecutiveSidebarWidth)
+        assertEquals(56.dp, ExecutiveUtilityHeight)
     }
 
     private fun read(relativePath: String): String =

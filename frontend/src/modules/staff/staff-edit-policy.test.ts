@@ -53,6 +53,13 @@ describe('buildStaffAccessPatch', () => {
   });
 });
 
+it('assigns the generic gaming cashier role only after an explicit selection', () => {
+  expect(buildStaffAccessPatch({ ...BASE, selectedRoleCode: 'gaming_cashier', roleSelectionChanged: true }))
+    .toEqual({ role_code: 'gaming_cashier' });
+  expect(buildStaffAccessPatch({ ...BASE, selectedRoleCode: 'gaming_cashier', roleSelectionChanged: false }))
+    .toEqual({});
+});
+
 describe('canChangeStaffAccess', () => {
   it('never offers suspend/delete against the caller account', () => {
     expect(canChangeStaffAccess({
@@ -104,15 +111,16 @@ describe('editableStaffRoleOptions', () => {
     { code: 'owner', name: 'Owner' },
     { code: 'manager', name: 'Manager' },
     { code: 'cashier', name: 'Cashier' },
+    { code: 'gaming_cashier', name: 'Gaming & POS staff' },
   ];
 
   it('never shows owner grants to a caller without protected authority', () => {
     expect(editableStaffRoleOptions(fallback, false).map((role) => role.code))
-      .toEqual(['manager', 'cashier']);
+      .toEqual(['manager', 'cashier', 'gaming_cashier']);
   });
 
   it('allows owner tiers to the protected owner but never offers super_owner', () => {
     expect(editableStaffRoleOptions(fallback, true).map((role) => role.code))
-      .toEqual(['co_owner', 'owner', 'manager', 'cashier']);
+      .toEqual(['co_owner', 'owner', 'manager', 'cashier', 'gaming_cashier']);
   });
 });

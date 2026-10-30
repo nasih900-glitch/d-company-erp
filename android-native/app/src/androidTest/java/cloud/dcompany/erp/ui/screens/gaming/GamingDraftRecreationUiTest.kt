@@ -15,7 +15,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -35,6 +40,7 @@ import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -75,7 +81,7 @@ class GamingDraftRecreationUiTest {
                 }
                 selectedId = selected
                 if (!state.catalogueLoaded) Text("Loading scoped catalogue")
-                else Box(Modifier.width(1280.dp).height(744.dp)) {
+                else Box(Modifier.width(1280.dp).height(744.dp).testTag("gaming-draft-fixture-root")) {
                     GamingCommandWorkspace(
                         state = state, access = GamingAccess(canManageSessions = true),
                         filters = listOf(StationFilter("all", "All")), selectedFilter = "all",
@@ -115,9 +121,37 @@ class GamingDraftRecreationUiTest {
             up()
         }
         compose.onNodeWithContentDescription("Choose 60 minutes, ₹210.00").assertIsDisplayed()
-        compose.onNodeWithText("Start 60 min · ₹210.00").assertIsDisplayed()
+        assertStartAction("Start 60 min · ₹210.00", "ps5-2")
         compose.runOnIdle { assertEquals("ps5-2", selectedId) }
     }
+
+    private fun assertStartAction(expected: String, stationId: String) {
+        val start = compose.onNodeWithTag("gaming-start-action")
+            .performScrollTo()
+            .assertIsDisplayed()
+            .assertHasClickAction()
+            .assertIsEnabled()
+            .assertHeightIsAtLeast(48.dp)
+            .assertTextEquals(expected)
+        val target = start.fetchSemanticsNode().boundsInRoot
+        val visible = listOf(
+            compose.onNodeWithTag("gaming-draft-fixture-root").fetchSemanticsNode().boundsInRoot,
+            compose.onNodeWithTag("gaming-inline-expansion-$stationId").fetchSemanticsNode().boundsInRoot,
+            compose.onNodeWithTag("gaming-control-pane").fetchSemanticsNode().boundsInRoot,
+            compose.onNodeWithTag("gaming-detail-viewport").fetchSemanticsNode().boundsInRoot,
+        ).reduce(::intersection)
+        assertTrue("Start must have non-empty bounds: $target", target.width > 0f && target.height > 0f)
+        assertTrue("Start must be fully contained in the visible detail viewport: target=$target visible=$visible",
+            target.left >= visible.left - 1f && target.top >= visible.top - 1f &&
+                target.right <= visible.right + 1f && target.bottom <= visible.bottom + 1f)
+    }
+
+    private fun intersection(left: Rect, right: Rect): Rect = Rect(
+        left = maxOf(left.left, right.left),
+        top = maxOf(left.top, right.top),
+        right = minOf(left.right, right.right),
+        bottom = minOf(left.bottom, right.bottom),
+    )
 
     // Use the same composition ancestry on both Activity instances, as onCreate does.
     // Different setContent lambda callsites have different implicit rememberSaveable keys.
@@ -143,7 +177,7 @@ class GamingDraftRecreationUiTest {
         compose.onNodeWithText("Loading scoped catalogue").assertIsDisplayed()
         compose.onNodeWithTag("gaming-start-action").assertDoesNotExist()
         compose.runOnIdle { assertEquals("ps5-2", selectedId); projection.value = loaded }
-        compose.onNodeWithText("Start 60 min · ₹210.00").assertIsDisplayed()
+        assertStartAction("Start 60 min · ₹210.00", "ps5-2")
         compose.onNodeWithText("Dual · 2+ players").performScrollTo().assertIsDisplayed().assertIsSelected()
         compose.onNodeWithTag("gaming-booked-player-count").performScrollTo().assertTextEquals("4/4")
         compose.onNodeWithText("Add player").performScrollTo().assertIsDisplayed().assertIsNotEnabled()
@@ -152,7 +186,7 @@ class GamingDraftRecreationUiTest {
             assertEquals("ps5-2", selectedId)
             projection.value = loaded.copy(stations = listOf(stations.first()))
         }
-        compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
+        assertStartAction("Start 30 min · ₹80.00", "ps5-1")
         compose.runOnIdle { assertEquals("ps5-1", selectedId) }
     }
 
@@ -160,7 +194,7 @@ class GamingDraftRecreationUiTest {
         compose.activityRule.scenario.onActivity(::installFixtureContent); chooseDualFourSixty()
         recreateWithInitialEmpty(authority(generation = 2))
         compose.runOnIdle { projection.value = loaded }
-        compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
+        assertStartAction("Start 30 min · ₹80.00", "ps5-1")
         compose.runOnIdle { assertEquals("ps5-1", selectedId) }
     }
 
@@ -168,7 +202,7 @@ class GamingDraftRecreationUiTest {
         compose.activityRule.scenario.onActivity(::installFixtureContent); chooseDualFourSixty()
         recreateWithInitialEmpty(authority(profile = me.copy(effectivePermissions = emptyList()), terminal = "other-till"))
         compose.runOnIdle { projection.value = loaded }
-        compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
+        assertStartAction("Start 30 min · ₹80.00", "ps5-1")
         compose.runOnIdle { assertEquals("ps5-1", selectedId); currentAuthority.value = null }
         compose.onNodeWithText("Verifying Gaming workspace. Draft actions are unavailable.").assertIsDisplayed()
         compose.onNodeWithTag("gaming-start-action").assertDoesNotExist()

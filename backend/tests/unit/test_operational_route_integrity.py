@@ -27,6 +27,7 @@ from app.core.errors import (
     CheckoutClaimConflictError,
     ConflictError,
     ForbiddenError,
+    IdempotencyConflict,
     NotFoundError,
 )
 from app.core.permissions import ROLE_PERMISSIONS
@@ -196,6 +197,8 @@ async def test_whole_order_void_replay_requires_the_original_reason() -> None:
 
     same_reason_session = _Session(
         _Result(scalar=order),
+        _Result(scalar=None),  # no Gaming session owns this order
+        _Result(scalar=None),  # no Gaming Void receipt owns this order
         _Result(scalar=voided_at),
         _Result(rows=["Customer left"]),
     )
@@ -211,6 +214,8 @@ async def test_whole_order_void_replay_requires_the_original_reason() -> None:
 
     changed_reason_session = _Session(
         _Result(scalar=order),
+        _Result(scalar=None),  # no Gaming session owns this order
+        _Result(scalar=None),  # no Gaming Void receipt owns this order
         _Result(scalar=voided_at),
         _Result(rows=["Customer left"]),
     )
@@ -897,15 +902,23 @@ def _tenant(
     terminal_id: UUID | None = None,
     user_id: UUID | None = None,
     protected_access: bool = False,
+    roles: tuple[str, ...] = ("owner",),
 ) -> TenantContext:
     return TenantContext(
         user_id=user_id or uuid4(),
         company_id=company_id or uuid4(),
         branch_id=branch_id or uuid4(),
         terminal_id=terminal_id or uuid4(),
-        roles=("owner",),
+        roles=roles,
         protected_access=protected_access,
     )
+
+
+def _idempotent_request(key: str, request_hash: str) -> Request:
+    request = Request({"type": "http", "headers": []})
+    request.state.idempotency_key = key
+    request.state.idempotency_request_hash = request_hash
+    return request
 
 
 def _shift(tenant: TenantContext, **overrides):
@@ -1680,10 +1693,9 @@ async def test_deleted_package_session_cannot_receive_hourly_membership_waiver(
     assert order.total_minor == 15_000
 
 
-def test_cancel_reason_is_trimmed_and_whitespace_only_is_rejected() -> None:
+def test_cancel_reason_is_trimmed_and_whitespace_becomes_absent_policy_input() -> None:
     assert gaming_router.SessionCancel(reason="  Customer left  ").reason == "Customer left"
-    with pytest.raises(PydanticValidationError):
-        gaming_router.SessionCancel(reason="   \t  ")
+    assert gaming_router.SessionCancel(reason="   \t  ").reason is None
 
 
 def test_shift_close_count_schema_rejects_negative_but_preserves_zero() -> None:
@@ -2398,23 +2410,36 @@ async def test_session_send_retry_returns_the_existing_order_without_creating_an
 
 
 @pytest.mark.asyncio
-async def test_cancel_session_records_trace_and_retry_preserves_the_original_reason() -> None:
-    tenant = _tenant()
+async def test_cancel_session_records_trace_and_retry_preserves_the_original_reason(
+    monkeypatch,
+) -> None:
+    tenant = _tenant(roles=("gaming_supervisor",))
     station = _station(tenant)
     shift = _shift(tenant)
     gaming_session = _gaming_session(tenant, station.id, shift.id)
     first_session = _Session(
         _Result(scalar=gaming_session),
-        _Result(scalar=shift),
-        _Result(scalar=0),  # no active add-ons block whole-session cancellation
+        _Result(rows=[shift]),
+        _Result(rows=[]),  # no active add-ons block whole-session cancellation
         entities={(Station, station.id): station},
     )
+    async def _reserve(*_args, **_kwargs):
+        return None
+
+    async def _store(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(gaming_router, "check_or_reserve", _reserve)
+    monkeypatch.setattr(gaming_router, "store_response", _store)
+    key = f"gaming-session-void:{gaming_session.id}"
+    request_hash = "a" * 64
+    first_payload = gaming_router.SessionCancel(reason="  Customer left before billing  ")
 
     first = await gaming_router.cancel_session(
         gaming_session.id,
-        gaming_router.SessionCancel(reason="  Customer left before billing  "),
+        first_payload,
         first_session,
-        Request({"type": "http", "headers": []}),
+        _idempotent_request(key, request_hash),
         tenant,
     )
 
@@ -2426,31 +2451,53 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
     assert gaming_session.billable_minutes == 0
     assert gaming_session.amount_minor == 0
     original_cancelled_at = gaming_session.cancelled_at
+    void_audit = next(
+        entity
+        for entity in first_session.added
+        if isinstance(entity, AuditLog) and entity.action == "gaming_session_voided"
+    )
 
     # The original opener can safely recover a lost response even after the
     # exact shift has closed; scope and opener checks still run first.
     shift.status = "closed"
     retry_session = _Session(
         _Result(scalar=gaming_session),
-        _Result(scalar=shift),
+        _Result(rows=[shift]),
+        _Result(rows=[void_audit]),
         entities={(Station, station.id): station},
     )
     retry = await gaming_router.cancel_session(
         gaming_session.id,
-        gaming_router.SessionCancel(reason="Different retry body"),
+        first_payload,
         retry_session,
-        Request({"type": "http", "headers": []}),
+        _idempotent_request(key, request_hash),
         tenant,
     )
     assert retry.cancel_reason == "Customer left before billing"
     assert gaming_session.cancelled_at == original_cancelled_at
     assert retry_session.flush_count == 0
 
+    changed_retry = _Session(
+        _Result(scalar=gaming_session),
+        _Result(rows=[shift]),
+        _Result(rows=[void_audit]),
+        entities={(Station, station.id): station},
+    )
+    with pytest.raises(IdempotencyConflict, match="immutable Void receipt"):
+        await gaming_router.cancel_session(
+            gaming_session.id,
+            gaming_router.SessionCancel(reason="Different retry body"),
+            changed_retry,
+            _idempotent_request(key, "b" * 64),
+            tenant,
+        )
+
     wrong_terminal = _tenant(
         company_id=tenant.company_id,
         branch_id=tenant.branch_id,
         terminal_id=uuid4(),
         user_id=tenant.user_id,
+        roles=("gaming_supervisor",),
     )
     with pytest.raises(BusinessRuleError, match="different terminal"):
         await gaming_router.cancel_session(
@@ -2458,11 +2505,11 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
             gaming_router.SessionCancel(reason="Retry from wrong drawer"),
             _Session(
                 _Result(scalar=gaming_session),
-                _Result(scalar=shift),
-                _Result(scalar=0),
+                _Result(rows=[shift]),
+                _Result(rows=[]),
                 entities={(Station, station.id): station},
             ),
-            Request({"type": "http", "headers": []}),
+            _idempotent_request(key, request_hash),
             wrong_terminal,
         )
 
@@ -2474,6 +2521,7 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
         company_id=tenant.company_id,
         branch_id=tenant.branch_id,
         terminal_id=tenant.terminal_id,
+        roles=("gaming_supervisor",),
     )
     with pytest.raises(BusinessRuleError, match="Only the staff member who opened this shift"):
         await gaming_router.cancel_session(
@@ -2481,11 +2529,11 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
             gaming_router.SessionCancel(reason="Waive this charge"),
             _Session(
                 _Result(scalar=gaming_session),
-                _Result(scalar=shift),
-                _Result(scalar=0),
+                _Result(rows=[shift]),
+                _Result(rows=[]),
                 entities={(Station, station.id): station},
             ),
-            Request({"type": "http", "headers": []}),
+            _idempotent_request(f"{key}:staff", "c" * 64),
             other_staff,
         )
 
@@ -2497,17 +2545,17 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
         terminal_id=tenant.terminal_id,
         protected_access=True,
     )
-    with pytest.raises(BusinessRuleError, match="only cancel a legacy ended session"):
+    with pytest.raises(BusinessRuleError, match="Only an ended legacy session can be voided"):
         await gaming_router.cancel_session(
             gaming_session.id,
             gaming_router.SessionCancel(reason="Invalid closed-shift cleanup"),
             _Session(
                 _Result(scalar=gaming_session),
-                _Result(scalar=shift),
-                _Result(scalar=0),
+                _Result(rows=[shift]),
+                _Result(rows=[]),
                 entities={(Station, station.id): station},
             ),
-            Request({"type": "http", "headers": []}),
+            _idempotent_request(f"{key}:owner", "d" * 64),
             protected_owner,
         )
 

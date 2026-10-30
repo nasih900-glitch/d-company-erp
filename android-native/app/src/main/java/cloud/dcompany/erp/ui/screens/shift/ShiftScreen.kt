@@ -33,7 +33,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -98,6 +98,7 @@ import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
 import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.LocalWorkspaceGlassScene
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
 import cloud.dcompany.erp.ui.components.ActionIntent
@@ -112,6 +113,9 @@ import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import cloud.dcompany.erp.ui.components.TouchMoneyEntry
 import cloud.dcompany.erp.ui.components.WholeNumberStepper
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
+import cloud.dcompany.erp.ui.theme.WorkspacePanelShape
 import cloud.dcompany.erp.ui.screens.businessDateTime
 import kotlinx.coroutines.launch
 
@@ -450,9 +454,9 @@ internal fun ShiftDashboardOverview(
             verticalArrangement = Arrangement.spacedBy(Spacing.sm),
         ) {
             Row(
-                Modifier.fillMaxWidth().clip(Radius.shapeLg)
-                    .background(MaterialTheme.colorScheme.surface)
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg)
+                Modifier.fillMaxWidth()
+                    .clip(WorkspacePanelShape)
+                    .liquidWorkspaceSurface(WorkspacePanelShape, WorkspaceGlassRole.PANEL)
                     .padding(Spacing.md),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
@@ -487,9 +491,9 @@ internal fun ShiftDashboardOverview(
             }
 
             Column(
-                Modifier.fillMaxWidth().clip(Radius.shapeLg)
-                    .background(MaterialTheme.colorScheme.surface)
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg)
+                Modifier.fillMaxWidth()
+                    .clip(WorkspacePanelShape)
+                    .liquidWorkspaceSurface(WorkspacePanelShape, WorkspaceGlassRole.PANEL)
                     .padding(Spacing.lg),
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
@@ -674,9 +678,8 @@ internal fun ShiftDashboardOverview(
                     }
                     if (reconciliationExpanded) {
                         Column(
-                            Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                                .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
+                            Modifier.fillMaxWidth()
+                                .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.UTILITY)
                                 .padding(Spacing.md)
                                 .testTag("shift-reconciliation-details"),
                             verticalArrangement = Arrangement.spacedBy(Spacing.sm),
@@ -1143,9 +1146,9 @@ internal fun CloseShiftCard(
 
     val cardModifier = if (compactLayout) Modifier.fillMaxWidth() else Modifier.fillMaxSize()
     Column(
-        cardModifier.clip(Radius.shapeLg)
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.52f), Radius.shapeLg)
+        cardModifier
+            .clip(WorkspacePanelShape)
+            .liquidWorkspaceSurface(WorkspacePanelShape, WorkspaceGlassRole.PANEL)
             .padding(Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -1549,13 +1552,21 @@ internal fun DrawerCountDialogContent(
     }
     val countedMinor = drawerCountedMinor(draftCounts)
     val differenceMinor = expectedMinor?.let { countedMinor - it }
+    val hasWorkspaceGlassScene = LocalWorkspaceGlassScene.current != null
 
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        color = if (hasWorkspaceGlassScene) Color.Transparent else MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeXl,
         tonalElevation = 0.dp,
         modifier = modifier
-            .border(1.dp, MaterialTheme.colorScheme.outline, Radius.shapeXl)
+            .clip(Radius.shapeXl)
+            .then(
+                if (hasWorkspaceGlassScene) Modifier.liquidWorkspaceSurface(
+                    Radius.shapeXl,
+                    WorkspaceGlassRole.MODAL,
+                    allowWindowProjection = true,
+                ) else Modifier.border(1.dp, MaterialTheme.colorScheme.outline, Radius.shapeXl),
+            )
             .semantics { contentDescription = "Drawer count dialog" },
     ) {
         Column(
@@ -1846,8 +1857,9 @@ private fun BusinessDayHistoryRow(day: ShiftBusinessDaySummary) {
     val totalsAvailable = day.grossCollectionsMinor != null &&
         day.totalRefundsMinor != null && day.netCollectionsMinor != null
     Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeSm)
-            .background(MaterialTheme.colorScheme.surfaceVariant).padding(12.dp),
+        Modifier.fillMaxWidth()
+            .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.UTILITY)
+            .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
@@ -1926,8 +1938,9 @@ private fun BusinessDayHistoryRow(day: ShiftBusinessDaySummary) {
 private fun HistoryRow(s: ShiftHistoryRow) {
     val opener = shiftHistoryOpenerLabel(s)
     Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeSm)
-            .background(MaterialTheme.colorScheme.surfaceVariant).padding(10.dp),
+        Modifier.fillMaxWidth()
+            .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.UTILITY)
+            .padding(10.dp),
     ) {
         Text(
             "Opened ${formatHistoryDate(s.openedAtMillis)} by $opener",

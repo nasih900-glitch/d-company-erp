@@ -1,13 +1,15 @@
-# Build55 guarded deployment — exact54/0091 to55/0092
+# Build55 guarded deployment — exact54/0091 to55/0093
 
 This is a preservation profile for the deployed Build54 source
 `5ad146ae076f5178acc2c8e4cb840ecbb0d0343a`, version3.1.46 and schema0091.
-The candidate is version3.1.47, Android code55 and schema0092. It is not a
+The candidate is version3.1.47, Android code55 and schema0093. It is not a
 general migration bypass. Historical release helpers remain unchanged.
 
-The profile is deliberately closed while its independent source closures and
-negative tests are pending. A local test result, signed APK, workflow approval
-or an earlier read-only server snapshot does not admit production deployment.
+The profile admits only its independently reviewed source closures, exact
+PostgreSQL16 catalogue/trigger changes and nonempty migration/restore evidence.
+Missing or mismatched pins refuse admission; they must not be guessed from
+migration source. A local test result, signed APK, workflow approval or an earlier
+read-only server snapshot does not by itself admit production deployment.
 
 ## Before maintenance
 
@@ -85,16 +87,27 @@ credential rotation or authentication downgrade.
    Raw schema evidence stays intact. Restore/rollback recognizes only the five
    reviewed full-string CHECK deparser equivalences; no column, index, function
    or unrelated constraint normalization is permitted. Live post-migration
-   comparison is entirely raw and exact. Baseline raw hashes and its mode0400
+   catalogue comparison admits only the independently reviewed exact removed and
+   added rows. Full raw table hashes remain in the evidence alongside the
+   explicit legacy gaming-session projection described below. Baseline raw hashes and its mode0400
    checksum-manifest digest are retained by the installer process and rechecked
    at each boundary; losing or changing that seal requires manual review.
 3. Re-resolve all five scanned image tags, produce a digest-only Compose override
    and prove its only config changes are the five attested image IDs. Start only
    the exact attested PostgreSQL image. Run Alembic through the exact backend
    image with an explicit Python entrypoint; do not start the normal app yet.
-4. Immediately prove the sole additive change: Alembic's exact0091→0092 row and
-   the exact18 catalogue entries for the new **empty** `android_update_policy`
-   table. Every legacy table row/hash, sequence and fleet record must match.
+4. Immediately prove the exact0091→0093 transition. The three new tables
+   `android_update_policy`, `gaming_void_receipts` and `gaming_void_addon_lines`
+   must all be empty. Every existing sequence and fleet record must match.
+   Every legacy table retains its exact full-row hash except `gaming_sessions`,
+   whose new nullable UUID `retained_addon_order_id` changes its raw JSON shape.
+   Retain that full raw hash too, require zero non-null links, and compare the
+   projection removing only that field against the pre-migration full-row hash
+   and count. No other legacy field may change.
+   Schema admission is the exact independently derived removed/added catalogue
+   delta, including the replaced reporting-snapshot function and removed old
+   add-on-cancel function/trigger. Compare user trigger definitions and enabled
+   and deferral state separately; trigger names alone are not sufficient.
    Unexpected seeding, business/Audit/finance drift or another schema change
    refuses the transition before a candidate app writer starts.
 5. Start internal services with the same digest-only operational configuration.

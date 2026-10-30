@@ -167,6 +167,9 @@ object Radius {
     val shapePill = RoundedCornerShape(pill)
 }
 
+/** Neutral workspace panels share a contour independently of controls and dialogs. */
+internal val WorkspacePanelShape = RoundedCornerShape(12.dp)
+
 /** Motion durations + the one easing curve used everywhere, so a screen
  * transition, a dialog, and a button press all feel like the same app
  * rather than each picking their own timing by feel. */

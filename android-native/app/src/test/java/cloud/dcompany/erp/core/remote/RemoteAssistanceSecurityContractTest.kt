@@ -121,9 +121,15 @@ class RemoteAssistanceSecurityContractTest {
                 "pendingRemoteGrant" in activity
         })
         assertTrue("Unsafe workflows must receive a passive Help cue, not an interrupting prompt", run {
+            val reviewAction = activity.substringAfter("onReviewRemoteSupportRequest = {")
+                .substringBefore("onStopRemoteSupport =")
             "remoteSupportRequestWaiting = remoteAssistanceState.pendingGrant != null" in activity &&
                 "onReviewRemoteSupportRequest" in activity &&
-                "currentDestination = Destination.Help" in activity
+                "if (Destination.Help in destinations)" in reviewAction &&
+                "acceptWorkspaceNavigation(" in reviewAction &&
+                "target = Destination.Help" in reviewAction &&
+                "beforeCommit = remoteAssistance.uiGateway::markRouteTransition" in reviewAction &&
+                "afterCommit = { operationalFocus = null }" in reviewAction
         })
         assertFalse("Remote refresh must never call SyncEngine or financial resources", run {
             "sync.refresh(" in coordinator

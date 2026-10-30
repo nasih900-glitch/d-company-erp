@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.screens.reports
 
+import cloud.dcompany.erp.ui.components.liquidCalendarColors
 import cloud.dcompany.erp.ui.theme.operationalDanger
 import cloud.dcompany.erp.ui.theme.operationalDangerContainer
 import cloud.dcompany.erp.ui.theme.operationalGood
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -32,10 +34,12 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDefaults
-import androidx.compose.material3.DatePickerDialog
+import cloud.dcompany.erp.ui.components.LiquidDatePickerDialog as DatePickerDialog
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SelectableDates
@@ -45,13 +49,17 @@ import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -59,25 +67,32 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.core.auth.ReportsAccess
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
 import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.components.CompactStatCard
 import cloud.dcompany.erp.ui.components.DesignedEmptyState
+import cloud.dcompany.erp.ui.components.LiquidDropdownMenu
 import cloud.dcompany.erp.ui.components.OperationalBanner
 import cloud.dcompany.erp.ui.components.PremiumTabBar
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.TabOption
 import cloud.dcompany.erp.ui.components.UiTone
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
+import cloud.dcompany.erp.ui.components.workspaceContentCanvas
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
 import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
@@ -87,77 +102,321 @@ import java.util.Locale
 import kotlin.math.abs
 
 /**
- * Reports — daily / monthly / quarterly / yearly P&L, straight from
- * /reports/… endpoints. The wording is deliberately the plain-language wording the
- * owners already read on the web build ("what's really yours before any
- * costs"), because the whole point of this screen is that a non-accountant
- * can act on it without asking anyone what a line means.
+ * Operational tabs share one admitted Overview snapshot. Current ingredient
+ * valuation and finance-only P&L retain independent authority and load attempts.
  */
 @Composable
 fun ReportsScreen(
+    access: ReportsAccess,
     presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
 ) {
     val vm: ReportsViewModel = viewModel()
-    val state by vm.state.collectAsStateWithLifecycle()
+    val rawState by vm.state.collectAsStateWithLifecycle()
+    val activeLease by vm.activeLease.collectAsStateWithLifecycle()
+    val state = visibleReportsState(rawState, activeLease, access)
+    LaunchedEffect(access) { vm.updateAccess(access) }
+    val context = LocalContext.current
+    val launchDocumentPicker = rememberReportsCsvDocumentPicker { requestId, uri ->
+        vm.saveOverviewExport(requestId, uri, access)
+    }
+    DisposableEffect(vm, context) {
+        onDispose {
+            if (context.reportsActivity()?.isChangingConfigurations != true) vm.cancelOverviewExport()
+        }
+    }
 
+    ReportsWorkspaceContent(
+        state = state,
+        presentation = presentation,
+        onSurface = vm::selectSurface,
+        onOperationalTab = vm::selectOperationalTab,
+        onPeriod = vm::selectPeriod,
+        onStep = vm::step,
+        onPickDate = vm::setDate,
+        onPickMonth = vm::setMonth,
+        onPickQuarter = vm::setQuarter,
+        onJumpToCurrent = vm::jumpToCurrent,
+        onRetry = vm::retry,
+        onExport = {
+            vm.beginOverviewExport(access)?.let { request ->
+                try {
+                    launchDocumentPicker(request)
+                } catch (_: Exception) {
+                    vm.cancelOverviewExport("The document picker could not be opened. Try again.")
+                }
+            }
+        },
+    )
+}
+
+@Composable
+internal fun ReportsWorkspaceContent(
+    state: ReportsUiState,
+    presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
+    onSurface: (ReportsSurface) -> Unit,
+    onPeriod: (ReportPeriod) -> Unit,
+    onStep: (Int) -> Unit,
+    onPickDate: (LocalDate) -> Unit,
+    onPickMonth: (YearMonth) -> Unit,
+    onPickQuarter: (Int) -> Unit,
+    onJumpToCurrent: () -> Unit,
+    onRetry: () -> Unit,
+    onExport: () -> Unit = {},
+    onOperationalTab: (ReportsOperationalTab) -> Unit = {},
+) {
     Column(
         Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
+            .workspaceContentCanvas()
     ) {
-        PeriodTabs(state.period, vm::selectPeriod)
-        PeriodSelector(
+        ReportsHeader(
             state = state,
-            onStep = vm::step,
-            onPickDate = vm::setDate,
-            onPickMonth = vm::setMonth,
-            onPickQuarter = vm::setQuarter,
-            onJumpToCurrent = vm::jumpToCurrent,
+            onSurface = onSurface,
+            onOperationalTab = onOperationalTab,
+            onPeriod = onPeriod,
+            onStep = onStep,
+            onPickDate = onPickDate,
+            onPickMonth = onPickMonth,
+            onPickQuarter = onPickQuarter,
+            onJumpToCurrent = onJumpToCurrent,
+            onExport = onExport,
         )
-        CostingCoverageBanner(state)
-
-        Box(Modifier.fillMaxSize()) {
-            val report = state.report
-            when (reportPresentation(state)) {
-                ReportPresentation.INITIAL_LOADING -> LoadingPanel()
-                ReportPresentation.BLOCKING_ERROR -> ErrorPanel(state.error!!, vm::retry)
-                ReportPresentation.FRESH_EMPTY -> EmptyPanel(
-                    state.period,
-                    report!!.label,
-                    state.loading,
-                    state.fetchedAtMillis,
-                    presentation,
-                )
-                ReportPresentation.FRESH_CONTENT -> ReportBody(
-                    report!!,
-                    state.period,
-                    state.loading,
-                    state.fetchedAtMillis,
-                    presentation,
-                )
-                ReportPresentation.STALE_EMPTY,
-                ReportPresentation.STALE_CONTENT -> Column(Modifier.fillMaxSize()) {
-                    StaleReportBanner(state.error!!, vm::retry)
-                    Box(Modifier.weight(1f)) {
-                        if (report!!.hasNothing) {
-                            EmptyPanel(
-                                state.period,
-                                report.label,
-                                state.loading,
-                                state.fetchedAtMillis,
-                                presentation,
-                            )
-                        } else {
-                            ReportBody(
-                                report,
-                                state.period,
-                                state.loading,
-                                state.fetchedAtMillis,
-                                presentation,
-                            )
+        state.overviewExportMessage?.let { message ->
+            OperationalBanner(
+                title = if (state.overviewExportFailed) "CSV export unavailable" else "Overview CSV",
+                detail = message,
+                tone = if (state.overviewExportFailed) UiTone.Warning else UiTone.Information,
+                icon = Icons.Filled.Assessment,
+                modifier = Modifier.padding(horizontal = Spacing.lgPlus, vertical = Spacing.xs)
+                    .testTag("reports-overview-export-status"),
+            )
+        }
+        when (state.surface) {
+            ReportsSurface.OVERVIEW -> key(state.operationalTab) { ReportsOperationalContent(state, onRetry) }
+            ReportsSurface.PNL -> {
+                CostingCoverageBanner(state)
+                Box(Modifier.fillMaxSize()) {
+                    val report = state.report
+                    when (reportPresentation(state)) {
+                        ReportPresentation.INITIAL_LOADING -> LoadingPanel()
+                        ReportPresentation.BLOCKING_ERROR -> ErrorPanel(state.error!!, onRetry)
+                        ReportPresentation.FRESH_EMPTY -> EmptyPanel(
+                            state.period,
+                            report!!.label,
+                            state.loading,
+                            state.fetchedAtMillis,
+                            presentation,
+                        )
+                        ReportPresentation.FRESH_CONTENT -> ReportBody(
+                            report!!,
+                            state.period,
+                            state.loading,
+                            state.fetchedAtMillis,
+                            presentation,
+                        )
+                        ReportPresentation.STALE_EMPTY,
+                        ReportPresentation.STALE_CONTENT -> Column(Modifier.fillMaxSize()) {
+                            StaleReportBanner(state.error!!, onRetry)
+                            Box(Modifier.weight(1f)) {
+                                if (report!!.hasNothing) {
+                                    EmptyPanel(
+                                        state.period,
+                                        report.label,
+                                        state.loading,
+                                        state.fetchedAtMillis,
+                                        presentation,
+                                    )
+                                } else {
+                                    ReportBody(
+                                        report,
+                                        state.period,
+                                        state.loading,
+                                        state.fetchedAtMillis,
+                                        presentation,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+internal fun reportsSelectionControlsVisible(state: ReportsUiState): Boolean =
+    state.surface == ReportsSurface.PNL ||
+        (state.operationalTab != ReportsOperationalTab.INVENTORY && state.overviewTimezone != null)
+
+@Composable
+private fun ReportsHeader(
+    state: ReportsUiState,
+    onOperationalTab: (ReportsOperationalTab) -> Unit,
+    onSurface: (ReportsSurface) -> Unit,
+    onPeriod: (ReportPeriod) -> Unit,
+    onStep: (Int) -> Unit,
+    onPickDate: (LocalDate) -> Unit,
+    onPickMonth: (YearMonth) -> Unit,
+    onPickQuarter: (Int) -> Unit,
+    onJumpToCurrent: () -> Unit,
+    onExport: () -> Unit,
+) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val wide = maxWidth >= 720.dp
+        val controlsVisible = reportsSelectionControlsVisible(state)
+        Column(
+            Modifier.fillMaxWidth().padding(
+                horizontal = Spacing.lgPlus,
+                vertical = if (wide) Spacing.xs else Spacing.sm,
+            ),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
+            if (wide) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.lg),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ReportsHeading(state, onExport, Modifier.weight(1f))
+                    if (controlsVisible) {
+                        PeriodSelector(
+                            state = state,
+                            onStep = onStep,
+                            onPickDate = onPickDate,
+                            onPickMonth = onPickMonth,
+                            onPickQuarter = onPickQuarter,
+                            onJumpToCurrent = onJumpToCurrent,
+                            modifier = Modifier.widthIn(min = 300.dp, max = 420.dp),
+                            denseWide = true,
+                        )
+                    }
+                }
+            } else {
+                ReportsHeading(state, onExport, Modifier.fillMaxWidth())
+                if (controlsVisible) {
+                    PeriodSelector(
+                        state = state,
+                        onStep = onStep,
+                        onPickDate = onPickDate,
+                        onPickMonth = onPickMonth,
+                        onPickQuarter = onPickQuarter,
+                        onJumpToCurrent = onJumpToCurrent,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ReportsSurfaceTabs(
+                    state = state,
+                    onSelect = onSurface,
+                    onOperationalTab = onOperationalTab,
+                    modifier = Modifier.weight(1f),
+                )
+                if (controlsVisible) {
+                    PeriodMenu(
+                        selected = state.period,
+                        onSelect = onPeriod,
+                        modifier = Modifier.widthIn(min = 152.dp, max = 220.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReportsHeading(state: ReportsUiState, onExport: () -> Unit, modifier: Modifier) {
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                "Reports",
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.testTag("reports-title"),
+            )
+            Text(
+                "Analyze your lounge performance" +
+                    if (state.overviewLoading || state.loading) " · refreshing…" else "",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("reports-subtitle"),
+            )
+        }
+        if (state.surface == ReportsSurface.OVERVIEW && state.operationalTab != ReportsOperationalTab.INVENTORY && state.access.canReadOverview && state.access.canExportOverview) {
+            ReportsOverviewExportButton(
+                enabled = canExportReportsOverview(state, state.lease),
+                busy = state.overviewExportBusy,
+                onClick = onExport,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReportsSurfaceTabs(
+    state: ReportsUiState,
+    onSelect: (ReportsSurface) -> Unit,
+    onOperationalTab: (ReportsOperationalTab) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val options = buildList {
+        availableReportsOperationalTabs(state).forEach { add(TabOption(it.name, it.label)) }
+        if (state.access.canReadPnl) add(TabOption(ReportsSurface.PNL.name, "P&L"))
+    }
+    if (options.size > 1) {
+        PremiumTabBar(
+            options = options,
+            selectedId = if (state.surface == ReportsSurface.PNL) ReportsSurface.PNL.name else state.operationalTab.name,
+            onSelect = { id ->
+                if (id == ReportsSurface.PNL.name) onSelect(ReportsSurface.PNL)
+                else ReportsOperationalTab.entries.firstOrNull { it.name == id }?.let(onOperationalTab)
+            },
+            modifier = modifier,
+        )
+    } else {
+        Spacer(modifier)
+    }
+}
+
+@Composable
+private fun PeriodMenu(
+    selected: ReportPeriod,
+    onSelect: (ReportPeriod) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier) {
+        OutlinedButton(
+            onClick = { expanded = true },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("reports-period-menu"),
+        ) {
+            Text(
+                selected.tab,
+                Modifier.weight(1f).testTag("reports-period-menu-label"),
+                textAlign = TextAlign.Start,
+            )
+            Icon(Icons.Filled.ArrowDropDown, contentDescription = "Choose report period")
+        }
+        LiquidDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.testTag("reports-period-popup"),
+            role = WorkspaceGlassRole.CONTROL,
+        ) {
+            ReportPeriod.entries.forEach { period ->
+                DropdownMenuItem(
+                    text = { Text(period.tab) },
+                    onClick = {
+                        expanded = false
+                        onSelect(period)
+                    },
+                    modifier = Modifier.heightIn(min = 48.dp).testTag("reports-period-option-${period.name}"),
+                )
             }
         }
     }
@@ -192,16 +451,6 @@ private fun CostingCoverageBanner(state: ReportsUiState) {
     }
 }
 
-@Composable
-private fun PeriodTabs(selected: ReportPeriod, onSelect: (ReportPeriod) -> Unit) {
-    PremiumTabBar(
-        options = ReportPeriod.entries.map { TabOption(it.name, it.tab) },
-        selectedId = selected.name,
-        onSelect = { id -> ReportPeriod.entries.firstOrNull { it.name == id }?.let(onSelect) },
-        modifier = Modifier.padding(horizontal = Spacing.lgPlus, vertical = Spacing.md),
-    )
-}
-
 // ---------------------------------------------------------------- selectors
 
 @Composable
@@ -212,88 +461,80 @@ private fun PeriodSelector(
     onPickMonth: (YearMonth) -> Unit,
     onPickQuarter: (Int) -> Unit,
     onJumpToCurrent: () -> Unit,
+    modifier: Modifier = Modifier,
+    denseWide: Boolean = false,
 ) {
     var showCalendar by remember { mutableStateOf(false) }
 
-    SectionCard(Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
-        BoxWithConstraints(Modifier.fillMaxWidth()) {
-            val compact = maxWidth < 620.dp
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    StepButton("‹", enabled = true) { onStep(-1) }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                .clip(Radius.shapeMd)
+                .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.UTILITY)
+                .padding(horizontal = Spacing.xs, vertical = if (denseWide) 0.dp else Spacing.xs)
+                .testTag("reports-period-selector"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+        ) {
+            StepButton("‹", "reports-period-previous", enabled = true) { onStep(-1) }
 
-                    // Tapping the label opens a calendar for the two periods where a
-                    // calendar is the natural way to reach a distant date. Stepping is
-                    // still there because "yesterday" is the query staff actually run.
-                    val labelModifier = when (state.period) {
-                        ReportPeriod.DAILY, ReportPeriod.MONTHLY ->
-                            Modifier.clickable { showCalendar = true }
-                        else -> Modifier
-                    }
-                    Column(
-                        Modifier
-                            .weight(1f)
-                            .then(labelModifier),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Text(
-                            selectorLabel(state),
-                            style = MaterialTheme.typography.titleLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            textAlign = TextAlign.Center,
-                        )
-                        if (state.period == ReportPeriod.DAILY || state.period == ReportPeriod.MONTHLY) {
-                            Text(
-                                "Tap to pick",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
+            // Daily and Monthly labels remain direct calendar entry points;
+            // stepping keeps the common adjacent-period workflow one tap away.
+            val labelModifier = when (state.period) {
+                ReportPeriod.DAILY, ReportPeriod.MONTHLY -> Modifier.clickable { showCalendar = true }
+                else -> Modifier
+            }
+            Box(
+                Modifier.weight(1f).heightIn(min = 48.dp).then(labelModifier)
+                    .testTag("reports-period-label-action"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    selectorLabel(state),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().testTag("reports-period-label"),
+                )
+            }
 
-                    StepButton("›", enabled = state.canStepForward) { onStep(1) }
+            StepButton("›", "reports-period-next", enabled = state.canStepForward) { onStep(1) }
 
-                    if (!compact && !isCurrentPeriod(state)) {
-                        OutlinedButton(onClick = onJumpToCurrent) { Text(currentWord(state.period)) }
-                    }
-                }
+            if (!isCurrentPeriod(state)) {
+                OutlinedButton(
+                    onClick = onJumpToCurrent,
+                    modifier = Modifier.heightIn(min = 48.dp).testTag("reports-period-current"),
+                ) { Text(currentWord(state.period)) }
+            }
+        }
 
-                if (compact && !isCurrentPeriod(state)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        OutlinedButton(onClick = onJumpToCurrent) { Text(currentWord(state.period)) }
-                    }
-                }
-
-                if (state.period == ReportPeriod.QUARTERLY) {
-                    val entries = QUARTER_LABELS.withIndex().toList()
-                    val perRow = if (compact) 2 else 4
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        entries.chunked(perRow).forEach { quarterRow ->
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                quarterRow.forEach { (index, label) ->
-                                    val quarter = index + 1
-                                    FilterChip(
-                                        selected = state.quarter == quarter,
-                                        enabled = canSelectFiscalQuarter(state.fiscalYear, quarter),
-                                        onClick = { onPickQuarter(quarter) },
-                                        label = { Text(label, textAlign = TextAlign.Center) },
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                            selectedLabelColor = MaterialTheme.colorScheme.onSurface,
-                                            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        ),
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                }
-                                repeat(perRow - quarterRow.size) { Spacer(Modifier.weight(1f)) }
+        if (state.period == ReportPeriod.QUARTERLY) {
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val perRow = if (maxWidth < 620.dp) 2 else 4
+                val entries = QUARTER_LABELS.withIndex().toList()
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                    entries.chunked(perRow).forEach { quarterRow ->
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                        ) {
+                            quarterRow.forEach { (index, label) ->
+                                val quarter = index + 1
+                                FilterChip(
+                                    selected = state.quarter == quarter,
+                                    enabled = canSelectFiscalQuarter(state.fiscalYear, quarter),
+                                    onClick = { onPickQuarter(quarter) },
+                                    label = { Text(label, textAlign = TextAlign.Center) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                        selectedLabelColor = MaterialTheme.colorScheme.onSurface,
+                                        labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    ),
+                                    modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                                        .testTag("reports-quarter-$quarter"),
+                                )
                             }
+                            repeat(perRow - quarterRow.size) { Spacer(Modifier.weight(1f)) }
                         }
                     }
                 }
@@ -385,11 +626,11 @@ private fun CalendarDialog(
             ) { Text("Show report") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-        colors = DatePickerDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = liquidCalendarColors(),
     ) {
         DatePicker(
             state = pickerState,
-            colors = DatePickerDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
+            colors = liquidCalendarColors(),
         )
     }
 }
@@ -717,7 +958,7 @@ private fun ReportHeading(
     }
 }
 
-private fun relativeAge(fetchedAtMillis: Long): String {
+internal fun relativeAge(fetchedAtMillis: Long): String {
     val seconds = (System.currentTimeMillis() - fetchedAtMillis) / 1000
     return when {
         seconds < 60 -> "just now"
@@ -734,7 +975,7 @@ private fun KpiGrid(
     presentation: WorkspacePresentationPolicy,
 ) {
     val tiles = listOf(
-        KpiTile("Revenue", report.netRevenueMinor.asRupees()),
+        KpiTile("Revenue", report.netRevenueMinor.asRupees(), tag = "reports-pnl-kpi-revenue"),
         KpiTile("Orders", report.ordersCount.toString()),
         KpiTile(
             if (presentation.showsEvents) "Average ticket" else "Average paid bill",
@@ -756,11 +997,17 @@ private fun KpiGrid(
     }
 }
 
-private data class KpiTile(val label: String, val value: String, val negative: Boolean = false)
+private data class KpiTile(
+    val label: String,
+    val value: String,
+    val negative: Boolean = false,
+    val tag: String? = null,
+)
 
 @Composable
 private fun KpiCard(tile: KpiTile, modifier: Modifier = Modifier) {
-    SectionCard(modifier) {
+    val taggedModifier = tile.tag?.let { modifier.testTag(it) } ?: modifier
+    SectionCard(taggedModifier) {
         Text(
             tile.label.uppercase(Locale.ENGLISH),
             style = MaterialTheme.typography.labelSmall,
@@ -1280,13 +1527,19 @@ private fun Divider() {
 }
 
 @Composable
-private fun StepButton(glyph: String, enabled: Boolean, onClick: () -> Unit) {
+private fun StepButton(glyph: String, tag: String, enabled: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
             .size(48.dp)
-            .clip(Radius.shapeMd)
-            .background(if (enabled) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface)
-            .clickable(enabled = enabled, onClick = onClick),
+            .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.CONTROL)
+            .then(
+                if (enabled) Modifier else Modifier.background(
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f),
+                    Radius.shapeMd,
+                ),
+            )
+            .clickable(enabled = enabled, onClick = onClick)
+            .testTag(tag),
         contentAlignment = Alignment.Center,
     ) {
         Text(

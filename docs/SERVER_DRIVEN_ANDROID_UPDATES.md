@@ -161,6 +161,19 @@ responses and network uncertainty remain blocked. The APK itself must return:
 - `Cache-Control: public, immutable, no-transform, max-age=31536000` (or longer)
 - no redirect from its same-origin versioned URL
 
+## SSH operator privileges
+
+Staging defaults to running remote Python as the SSH account. If the verified
+server uses an unprivileged operator account with existing non-interactive sudo,
+explicitly add `--ssh-sudo` alongside its `--ssh-host` and `--ssh-key` options.
+Both control requests and the binary APK upload then use the fixed command
+`sudo -n -- python3`. A denied sudo request fails staging; there is no password
+prompt or unprivileged retry. Verification-only mode still makes no remote call.
+
+This option does not change server users, SSH authentication, Docker access or
+file permissions. The root-owned upload directory, production lock, source and
+runtime checks, immutable publication and owner activation remain required.
+
 ## Code30.3 staging procedure
 
 1. Complete the frozen-source suites and business trial recorded in

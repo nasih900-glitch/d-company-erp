@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Brightness6
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -24,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -31,9 +31,11 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
+import cloud.dcompany.erp.ui.theme.LocalWorkspaceGlassScene
 import cloud.dcompany.erp.ui.theme.AppearancePreference
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
 
 @Composable
 internal fun AppearanceControl(
@@ -55,11 +57,18 @@ internal fun AppearanceControl(
         }
     }
     Box {
+        val glass = LocalWorkspaceGlassScene.current != null
         Surface(
-            color = MaterialTheme.colorScheme.surface,
+            color = if (glass) androidx.compose.ui.graphics.Color.Transparent else MaterialTheme.colorScheme.surface,
             shape = Radius.shapePill,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            modifier = modifier.heightIn(min = 48.dp).clickable { expanded = true }
+            border = if (glass) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            modifier = modifier
+                .then(
+                    if (glass) Modifier.clip(Radius.shapePill)
+                        .liquidWorkspaceSurface(Radius.shapePill, WorkspaceGlassRole.CONTROL)
+                    else Modifier,
+                )
+                .heightIn(min = 48.dp).clickable { expanded = true }
                 .semantics {
                     role = Role.Button
                     contentDescription = "Day, night and system appearance"
@@ -73,7 +82,11 @@ internal fun AppearanceControl(
                 Text(label, style = MaterialTheme.typography.labelLarge)
             }
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        LiquidDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            role = WorkspaceGlassRole.CONTROL,
+        ) {
             AppearancePreference.entries.forEach { option ->
                 DropdownMenuItem(
                     text = { Text(when (option) {

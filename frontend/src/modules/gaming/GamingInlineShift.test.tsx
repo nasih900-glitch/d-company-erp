@@ -158,7 +158,7 @@ it('voids a reviewed stopped-player session here with exact metadata and no POS 
   const handoff = vi.spyOn(gaming, 'sendToPos');
   const expectedReview = { idempotencyKey: 'gaming-session-void:ended-session',
     expected_participant_revision: 2, expected_billing_revision: 0, expected_amount_minor: 6_000 };
-  const requestBody = { reason: 'Entered by mistake', expected_participant_revision: 2,
+  const requestBody = { reason: 'Entered by mistake', expected_order_id: null, expected_participant_revision: 2,
     expected_billing_revision: 0, expected_amount_minor: 6_000 };
   const expectedHash = createHash('sha256').update(
     'POST\n/api/v1/gaming/sessions/ended-session/cancel\n\ngaming-session-void:ended-session\n' + JSON.stringify(requestBody),
@@ -195,7 +195,7 @@ it('keeps stopped-player Void blocked until its billing review metadata is known
   const cancel = vi.spyOn(gaming, 'cancelSession');
   prepare(ended); await settle();
   expect(button('Void').disabled).toBe(true);
-  expect(button('Void').title).toContain('verify the stopped player settlement');
+  expect(button('Void').title).toContain('Refresh Gaming to verify player attendance and billing before Void.');
   act(() => button('Void').click());
   expect(cancel).not.toHaveBeenCalled();
   expect(document.querySelector('input[placeholder="Why is this session being cancelled?"]')).toBeNull();

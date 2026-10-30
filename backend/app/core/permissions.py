@@ -100,6 +100,11 @@ CASHIER_ACCESS = STAFF_ACCESS | {
     "gaming.read",
 }
 
+GAMING_CASHIER_ACCESS = {
+    "pos.read", "pos.write", "pos.void", "pos.shift.open", "pos.shift.close",
+    "menu.read", "gaming.read", "gaming.write", "staff.attendance.write",
+}
+
 KITCHEN_ACCESS = {
     "kitchen.read",
     "kitchen.write",
@@ -222,6 +227,7 @@ ROLE_DESCRIPTIONS: dict[str, str] = {
     "partner": "Business partner — read-only business and finance visibility",
     "manager": "Operations manager — daily operations and staff management",
     "cashier": "Cashier — POS, table orders, and shift operation",
+    "gaming_cashier": "Gaming & POS staff — sessions, sales, own shifts and attendance; no management access",
     "kitchen": "Kitchen team — kitchen display and ticket status only",
     "gaming_supervisor": "Gaming team — sessions, bookings, and tournaments",
     "auditor": "External auditor / CA — read-only access to finance, analytics, "
@@ -238,6 +244,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     "partner": set(PARTNER_ACCESS),
     "manager": set(MANAGER_ACCESS),
     "cashier": set(CASHIER_ACCESS),
+    "gaming_cashier": set(GAMING_CASHIER_ACCESS),
     "kitchen": set(KITCHEN_ACCESS),
     "gaming_supervisor": set(GAMING_ACCESS),
     "auditor": set(AUDITOR_ACCESS),
@@ -315,6 +322,10 @@ def _role_allows_permission(
     if perm in HIGH_TRUST_PERMISSIONS and not default_allowed:
         allowed = False
     if role == "auditor" and perm not in AUDITOR_ACCESS:
+        allowed = False
+    # A daily-operations role must not gain business-management permissions
+    # through a coarse module switch, including future additions to a module.
+    if role == "gaming_cashier" and perm not in GAMING_CASHIER_ACCESS:
         allowed = False
     return allowed
 

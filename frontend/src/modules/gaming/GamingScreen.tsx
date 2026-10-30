@@ -1,4 +1,4 @@
-import { gamingCancellationBlock, matchesCancellationIdentity, isConfirmedCancellation, removeConfirmedCancelledSession, participantVoidMetadataReady, participantVoidReview, participantVoidRequestHash } from './GamingCancellation';
+import { gamingCancellationBlock, gamingVoidReview, matchesCancellationIdentity, isConfirmedCancellation, removeConfirmedCancelledSession, participantVoidMetadataReady, participantVoidRequestHash } from './GamingCancellation';
 import { InlineShiftWorkspace } from '@/modules/pos/OrdersAndShiftsScreen';
 /**
  * Gaming screen — stations + sessions (live + demo).
@@ -192,6 +192,8 @@ type LocalSession = {
   billable_minutes?: number | null;
   amount_minor?: number | null;
   order_id?: string | null;
+  server_play_elapsed_ms?: number | null;
+  void_reason_required?: boolean | null;
   backend_session_id?: string;
   timer_minutes?: number | null;
   timer_ends_at?: number | null;
@@ -716,6 +718,9 @@ export default function GamingScreen() {
   // them with gaming.write, including the gaming-supervisor role that does not
   // independently operate POS checkout.
   const canManageSessionAddons = canManageStations;
+  const isGamingOwner = Boolean(me?.roles?.some((role) => (
+    role === 'owner' || role === 'co_owner' || role === 'super_owner'
+  )));
 
   const cancellationBusyRef = useRef<number | null>(null);
   const cancellationOperationRef = useRef(0);
@@ -1142,7 +1147,8 @@ export default function GamingScreen() {
         if (!refresh.isCurrent()) return;
         const activeSessions = operationalSessions.filter((session) => session.status === 'active');
         const pausedSessions = operationalSessions.filter((session) => session.status === 'paused');
-        const endedSessions = operationalSessions.filter((session) => session.status === 'ended' && !session.order_id);
+        const endedSessions = operationalSessions.filter((session) =>
+          session.status === 'ended' && !session.order_id);
         const nextStations = stationRows.filter((station) => isAppStoreAllowedType(station.type));
         const nextPackages = packageRows.map(normalizeGamingPackage);
         const visibleSessions = gridVisibleGamingSessions(
@@ -1261,6 +1267,8 @@ export default function GamingScreen() {
               billable_minutes: gs.billable_minutes,
               amount_minor: gs.amount_minor,
               order_id: gs.order_id,
+              server_play_elapsed_ms: gs.server_play_elapsed_ms,
+              void_reason_required: gs.void_reason_required,
               backend_session_id: gs.id,
               timer_minutes: gs.timer_minutes,
               timer_ends_at: gs.timer_ends_at ? new Date(gs.timer_ends_at).getTime() : null,
@@ -1313,6 +1321,8 @@ export default function GamingScreen() {
               billable_minutes: gs.billable_minutes,
               amount_minor: gs.amount_minor,
               order_id: gs.order_id,
+              server_play_elapsed_ms: gs.server_play_elapsed_ms,
+              void_reason_required: gs.void_reason_required,
             };
           }
           return next;
@@ -1825,6 +1835,8 @@ export default function GamingScreen() {
         billable_minutes: response.billable_minutes,
         amount_minor: response.amount_minor,
         order_id: response.order_id,
+        server_play_elapsed_ms: response.server_play_elapsed_ms,
+        void_reason_required: response.void_reason_required,
         timer_minutes: response.timer_minutes,
         timer_ends_at: response.timer_ends_at ? new Date(response.timer_ends_at).getTime() : null,
         participant_revision: response.participant_revision,
@@ -3046,6 +3058,7 @@ export default function GamingScreen() {
       online: navigator.onLine,
       status: current.status,
       hasOrder: Boolean(current.order_id),
+      isOwner: isGamingOwner,
       ownsCurrentShift: ownsCurrentShift(current),
       hasPendingActions: Boolean(gamingActionBusyRef.current || savedGamingActions.error ||
         savedGamingActions.attempts.some((attempt) => attempt.sessionId === current.backend_session_id) ||
@@ -3097,9 +3110,13 @@ export default function GamingScreen() {
       );
       return;
     }
-    if (!requireCurrentShiftOwnership(current, 'cancel it')) return;
+    if (!ownsCurrentShift(current) && !isGamingOwner) {
+      requireCurrentShiftOwnership(current, 'cancel it');
+      return;
+    }
     if (!requirePaidExtensionResolved(current, 'cancelled')) return;
-    if (!reason.trim() || reason.trim().length > 500) return;
+    const normalizedReason = reason.trim();
+    if ((current.void_reason_required !== false && !normalizedReason) || normalizedReason.length > 500) return;
     const expected = { id: current.backend_session_id, stationId: st.id, shiftId: current.shift_id };
     const expectedContext = cancellationContextRef.current;
     const expectedGeneration = cancellationLifecycleRef.current.generation;
@@ -3117,24 +3134,34 @@ export default function GamingScreen() {
     try {
       const latest = await gaming.getSession(expected.id);
       if (!requestScopeIsCurrent()) return;
+      const review = gamingVoidReview(expected.id, reviewed);
+      const latestReview = gamingVoidReview(expected.id, latest);
+      const reviewStillCurrent = latest.participant_revision === reviewed.participant_revision
+        && latest.billing_revision === reviewed.billing_revision
+        && latest.billing_mode === reviewed.billing_mode
+        && (latest.participant_revision === 0 || participantVoidMetadataReady(latest))
+        && latestReview.expected_participant_revision === review.expected_participant_revision
+        && latestReview.expected_billing_revision === review.expected_billing_revision
+        && latestReview.expected_amount_minor === review.expected_amount_minor;
       if (!matchesCancellationIdentity(latest, expected) ||
         (latest.status !== 'cancelled' &&
           (!['active', 'paused', 'ended'].includes(latest.status) || latest.order_id ||
-            (latest.participant_revision !== 0 && (latest.status !== 'ended' || current.status !== 'ended' ||
-              latest.participant_revision !== reviewed.participant_revision || latest.billing_revision !== reviewed.billing_revision ||
-              latest.amount_minor !== reviewed.amount_minor))))) {
+            !reviewStillCurrent))) {
         throw new Error('The session changed. Refresh Gaming before cancelling; saved work is unchanged.');
       }
-      const review = participantVoidReview(expected.id, reviewed);
-      const expectedHash = latest.status !== 'cancelled' && review
-        ? await participantVoidRequestHash(expected.id, reason.trim(), review) : null;
+      if (latest.status !== 'cancelled' && !normalizedReason && latest.void_reason_required !== false) {
+        throw new Error('This session has reached 30 minutes. Enter a reason before cancelling it.');
+      }
+      const reasonForRequest = normalizedReason || null;
+      const expectedHash = latest.status !== 'cancelled'
+        ? await participantVoidRequestHash(expected.id, reasonForRequest, review) : null;
       if (!requestScopeIsCurrent()) return;
       const cancelled = latest.status === 'cancelled' ? latest : await write.dispatch(
-        'cancelSession', expected.id, reason.trim(), review,
+        'cancelSession', expected.id, reasonForRequest, review,
       );
       if (!requestScopeIsCurrent()) return;
       if (!isConfirmedCancellation(cancelled, expected) ||
-        (latest.status !== 'cancelled' && review && (!cancelled.cancellation_receipt_id ||
+        (latest.status !== 'cancelled' && (!cancelled.cancellation_receipt_id ||
           cancelled.cancellation_idempotency_key !== review.idempotencyKey ||
           cancelled.cancellation_request_hash !== expectedHash))) {
         throw new Error('Cancellation was not confirmed in this workspace. Refresh Gaming before retrying.');
@@ -3980,6 +4007,7 @@ export default function GamingScreen() {
               online: navigator.onLine,
               status: session.status,
               hasOrder: Boolean(session.order_id),
+              isOwner: isGamingOwner,
               ownsCurrentShift: sessionOwned,
               hasPendingActions: Boolean(actionPending || gamingActionBusy || transferAttempt ||
                 transferBoardStale || changingPause || stoppingSession || addonMutationPending),
@@ -5009,12 +5037,15 @@ export default function GamingScreen() {
         {cancelStationTarget && (
           <PromptModal
             title={`${cancelStationTarget.reviewed.status === 'ended' ? 'Void' : 'Cancel'} ${cancelStationTarget.station.name}`}
-            label={cancelStationTarget.reviewed.status === 'ended'
-              ? `Void ${inr(cancelStationTarget.reviewed.amount_minor ?? 0)} before POS. Attendance and billing evidence stay in the audit trail. Enter the required reason.`
-              : 'Audit reason (required). Cancel a mistaken session without creating a POS bill.'}
+            label={cancelStationTarget.reviewed.void_reason_required === false
+              ? 'Audit reason (optional before 30 minutes). Session facts and the Void remain in the audit trail.'
+              : cancelStationTarget.reviewed.status === 'ended'
+                ? `Void ${inr(cancelStationTarget.reviewed.amount_minor ?? 0)} before POS. Attendance and billing evidence stay in the audit trail. Enter the required reason.`
+                : 'Audit reason (required). Cancel a mistaken session without creating a POS bill.'}
             placeholder="Why is this session being cancelled?"
             confirmLabel={cancelStationTarget.reviewed.status === 'ended' ? 'Void session' : 'Cancel session'}
             danger
+            required={cancelStationTarget.reviewed.void_reason_required !== false}
             busy={cancelling === cancelStationTarget.station.id}
             onSubmit={(reason) => { void cancelSession(cancelStationTarget.station, reason, cancelStationTarget.reviewed); }}
             onCancel={() => { if (!cancelling) setCancelStationTarget(null); }}

@@ -122,6 +122,11 @@ class RemoteTarget:
     key: Path
     port: int
     root: str
+    ssh_sudo: bool = False
+
+    @property
+    def python_command(self) -> list[str]:
+        return ["sudo", "-n", "--", "python3"] if self.ssh_sudo else ["python3"]
 
     @property
     def ssh_base(self) -> list[str]:
@@ -186,6 +191,8 @@ def _validated_base_url(raw: str) -> str:
 
 
 def _validated_remote_target(target: RemoteTarget) -> RemoteTarget:
+    if type(target.ssh_sudo) is not bool:
+        raise AndroidReleaseStagingError("SSH sudo flag must be boolean")
     user, separator, hostname = target.host.partition("@")
     if (
         _SSH_HOST.fullmatch(target.host) is None
@@ -669,7 +676,7 @@ def _ssh_json(
     remote_script = f"{target.root}/ops/stage_android_release.py"
     command = [
         *target.ssh_base,
-        "python3",
+        *target.python_command,
         remote_script,
         "_remote",
         action,
@@ -711,7 +718,7 @@ def _ssh_upload_apk(
     remote_script = f"{target.root}/ops/stage_android_release.py"
     command = [
         *target.ssh_base,
-        "python3",
+        *target.python_command,
         remote_script,
         "_remote",
         "upload",
@@ -827,6 +834,15 @@ def _finalize_staged_release(
 
 
 def stage_release(args: argparse.Namespace) -> dict[str, Any]:
+    target = _validated_remote_target(
+        RemoteTarget(
+            host=args.ssh_host,
+            key=args.ssh_key.expanduser().resolve(),
+            port=args.ssh_port,
+            root=args.remote_root.rstrip("/"),
+            ssh_sudo=getattr(args, "ssh_sudo", False),
+        )
+    )
     base_url = _validated_base_url(args.base_url)
     ci = load_ci_manifest(args.manifest, base_url=base_url)
     expected_signer = _normalized_sha256(
@@ -848,14 +864,6 @@ def stage_release(args: argparse.Namespace) -> dict[str, Any]:
     manifest_bytes = canonical_registry_manifest(strict_manifest)
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
 
-    target = _validated_remote_target(
-        RemoteTarget(
-            host=args.ssh_host,
-            key=args.ssh_key.expanduser().resolve(),
-            port=args.ssh_port,
-            root=args.remote_root.rstrip("/"),
-        )
-    )
     remote_final = f"{target.root}/releases/android/{ci.apk_filename}"
 
     plan = {
@@ -868,6 +876,7 @@ def stage_release(args: argparse.Namespace) -> dict[str, Any]:
         "registry_manifest_sha256": manifest_sha256,
         "remote_final": remote_final,
         "update_url": ci.apk_download_url,
+        "ssh_sudo": target.ssh_sudo,
     }
     if not args.apply:
         return {"ok": True, "applied": False, "plan": plan}
@@ -1488,6 +1497,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ssh-host", default="root@dcompany.duckdns.org")
     parser.add_argument("--ssh-key", type=Path, default=Path("~/.ssh/dcompany_erp"))
     parser.add_argument("--ssh-port", type=int, default=22)
+    parser.add_argument(
+        "--ssh-sudo",
+        action="store_true",
+        help="run the fixed remote Python command through sudo -n; no fallback",
+    )
     parser.add_argument("--remote-root", default=DEFAULT_REMOTE_ROOT)
     parser.add_argument("--apkanalyzer")
     parser.add_argument("--apksigner")

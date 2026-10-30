@@ -50,6 +50,44 @@ class CacheScopeTest {
     }
 
     @Test
+    fun `lease signal publishes exact generations and null revocation`() = runBlocking {
+        val coordinator = CacheIsolationCoordinator(FakePurger(), FakeMarker(scopeA))
+        assertNull(coordinator.activeLeaseFlow.value)
+
+        coordinator.activateValidated(scopeA)
+        val first = requireNotNull(coordinator.activeLeaseFlow.value)
+        assertEquals(coordinator.currentLease(), first)
+
+        coordinator.deactivate()
+        assertNull(coordinator.activeLeaseFlow.value)
+        coordinator.activateValidated(scopeA)
+        val second = requireNotNull(coordinator.activeLeaseFlow.value)
+        assertEquals(scopeA, second.scope)
+        assertTrue(second.generation > first.generation)
+    }
+
+    @Test
+    fun `lease signal follows cached adoption and never retains authority after a refused transition`() = runBlocking {
+        val cached = CacheIsolationCoordinator(FakePurger(), FakeMarker(scopeA))
+        val adoption = requireNotNull(
+            cached.adoptCachedOnlyIfInactive(scopeA) as? CachedScopeLeaseAdoption.Ready,
+        )
+        assertTrue(adoption.adopted)
+        assertEquals(adoption.lease, cached.activeLeaseFlow.value)
+
+        val refusing = CacheIsolationCoordinator(
+            FakePurger(unresolvedAtPreflight = true),
+            FakeMarker(scopeA),
+        )
+        refusing.activateValidated(scopeA)
+        assertThrows(CacheScopeException::class.java) {
+            runBlocking { refusing.activateValidated(scopeB) }
+        }
+        assertNull(refusing.currentLease())
+        assertNull(refusing.activeLeaseFlow.value)
+    }
+
+    @Test
     fun `offline cached activation requires exact user company branch and terminal`() = runBlocking {
         val coordinator = CacheIsolationCoordinator(FakePurger(), FakeMarker(scopeA))
 

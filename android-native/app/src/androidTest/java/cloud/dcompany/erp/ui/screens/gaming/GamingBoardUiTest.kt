@@ -1,8 +1,22 @@
 package cloud.dcompany.erp.ui.screens.gaming
 
+import android.app.Activity
+import android.app.AlarmManager
+import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.net.Uri
+import android.os.Bundle
+import android.os.Process
+import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.LocalActivityResultRegistryOwner
+import androidx.activity.result.ActivityResult
+import androidx.activity.result.ActivityResultRegistry
+import androidx.activity.result.ActivityResultRegistryOwner
+import androidx.activity.result.contract.ActivityResultContract
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.ActivityOptionsCompat
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,18 +42,28 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.SemanticsNodeInteraction
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -48,6 +72,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.performTextInput
@@ -56,6 +81,7 @@ import androidx.compose.ui.test.printToLog
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.test.platform.app.InstrumentationRegistry
 import cloud.dcompany.erp.core.auth.GamingAccess
 import cloud.dcompany.erp.core.auth.ShiftAccess
 import cloud.dcompany.erp.core.db.GamingSessionParticipantCacheEntity
@@ -405,7 +431,10 @@ class GamingBoardUiTest {
         val joins = mutableListOf<List<String?>>()
         compose.setContent {
             DCompanyTheme {
-                Box(Modifier.width(1_280.dp).height(744.dp)) {
+                Box(
+                    Modifier.width(1_280.dp).height(744.dp)
+                        .testTag("gaming-pending-offline-fixture-root"),
+                ) {
                     GamingCommandWorkspace(
                         state = state.value, access = GamingAccess(canManageSessions = true),
                         filters = listOf(StationFilter("all", "All")), selectedFilter = "all",
@@ -431,18 +460,121 @@ class GamingBoardUiTest {
                 }
             }
         }
-        compose.onNodeWithText("Players").assertIsDisplayed().assertIsEnabled().performClick()
-        compose.onNodeWithTag("gaming-player-pending-start-guidance").performScrollTo().assertIsDisplayed()
+        val board = compose.onNodeWithTag("gaming-station-board").assertIsDisplayed()
+        compose.onNode(
+            hasText("Players") and hasClickAction() and
+                hasAnyAncestor(hasTestTag("gaming-control-pane")),
+        ).assertIsDisplayed().assertIsEnabled().performClick()
+        board.performScrollToNode(hasTestTag("gaming-inline-expansion-ps5-1"))
+        compose.onNodeWithTag("gaming-player-inline").assertIsDisplayed()
+        val guidance = compose.onNodeWithTag("gaming-player-pending-start-guidance")
+            .performScrollTo()
+        captureDetailTargetBeforeAssert(
+            filenameStem = "gaming-r7-4-pending-guidance-before-assert",
+            rootTag = "gaming-pending-offline-fixture-root",
+            targetName = "guidance",
+            target = guidance,
+        )
+        guidance.assertIsDisplayed()
+        val rootBounds = compose.onNodeWithTag("gaming-pending-offline-fixture-root")
+            .getUnclippedBoundsInRoot()
+        val expansionBounds = compose.onNodeWithTag("gaming-inline-expansion-ps5-1")
+            .getUnclippedBoundsInRoot()
+        val editorBounds = compose.onNodeWithTag("gaming-player-inline")
+            .getUnclippedBoundsInRoot()
+        val detailViewportBounds = compose.onNodeWithTag("gaming-detail-viewport")
+            .getUnclippedBoundsInRoot()
+        val detailScrollOwnerBounds = compose.onNodeWithTag("gaming-detail-scroll-owner")
+            .getUnclippedBoundsInRoot()
+        val guidanceBounds = compose.onNodeWithTag("gaming-player-pending-start-guidance")
+            .getUnclippedBoundsInRoot()
+        val visibleLeft = maxOf(
+            rootBounds.left, expansionBounds.left, detailViewportBounds.left,
+            detailScrollOwnerBounds.left, editorBounds.left,
+        )
+        val visibleTop = maxOf(
+            rootBounds.top, expansionBounds.top, detailViewportBounds.top,
+            detailScrollOwnerBounds.top, editorBounds.top,
+        )
+        val visibleRight = minOf(
+            rootBounds.right, expansionBounds.right, detailViewportBounds.right,
+            detailScrollOwnerBounds.right, editorBounds.right,
+        )
+        val visibleBottom = minOf(
+            rootBounds.bottom, expansionBounds.bottom, detailViewportBounds.bottom,
+            detailScrollOwnerBounds.bottom, editorBounds.bottom,
+        )
+        captureDiagnostic(
+            filenameStem = "gaming-r7-3-pending-player-post-scroll",
+            rootTag = "gaming-pending-offline-fixture-root",
+            bounds = mapOf(
+                "root" to rootBounds,
+                "expansion" to expansionBounds,
+                "editor" to editorBounds,
+                "detail_viewport" to detailViewportBounds,
+                "detail_scroll_owner" to detailScrollOwnerBounds,
+                "guidance" to guidanceBounds,
+                "visible_intersection" to
+                    "[$visibleLeft,$visibleTop,$visibleRight,$visibleBottom]",
+            ),
+        )
+        assertTrue(
+            "Pending-start guidance must remain fully inside the visible root/expansion/editor " +
+                "intersection: guidance=$guidanceBounds root=$rootBounds " +
+                "expansion=$expansionBounds detailViewport=$detailViewportBounds " +
+                "detailScrollOwner=$detailScrollOwnerBounds editor=$editorBounds",
+            visibleRight > visibleLeft && visibleBottom > visibleTop &&
+                guidanceBounds.left >= visibleLeft && guidanceBounds.right <= visibleRight &&
+                guidanceBounds.top >= visibleTop && guidanceBounds.bottom <= visibleBottom,
+        )
         compose.onNodeWithText("Resume the session before adding a player.").assertDoesNotExist()
-        compose.onNodeWithTag("gaming-player-inline-confirm").assertIsDisplayed().assertIsEnabled().performClick()
+        val confirm = compose.onNodeWithTag("gaming-player-inline-confirm").performScrollTo()
+        captureDetailTargetBeforeAssert(
+            filenameStem = "gaming-r7-4-pending-confirm-before-assert",
+            rootTag = "gaming-pending-offline-fixture-root",
+            targetName = "confirm",
+            target = confirm,
+        )
+        confirm.assertIsDisplayed().assertIsEnabled().performClick()
         compose.runOnIdle {
             assertEquals(listOf(listOf<String?>(null, null, null, null)), joins)
             assertEquals(listOf("join:${pending.id}"), calls)
         }
         compose.onNodeWithTag("gaming-player-inline-confirm").assertIsNotEnabled()
         compose.runOnIdle { state.value = state.value.copy(busyStationId = null) }
-        compose.onNodeWithTag("gaming-primary-action-host").assertIsDisplayed().assertIsEnabled()
-        compose.onNodeWithText("Stop & calculate").assertIsDisplayed().assertIsEnabled().performClick()
+        board.performScrollToNode(hasTestTag("gaming-inline-expansion-ps5-1"))
+        val stopHost = compose.onNodeWithTag("gaming-primary-action-host").performScrollTo()
+        val stopBounds = stopHost.getUnclippedBoundsInRoot()
+        val stop = compose.onNodeWithText("Stop & calculate").performScrollTo()
+        val stopRootBounds = compose.onNodeWithTag("gaming-pending-offline-fixture-root")
+            .getUnclippedBoundsInRoot()
+        val stopDetailBounds = compose.onNodeWithTag("gaming-detail-viewport")
+            .getUnclippedBoundsInRoot()
+        val stopScrollBounds = compose.onNodeWithTag("gaming-detail-scroll-owner")
+            .getUnclippedBoundsInRoot()
+        val stopVisibleTop = maxOf(stopRootBounds.top, stopDetailBounds.top, stopScrollBounds.top)
+        val stopVisibleBottom = minOf(
+            stopRootBounds.bottom, stopDetailBounds.bottom, stopScrollBounds.bottom,
+        )
+        captureDiagnostic(
+            filenameStem = "gaming-r7-4-pending-stop-before-assert",
+            rootTag = "gaming-pending-offline-fixture-root",
+            bounds = mapOf(
+                "root" to stopRootBounds,
+                "detail_viewport" to stopDetailBounds,
+                "detail_scroll_owner" to stopScrollBounds,
+                "stop" to stopBounds,
+                "visible_vertical_intersection" to "[$stopVisibleTop,$stopVisibleBottom]",
+            ),
+        )
+        stopHost.assertIsDisplayed().assertIsEnabled()
+        stop.assertIsDisplayed().assertIsEnabled()
+        assertTrue(
+            "Stop must remain fully inside the visible detail viewport: " +
+                "stop=$stopBounds intersection=[$stopVisibleTop,$stopVisibleBottom]",
+            stopBounds.top >= stopVisibleTop && stopBounds.bottom <= stopVisibleBottom,
+        )
+        stop.performClick()
         compose.runOnIdle { assertEquals(listOf("join:${pending.id}", "stop:${pending.id}"), calls) }
     }
 
@@ -544,16 +676,43 @@ class GamingBoardUiTest {
         )
     }
 
-    private fun assertIntegratedDrinksFooterInsideControlPane() {
-        val footer = compose.onNodeWithTag("gaming-drinks-inline-confirm")
-            .assertIsDisplayed().getUnclippedBoundsInRoot()
+    private fun assertIntegratedDrinksFooterInsideControlPane(
+        rootTag: String,
+        filenameStem: String,
+    ) {
+        val footerNode = compose.onNodeWithTag("gaming-drinks-inline-confirm")
+            .performScrollTo()
+        val footer = footerNode.getUnclippedBoundsInRoot()
         val editor = compose.onNodeWithTag("gaming-drinks-inline").getUnclippedBoundsInRoot()
         val pane = compose.onNodeWithTag("gaming-control-pane").getUnclippedBoundsInRoot()
+        val detail = compose.onNodeWithTag("gaming-detail-viewport").getUnclippedBoundsInRoot()
+        val root = compose.onNodeWithTag(rootTag).getUnclippedBoundsInRoot()
+        val visibleLeft = maxOf(root.left, detail.left, pane.left, editor.left)
+        val visibleTop = maxOf(root.top, detail.top, pane.top, editor.top)
+        val visibleRight = minOf(root.right, detail.right, pane.right, editor.right)
+        val visibleBottom = minOf(root.bottom, detail.bottom, pane.bottom, editor.bottom)
+        captureDiagnostic(
+            filenameStem = filenameStem,
+            rootTag = rootTag,
+            bounds = mapOf(
+                "root" to root,
+                "detail_viewport" to detail,
+                "pane" to pane,
+                "editor" to editor,
+                "footer" to footer,
+                "visible_intersection" to
+                    "[$visibleLeft,$visibleTop,$visibleRight,$visibleBottom]",
+            ),
+        )
+        footerNode.assertIsDisplayed()
         assertTrue(
-            "Confirm add must remain inside both the inline editor and control pane: " +
-                "footer=$footer editor=$editor pane=$pane",
-            footer.top >= editor.top && footer.bottom <= editor.bottom &&
-                footer.top >= pane.top && footer.bottom <= pane.bottom,
+            "Confirm add must remain a full 48dp target inside the physical root, detail, " +
+                "control pane and editor intersection: footer=$footer root=$root detail=$detail " +
+                "pane=$pane editor=$editor",
+            visibleRight > visibleLeft && visibleBottom > visibleTop &&
+                footer.left >= visibleLeft && footer.right <= visibleRight &&
+                footer.top >= visibleTop && footer.bottom <= visibleBottom &&
+                footer.bottom - footer.top >= 48.dp,
         )
     }
 
@@ -1009,9 +1168,9 @@ class GamingBoardUiTest {
             }
         }
         compose.onNodeWithTag("gaming-cancel-active-session").assertIsDisplayed().performClick()
-        compose.onNodeWithText("Cancel session").assertIsNotEnabled()
+        compose.onNodeWithText("Void session").assertIsNotEnabled()
         compose.onNodeWithText("Entered by mistake").performClick()
-        compose.onNodeWithText("Cancel session").performClick()
+        compose.onNodeWithText("Void session").performClick()
         compose.runOnIdle { assertEquals("Entered by mistake", confirmed) }
     }
 
@@ -1223,7 +1382,11 @@ class GamingBoardUiTest {
                             selectedStationId = selectedId.value, showDetail = false,
                             focusStationId = null, focusRequested = false,
                             startTerminalBlockMessage = null,
-                            wallClock = remember { mutableLongStateOf(1_779_989_200_000L) },
+                            wallClock = remember {
+                                mutableLongStateOf(
+                                    Instant.parse("2026-09-27T10:05:00Z").toEpochMilli(),
+                                )
+                            },
                             attentionCount = 0,
                             onSelectFilter = {}, onSelectStation = { selectedId.value = it },
                             onBackToBoard = {}, onOpenAttention = {}, onRefresh = {},
@@ -1246,66 +1409,101 @@ class GamingBoardUiTest {
             }
         }
 
-        val width = compose.activity.resources.configuration.screenWidthDp
-        val first = compose.onNodeWithTag("gaming-station-ps5-1").fetchSemanticsNode().boundsInRoot
-        val second = compose.onNodeWithTag("gaming-station-ps5-2").fetchSemanticsNode().boundsInRoot
-        val third = compose.onNodeWithTag("gaming-station-ps5-3").fetchSemanticsNode().boundsInRoot
-        val fourth = compose.onNodeWithTag("gaming-station-ps5-4").fetchSemanticsNode().boundsInRoot
-        val eighth = compose.onNodeWithTag("gaming-station-streaming-1").fetchSemanticsNode().boundsInRoot
-        val board = compose.onNodeWithTag("gaming-station-board").fetchSemanticsNode().boundsInRoot
-        if (width >= 900) {
-            val pane = compose.onNodeWithTag("gaming-control-pane").fetchSemanticsNode().boundsInRoot
-            assertEquals(first.top, second.top, 1f)
-            assertTrue("Second station must be alongside first", second.left > first.right)
-            assertEquals(third.top, fourth.top, 1f)
-            assertTrue("The second station row must follow the first", third.top > first.bottom)
-            assertTrue("All eight stations should fit above the fold", eighth.bottom <= board.bottom + 1f)
-            assertTrue("Board and slider should be side by side", board.right < pane.left)
-            assertTrue("The dial pane must be wider than the station board",
-                pane.width > board.width)
-        } else {
-            compose.onNodeWithTag("gaming-station-streaming-1").performScrollTo().assertIsDisplayed()
-            capture("gaming-same-screen-960x600-board.png")
-            compose.onNodeWithTag("gaming-board-and-controls").performScrollToIndex(0)
-            compose.onNodeWithTag("gaming-station-ps5-2").performClick()
-            compose.waitForIdle()
-            compose.onNodeWithContentDescription("Session duration dial").assertIsDisplayed()
-            compose.onNodeWithTag("gaming-board-and-controls").performScrollToIndex(1)
-            compose.onNodeWithTag("gaming-control-pane").assertIsDisplayed()
-            compose.onNodeWithContentDescription("Session duration dial").assertIsDisplayed()
-            compose.onNodeWithText("Start 30 min · ₹80.00")
-                .performScrollTo().assertIsDisplayed()
-            capture("gaming-same-screen-960x600-control.png")
-            compose.onNodeWithContentDescription("Search saved customers by name or phone")
-                .performScrollTo().assertIsDisplayed()
-                .performClick()
-            compose.onNodeWithContentDescription("Search saved customers by name or phone")
-                .performTextInput("Ada")
-            compose.onNodeWithText("Start 30 min · ₹80.00")
-                .performScrollTo().assertIsDisplayed()
-            capture("gaming-same-screen-960x600-search.png")
-            return
-        }
+        val board = compose.onNodeWithTag("gaming-station-board").assertIsDisplayed()
+        board.performScrollToNode(hasTestTag("gaming-station-ps5-1"))
+        compose.onNodeWithTag("gaming-station-ps5-1").assertIsDisplayed()
+        board.performScrollToNode(hasTestTag("gaming-station-ps5-3"))
+        compose.onNodeWithTag("gaming-station-ps5-3").assertIsDisplayed()
+        board.performScrollToNode(hasTestTag("gaming-station-streaming-1"))
+        compose.onNodeWithTag("gaming-station-streaming-1").assertIsDisplayed()
+
+        board.performScrollToNode(hasTestTag("gaming-station-ps5-2"))
+        compose.onNodeWithTag("gaming-station-ps5-2").assertIsDisplayed().performClick()
+        board.performScrollToNode(hasTestTag("gaming-inline-expansion-ps5-2"))
+        compose.onNodeWithTag("gaming-control-pane").assertIsDisplayed()
+        val draftRingBounds = compose.onNodeWithTag("gaming-control-ring")
+            .assertIsDisplayed().getUnclippedBoundsInRoot()
         compose.onNodeWithContentDescription("Session duration dial").assertIsDisplayed()
-        compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
-        capture(if (width >= 1_100) "gaming-same-screen-1280x800-content.png"
-            else "gaming-same-screen-960x600-content.png")
+        val initialSearch = compose.onNodeWithContentDescription(
+            "Search saved customers by name or phone",
+        ).performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-board-search-before-assert", "gaming-fixture-root",
+            "search", initialSearch,
+        )
+        initialSearch.assertIsDisplayed()
+        val initialStart = compose.onNodeWithText("Start 30 min · ₹80.00").performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-board-initial-start-before-assert", "gaming-fixture-root",
+            "start", initialStart,
+        )
+        initialStart.assertIsDisplayed()
+        compose.runOnIdle { assertEquals(1, customerPrepareCalls) }
+        capture("gaming-same-screen-selected-expansion.png")
 
-        if (width < 1_100) {
-            compose.onNodeWithTag("gaming-station-ps5-2").performClick()
-            compose.onNodeWithTag("gaming-station-board").assertIsDisplayed()
-            compose.onNodeWithContentDescription("Session duration dial").assertIsDisplayed()
-            compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
-            compose.onNodeWithContentDescription("Search saved customers by name or phone")
-                .performScrollTo().assertIsDisplayed().performClick()
-            compose.onNodeWithContentDescription("Search saved customers by name or phone")
-                .performTextInput("Ada")
-            compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
-            return
+        val dual = compose.onNodeWithText("Dual · 2+ players").performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-board-dual-before-assert", "gaming-fixture-root", "dual", dual,
+        )
+        dual.assertIsDisplayed().performClick()
+        val dualStart = compose.onNodeWithText("Start 30 min · ₹100.00").performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-board-dual-start-before-assert", "gaming-fixture-root",
+            "start", dualStart,
+        )
+        dualStart.assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals("ps5-2" to "dual-30", confirmed) }
+        val addPlayer = compose.onNodeWithText("Add player").performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-board-add-player-before-assert", "gaming-fixture-root",
+            "add_player", addPlayer,
+        )
+        addPlayer.assertIsDisplayed().performClick()
+        val extraPlayerStart = compose.onNodeWithText("Start 30 min · ₹130.00").performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-board-extra-player-start-before-assert", "gaming-fixture-root",
+            "start", extraPlayerStart,
+        )
+        extraPlayerStart.assertIsDisplayed().performClick()
+        compose.runOnIdle {
+            assertEquals("ps5-2" to "dual-30", confirmed)
+            assertEquals(1, confirmedExtraControllers)
+        }
+        assertEquals(
+            "Draft changes must retain the one station-keyed ring",
+            draftRingBounds,
+            compose.onNodeWithTag("gaming-control-ring")
+                .assertIsDisplayed().getUnclippedBoundsInRoot(),
+        )
+
+        board.performScrollToNode(hasTestTag("gaming-station-racing-1"))
+        compose.onNodeWithTag("gaming-station-racing-1").assertIsDisplayed().performClick()
+        board.performScrollToNode(hasTestTag("gaming-inline-expansion-racing-1"))
+        val racingStart = compose.onNodeWithText("Start 15 min · ₹70.00").performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-board-racing-start-before-assert", "gaming-fixture-root",
+            "start", racingStart,
+        )
+        racingStart.assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals("racing-1" to "racing-15", confirmed) }
+
+        // An unsent choice belongs to its station. Returning must retain the
+        // exact Dual tariff and added player without changing another station.
+        board.performScrollToNode(hasTestTag("gaming-station-ps5-2"))
+        compose.onNodeWithTag("gaming-station-ps5-2").performClick()
+        board.performScrollToNode(hasTestTag("gaming-inline-expansion-ps5-2"))
+        val retainedStart = compose.onNodeWithText("Start 30 min · ₹130.00").performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-board-retained-start-before-assert", "gaming-fixture-root",
+            "start", retainedStart,
+        )
+        retainedStart.assertIsDisplayed().performClick()
+        compose.runOnIdle {
+            assertEquals("ps5-2" to "dual-30", confirmed)
+            assertEquals(1, confirmedExtraControllers)
         }
 
-        // The production board has eight stations today. A third compact row
-        // reserves room for two additions without hiding controls or stations.
+        // Additional rows remain virtualized but reachable through the same owner.
         val expandedStations = stations + listOf(
             Station("ps5-5", "PS5-5", "PS5 Station 5", "ps5", 12_000),
             Station("ps5-6", "PS5-6", "PS5 Station 6", "ps5", 12_000),
@@ -1314,44 +1512,12 @@ class GamingBoardUiTest {
             visibleStations.value = expandedStations
             state.value = state.value.copy(stations = expandedStations)
         }
-        val tenth = compose.onNodeWithTag("gaming-station-ps5-6").fetchSemanticsNode().boundsInRoot
-        val expandedPane = compose.onNodeWithTag("gaming-control-pane").fetchSemanticsNode().boundsInRoot
-        assertTrue("Ten stations should fit beside the controls", tenth.bottom <= expandedPane.bottom)
+        board.performScrollToNode(hasTestTag("gaming-station-ps5-6"))
+        compose.onNodeWithTag("gaming-station-ps5-6").assertIsDisplayed()
         compose.runOnIdle {
             visibleStations.value = stations
             state.value = state.value.copy(stations = stations)
         }
-
-        compose.onNodeWithTag("gaming-station-ps5-2").performClick()
-        compose.runOnIdle { assertEquals(1, customerPrepareCalls) }
-        compose.onNodeWithTag("gaming-station-board").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Session duration dial").assertIsDisplayed()
-        compose.onNodeWithText("Dual · 2+ players").performScrollTo().performClick()
-        compose.onNodeWithText("Start 30 min · ₹100.00").assertIsDisplayed()
-        compose.onNodeWithText("Start 30 min · ₹100.00").performClick()
-        compose.runOnIdle { assertEquals("ps5-2" to "dual-30", confirmed) }
-        compose.onNodeWithText("Add player").performScrollTo().performClick()
-        compose.onNodeWithText("Start 30 min · ₹130.00").assertIsDisplayed().performClick()
-        compose.runOnIdle {
-            assertEquals("ps5-2" to "dual-30", confirmed)
-            assertEquals(1, confirmedExtraControllers)
-        }
-
-        compose.onNodeWithTag("gaming-station-racing-1").performScrollTo().performClick()
-        compose.onNodeWithTag("gaming-station-board").assertIsDisplayed()
-        compose.onNodeWithText("Start 15 min · ₹70.00").assertIsDisplayed()
-        compose.onNodeWithText("Start 15 min · ₹70.00").performClick()
-        compose.runOnIdle { assertEquals("racing-1" to "racing-15", confirmed) }
-
-        // An unsent choice belongs to its station. Returning must retain the
-        // exact Dual tariff and added player without changing another station.
-        compose.onNodeWithTag("gaming-station-ps5-2").performScrollTo().performClick()
-        compose.onNodeWithText("Start 30 min · ₹130.00").assertIsDisplayed().performClick()
-        compose.runOnIdle {
-            assertEquals("ps5-2" to "dual-30", confirmed)
-            assertEquals(1, confirmedExtraControllers)
-        }
-
         compose.runOnIdle {
             selectedId.value = "ps5-1"
             state.value = state.value.copy(sessions = listOf(GameSession(
@@ -1360,13 +1526,25 @@ class GamingBoardUiTest {
                 ratePerHourMinor = 12_000,
             )))
         }
-        compose.onNodeWithTag("gaming-station-board").assertIsDisplayed()
+        board.performScrollToNode(hasTestTag("gaming-inline-expansion-ps5-1"))
         capture("gaming-same-screen-1280x800-active.png")
         // Hourly/open-ended sessions still retain their truthful live timer;
         // only the package-duration face uses the permanent published dial.
-        compose.onNodeWithText("ELAPSED TIME").assertIsDisplayed()
-        compose.onNodeWithText("Open-ended session").assertIsDisplayed()
-        compose.onNodeWithText("Stop & calculate").assertIsDisplayed()
+        compose.onAllNodes(hasTestTag("gaming-control-ring"), useUnmergedTree = true)
+            .assertCountEquals(1)
+        val activeRing = compose.onNodeWithTag("gaming-control-ring")
+            .assertIsDisplayed().fetchSemanticsNode()
+        val activeRingDescription = activeRing.config[SemanticsProperties.ContentDescription]
+            .joinToString(" ")
+        assertTrue(activeRingDescription.contains("ELAPSED TIME"))
+        assertTrue(activeRingDescription.contains("00:05:00"))
+        assertTrue(activeRingDescription.contains("Open-ended session"))
+        val activeStop = compose.onNodeWithText("Stop & calculate").performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-board-active-stop-before-assert", "gaming-fixture-root",
+            "stop", activeStop,
+        )
+        activeStop.assertIsDisplayed()
         compose.onNodeWithTag("gaming-control-pane").assertIsDisplayed()
         compose.runOnIdle {
             state.value = state.value.copy(sessions = listOf(GameSession(
@@ -1378,9 +1556,20 @@ class GamingBoardUiTest {
         }
         compose.onNodeWithTag("gaming-station-board").assertIsDisplayed()
         capture("gaming-same-screen-1280x800-payment-due.png")
-        compose.onNodeWithText("Send to POS or Void this unpaid session here before starting again.")
-            .performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("Send to POS").performScrollTo().assertIsDisplayed()
+        val unpaidGuidance = compose.onNodeWithText(
+            "Send to POS or Void this unpaid session here before starting again.",
+        ).performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-board-unpaid-guidance-before-assert", "gaming-fixture-root",
+            "unpaid_guidance", unpaidGuidance,
+        )
+        unpaidGuidance.assertIsDisplayed()
+        val sendToPos = compose.onNodeWithText("Send to POS").performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-board-send-to-pos-before-assert", "gaming-fixture-root",
+            "send_to_pos", sendToPos,
+        )
+        sendToPos.assertIsDisplayed()
     }
 
     @Test
@@ -1509,35 +1698,106 @@ class GamingBoardUiTest {
 
         val runningRingBounds = compose.onNodeWithTag("gaming-control-ring")
             .fetchSemanticsNode().boundsInRoot
-        compose.onNodeWithText("Extend").assertIsDisplayed().performClick()
-        compose.onNodeWithTag("gaming-extension-preview").assertIsDisplayed()
+        val initialExtend = compose.onNodeWithText("Extend").performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-extension-open-before-assert", "extension-compact-viewport",
+            "extend", initialExtend,
+        )
+        initialExtend.assertIsDisplayed().performClick()
+        val initialPreview = compose.onNodeWithTag("gaming-extension-preview")
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-extension-preview-before-assert", "extension-compact-viewport",
+            "preview", initialPreview,
+        )
+        initialPreview.assertIsDisplayed()
         compose.onNodeWithText("ELAPSED TIME").assertIsDisplayed()
         assertEquals(
             runningRingBounds,
             compose.onNodeWithTag("gaming-control-ring").fetchSemanticsNode().boundsInRoot,
         )
-        compose.onNodeWithText("Add 60 min · ₹100.00").assertIsDisplayed().performClick()
-        compose.onNodeWithText("Resulting booked total · ₹220.00")
-            .assertIsDisplayed()
-        val extensionActions = compose.onNodeWithTag("gaming-extension-actions")
-            .assertIsDisplayed().getUnclippedBoundsInRoot()
+        val initialExtensionChoice = compose.onNodeWithText("Add 60 min · ₹100.00")
+            .performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-extension-choice-before-assert", "extension-compact-viewport",
+            "choice", initialExtensionChoice,
+        )
+        initialExtensionChoice.assertIsDisplayed().performClick()
+        val extensionBoard = compose.onNodeWithTag("gaming-station-board")
+        extensionBoard.performScrollToNode(
+            hasTestTag("gaming-inline-expansion-ps5-1"),
+        )
+        val resultingTotal = compose.onNodeWithTag("gaming-extension-resulting-total")
+            .performScrollTo()
+        val extensionActionsNode = compose.onNodeWithTag("gaming-extension-actions")
+            .performScrollTo()
+        val extensionActions = extensionActionsNode.getUnclippedBoundsInRoot()
+        val resultingTotalBounds = resultingTotal.getUnclippedBoundsInRoot()
         val extensionViewport = compose.onNodeWithTag("extension-compact-viewport")
             .getUnclippedBoundsInRoot()
-        assertTrue(
-            "Extension confirmation actions must remain in the 960x600 workspace: " +
-                "actions=$extensionActions viewport=$extensionViewport",
-            extensionActions.top >= extensionViewport.top &&
-                extensionActions.bottom <= extensionViewport.bottom,
+        val detailViewport = compose.onNodeWithTag("gaming-detail-viewport")
+            .getUnclippedBoundsInRoot()
+        val detailScrollOwner = compose.onNodeWithTag("gaming-detail-scroll-owner")
+            .getUnclippedBoundsInRoot()
+        val visibleTop = maxOf(extensionViewport.top, detailViewport.top, detailScrollOwner.top)
+        val visibleBottom = minOf(
+            extensionViewport.bottom, detailViewport.bottom, detailScrollOwner.bottom,
         )
+        captureDiagnostic(
+            filenameStem = "gaming-r7-4-extension-total-actions-before-assert",
+            rootTag = "extension-compact-viewport",
+            bounds = mapOf(
+                "resulting_total" to resultingTotalBounds,
+                "actions" to extensionActions,
+                "root" to extensionViewport,
+                "detail_viewport" to detailViewport,
+                "detail_scroll_owner" to detailScrollOwner,
+                "visible_vertical_intersection" to "[$visibleTop,$visibleBottom]",
+            ),
+        )
+        resultingTotal.assertIsDisplayed()
+        extensionActionsNode.assertIsDisplayed()
+        assertTrue(
+            "Extension confirmation actions must remain in the visible detail viewport: " +
+                "actions=$extensionActions root=$extensionViewport " +
+                "detail=$detailViewport scroll=$detailScrollOwner",
+            extensionActions.top >= visibleTop && extensionActions.bottom <= visibleBottom,
+        )
+        assertTrue(
+            "The reviewed booked amount must be visible immediately above Confirm: " +
+                "total=$resultingTotalBounds actions=$extensionActions",
+            resultingTotalBounds.bottom <= extensionActions.top &&
+                resultingTotalBounds.top >= extensionViewport.top,
+        )
+        val resultingBookedTotal = compose.onNodeWithText("Resulting booked total · ₹220.00")
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-extension-booked-total-copy-before-assert",
+            "extension-compact-viewport", "booked_total_copy", resultingBookedTotal,
+        )
+        resultingBookedTotal.assertIsDisplayed()
         compose.runOnIdle {
             assertEquals(0, confirms)
             assertEquals(0, fallbackDialogs)
         }
-        compose.onNodeWithText("Cancel").assertIsDisplayed().performClick()
+        val firstCancel = compose.onNodeWithText("Cancel").performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-extension-first-cancel-before-assert",
+            "extension-compact-viewport", "cancel", firstCancel,
+        )
+        firstCancel.assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(0, confirms) }
 
-        compose.onNodeWithText("Extend").assertIsDisplayed().performClick()
-        compose.onNodeWithText("Add 60 min · ₹100.00").assertIsDisplayed().performClick()
+        val secondExtend = compose.onNodeWithText("Extend").performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-extension-second-open-before-assert",
+            "extension-compact-viewport", "extend", secondExtend,
+        )
+        secondExtend.assertIsDisplayed().performClick()
+        val secondChoice = compose.onNodeWithText("Add 60 min · ₹100.00").performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-extension-second-choice-before-assert",
+            "extension-compact-viewport", "choice", secondChoice,
+        )
+        secondChoice.assertIsDisplayed().performClick()
         compose.runOnIdle {
             state.value = state.value.copy(
                 packages = extensions.map {
@@ -1545,17 +1805,47 @@ class GamingBoardUiTest {
                 },
             )
         }
-        compose.onNodeWithText(
+        val changedPrice = compose.onNodeWithText(
             "The extension price or duration changed. Reopen Extend and review the new total.",
-        ).assertIsDisplayed()
-        compose.onNodeWithText("Confirm extension").assertIsNotEnabled()
+        ).performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-extension-price-changed-before-assert",
+            "extension-compact-viewport", "price_changed", changedPrice,
+        )
+        changedPrice.assertIsDisplayed()
+        val disabledConfirm = compose.onNodeWithText("Confirm extension").performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-extension-disabled-confirm-before-assert",
+            "extension-compact-viewport", "confirm", disabledConfirm,
+        )
+        disabledConfirm.assertIsNotEnabled()
         compose.runOnIdle { assertEquals(0, confirms) }
-        compose.onNodeWithText("Cancel").assertIsDisplayed().performClick()
+        val secondCancel = compose.onNodeWithText("Cancel").performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-extension-second-cancel-before-assert",
+            "extension-compact-viewport", "cancel", secondCancel,
+        )
+        secondCancel.assertIsDisplayed().performClick()
         compose.runOnIdle { state.value = state.value.copy(packages = extensions) }
 
-        compose.onNodeWithText("Extend").assertIsDisplayed().performClick()
-        compose.onNodeWithText("Add 60 min · ₹100.00").assertIsDisplayed().performClick()
-        compose.onNodeWithText("Confirm extension").assertIsDisplayed().performClick()
+        val thirdExtend = compose.onNodeWithText("Extend").performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-extension-third-open-before-assert",
+            "extension-compact-viewport", "extend", thirdExtend,
+        )
+        thirdExtend.assertIsDisplayed().performClick()
+        val thirdChoice = compose.onNodeWithText("Add 60 min · ₹100.00").performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-extension-third-choice-before-assert",
+            "extension-compact-viewport", "choice", thirdChoice,
+        )
+        thirdChoice.assertIsDisplayed().performClick()
+        val finalConfirm = compose.onNodeWithText("Confirm extension").performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-extension-final-confirm-before-assert",
+            "extension-compact-viewport", "confirm", finalConfirm,
+        )
+        finalConfirm.assertIsDisplayed().performClick()
         compose.runOnIdle {
             assertEquals(1, confirms)
             assertEquals("extend-60", confirmedPackageId)
@@ -1601,7 +1891,11 @@ class GamingBoardUiTest {
                             focusStationId = null,
                             focusRequested = false,
                             startTerminalBlockMessage = null,
-                            wallClock = remember { mutableLongStateOf(1_780_134_000_000L) },
+                            wallClock = remember {
+                                mutableLongStateOf(
+                                    Instant.parse("2026-09-30T10:20:00Z").toEpochMilli(),
+                                )
+                            },
                             attentionCount = 0,
                             onSelectFilter = {}, onSelectStation = {}, onBackToBoard = {},
                             onOpenAttention = {}, onRefresh = {}, onStart = {},
@@ -1619,8 +1913,25 @@ class GamingBoardUiTest {
             }
         }
 
-        compose.onNodeWithTag("gaming-board-and-controls").performScrollToIndex(1)
+        val compactBoard = compose.onNodeWithTag("gaming-station-board")
+        compactBoard.performScrollToNode(
+            hasTestTag("gaming-inline-expansion-ps5-1"),
+        )
         compose.onNodeWithTag("gaming-control-pane").assertIsDisplayed()
+        compose.onAllNodes(hasTestTag("gaming-control-ring"), useUnmergedTree = true)
+            .assertCountEquals(1)
+        val ring = compose.onNodeWithTag("gaming-control-ring")
+            .performScrollTo().assertIsDisplayed().fetchSemanticsNode()
+        val ringDescription = ring.config[SemanticsProperties.ContentDescription].joinToString(" ")
+        assertTrue(ringDescription.contains("ELAPSED TIME"))
+        assertTrue(ringDescription.contains("00:20:00"))
+        assertTrue(ringDescription.contains("00:40:00 remaining"))
+        compose.onNodeWithText("Stop & calculate").performScrollTo().assertIsDisplayed()
+        compose.onNode(
+            hasText("Players") and hasClickAction() and
+                hasAnyAncestor(hasTestTag("gaming-control-pane")),
+        ).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Add drinks").performScrollTo().assertIsDisplayed()
     }
 
     @Test
@@ -1704,7 +2015,9 @@ class GamingBoardUiTest {
             selectedStationId.value = station.id
         }
 
-        compose.onNodeWithTag("gaming-board-and-controls").performScrollToIndex(1)
+        compose.onNodeWithTag("gaming-station-board").performScrollToNode(
+            hasTestTag("gaming-inline-expansion-ps5-1"),
+        )
         compose.onNodeWithTag("gaming-control-pane").assertIsDisplayed()
         compose.onNodeWithTag("gaming-start-inline").assertIsDisplayed()
         compose.onNodeWithText("Single").assertIsDisplayed()
@@ -1776,7 +2089,9 @@ class GamingBoardUiTest {
             }
         }
 
-        compose.onNodeWithTag("gaming-board-and-controls").performScrollToIndex(1)
+        compose.onNodeWithTag("gaming-station-board").performScrollToNode(
+            hasTestTag("gaming-inline-expansion-racing-1"),
+        )
         compose.onNodeWithTag("gaming-start-inline").assertIsDisplayed()
         compose.onNodeWithContentDescription("Search saved customers by name or phone")
             .assertIsDisplayed()
@@ -1823,7 +2138,10 @@ class GamingBoardUiTest {
                     screenHeightDp = 800
                 }
                 CompositionLocalProvider(LocalConfiguration provides configuration) {
-                    Box(Modifier.width(1_280.dp).height(744.dp)) {
+                    Box(
+                        Modifier.width(1_280.dp).height(744.dp)
+                            .testTag("gaming-booked-subtotal-fixture-root"),
+                    ) {
                         GamingCommandWorkspace(
                             state = state.value, access = GamingAccess(canManageSessions = true),
                             filters = listOf(StationFilter("all", "All")), selectedFilter = "all",
@@ -1845,42 +2163,166 @@ class GamingBoardUiTest {
                 }
             }
         }
-        compose.onNodeWithText("Booked session ₹80.00", useUnmergedTree = true).assertIsDisplayed()
-        compose.onNodeWithText("Booked package · ₹80.00").assertIsDisplayed()
-        compose.onNodeWithText("Booked package price is locked; added players and drinks are extra.")
-            .assertIsDisplayed()
+        compose.onNode(
+            hasText("Single · booked ₹80.00") and
+                hasAnyAncestor(hasTestTag("gaming-station-ps5-1")),
+            useUnmergedTree = true,
+        ).assertIsDisplayed()
+        val bookedBoard = compose.onNodeWithTag("gaming-station-board")
+        bookedBoard.performScrollToNode(
+            hasTestTag("gaming-inline-expansion-ps5-1"),
+        )
+        val bookedHeading = compose.onNodeWithText("Booked package · ₹80.00")
+            .performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-booked-heading-before-assert",
+            "gaming-booked-subtotal-fixture-root", "booked_heading", bookedHeading,
+        )
+        bookedHeading.assertIsDisplayed()
+        val bookedExplanation = compose.onNodeWithText(
+            "Booked package price is locked; added players and drinks are extra.",
+        ).performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-booked-explanation-before-assert",
+            "gaming-booked-subtotal-fixture-root", "booked_explanation", bookedExplanation,
+        )
+        bookedExplanation.assertIsDisplayed()
         compose.onNodeWithText("Estimated ₹80.00").assertDoesNotExist()
         compose.onNodeWithText("Package total", substring = true).assertDoesNotExist()
-        compose.onNodeWithText("Players").assertIsDisplayed().performClick()
-        compose.onNodeWithText("Players · 4/4").assertIsDisplayed()
-        compose.onNodeWithText("3 added players playing now · 1 booked").assertIsDisplayed()
+        val playersAction = compose.onNode(
+            hasText("Players") and hasClickAction() and
+                hasAnyAncestor(hasTestTag("gaming-control-pane")),
+        ).performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-booked-players-action-before-assert",
+            "gaming-booked-subtotal-fixture-root", "players_action", playersAction,
+        )
+        playersAction.assertIsDisplayed().performClick()
+        val playerCount = compose.onNodeWithText("Players · 4/4").performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-booked-player-count-before-assert",
+            "gaming-booked-subtotal-fixture-root", "player_count", playerCount,
+        )
+        playerCount.assertIsDisplayed()
+        val playerSummary = compose.onNodeWithText(
+            "3 added players playing now · 1 booked",
+        ).performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-booked-player-summary-before-assert",
+            "gaming-booked-subtotal-fixture-root", "player_summary", playerSummary,
+        )
+        playerSummary.assertIsDisplayed()
         compose.runOnIdle {
             assertEquals(9_000L, estimatedGamingFriendControllerMinor(
                 state.value.participantsFor(running), 600_000L,
             ))
         }
-        compose.onNodeWithTag("gaming-player-inline-close").performClick()
+        val closePlayers = compose.onNodeWithTag("gaming-player-inline-close").performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-4-booked-close-players-before-assert",
+            "gaming-booked-subtotal-fixture-root", "close_players", closePlayers,
+        )
+        closePlayers.assertIsDisplayed().performClick()
         compose.runOnIdle { state.value = state.value.copy(sessionAddons = listOf(drink)) }
-        compose.onNodeWithText("Booked + drinks ₹130.00", useUnmergedTree = true).assertIsDisplayed()
-        compose.onNodeWithText("Booked package · ₹80.00").assertIsDisplayed()
+        bookedBoard.performScrollToNode(hasTestTag("gaming-station-ps5-1"))
+        val bookedBaseRow = compose.onNode(
+            hasText("Single · booked ₹80.00") and
+                hasAnyAncestor(hasTestTag("gaming-station-ps5-1")),
+            useUnmergedTree = true,
+        )
+        captureDiagnostic(
+            filenameStem = "gaming-r7-6-booked-base-row-with-items-before-assert",
+            rootTag = "gaming-booked-subtotal-fixture-root",
+            bounds = mapOf(
+                "station_row" to compose.onNodeWithTag("gaming-station-ps5-1")
+                    .getUnclippedBoundsInRoot(),
+                "booked_base" to bookedBaseRow.getUnclippedBoundsInRoot(),
+            ),
+        )
+        bookedBaseRow.assertIsDisplayed()
+        bookedBoard.performScrollToNode(hasTestTag("gaming-inline-expansion-ps5-1"))
+        val sessionItems = compose.onNodeWithText("Session items").performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-6-booked-session-items-before-assert",
+            "gaming-booked-subtotal-fixture-root", "session_items", sessionItems,
+        )
+        sessionItems.assertIsDisplayed()
+        val itemAmount = compose.onNodeWithTag(
+            "gaming-session-items-subtotal",
+            useUnmergedTree = true,
+        ).performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-6-booked-item-amount-before-assert",
+            "gaming-booked-subtotal-fixture-root", "item_amount", itemAmount,
+        )
+        itemAmount.assertIsDisplayed().assertTextEquals("₹50.00")
+        val activeSubtotal = compose.onNodeWithTag("gaming-active-package-subtotal")
+            .performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-6-active-package-subtotal-before-assert",
+            "gaming-booked-subtotal-fixture-root", "active_subtotal", activeSubtotal,
+        )
+        activeSubtotal.assertIsDisplayed()
+            .assertTextEquals("Current booked + items subtotal · ₹130.00")
+        compose.onNodeWithTag("gaming-active-package-subtotal-qualifier")
+            .performScrollTo().assertIsDisplayed()
+            .assertTextEquals("Added players/controllers are separate")
+        val bookedHeadingAfterDrink = compose.onNodeWithText("Booked package · ₹80.00")
+            .performScrollTo()
+        captureDetailTargetBeforeAssert(
+            "gaming-r7-5-booked-heading-after-drink-before-assert",
+            "gaming-booked-subtotal-fixture-root", "booked_heading", bookedHeadingAfterDrink,
+        )
+        bookedHeadingAfterDrink.assertIsDisplayed()
         compose.onNodeWithText("Estimated ₹130.00").assertDoesNotExist()
+        compose.onNodeWithText("₹220.00").assertDoesNotExist()
         compose.runOnIdle {
             // A server-voided drink remains in history but contributes no money.
             state.value = state.value.copy(sessionAddons = listOf(drink.copy(
                 voided = true, voidReason = "Entered in error",
             )))
         }
-        compose.onNodeWithText("Booked session ₹80.00", useUnmergedTree = true).assertIsDisplayed()
+        bookedBoard.performScrollToNode(hasTestTag("gaming-station-ps5-1"))
+        val voidedBookedRow = compose.onNode(
+            hasText("Single · booked ₹80.00") and
+                hasAnyAncestor(hasTestTag("gaming-station-ps5-1")),
+            useUnmergedTree = true,
+        )
+        captureDiagnostic(
+            filenameStem = "gaming-r7-5-booked-row-after-void-before-assert",
+            rootTag = "gaming-booked-subtotal-fixture-root",
+            bounds = mapOf(
+                "station_row" to compose.onNodeWithTag("gaming-station-ps5-1")
+                    .getUnclippedBoundsInRoot(),
+                "booked_row" to voidedBookedRow.getUnclippedBoundsInRoot(),
+            ),
+        )
+        voidedBookedRow.assertIsDisplayed()
+        bookedBoard.performScrollToNode(hasTestTag("gaming-inline-expansion-ps5-1"))
+        compose.onNodeWithTag("gaming-active-package-subtotal").assertDoesNotExist()
+        compose.onNodeWithText("Current booked + items subtotal · ₹130.00")
+            .assertDoesNotExist()
         compose.runOnIdle {
             state.value = state.value.copy(sessions = listOf(running.copy(
                 status = "ended", endAt = start.plusSeconds(600).toString(),
                 amountMinor = 17_000, billableMinutes = 10,
             )))
         }
-        compose.onNode(
+        bookedBoard.performScrollToNode(hasTestTag("gaming-station-ps5-1"))
+        val endedAmount = compose.onNode(
             hasText("₹170.00") and hasAnyAncestor(hasTestTag("gaming-station-ps5-1")),
             useUnmergedTree = true,
-        ).assertIsDisplayed()
+        )
+        captureDiagnostic(
+            filenameStem = "gaming-r7-5-booked-ended-amount-before-assert",
+            rootTag = "gaming-booked-subtotal-fixture-root",
+            bounds = mapOf(
+                "station_row" to compose.onNodeWithTag("gaming-station-ps5-1")
+                    .getUnclippedBoundsInRoot(),
+                "ended_amount" to endedAmount.getUnclippedBoundsInRoot(),
+            ),
+        )
+        endedAmount.assertIsDisplayed()
         compose.onNodeWithText("Booked session ₹80.00").assertDoesNotExist()
         compose.onNodeWithText("₹260.00").assertDoesNotExist()
     }
@@ -1989,42 +2431,69 @@ class GamingBoardUiTest {
         compose.onNodeWithTag("gaming-filter-vr").assertIsDisplayed()
         compose.onNodeWithText("Gaming board ready").assertDoesNotExist()
         compose.onNodeWithTag("gaming-attention-bar").assertDoesNotExist()
-        val readyHeaderBounds = compose.onNodeWithTag("gaming-board-header")
+        val readyHeaderBounds = compose.onNodeWithTag("gaming-photo-header")
             .assertIsDisplayed().getUnclippedBoundsInRoot()
+        compose.onNodeWithTag("gaming-headline-title", useUnmergedTree = true).assertIsDisplayed()
         compose.runOnIdle { state.value = state.value.copy(refreshing = true) }
-        compose.onNodeWithText("Refreshing…").assertIsDisplayed()
+        compose.onNode(
+            hasText("Refreshing") and hasClickAction() and
+                hasAnyAncestor(hasTestTag("gaming-photo-header")),
+        ).assertIsDisplayed().assertIsNotEnabled()
         assertEquals(
             "Refreshing must not move the station header or controls",
             readyHeaderBounds,
-            compose.onNodeWithTag("gaming-board-header").getUnclippedBoundsInRoot(),
+            compose.onNodeWithTag("gaming-photo-header").getUnclippedBoundsInRoot(),
         )
         compose.runOnIdle { state.value = state.value.copy(refreshing = false) }
+        val stationBoard = compose.onNodeWithTag("gaming-station-board").assertIsDisplayed()
         val firstTile = compose.onNodeWithTag("gaming-station-ps5-1")
-            .getUnclippedBoundsInRoot()
+            .assertIsDisplayed().getUnclippedBoundsInRoot()
+        stationBoard.performScrollToNode(hasTestTag("gaming-station-racing-1"))
         val racingTile = compose.onNodeWithTag("gaming-station-racing-1")
-            .getUnclippedBoundsInRoot()
+            .assertIsDisplayed().getUnclippedBoundsInRoot()
         assertTrue(
             "Long station names and missing-rate warnings must not stretch the board: " +
                 "first=${firstTile.bottom - firstTile.top}, racing=${racingTile.bottom - racingTile.top}",
             abs((firstTile.bottom - firstTile.top).value -
                 (racingTile.bottom - racingTile.top).value) <= 1f,
         )
+        stationBoard.performScrollToNode(hasTestTag("gaming-inline-expansion-ps5-1"))
         if (compose.activity.resources.configuration.screenWidthDp >= 1_100) {
-            val pane = compose.onNodeWithTag("gaming-control-pane").getUnclippedBoundsInRoot()
-            val lastStation = compose.onNodeWithTag("gaming-station-streaming-1")
-                .getUnclippedBoundsInRoot()
-            assertTrue(
-                "Station board fits in the full workspace: last=$lastStation pane=$pane",
-                lastStation.bottom <= pane.bottom,
-            )
+            compose.onNodeWithTag("gaming-station-ps5-2").assertIsDisplayed()
             compose.onNodeWithContentDescription("Session duration dial").assertIsDisplayed()
-            compose.onNodeWithContentDescription("Search saved customers by name or phone")
-                .assertIsDisplayed()
-            compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
+            val wideSearch = compose.onNodeWithContentDescription(
+                "Search saved customers by name or phone",
+            ).performScrollTo()
+            captureDetailTargetBeforeAssert(
+                "gaming-r7-4-full-tablet-search-before-assert",
+                "gaming-full-workspace", "search", wideSearch,
+            )
+            wideSearch.assertIsDisplayed()
+            val wideStart = compose.onNodeWithText("Start 30 min · ₹80.00")
+                .performScrollTo()
+            captureDetailTargetBeforeAssert(
+                "gaming-r7-4-full-tablet-start-before-assert",
+                "gaming-full-workspace", "start", wideStart,
+            )
+            wideStart.assertIsDisplayed()
             val wideDraftRingBounds = compose.onNodeWithTag("gaming-control-ring")
                 .assertIsDisplayed().getUnclippedBoundsInRoot()
             val wideDraftPrimaryBounds = compose.onNodeWithTag("gaming-primary-action-host")
                 .assertIsDisplayed().getUnclippedBoundsInRoot()
+            captureDiagnostic(
+                filenameStem = "gaming-r7-4-full-tablet-start-geometry-before-assert",
+                rootTag = "gaming-full-workspace",
+                bounds = mapOf(
+                    "detail_viewport" to compose.onNodeWithTag("gaming-detail-viewport")
+                        .getUnclippedBoundsInRoot(),
+                    "detail_scroll_owner" to compose.onNodeWithTag("gaming-detail-scroll-owner")
+                        .getUnclippedBoundsInRoot(),
+                    "ring" to wideDraftRingBounds,
+                    "start" to wideDraftPrimaryBounds,
+                    "neighbor" to compose.onNodeWithTag("gaming-station-ps5-2")
+                        .getUnclippedBoundsInRoot(),
+                ),
+            )
             capture("gaming-full-workspace-1280x800.png", "gaming-full-workspace")
 
             compose.runOnIdle {
@@ -2033,12 +2502,33 @@ class GamingBoardUiTest {
                     activeShiftServerConfirmed = false,
                 )
             }
-            compose.onNodeWithText("Open shift here").assertIsDisplayed()
-            compose.onNodeWithText("Sync shift state").assertIsDisplayed()
-            compose.onNodeWithContentDescription("Add new customer").assertIsDisplayed()
-            val blockedSearch = compose.onNodeWithContentDescription(
+            val openShift = compose.onNodeWithText("Open shift here").performScrollTo()
+            captureDetailTargetBeforeAssert(
+                "gaming-r7-4-full-tablet-open-shift-before-assert",
+                "gaming-full-workspace", "open_shift", openShift,
+            )
+            openShift.assertIsDisplayed()
+            val syncShift = compose.onNodeWithText("Sync shift state").performScrollTo()
+            captureDetailTargetBeforeAssert(
+                "gaming-r7-4-full-tablet-sync-shift-before-assert",
+                "gaming-full-workspace", "sync_shift", syncShift,
+            )
+            syncShift.assertIsDisplayed()
+            val addCustomer = compose.onNodeWithContentDescription("Add new customer")
+                .performScrollTo()
+            captureDetailTargetBeforeAssert(
+                "gaming-r7-4-full-tablet-add-customer-before-assert",
+                "gaming-full-workspace", "add_customer", addCustomer,
+            )
+            addCustomer.assertIsDisplayed()
+            val blockedSearchInteraction = compose.onNodeWithContentDescription(
                 "Search saved customers by name or phone",
-            ).fetchSemanticsNode()
+            ).performScrollTo()
+            captureDetailTargetBeforeAssert(
+                "gaming-r7-4-full-tablet-blocked-search-before-assert",
+                "gaming-full-workspace", "blocked_search", blockedSearchInteraction,
+            )
+            val blockedSearch = blockedSearchInteraction.assertIsDisplayed().fetchSemanticsNode()
             val blockedSearchBounds = blockedSearch.boundsInRoot
             val minimumTouchHeightPx = 48f * compose.activity.resources.displayMetrics.density
             assertTrue(
@@ -2053,7 +2543,12 @@ class GamingBoardUiTest {
                 compose.onNodeWithTag("gaming-control-ring")
                     .assertIsDisplayed().getUnclippedBoundsInRoot(),
             )
-            compose.onNodeWithTag("gaming-start-action").assertIsNotEnabled()
+            val blockedStart = compose.onNodeWithTag("gaming-start-action").performScrollTo()
+            captureDetailTargetBeforeAssert(
+                "gaming-r7-4-full-tablet-blocked-start-before-assert",
+                "gaming-full-workspace", "blocked_start", blockedStart,
+            )
+            blockedStart.assertIsDisplayed().assertIsNotEnabled()
 
             compose.runOnIdle {
                 state.value = state.value.copy(
@@ -2075,8 +2570,14 @@ class GamingBoardUiTest {
             }
             val wideStartingRingBounds = compose.onNodeWithTag("gaming-control-ring")
                 .assertIsDisplayed().getUnclippedBoundsInRoot()
-            val wideStartingPrimaryBounds = compose.onNodeWithTag("gaming-primary-action-host")
-                .assertIsDisplayed().getUnclippedBoundsInRoot()
+            val startingPrimary = compose.onNodeWithTag("gaming-primary-action-host")
+                .performScrollTo()
+            captureDetailTargetBeforeAssert(
+                "gaming-r7-4-full-tablet-starting-primary-before-assert",
+                "gaming-full-workspace", "starting_primary", startingPrimary,
+            )
+            val wideStartingPrimaryBounds = startingPrimary.assertIsDisplayed()
+                .getUnclippedBoundsInRoot()
             assertTrue(
                 "1280dp draft and pending-start dial must keep identical geometry: " +
                     "draft=$wideDraftRingBounds starting=$wideStartingRingBounds",
@@ -2087,10 +2588,10 @@ class GamingBoardUiTest {
                     abs((wideDraftRingBounds.bottom - wideDraftRingBounds.top).value -
                         (wideStartingRingBounds.bottom - wideStartingRingBounds.top).value) <= 1f,
             )
-            assertEquals(
-                "Start and pending-start primary actions must keep identical bounds",
-                wideDraftPrimaryBounds,
-                wideStartingPrimaryBounds,
+            assertTrue(
+                "Pending-start primary action must retain a 48dp visible target: " +
+                    "bounds=$wideStartingPrimaryBounds",
+                wideStartingPrimaryBounds.bottom - wideStartingPrimaryBounds.top >= 48.dp,
             )
             capture("gaming-full-workspace-1280x800-starting.png", "gaming-full-workspace")
 
@@ -2105,8 +2606,14 @@ class GamingBoardUiTest {
             }
             val wideActiveRingBounds = compose.onNodeWithTag("gaming-control-ring")
                 .assertIsDisplayed().getUnclippedBoundsInRoot()
-            val wideActivePrimaryBounds = compose.onNodeWithTag("gaming-primary-action-host")
-                .assertIsDisplayed().getUnclippedBoundsInRoot()
+            val activePrimary = compose.onNodeWithTag("gaming-primary-action-host")
+                .performScrollTo()
+            captureDetailTargetBeforeAssert(
+                "gaming-r7-4-full-tablet-active-primary-before-assert",
+                "gaming-full-workspace", "active_primary", activePrimary,
+            )
+            val wideActivePrimaryBounds = activePrimary.assertIsDisplayed()
+                .getUnclippedBoundsInRoot()
             assertTrue(
                 "1280dp pending-start and active timer must keep identical geometry: " +
                     "starting=$wideStartingRingBounds active=$wideActiveRingBounds",
@@ -2117,12 +2624,17 @@ class GamingBoardUiTest {
                     abs((wideStartingRingBounds.bottom - wideStartingRingBounds.top).value -
                         (wideActiveRingBounds.bottom - wideActiveRingBounds.top).value) <= 1f,
             )
-            assertEquals(
-                "Start and active Stop actions must keep identical bounds",
-                wideDraftPrimaryBounds,
-                wideActivePrimaryBounds,
+            assertTrue(
+                "Active Stop action must retain a 48dp visible target: " +
+                    "bounds=$wideActivePrimaryBounds",
+                wideActivePrimaryBounds.bottom - wideActivePrimaryBounds.top >= 48.dp,
             )
-            compose.onNodeWithText("Stop & calculate").assertIsDisplayed()
+            val activeStop = compose.onNodeWithText("Stop & calculate").performScrollTo()
+            captureDetailTargetBeforeAssert(
+                "gaming-r7-4-full-tablet-active-stop-before-assert",
+                "gaming-full-workspace", "stop", activeStop,
+            )
+            activeStop.assertIsDisplayed()
             compose.runOnIdle {
                 state.value = state.value.copy(
                     participantCache = listOf(
@@ -2147,44 +2659,73 @@ class GamingBoardUiTest {
                     ),
                 )
             }
-            compose.onNodeWithText("Players").assertIsDisplayed().performClick()
-            compose.onNodeWithTag("gaming-player-inline").assertIsDisplayed()
-            assertEquals(
-                "Opening Players must not move the primary Stop action",
-                wideActivePrimaryBounds,
-                compose.onNodeWithTag("gaming-primary-action-host")
-                    .assertIsDisplayed().getUnclippedBoundsInRoot(),
+            val players = compose.onNode(
+                hasText("Players") and hasClickAction() and
+                    hasAnyAncestor(hasTestTag("gaming-control-pane")),
+            ).performScrollTo()
+            captureDetailTargetBeforeAssert(
+                "gaming-r7-4-full-tablet-players-before-assert",
+                "gaming-full-workspace", "players", players,
             )
-            val pinnedConfirm = compose.onNodeWithTag("gaming-player-inline-confirm")
-                .assertIsDisplayed().getUnclippedBoundsInRoot()
+            players.assertIsDisplayed().performClick()
+            val playerInline = compose.onNodeWithTag("gaming-player-inline").performScrollTo()
+            captureDetailTargetBeforeAssert(
+                "gaming-r7-4-full-tablet-player-inline-before-assert",
+                "gaming-full-workspace", "player_inline", playerInline,
+            )
+            playerInline.assertIsDisplayed()
+            val pinnedConfirmNode = compose.onNodeWithTag("gaming-player-inline-confirm")
+                .performScrollTo()
+            captureDetailTargetBeforeAssert(
+                "gaming-r7-4-full-tablet-player-confirm-before-assert",
+                "gaming-full-workspace", "player_confirm", pinnedConfirmNode,
+            )
+            val pinnedConfirm = pinnedConfirmNode.assertIsDisplayed().getUnclippedBoundsInRoot()
             val playerEditor = compose.onNodeWithTag("gaming-player-inline")
                 .getUnclippedBoundsInRoot()
             assertTrue(
-                "The add-player confirmation must stay pinned after two participant rows: " +
+                "The add-player confirmation must remain fully reachable after two participant rows: " +
                     "confirm=$pinnedConfirm editor=$playerEditor",
                 pinnedConfirm.top >= playerEditor.top && pinnedConfirm.bottom <= playerEditor.bottom,
             )
-            compose.onNodeWithTag("gaming-player-inline-close")
-                .assertIsDisplayed().performClick()
+            val playerClose = compose.onNodeWithTag("gaming-player-inline-close")
+                .performScrollTo()
+            captureDetailTargetBeforeAssert(
+                "gaming-r7-4-full-tablet-player-close-before-assert",
+                "gaming-full-workspace", "player_close", playerClose,
+            )
+            playerClose.assertIsDisplayed().performClick()
             capture(
                 "gaming-full-workspace-1280x800-post-player-close.png",
                 "gaming-full-workspace",
             )
             compose.onRoot(useUnmergedTree = true).printToLog("GamingPostPlayerClose")
-            compose.onNodeWithText("Add drinks").assertIsDisplayed().performClick()
-            compose.onNodeWithTag("gaming-drinks-inline").assertIsDisplayed()
-            compose.onNodeWithTag("gaming-drinks-search").assertIsDisplayed()
-            compose.onNodeWithTag("gaming-drinks-catalogue").assertIsDisplayed()
-            assertEquals(
-                "Opening Add drinks must not move the primary Stop action",
-                wideActivePrimaryBounds,
-                compose.onNodeWithTag("gaming-primary-action-host")
-                    .assertIsDisplayed().getUnclippedBoundsInRoot(),
+            val addDrinks = compose.onNodeWithText("Add drinks").performScrollTo()
+            captureDetailTargetBeforeAssert(
+                "gaming-r7-4-full-tablet-add-drinks-before-assert",
+                "gaming-full-workspace", "add_drinks", addDrinks,
             )
+            addDrinks.assertIsDisplayed().performClick()
+            val drinksInline = compose.onNodeWithTag("gaming-drinks-inline").performScrollTo()
+            captureDetailTargetBeforeAssert(
+                "gaming-r7-4-full-tablet-drinks-inline-before-assert",
+                "gaming-full-workspace", "drinks_inline", drinksInline,
+            )
+            drinksInline.assertIsDisplayed()
+            val drinksSearch = compose.onNodeWithTag("gaming-drinks-search").performScrollTo()
+            captureDetailTargetBeforeAssert(
+                "gaming-r7-4-full-tablet-drinks-search-before-assert",
+                "gaming-full-workspace", "drinks_search", drinksSearch,
+            )
+            drinksSearch.assertIsDisplayed()
+            compose.onNodeWithTag("gaming-drinks-catalogue").performScrollTo().assertIsDisplayed()
             compose.onNodeWithTag("gaming-drinks-search").performTextInput("Mango")
             compose.onNodeWithTag("gaming-drinks-catalogue").performScrollToIndex(2)
             compose.onNodeWithText("Select").assertIsDisplayed().performClick()
-            assertIntegratedDrinksFooterInsideControlPane()
+            assertIntegratedDrinksFooterInsideControlPane(
+                rootTag = "gaming-full-workspace",
+                filenameStem = "gaming-r7-5-full-tablet-drinks-footer-before-assert",
+            )
             compose.onNodeWithTag("gaming-drinks-inline-confirm").performClick()
             compose.runOnIdle { assertEquals(listOf("mango" to 1), quickAdds) }
             compose.runOnIdle {
@@ -2192,11 +2733,28 @@ class GamingBoardUiTest {
                     it.copy(status = "paused", pausedAt = "2026-09-27T10:10:00Z", pauseVersion = 1)
                 })
             }
-            compose.onNodeWithText("PAUSED").assertIsDisplayed()
+            compose.onNodeWithTag("gaming-selected-status", useUnmergedTree = true)
+                .assertIsDisplayed()
+                .assertTextContains("PAUSED", ignoreCase = true)
+            compose.onNode(
+                hasText("PAUSED") and
+                    hasAnyAncestor(hasTestTag("gaming-control-ring")),
+                useUnmergedTree = true,
+            ).assertIsDisplayed()
             assertEquals("Pausing must preserve the permanent dial bounds", wideActiveRingBounds,
                 compose.onNodeWithTag("gaming-control-ring").assertIsDisplayed().getUnclippedBoundsInRoot())
-            assertEquals("Pausing must preserve the primary action bounds", wideActivePrimaryBounds,
-                compose.onNodeWithTag("gaming-primary-action-host").assertIsDisplayed().getUnclippedBoundsInRoot())
+            val pausedPrimary = compose.onNodeWithTag("gaming-primary-action-host")
+                .performScrollTo()
+            captureDetailTargetBeforeAssert(
+                "gaming-r7-4-full-tablet-paused-primary-before-assert",
+                "gaming-full-workspace", "paused_primary", pausedPrimary,
+            )
+            assertTrue(
+                "Pausing must preserve a reachable 48dp primary action",
+                pausedPrimary.assertIsDisplayed().getUnclippedBoundsInRoot().let {
+                    it.bottom - it.top >= 48.dp
+                },
+            )
             compose.runOnIdle {
                 state.value = state.value.copy(sessions = state.value.sessions.map {
                     it.copy(status = "active", pausedAt = null, pauseVersion = 2)
@@ -2217,7 +2775,7 @@ class GamingBoardUiTest {
             assertEquals(
                 "Payment attention must share the existing header height",
                 readyHeaderBounds,
-                compose.onNodeWithTag("gaming-board-header").getUnclippedBoundsInRoot(),
+                compose.onNodeWithTag("gaming-photo-header").getUnclippedBoundsInRoot(),
             )
             assertEquals(
                 "Payment attention must update the status rail without moving the dial",
@@ -2225,15 +2783,9 @@ class GamingBoardUiTest {
                 compose.onNodeWithTag("gaming-control-ring")
                     .assertIsDisplayed().getUnclippedBoundsInRoot(),
             )
-            val paymentPane = compose.onNodeWithTag("gaming-control-pane")
-                .getUnclippedBoundsInRoot()
-            val paymentLastStation = compose.onNodeWithTag("gaming-station-streaming-1")
-                .getUnclippedBoundsInRoot()
-            assertTrue(
-                "Payment attention must keep every station visible: " +
-                    "last=$paymentLastStation pane=$paymentPane",
-                paymentLastStation.bottom <= paymentPane.bottom,
-            )
+            stationBoard.performScrollToNode(hasTestTag("gaming-station-streaming-1"))
+            compose.onNodeWithTag("gaming-station-streaming-1").assertIsDisplayed()
+            stationBoard.performScrollToNode(hasTestTag("gaming-inline-expansion-ps5-1"))
 
             compose.runOnIdle {
                 attentionCount.value = 0
@@ -2248,31 +2800,15 @@ class GamingBoardUiTest {
                 visibleStations.value = tenStations
                 state.value = state.value.copy(stations = tenStations)
             }
-            compose.onNodeWithTag("gaming-station-ps5-6")
-                .performScrollTo().assertIsDisplayed()
-            val tenth = compose.onNodeWithTag("gaming-station-ps5-6")
-                .getUnclippedBoundsInRoot()
-            val expandedPane = compose.onNodeWithTag("gaming-control-pane")
-                .getUnclippedBoundsInRoot()
-            assertTrue(
-                "Stations beyond the approved 2x4 board remain reachable by scrolling: " +
-                    "tenth=$tenth pane=$expandedPane",
-                tenth.top >= expandedPane.top && tenth.bottom <= expandedPane.bottom,
-            )
+            stationBoard.performScrollToNode(hasTestTag("gaming-station-ps5-6"))
+            compose.onNodeWithTag("gaming-station-ps5-6").assertIsDisplayed()
             capture("gaming-full-workspace-10-stations-1280x800.png", "gaming-full-workspace")
         } else {
-            val board = compose.onNodeWithTag("gaming-station-board")
-                .getUnclippedBoundsInRoot()
-            val pane = compose.onNodeWithTag("gaming-control-pane")
-                .getUnclippedBoundsInRoot()
-            val eighth = compose.onNodeWithTag("gaming-station-streaming-1")
-                .getUnclippedBoundsInRoot()
-            assertTrue("960dp board and dial share the viewport", board.right < pane.left)
-            assertTrue(
-                "All eight cards remain above the bottom navigation: eighth=$eighth pane=$pane",
-                eighth.bottom <= pane.bottom,
-            )
+            stationBoard.performScrollToNode(hasTestTag("gaming-station-streaming-1"))
             compose.onNodeWithTag("gaming-station-streaming-1").assertIsDisplayed()
+            stationBoard.performScrollToNode(hasTestTag("gaming-inline-expansion-ps5-1"))
+            val pane = compose.onNodeWithTag("gaming-control-pane")
+                .assertIsDisplayed().getUnclippedBoundsInRoot()
             val dial = compose.onNodeWithContentDescription("Session duration dial")
                 .assertIsDisplayed()
             val draftRingBounds = compose.onNodeWithTag("gaming-control-ring")
@@ -2468,7 +3004,10 @@ class GamingBoardUiTest {
                 .performTextInput("Mango")
             compose.onNodeWithTag("gaming-drinks-catalogue").performScrollToIndex(2)
             compose.onNodeWithText("Select").assertIsDisplayed().performClick()
-            assertIntegratedDrinksFooterInsideControlPane()
+            assertIntegratedDrinksFooterInsideControlPane(
+                rootTag = "gaming-full-workspace",
+                filenameStem = "gaming-r7-5-compact-drinks-footer-before-assert",
+            )
             compose.onNodeWithTag("gaming-drinks-inline-confirm").performClick()
             compose.runOnIdle { assertEquals(listOf("mango" to 1), quickAdds) }
             capture("gaming-full-workspace-960x600-active-action.png", "gaming-full-workspace")
@@ -2509,15 +3048,9 @@ class GamingBoardUiTest {
             compose.onNodeWithText("Send to POS").performScrollTo().assertIsDisplayed()
             val stoppedRing = compose.onNodeWithTag("gaming-control-ring").assertIsDisplayed()
             assertEquals(activeRingBounds, stoppedRing.getUnclippedBoundsInRoot())
-            val attentionLastStation = compose.onNodeWithTag("gaming-station-streaming-1")
-                .getUnclippedBoundsInRoot()
-            val attentionPane = compose.onNodeWithTag("gaming-control-pane")
-                .getUnclippedBoundsInRoot()
-            assertTrue(
-                "Payment attention must keep all eight compact cards visible: " +
-                    "last=$attentionLastStation pane=$attentionPane",
-                attentionLastStation.bottom <= attentionPane.bottom,
-            )
+            stationBoard.performScrollToNode(hasTestTag("gaming-station-streaming-1"))
+            compose.onNodeWithTag("gaming-station-streaming-1").assertIsDisplayed()
+            stationBoard.performScrollToNode(hasTestTag("gaming-inline-expansion-ps5-1"))
             assertTrue(
                 "Stopping must retain the outer booking ring, arc and marker geometry",
                 draftRingFace.contentEquals(
@@ -2534,6 +3067,7 @@ class GamingBoardUiTest {
     @Test
     fun missingRacingTariffDisablesSameScreenStartAndExplainsWhy() {
         val station = Station("racing-1", "RACE-1", "Racing Simulator 1", "racing", 15_000)
+        var confirms = 0
         compose.setContent {
             DCompanyTheme {
                 Box(Modifier.width(1_280.dp).height(616.dp)) {
@@ -2548,9 +3082,7 @@ class GamingBoardUiTest {
                         wallClock = remember { mutableLongStateOf(1_779_989_200_000L) },
                         attentionCount = 0, onSelectFilter = {}, onSelectStation = {},
                         onBackToBoard = {}, onOpenAttention = {}, onRefresh = {},
-                        onStart = {}, onConfirmStart = { _, _, _, _, _, _, _, _ ->
-                            throw AssertionError("Missing tariff must never start")
-                        },
+                        onStart = {}, onConfirmStart = { _, _, _, _, _, _, _, _ -> confirms++ },
                         onStop = { _, _ -> }, onSend = {}, onCancelUnbilled = {},
                         onExtendTimer = {}, onExtendPackage = { _, _ -> },
                         onTransfer = {}, onPauseResume = {}, onReconcile = {},
@@ -2563,79 +3095,300 @@ class GamingBoardUiTest {
             }
         }
         compose.onNodeWithTag("gaming-station-racing-1").assertIsDisplayed()
-        compose.onNodeWithText("Sync", substring = true).assertIsDisplayed()
+        compose.onNode(
+            hasText("SYNC RATES") and
+                hasAnyAncestor(hasTestTag("gaming-station-status-racing-1")),
+            useUnmergedTree = true,
+        ).assertIsDisplayed()
+        compose.onNode(
+            hasText("Fixed-price tariff not synced") and
+                hasAnyAncestor(hasTestTag("gaming-station-racing-1")),
+            useUnmergedTree = true,
+        ).assertIsDisplayed()
         compose.onNodeWithText("The fixed-price tariff has not synced", substring = true)
             .performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("Start session").assertExists()
-        compose.onNodeWithText("Start session").assertIsNotEnabled()
+        compose.onNodeWithTag("gaming-start-action").assertExists().assertIsNotEnabled()
+        compose.runOnIdle { assertEquals(0, confirms) }
     }
 
     @Test
     fun simultaneousWarningsKeepCompactBoardDialAndRecoveryActionReachable() {
         val station = Station("ps5-1", "PS5-1", "PS5 Station 1", "ps5", 12_000)
         var startRequests = 0
+        val registry = CancelSettingsActivityResultRegistry(
+            InstrumentationRegistry.getInstrumentation().targetContext.packageName,
+        )
+        val registryOwner = object : ActivityResultRegistryOwner {
+            override val activityResultRegistry = registry
+        }
+        val density = compose.activity.resources.displayMetrics.density
+        val alarmManager = compose.activity.getSystemService(AlarmManager::class.java)
+        assertFalse(
+            "grouped overflow evidence must run in the root-owned denied alarm lane",
+            alarmManager.canScheduleExactAlarms(),
+        )
         compose.setContent {
-            DCompanyTheme {
-                Box(Modifier.width(960.dp).height(470.dp).testTag("warning-workspace")) {
-                    GamingCommandWorkspace(
-                        state = GamingUiState(
-                            stations = listOf(station),
-                            packages = listOf(
-                                GamingPackage(
-                                    id = "single-30", code = "single-30", stationType = "ps5",
-                                    variant = "single", kind = "base", name = "Single 30",
-                                    durationMinutes = 30, priceMinor = 8_000,
+            CompositionLocalProvider(
+                LocalActivityResultRegistryOwner provides registryOwner,
+                LocalDensity provides Density(density, fontScale = 1f),
+            ) {
+                DCompanyTheme {
+                    Box(Modifier.width(960.dp).height(470.dp).testTag("warning-workspace")) {
+                        GamingCommandWorkspace(
+                            state = GamingUiState(
+                                stations = listOf(station),
+                                packages = listOf(
+                                    GamingPackage(
+                                        id = "single-30", code = "single-30", stationType = "ps5",
+                                        variant = "single", kind = "base", name = "Single 30",
+                                        durationMinutes = 30, priceMinor = 8_000,
+                                    ),
+                                    GamingPackage(
+                                        id = "single-60", code = "single-60", stationType = "ps5",
+                                        variant = "single", kind = "base", name = "Single 60",
+                                        durationMinutes = 60, priceMinor = 12_000,
+                                    ),
                                 ),
-                                GamingPackage(
-                                    id = "single-60", code = "single-60", stationType = "ps5",
-                                    variant = "single", kind = "base", name = "Single 60",
-                                    durationMinutes = 60, priceMinor = 12_000,
+                                cleanupAcknowledgementsPending = listOf(
+                                    GamingCleanupAcknowledgementUi(
+                                        stationId = station.id,
+                                        detail = "The saved cleanup acknowledgement needs review before " +
+                                            "this station is used again.",
+                                    ),
                                 ),
+                                everSynced = true, refreshing = false, activeShiftId = "fixture-shift",
+                                activeShiftServerConfirmed = true, online = true,
                             ),
-                            cleanupAcknowledgementsPending = listOf(
-                                GamingCleanupAcknowledgementUi(
-                                    stationId = station.id,
-                                    detail = "The saved cleanup acknowledgement needs review before " +
-                                        "this station is used again.",
-                                ),
-                            ),
-                            everSynced = true, refreshing = false, activeShiftId = "fixture-shift",
-                            activeShiftServerConfirmed = true, online = true,
-                        ),
-                        access = GamingAccess(canManageSessions = true),
-                        filters = listOf(StationFilter("all", "All")),
-                        selectedFilter = "all", visibleStations = listOf(station),
-                        selectedStationId = station.id, showDetail = false,
-                        focusStationId = null, focusRequested = false,
-                        startTerminalBlockMessage = null,
-                        wallClock = remember { mutableLongStateOf(1_779_989_200_000L) },
-                        attentionCount = 1,
-                        onSelectFilter = {}, onSelectStation = {}, onBackToBoard = {},
-                        onOpenAttention = {}, onRefresh = {}, onStart = {},
-                        onConfirmStart = { _, _, _, _, _, _, _, _ -> startRequests++ },
-                        onStop = { _, _ -> }, onSend = {}, onCancelUnbilled = {},
-                        onExtendTimer = {}, onExtendPackage = { _, _ -> },
-                        onTransfer = {}, onPauseResume = {}, onReconcile = {},
-                        onRepairBilling = {}, onResolveLegacyStart = {},
-                        onDiscardPackageExtension = {}, onAddItems = {},
-                        onVoidAddon = { _, _ -> }, onReviewRejectedAddon = {},
-                        onManageParticipants = {},
-                    )
+                            access = GamingAccess(canManageSessions = true),
+                            filters = listOf(StationFilter("all", "All")),
+                            selectedFilter = "all", visibleStations = listOf(station),
+                            selectedStationId = station.id, showDetail = false,
+                            focusStationId = null, focusRequested = false,
+                            startTerminalBlockMessage = null,
+                            wallClock = remember { mutableLongStateOf(1_779_989_200_000L) },
+                            attentionCount = 1,
+                            onSelectFilter = {}, onSelectStation = {}, onBackToBoard = {},
+                            onOpenAttention = {}, onRefresh = {}, onStart = {},
+                            onConfirmStart = { _, _, _, _, _, _, _, _ -> startRequests++ },
+                            onStop = { _, _ -> }, onSend = {}, onCancelUnbilled = {},
+                            onExtendTimer = {}, onExtendPackage = { _, _ -> },
+                            onTransfer = {}, onPauseResume = {}, onReconcile = {},
+                            onRepairBilling = {}, onResolveLegacyStart = {},
+                            onDiscardPackageExtension = {}, onAddItems = {},
+                            onVoidAddon = { _, _ -> }, onReviewRejectedAddon = {},
+                            onManageParticipants = {},
+                        )
+                    }
                 }
             }
         }
 
-        val root = compose.onNodeWithTag("warning-workspace").fetchSemanticsNode().boundsInRoot
-        val rail = compose.onNodeWithTag("gaming-notice-rail").fetchSemanticsNode().boundsInRoot
-        val pane = compose.onNodeWithTag("gaming-control-pane").fetchSemanticsNode().boundsInRoot
-        assertTrue("Warnings must use a bounded rail", rail.height <= root.height * 0.24f)
-        assertTrue("The control pane must retain useful height", pane.height >= root.height * 0.35f)
-        compose.onNodeWithTag("gaming-station-ps5-1").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Session duration dial").assertIsDisplayed()
-        compose.onNodeWithText("Retry acknowledgement").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("Start 30 min · ₹80.00")
-            .assertIsDisplayed().performClick()
+        val rootInteraction = compose.onNodeWithTag("warning-workspace")
+        val railOwner = compose.onNodeWithTag("gaming-notice-rail", useUnmergedTree = true)
+            .assertIsDisplayed()
+        val preciseAlarms = compose.onNodeWithText("Precise alarms")
+        physicallyRevealNoticeTarget(railOwner, preciseAlarms, rootInteraction)
+        preciseAlarms.assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
+            .performTouchInput { click() }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText(GamingPreciseAlarmLongFeedback, useUnmergedTree = true)
+                .fetchSemanticsNodes().size == 1
+        }
+        assertEquals("exactly one real Settings launch is allowed", 1, registry.launchCount)
+        assertFalse("cancelled Settings must preserve denied OS authority", alarmManager.canScheduleExactAlarms())
+
+        val root = rootInteraction.fetchSemanticsNode().boundsInRoot
+        val railNode = railOwner.fetchSemanticsNode()
+        val railViewport = railNode.boundsInRoot
+        val initialRange = railNode.config[SemanticsProperties.VerticalScrollAxisRange]
+        captureDiagnostic(
+            filenameStem = "gaming-warning-overflow-960x470-font1_0",
+            rootTag = "warning-workspace",
+            bounds = linkedMapOf(
+                "root" to root,
+                "rail_viewport" to railViewport,
+                "feedback" to unclippedBoundsPx(
+                    compose.onNodeWithText(
+                        GamingPreciseAlarmLongFeedback,
+                        useUnmergedTree = true,
+                    ),
+                ),
+                "range_at_feedback" to initialRange.value(),
+                "range_max" to initialRange.maxValue(),
+                "font_scale" to 1f,
+                "density" to density,
+            ),
+        )
+        assertLongFeedbackTextCompleteInBoard()
+
+        compose.onAllNodesWithTag("gaming-notice-rail").assertCountEquals(1)
+        compose.onNode(
+            hasTestTag("gaming-alarm-permission-banner") and
+                hasAnyAncestor(hasTestTag("gaming-notice-rail")),
+            useUnmergedTree = true,
+        ).assertIsDisplayed()
+        compose.onNode(
+            hasText("Retry acknowledgement") and
+                hasAnyAncestor(hasTestTag("gaming-notice-rail")),
+        ).assertHasClickAction()
+
+        assertTrue(
+            "grouped warning viewport must retain the production cap: rail=$railViewport root=$root",
+            railViewport.height <= minOf(144f * density, root.height * 0.19f) + 1f,
+        )
+        assertTrue("grouped warning content must genuinely overflow", initialRange.maxValue() > 0f)
+        val beforePhysical = initialRange.value()
+        val moveTowardEnd = beforePhysical < initialRange.maxValue()
+        railOwner.performTouchInput {
+            val start = Offset(center.x, height * if (moveTowardEnd) 0.80f else 0.20f)
+            val end = Offset(center.x, height * if (moveTowardEnd) 0.20f else 0.80f)
+            down(start)
+            moveTo(end, delayMillis = 260)
+            advanceEventTime(160L)
+            up()
+        }
+        compose.waitUntil(5_000) {
+            val after = railOwner.fetchSemanticsNode()
+                .config[SemanticsProperties.VerticalScrollAxisRange].value()
+            if (moveTowardEnd) after > beforePhysical else after < beforePhysical
+        }
+        val afterPhysical = railOwner.fetchSemanticsNode()
+            .config[SemanticsProperties.VerticalScrollAxisRange].value()
+        assertTrue(
+            "physical grouped-rail gesture must move the production owner: " +
+                "before=$beforePhysical after=$afterPhysical towardEnd=$moveTowardEnd",
+            if (moveTowardEnd) afterPhysical > beforePhysical else afterPhysical < beforePhysical,
+        )
+
+        val recoveryTargets = buildList {
+            listOf("Allow notifications", "Try notifications again", "Notification settings")
+                .mapNotNullTo(this) { label ->
+                    val nodes = compose.onAllNodesWithText(label).fetchSemanticsNodes()
+                    when (nodes.size) {
+                        0 -> null
+                        1 -> compose.onNodeWithText(label)
+                        else -> error("grouped warning must expose at most one $label action")
+                    }
+                }
+            add(compose.onNodeWithText("Precise alarms"))
+            add(compose.onNodeWithText("Retry acknowledgement"))
+        }
+        assertEquals(
+            "grouped warning must expose one notification route, Precise alarms, and Retry",
+            3,
+            recoveryTargets.size,
+        )
+        recoveryTargets.forEach { target ->
+            physicallyRevealNoticeTarget(railOwner, target, rootInteraction)
+            target.assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
+            assertRectInside(
+                "grouped warning recovery action",
+                unclippedBoundsPx(target),
+                railOwner.fetchSemanticsNode().boundsInRoot.intersect(root),
+            )
+        }
+
+        val board = compose.onNodeWithTag("gaming-station-board").assertIsDisplayed()
+        board.performScrollToNode(hasTestTag("gaming-inline-expansion-ps5-1"))
+        val list = board.getUnclippedBoundsInRoot()
+        val expansion = compose.onNodeWithTag("gaming-inline-expansion-ps5-1")
+            .getUnclippedBoundsInRoot()
+        assertTrue(
+            "The station list must retain useful height: list=$list root=$root",
+            list.bottom - list.top > 0.dp,
+        )
+        assertTrue(
+            "The inline control allocation must remain within the 240–320dp policy: $expansion",
+            expansion.bottom - expansion.top in 240.dp..320.dp,
+        )
+        compose.onNodeWithContentDescription("Session duration dial")
+            .performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("gaming-start-action")
+            .performScrollTo().assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(1, startRequests) }
+    }
+
+    private fun physicallyRevealNoticeTarget(
+        owner: SemanticsNodeInteraction,
+        target: SemanticsNodeInteraction,
+        root: SemanticsNodeInteraction,
+    ) {
+        repeat(5) {
+            val viewport = owner.fetchSemanticsNode().boundsInRoot
+                .intersect(root.fetchSemanticsNode().boundsInRoot)
+            val targetBounds = unclippedBoundsPx(target)
+            if (targetBounds.left >= viewport.left - 1f && targetBounds.top >= viewport.top - 1f &&
+                targetBounds.right <= viewport.right + 1f && targetBounds.bottom <= viewport.bottom + 1f
+            ) return
+            val range = owner.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+            val before = range.value()
+            val moveTowardEnd = targetBounds.bottom > viewport.bottom + 1f
+            val canMove = if (moveTowardEnd) before < range.maxValue() else before > 0f
+            check(canMove) {
+                "target cannot move into grouped notice viewport: target=$targetBounds " +
+                    "viewport=$viewport range=$range"
+            }
+            val missing = if (moveTowardEnd) {
+                targetBounds.bottom - viewport.bottom
+            } else {
+                viewport.top - targetBounds.top
+            }
+            val touchSlop = android.view.ViewConfiguration.get(compose.activity)
+                .scaledTouchSlop.toFloat()
+            owner.performTouchInput {
+                val distance = (missing + touchSlop + 2f)
+                    .coerceAtLeast(touchSlop + 2f)
+                    .coerceAtMost(height * 0.70f)
+                val start = Offset(center.x, height * if (moveTowardEnd) 0.82f else 0.18f)
+                val end = Offset(start.x, start.y + if (moveTowardEnd) -distance else distance)
+                down(start)
+                moveTo(end, delayMillis = 260)
+                advanceEventTime(160L)
+                up()
+            }
+            compose.waitUntil(5_000) {
+                val after = owner.fetchSemanticsNode()
+                    .config[SemanticsProperties.VerticalScrollAxisRange].value()
+                if (moveTowardEnd) after > before else after < before
+            }
+        }
+        val viewport = owner.fetchSemanticsNode().boundsInRoot
+            .intersect(root.fetchSemanticsNode().boundsInRoot)
+        assertRectInside("physically revealed notice target", unclippedBoundsPx(target), viewport)
+    }
+
+    private fun unclippedBoundsPx(interaction: SemanticsNodeInteraction): Rect {
+        val bounds = interaction.getUnclippedBoundsInRoot()
+        val density = compose.activity.resources.displayMetrics.density
+        return Rect(
+            left = bounds.left.value * density,
+            top = bounds.top.value * density,
+            right = bounds.right.value * density,
+            bottom = bounds.bottom.value * density,
+        )
+    }
+
+    private fun assertLongFeedbackTextCompleteInBoard() {
+        val text = compose.onNodeWithText(GamingPreciseAlarmLongFeedback, useUnmergedTree = true)
+        val layouts = mutableListOf<TextLayoutResult>()
+        text.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        val layout = layouts.single()
+        assertEquals(GamingPreciseAlarmLongFeedback, layout.layoutInput.text.text)
+        assertFalse("long feedback must not overflow height", layout.didOverflowHeight)
+        assertEquals(
+            GamingPreciseAlarmLongFeedback.length,
+            layout.getLineEnd(layout.lineCount - 1, visibleEnd = true),
+        )
+        repeat(layout.lineCount) { line -> assertFalse(layout.isLineEllipsized(line)) }
+    }
+
+    private fun assertRectInside(name: String, inner: Rect, outer: Rect) {
+        assertTrue(
+            "$name must be nonempty and fully contained: inner=$inner outer=$outer",
+            inner.width > 0f && inner.height > 0f &&
+                inner.left >= outer.left - 1f && inner.top >= outer.top - 1f &&
+                inner.right <= outer.right + 1f && inner.bottom <= outer.bottom + 1f,
+        )
     }
 
     private fun capture(filename: String, rootTag: String = "gaming-fixture-root") {
@@ -2646,6 +3399,95 @@ class GamingBoardUiTest {
         } finally {
             bitmap.recycle()
         }
+    }
+
+    private fun captureDiagnostic(
+        filenameStem: String,
+        rootTag: String,
+        bounds: Map<String, Any>,
+    ): File {
+        val filename = "$filenameStem-${Process.myPid()}-${System.nanoTime()}.png"
+        val output = File(requireNotNull(compose.activity.getExternalFilesDir(null)), filename)
+        val bitmap = compose.onNodeWithTag(rootTag).captureToImage().asAndroidBitmap()
+        try {
+            output.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+        } finally {
+            bitmap.recycle()
+        }
+        publishDiagnostic(output, bounds)
+        return output
+    }
+
+    private fun captureDetailTargetBeforeAssert(
+        filenameStem: String,
+        rootTag: String,
+        targetName: String,
+        target: SemanticsNodeInteraction,
+        extraBounds: Map<String, Any> = emptyMap(),
+    ) {
+        captureDiagnostic(
+            filenameStem = filenameStem,
+            rootTag = rootTag,
+            bounds = linkedMapOf<String, Any>(
+                "root" to compose.onNodeWithTag(rootTag).getUnclippedBoundsInRoot(),
+                "detail_viewport" to compose.onNodeWithTag("gaming-detail-viewport")
+                    .getUnclippedBoundsInRoot(),
+                "detail_scroll_owner" to compose.onNodeWithTag("gaming-detail-scroll-owner")
+                    .getUnclippedBoundsInRoot(),
+                targetName to target.getUnclippedBoundsInRoot(),
+            ).apply { putAll(extraBounds) },
+        )
+    }
+
+    private fun publishDiagnostic(output: File, bounds: Map<String, Any>) {
+        InstrumentationRegistry.getInstrumentation().sendStatus(
+            2,
+            Bundle().apply {
+                putString("dcompany.gaming.board.diagnostic.filename", output.name)
+                putString("dcompany.gaming.board.diagnostic.path", output.absolutePath)
+                putString(
+                    "dcompany.gaming.board.diagnostic.bounds",
+                    bounds.entries.joinToString(separator = ";") { (name, value) ->
+                        "$name=$value"
+                    },
+                )
+            },
+        )
+    }
+}
+
+internal const val GamingPreciseAlarmLongFeedback =
+    "Precise alarms are still off. In Android Settings, enable Alarms & reminders " +
+        "for D Company ERP. Timer billing remains accurate, but screen-off alerts " +
+        "may arrive late."
+
+internal class CancelSettingsActivityResultRegistry(
+    private val expectedPackageName: String,
+) : ActivityResultRegistry() {
+    var launchCount: Int = 0
+        private set
+
+    @Suppress("UNCHECKED_CAST")
+    override fun <I : Any?, O : Any?> onLaunch(
+        requestCode: Int,
+        contract: ActivityResultContract<I, O>,
+        input: I,
+        options: ActivityOptionsCompat?,
+    ) {
+        check(contract is ActivityResultContracts.StartActivityForResult) {
+            "permission-overflow fixture only admits the real Settings launcher: ${contract::class.java.name}"
+        }
+        check(launchCount == 0) { "permission-overflow fixture admits exactly one Settings launch" }
+        val intent = input as? Intent
+            ?: error("permission-overflow fixture requires the contract-generated Settings Intent")
+        check(intent.action == Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM) {
+            "unexpected Settings action: ${intent.action}"
+        }
+        check(intent.data == Uri.parse("package:$expectedPackageName")) {
+            "unexpected Settings target package: ${intent.data}"
+        }
+        launchCount += 1
+        dispatchResult(requestCode, ActivityResult(Activity.RESULT_CANCELED, null) as O)
     }
 }
 

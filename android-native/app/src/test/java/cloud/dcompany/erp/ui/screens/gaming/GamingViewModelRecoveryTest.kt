@@ -7,9 +7,11 @@ import cloud.dcompany.erp.core.db.GamingLegacyResolutionAttemptState
 import cloud.dcompany.erp.core.db.GamingSessionState
 import cloud.dcompany.erp.core.db.RecoveredLegacyServerDisposition
 import cloud.dcompany.erp.core.net.ApiException
+import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.MeResponse
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.encodeToString
 import java.time.Instant
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertNotNull
@@ -516,7 +518,7 @@ class GamingViewModelRecoveryTest {
         assertEquals("zero", ui.activeFor("station-zero")?.id)
         assertEquals("paused", ui.activeFor("station-paused")?.id)
         assertEquals(listOf("send", "zero"), ui.readyForPos.map { it.id })
-        assertTrue(ui.needsCancellation.isEmpty())
+        assertEquals(listOf("zero"), ui.needsCancellation.map { it.id })
         assertEquals(37_500L, ui.pendingBillSnapshotMinor(failedSend))
         assertEquals(0L, ui.pendingBillSnapshotMinor(zeroValue))
         assertEquals(
@@ -562,6 +564,80 @@ class GamingViewModelRecoveryTest {
         )
 
         assertEquals(21_249L, ui.pendingBillSnapshotMinor(ended))
+    }
+
+    @Test
+    fun `linked POS history never occupies a station and remains newest first in review queue`() {
+        fun projected(
+            id: String,
+            status: String,
+            orderId: String? = null,
+            startAt: String = "2026-10-27T10:00:00Z",
+        ) = GameSession(
+            id = id,
+            stationId = "shared-station",
+            shiftId = "shift-1",
+            status = status,
+            startAt = startAt,
+            endAt = if (status == "ended") "2026-10-27T10:30:00Z" else null,
+            billableMinutes = if (status == "ended") 30 else null,
+            amountMinor = if (status == "ended") 6_000 else null,
+            orderId = orderId,
+        )
+
+        val linked = projected("linked", "ended", orderId = "held-order")
+        val unlinked = projected("unlinked", "ended")
+        val active = projected("active", "active")
+
+        assertEquals(
+            "active",
+            GamingUiState(sessions = listOf(linked, unlinked, active))
+                .activeFor("shared-station")?.id,
+        )
+        assertEquals(
+            "unlinked",
+            GamingUiState(sessions = listOf(linked, unlinked))
+                .activeFor("shared-station")?.id,
+        )
+        assertNull(GamingUiState(sessions = listOf(linked)).activeFor("shared-station"))
+        assertEquals(
+            listOf("linked"),
+            GamingUiState(sessions = listOf(linked)).posLinkedReviewSessions.map(GameSession::id),
+        )
+        assertEquals(
+            listOf("linked-new", "linked-old"),
+            GamingUiState(
+                sessions = listOf(
+                    projected(
+                        "linked-old",
+                        "ended",
+                        orderId = "old-held-order",
+                        startAt = "2026-10-27T09:00:00Z",
+                    ),
+                    projected(
+                        "linked-new",
+                        "ended",
+                        orderId = "new-held-order",
+                        startAt = "2026-10-27T11:00:00Z",
+                    ),
+                ),
+            ).posLinkedReviewSessions.map(GameSession::id),
+        )
+        assertEquals(
+            listOf("linked-new", "linked"),
+            GamingUiState(
+                sessions = listOf(
+                    active,
+                    linked,
+                    projected(
+                        "linked-new",
+                        "ended",
+                        orderId = "new-held-order",
+                        startAt = "2026-10-27T11:00:00Z",
+                    ),
+                ),
+            ).posLinkedReviewSessions.map(GameSession::id),
+        )
     }
 
     @Test
@@ -676,9 +752,28 @@ class GamingViewModelRecoveryTest {
         assertTrue(active.canCancelUnbilled())
         assertTrue(active.copy(status = "paused").canCancelUnbilled())
         assertNull(state.cancellationBlockFor(active, false))
-        assertNotNull(state.copy(online = false).cancellationBlockFor(active, false))
-        assertNotNull(state.copy(activeShiftId = "other-shift").cancellationBlockFor(active, true))
+        assertNotNull(
+            state.copy(online = false).cancellationBlockFor(
+                active,
+                canOverrideVoidShift = false,
+                manualBackendAvailable = false,
+            ),
+        )
+        assertNull(
+            state.copy(online = false).cancellationBlockFor(
+                active,
+                canOverrideVoidShift = false,
+                manualBackendAvailable = true,
+            ),
+        )
+        assertNotNull(state.copy(activeShiftId = "other-shift").cancellationBlockFor(active, false))
+        assertNull(state.copy(activeShiftId = "other-shift").cancellationBlockFor(active, true))
         assertNotNull(state.cancellationBlockFor(active.copy(participantRevision = 1), false))
+        assertNull(state.cancellationBlockFor(active.copy(
+            participantRevision = 1,
+            billingMode = "package",
+            amountMinor = 12_000L,
+        ), false))
         assertFalse(active.copy(localState = GamingSessionState.STOP_PENDING).canCancelUnbilled())
         assertFalse(active.copy(localState = GamingSessionState.START_PENDING).canCancelUnbilled())
         assertFalse(active.copy(localState = GamingSessionState.SEND_PENDING).canCancelUnbilled())
@@ -689,10 +784,40 @@ class GamingViewModelRecoveryTest {
     @Test
     fun stoppedPlayerVoidBindsReviewedRevisionsAmountAndStableRequestIdentity() {
         for (status in listOf("active", "paused")) {
-            val active = session("participant", status, GamingSessionState.START_SYNCED).copy(participantRevision = 2)
-            assertTrue(participantCancellationGuidance(status).contains("Stop this session, then Void it here"))
+            val active = session("participant", status, GamingSessionState.START_SYNCED).copy(
+                participantRevision = 2,
+                billingMode = "package",
+                amountMinor = 12_000,
+            )
+            assertTrue(participantCancellationGuidance(status).contains("settles this session atomically"))
             assertNull(participantVoidBody(active, "Mistake"))
+            val activeBody = sessionVoidBody(active, "Mistake")
+            assertEquals(2, activeBody.expectedParticipantRevision)
+            assertEquals(12_000L, activeBody.expectedAmountMinor)
+            assertEquals(
+                "{\"reason\":\"Mistake\",\"expected_order_id\":null," +
+                    "\"expected_participant_revision\":2,\"expected_billing_revision\":0," +
+                    "\"expected_amount_minor\":12000}",
+                ApiClient.json.encodeToString(activeBody),
+            )
         }
+        val hourly = session("participant-hourly", "active", GamingSessionState.START_SYNCED)
+            .copy(participantRevision = 2, billingMode = "hourly", amountMinor = null)
+        val hourlyBody = sessionVoidBody(hourly, "Mistake")
+        assertNull(hourlyBody.expectedAmountMinor)
+        assertEquals(
+            "{\"reason\":\"Mistake\",\"expected_order_id\":null," +
+                "\"expected_participant_revision\":2,\"expected_billing_revision\":0}",
+            ApiClient.json.encodeToString(hourlyBody),
+        )
+        val corruptHourly = hourly.copy(shiftId = "shift-1", amountMinor = 1L)
+        assertTrue(
+            GamingUiState(
+                sessions = listOf(corruptHourly),
+                activeShiftId = "shift-1",
+                online = true,
+            ).cancellationBlockFor(corruptHourly, false).orEmpty().contains("billing evidence"),
+        )
         val ended = session("participant", "ended", GamingSessionState.ENDED_UNBILLED)
             .copy(shiftId = "shift-1", participantRevision = 3, billingRevision = 1, amountMinor = 18_000)
         val state = GamingUiState(sessions = listOf(ended), activeShiftId = "shift-1", online = true)

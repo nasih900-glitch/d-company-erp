@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MutableLongState
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -29,6 +30,7 @@ import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
@@ -61,10 +63,12 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.ViewRootForTest
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Density
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.test.platform.app.InstrumentationRegistry
@@ -76,6 +80,7 @@ import cloud.dcompany.erp.core.db.GamingLegacyResolution
 import cloud.dcompany.erp.core.db.GamingLegacyResolutionAttemptState
 import cloud.dcompany.erp.core.db.LEGACY_PACKAGE_START_REVIEW_ERROR
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
+import kotlinx.serialization.json.JsonArray
 import java.time.Instant
 import java.io.File
 import java.io.FileInputStream
@@ -667,11 +672,11 @@ class GamingDialogUiTest {
         }
 
         PINNED_ACTIVE_ACTION_LABELS.forEach { label ->
-            assertPinnedActionInsideViewport(label, enabled = label != "Cancel")
+            assertPinnedActionInsideViewport(label, enabled = true)
         }
-        compose.onNodeWithText(
+        compose.onAllNodesWithText(
             "Void 1 active Gaming item above with a reason before voiding the whole session.",
-        ).assertIsDisplayed()
+        ).assertCountEquals(0)
         compose.onAllNodesWithText("00:05:00").assertCountEquals(0)
         compose.onNodeWithTag("gaming-primary-action-host").assertIsDisplayed()
         compose.onAllNodesWithText("+30 min").assertCountEquals(0)
@@ -682,11 +687,11 @@ class GamingDialogUiTest {
         // Reassert every command afterwards so a future parent-scroll change
         // cannot move a critical action partly or completely off-screen.
         PINNED_ACTIVE_ACTION_LABELS.forEach { label ->
-            assertPinnedActionInsideViewport(label, enabled = label != "Cancel")
+            assertPinnedActionInsideViewport(label, enabled = true)
         }
-        compose.onNodeWithText(
+        compose.onAllNodesWithText(
             "Void 1 active Gaming item above with a reason before voiding the whole session.",
-        ).assertIsDisplayed()
+        ).assertCountEquals(0)
     }
 
     @Test
@@ -779,7 +784,7 @@ class GamingDialogUiTest {
         }
 
         PINNED_ACTIVE_ACTION_LABELS.forEach { label ->
-            assertPinnedActionInsideViewport(label, enabled = label !in setOf("Pause", "Cancel"))
+            assertPinnedActionInsideViewport(label, enabled = label != "Pause")
         }
         compose.onNodeWithText("Reconnect to pause or resume safely across devices.")
             .assertIsDisplayed()
@@ -2408,6 +2413,200 @@ down(Offset(width * 0.50f, height * 0.90f))
         }
     }
 
+    @Test
+    fun sessionVoidReviewCrossesThirtyMinutesWithoutRecreationAndKeepsDraft() {
+        val start = Instant.parse("2026-10-26T08:00:00Z").toEpochMilli()
+        val clock = mutableLongStateOf(start + 1_799_999L)
+        val session = GameSession(
+            id = "session-boundary",
+            stationId = "station-1",
+            shiftId = "shift-1",
+            status = "active",
+            startAt = "2026-10-26T08:00:00Z",
+            amountMinor = 12_000,
+            serverPlayElapsedMs = 1_799_999L,
+            voidReasonRequired = false,
+        )
+
+        compose.setContent {
+            DCompanyTheme {
+                SessionVoidReviewDialog(
+                    session = session,
+                    stationName = "PS5 Station 1",
+                    wallClock = clock,
+                    onDismiss = {},
+                    onConfirm = { _, _ -> },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Reason is optional under 30 minutes", substring = true)
+            .assertIsDisplayed()
+        compose.onNodeWithText("Void session").assertIsEnabled()
+        compose.onNodeWithContentDescription("Cancellation reason: Other or add details")
+            .performClick()
+        val custom = compose.onNodeWithContentDescription("Custom cancellation reason")
+            .assert(
+                SemanticsMatcher.expectValue(
+                    SemanticsProperties.StateDescription,
+                    "Optional, empty",
+                ),
+            )
+
+        compose.runOnIdle { clock.longValue = start + 1_800_000L }
+
+        compose.onNodeWithText("Void session").assertIsNotEnabled()
+        custom.assert(
+            SemanticsMatcher.expectValue(
+                SemanticsProperties.StateDescription,
+                "Required, empty",
+            ),
+        ).performTextReplacement("Customer asked to stop after review")
+        compose.runOnIdle { clock.longValue = start + 1_801_000L }
+        compose.onNodeWithText("Void session").assertIsEnabled()
+        custom.assertTextContains("Customer asked to stop after review")
+        compose.onNodeWithText("Presets").performClick()
+        compose.onNodeWithText("A reason is required after 30 minutes", substring = true)
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun optionalVoidReasonSubmitsBlankWithoutAnnouncingRequired() {
+        var submitted: Pair<String, String?>? = null
+        compose.setContent {
+            DCompanyTheme {
+                CancelUnbilledSessionDialog(
+                    stationName = "PS5 Station 1",
+                    amountMinor = 0,
+                    activeSession = true,
+                    reasonRequired = false,
+                    serverPlayElapsedMs = 1_799_999L,
+                    onDismiss = {},
+                    onConfirm = {},
+                    onConfirmWithTarget = { reason, target -> submitted = reason to target },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Void decision stay in the audit trail", substring = true)
+            .assertIsDisplayed()
+        compose.onAllNodesWithText("required reason", substring = true)
+            .assertCountEquals(0)
+        compose.onNodeWithContentDescription("Cancellation reason: Other or add details")
+            .performClick()
+        compose.onNodeWithContentDescription("Custom cancellation reason")
+            .assert(
+                SemanticsMatcher.expectValue(
+                    SemanticsProperties.StateDescription,
+                    "Optional, empty",
+                ),
+            )
+        compose.onNodeWithText("Void session").assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals("" to null, submitted) }
+    }
+
+    @Test
+    fun retainedAddonsUseTruthfulBillCopyAndRequireExplicitTarget() {
+        var submitted: Pair<String, String?>? = null
+        val target = retainedVoidTarget()
+        compose.setContent {
+            DCompanyTheme {
+                CancelUnbilledSessionDialog(
+                    stationName = "PS5 Station 1",
+                    amountMinor = 15_000,
+                    activeSession = true,
+                    reasonRequired = false,
+                    serverPlayElapsedMs = 1_200_000L,
+                    activeAddons = listOf(retainedVoidAddon()),
+                    eligibleTargets = listOf(target),
+                    onDismiss = {},
+                    onConfirm = {},
+                    onConfirmWithTarget = { reason, targetId -> submitted = reason to targetId },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Those items stay payable on a retained POS bill", substring = true)
+            .assertIsDisplayed()
+        compose.onAllNodesWithText("without creating a POS bill", substring = true)
+            .assertCountEquals(0)
+        compose.onAllNodesWithText("No POS bill is required", substring = true)
+            .assertCountEquals(0)
+        compose.onNodeWithText("Void session").assertIsNotEnabled()
+        compose.onNodeWithText("${target.terminalName} · ${target.openedByName}")
+            .performScrollTo()
+            .performClick()
+        compose.onNodeWithText("Void session").assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals("" to target.shiftId, submitted) }
+    }
+
+    @Test
+    fun linkedOwnerVoidRequiresReasonAndNeverOffersReceivingShift() {
+        var submittedReason: String? = null
+        val unrelatedTarget = retainedVoidTarget()
+        compose.setContent {
+            DCompanyTheme {
+                CancelUnbilledSessionDialog(
+                    stationName = "PS5 Station 1",
+                    amountMinor = 15_000,
+                    reasonRequired = true,
+                    postPosOwnerReview = true,
+                    eligibleTargets = listOf(unrelatedTarget),
+                    onDismiss = {},
+                    onConfirm = { submittedReason = it },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Owner review of the exact unpaid POS bill", substring = true)
+            .assertIsDisplayed()
+        compose.onAllNodesWithText(unrelatedTarget.terminalName, substring = true)
+            .assertCountEquals(0)
+        compose.onAllNodesWithText("Choose the exact open shift", substring = true)
+            .assertCountEquals(0)
+        compose.onNodeWithText("Void session").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Cancellation reason: Entered by mistake")
+            .performClick()
+        compose.onNodeWithText("Void session").assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals("Entered by mistake", submittedReason) }
+    }
+
+    private fun retainedVoidAddon() = SessionAddon(
+        id = "addon-retained-1",
+        gamingSessionId = "session-retained-1",
+        clientLineId = "client-line-retained-1",
+        menuItemId = "menu-water",
+        menuItemName = "Water",
+        menuItemType = "drink",
+        modifiers = JsonArray(emptyList()),
+        qty = 1,
+        catalogUnitPriceMinor = 700,
+        unitPriceMinor = 700,
+        lineTotalMinor = 700,
+        discountMinor = 0,
+        taxRate = 18.0,
+        taxableValueMinor = 600,
+        cgstMinor = 50,
+        sgstMinor = 50,
+        igstMinor = 0,
+        cessMinor = 0,
+        createdBy = "owner-1",
+        createdTerminalId = "terminal-gaming-1",
+        createdAt = "2026-10-26T08:10:00Z",
+    )
+
+    private fun retainedVoidTarget(
+        terminalName: String = "Cafe POS",
+        openedByName: String = "Cashier",
+    ) = PosTargetShift(
+        shiftId = "shift-pos-1",
+        terminalId = "terminal-pos-1",
+        terminalName = terminalName,
+        openedBy = "cashier-1",
+        openedByName = openedByName,
+        openedAt = "2026-10-26T08:00:00Z",
+    )
+
     private fun testStation() = Station(
         id = "station-1",
         code = "PS5-1",
@@ -2631,6 +2830,8 @@ down(Offset(width * 0.50f, height * 0.90f))
             automation.serviceInfo = automation.serviceInfo.apply {
                 flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
             }
+            automation.waitForIdle(500, 5_000)
+            compose.waitForIdle()
             var previous: DialogTouchSnapshot? = null
             var stableSamples = 0
             compose.waitUntil(timeoutMillis = 5_000) {
@@ -2638,11 +2839,15 @@ down(Offset(width * 0.50f, height * 0.90f))
                 val snapshot = dialogTouchSnapshot()
                 stableSamples = if (snapshot.touchTargetReady && snapshot == previous) stableSamples + 1 else 0
                 previous = snapshot
-                stableSamples >= 2
+                stableSamples >= 3
             }
+            automation.waitForIdle(500, 5_000)
+            compose.waitForIdle()
+            awaitAndroidFrame()
             val target = checkNotNull(previous)
-            check(target.touchTargetReady && target == dialogTouchSnapshot()) {
-                "Initial input target moved before touch"
+            val finalSnapshot = dialogTouchSnapshot()
+            check(target.touchTargetReady && finalSnapshot.touchTargetReady && target == finalSnapshot) {
+                "Initial input target moved before touch: stable=$target final=$finalSnapshot"
             }
             injectAndroidTap(target.bounds.center.x, target.bounds.center.y)
             compose.waitForIdle()

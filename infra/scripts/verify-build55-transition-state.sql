@@ -112,6 +112,26 @@ WITH table_inventory(table_name, row_count, row_sha256) AS (
            || '|' || pg_get_functiondef(p.oid)
       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
      WHERE n.nspname = 'public' AND p.prokind IN ('f', 'p')
+), trigger_binding_rows AS (
+    SELECT 'trigger_binding|' || c.relname || '|' || t.tgname || '|'
+           || t.tgenabled::text || '|' || t.tgdeferrable::text || '|'
+           || t.tginitdeferred::text || '|' || pg_get_triggerdef(t.oid, true) AS item
+      FROM pg_trigger t
+      JOIN pg_class c ON c.oid = t.tgrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND NOT t.tgisinternal
+), trigger_bindings AS (
+    SELECT count(*)::bigint AS row_count,
+           encode(sha256(convert_to(coalesce(string_agg(item, E'\n' ORDER BY item COLLATE "C"), ''), 'UTF8')), 'hex') AS sha256,
+           coalesce(jsonb_agg(item ORDER BY item COLLATE "C"), '[]'::jsonb) AS rows
+      FROM trigger_binding_rows
+), gaming_legacy AS (
+    SELECT count(*)::bigint AS row_count,
+           count(*) FILTER (WHERE to_jsonb(t)->>'retained_addon_order_id' IS NOT NULL)::bigint AS nonnull_count,
+           encode(sha256(convert_to(coalesce(string_agg(
+               (to_jsonb(t) - 'retained_addon_order_id')::text, E'\n'
+               ORDER BY (to_jsonb(t) - 'retained_addon_order_id')::text), ''), 'UTF8')), 'hex') AS sha256
+      FROM public.gaming_sessions t
 ), catalogue AS (
     SELECT count(*)::bigint AS row_count,
            encode(sha256(convert_to(coalesce(string_agg(item, E'\n' ORDER BY item COLLATE "C"), ''), 'UTF8')), 'hex') AS sha256,
@@ -119,14 +139,25 @@ WITH table_inventory(table_name, row_count, row_sha256) AS (
       FROM catalogue_rows
 )
 SELECT jsonb_build_object(
-    'schema_version', 1,
-    'kind', 'build55-full-transition-v1',
+    'schema_version', 2,
+    'kind', 'build55-full-transition-v2',
     'database_revision', (SELECT version_num FROM public.alembic_version),
     'database_identity', jsonb_build_object(
         'database_name', current_database(),
         'database_oid', (SELECT oid::bigint FROM pg_database WHERE datname = current_database()),
         'system_identifier', (SELECT system_identifier::text FROM pg_control_system())
     ),
+    'gaming_sessions_legacy_projection', jsonb_build_object(
+        'column_present', EXISTS (SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'gaming_sessions'
+              AND column_name = 'retained_addon_order_id'),
+        'row_count', (SELECT row_count FROM gaming_legacy),
+        'row_sha256', (SELECT sha256 FROM gaming_legacy),
+        'nonnull_count', (SELECT nonnull_count FROM gaming_legacy)
+    ),
+    'trigger_catalog_row_count', (SELECT row_count FROM trigger_bindings),
+    'trigger_catalog_sha256', (SELECT sha256 FROM trigger_bindings),
+    'trigger_catalog_rows', (SELECT rows FROM trigger_bindings),
     'schema_catalog_row_count', (SELECT row_count FROM catalogue),
     'schema_catalog_sha256', (SELECT sha256 FROM catalogue),
     'schema_catalog_rows', (SELECT rows FROM catalogue),

@@ -9,7 +9,6 @@ import cloud.dcompany.erp.ui.theme.operationalInformationContainer
 import cloud.dcompany.erp.ui.theme.operationalWarning
 import cloud.dcompany.erp.ui.theme.operationalWarningContainer
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -22,7 +21,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -32,6 +31,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -46,9 +47,13 @@ import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.components.OperationalStatusBadge
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.UiTone
+import cloud.dcompany.erp.ui.components.workspaceContentCanvas
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.LocalWorkspaceGlassScene
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -103,7 +108,7 @@ internal class SupportInboxViewModel(
 internal fun SupportInboxScreen(vm: SupportInboxViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     Column(
-        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(Spacing.lgPlus),
+        Modifier.fillMaxSize().workspaceContentCanvas().padding(Spacing.lgPlus),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
         SectionCard(
@@ -182,11 +187,22 @@ internal fun SupportInboxScreen(vm: SupportInboxViewModel = viewModel()) {
 
 @Composable
 private fun SupportInboxRow(report: BugReportInboxItem, onClick: () -> Unit) {
+    val hasWorkspaceGlassScene = LocalWorkspaceGlassScene.current != null
     Surface(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxWidth().clip(Radius.shapeMd)
+            .then(
+                if (hasWorkspaceGlassScene) Modifier.liquidWorkspaceSurface(
+                    Radius.shapeMd,
+                    WorkspaceGlassRole.UTILITY,
+                ) else Modifier,
+            )
+            .clickable(onClick = onClick),
+        color = if (hasWorkspaceGlassScene) Color.Transparent else MaterialTheme.colorScheme.surface,
         shape = Radius.shapeMd,
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        border = if (hasWorkspaceGlassScene) null else androidx.compose.foundation.BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outlineVariant,
+        ),
     ) {
         Row(
             Modifier.fillMaxWidth().padding(Spacing.md),

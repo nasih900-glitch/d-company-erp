@@ -6,6 +6,7 @@ import android.graphics.Rect
 import android.os.Build
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
@@ -14,8 +15,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
@@ -42,6 +46,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipe
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -52,8 +58,14 @@ import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import cloud.dcompany.erp.BuildConfig
+import cloud.dcompany.erp.AuthenticatedWorkspaceHandoff
+import cloud.dcompany.erp.core.net.MeResponse
+import cloud.dcompany.erp.ui.AuthState
 import cloud.dcompany.erp.ui.theme.AppearancePreference
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
+import cloud.dcompany.erp.ui.theme.WorkspaceBackgroundUiState
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
+import cloud.dcompany.erp.ui.theme.workspaceGlassRoleStyle
 import java.io.File
 import java.security.MessageDigest
 import java.util.Locale
@@ -80,8 +92,8 @@ private val RequestedEntryDisplayId: Int? by lazy {
     } else {
         val requested = raw.toIntOrNull()
             ?: error("Invalid -e $EntryDisplayIdArgument value: $raw")
-        require(requested == 2) {
-            "Only the verified HD display 2 is supported; requested display was $requested"
+        require(requested in setOf(0, 2, 5, 6)) {
+            "Only verified HD displays 0, 2, 5 and 6 are supported; requested display was $requested"
         }
         requested
     }
@@ -138,13 +150,285 @@ class ExecutiveEntryPresentationUiTest {
     val compose = createEntryComposeRule()
 
     @Test
-    fun splashUsesSelectedSceneStandaloneMarkAndHonestInitializationCopy() {
+    fun freshLoginSuccessBlocksWorkspaceUntilExactContinueAndKeepsAccessibleTargets() {
+        val signedIn = mutableStateOf(
+            AuthState.SignedIn(
+                me = MeResponse(
+                    userId = "connected-user",
+                    email = "connected@example.test",
+                    name = "Connected Employee",
+                    companyId = "connected-company",
+                    branchId = "connected-branch",
+                    accessibleModules = listOf("gaming"),
+                ),
+                freshLoginNonce = 41L,
+            ),
+        )
+        val acknowledgements = mutableListOf<Long>()
+        render(widthDp = 1_280, heightDp = 800) {
+            AuthenticatedWorkspaceHandoff(
+                signedIn = signedIn.value,
+                backgroundState = WorkspaceBackgroundUiState(),
+                onContinue = { acknowledged ->
+                    acknowledgements += acknowledged
+                    val accepted = acknowledged == signedIn.value.freshLoginNonce
+                    if (accepted) {
+                        signedIn.value = signedIn.value.copy(freshLoginNonce = null)
+                    }
+                    accepted
+                },
+            ) {
+                Box(Modifier.fillMaxSize().testTag("workspace-after-fresh-login"))
+            }
+        }
+
+        compose.onNodeWithText("Login successful").assertIsDisplayed()
+        compose.onNodeWithText("Welcome, Connected Employee").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-after-fresh-login").assertDoesNotExist()
+        captureRoot(
+            name = "entry-fresh-login-1280x800",
+            testName = "freshLoginSuccessBlocksWorkspaceUntilExactContinueAndKeepsAccessibleTargets",
+            widthDp = 1_280,
+            heightDp = 800,
+            fontScale = 1.0f,
+            photoExpected = true,
+        )
+        compose.onNodeWithTag("fresh-login-continue")
+            .assertIsDisplayed()
+            .assertIsEnabled()
+            .assertHeightIsAtLeast(48.dp)
+            .performClick()
+        compose.waitUntil(timeoutMillis = 5_000) { acknowledgements == listOf(41L) }
+        compose.onNodeWithTag("workspace-after-fresh-login").assertIsDisplayed()
+        assertEquals(listOf(41L), acknowledgements)
+    }
+
+    @Test
+    fun freshLoginSwipeRejectsShortHorizontalAndDownGesturesThenAcceptsUpwardGesture() {
+        val acknowledgements = mutableListOf<Long>()
+        render(widthDp = 1_280, heightDp = 800) {
+            FreshLoginSuccessScreen(
+                nonce = 72L,
+                employeeName = "Gesture Employee",
+                backgroundState = WorkspaceBackgroundUiState(),
+                onContinue = {
+                    acknowledgements.add(it)
+                    true
+                },
+            )
+        }
+        val swipeOwner = compose.onNodeWithTag("fresh-login-swipe-owner")
+
+        swipeOwner.performTouchInput {
+            swipe(center, Offset(center.x, center.y - 24f), durationMillis = 250)
+        }
+        compose.waitForIdle()
+        assertTrue("A short swipe must not continue", acknowledgements.isEmpty())
+
+        swipeOwner.performTouchInput {
+            swipe(center, Offset(center.x + 180f, center.y), durationMillis = 250)
+        }
+        compose.waitForIdle()
+        assertTrue("A horizontal swipe must not continue", acknowledgements.isEmpty())
+
+        swipeOwner.performTouchInput {
+            swipe(center, Offset(center.x, center.y + 80f), durationMillis = 250)
+        }
+        compose.waitForIdle()
+        assertTrue("A downward swipe must not continue", acknowledgements.isEmpty())
+
+        swipeOwner.performTouchInput {
+            down(center)
+            moveTo(Offset(center.x, center.y - 320f), delayMillis = 240)
+            cancel()
+        }
+        compose.waitForIdle()
+        assertTrue("A cancelled swipe past the threshold must not continue", acknowledgements.isEmpty())
+
+        swipeOwner.performTouchInput {
+            swipe(center, Offset(center.x, center.y - 360f), durationMillis = 350)
+        }
+        compose.waitUntil(timeoutMillis = 5_000) { acknowledgements == listOf(72L) }
+        assertEquals(listOf(72L), acknowledgements)
+    }
+
+    @Test
+    fun rejectedScopeOrStaleNonceAcknowledgementRestoresInteractivePrompt() {
+        var currentNonce = 99L
+        var scopeValid = true
+        val attempts = mutableListOf<Long>()
+        render(widthDp = 1_280, heightDp = 800) {
+            FreshLoginSuccessScreen(
+                nonce = 99L,
+                employeeName = "Scope Employee",
+                backgroundState = WorkspaceBackgroundUiState(),
+                onContinue = { requested ->
+                    attempts += requested
+                    scopeValid && requested == currentNonce
+                },
+            )
+        }
+
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.onNodeWithTag("fresh-login-continue").performClick()
+            compose.mainClock.advanceTimeBy(130)
+            scopeValid = false
+            compose.mainClock.advanceTimeBy(600)
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+        compose.waitForIdle()
+        assertEquals(listOf(99L), attempts)
+        compose.onNodeWithTag("fresh-login-continue").assertIsDisplayed().assertIsEnabled()
+        compose.onNodeWithTag("fresh-login-stage").assertIsDisplayed()
+
+        scopeValid = true
+        currentNonce = 100L
+        compose.onNodeWithTag("fresh-login-continue").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf(99L, 99L), attempts)
+        compose.onNodeWithTag("fresh-login-continue").assertIsDisplayed().assertIsEnabled()
+
+        currentNonce = 99L
+        compose.onNodeWithTag("fresh-login-continue").performClick()
+        compose.waitUntil(timeoutMillis = 5_000) { attempts == listOf(99L, 99L, 99L) }
+    }
+
+    @Test
+    fun compactLargeTextSuccessKeepsCopyAndContinueFullyReachable() {
+        var acknowledgements = 0
+        render(widthDp = 600, heightDp = 500, fontScale = 1.3f) {
+            FreshLoginSuccessScreen(
+                nonce = 83L,
+                employeeName = "Large Text Employee",
+                backgroundState = WorkspaceBackgroundUiState(),
+                onContinue = {
+                    acknowledgements++
+                    true
+                },
+            )
+        }
+
+        listOf(
+            "fresh-login-brand-mark",
+            "fresh-login-title",
+            "fresh-login-employee",
+            "fresh-login-instruction",
+            "fresh-login-up-arrow",
+            "fresh-login-continue",
+        ).forEach { tag ->
+            compose.onNodeWithTag(tag).assertIsDisplayed()
+            assertFullyInsideRoot(tag)
+        }
+        compose.onNodeWithTag("fresh-login-continue").assertHeightIsAtLeast(48.dp)
+        captureRoot(
+            name = "entry-fresh-login-600x500-font1_3",
+            testName = "compactLargeTextSuccessKeepsCopyAndContinueFullyReachable",
+            widthDp = 600,
+            heightDp = 500,
+            fontScale = 1.3f,
+            photoExpected = true,
+        )
+        listOf(
+            "Login successful",
+            "Welcome, Large Text Employee",
+            "Swipe up to open your workspace",
+        ).forEach { text -> assertTextDoesNotOverflow(text, scrollIntoView = false) }
+    }
+
+    @Test
+    fun freshLoginReadySceneUsesRoleBoundGlassAndContrastInNightAndDay() {
+        val appearance = mutableStateOf(AppearancePreference.Night)
+        assertHost()
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(density.density, 1.3f),
+            ) {
+                DCompanyTheme(appearance.value) {
+                    Surface(color = MaterialTheme.colorScheme.background) {
+                        Box(Modifier.width(600.dp).height(500.dp)) {
+                            FreshLoginSuccessScreen(
+                                nonce = 87L,
+                                employeeName = "Contrast Employee",
+                                backgroundState = WorkspaceBackgroundUiState(),
+                                onContinue = { true },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        listOf(AppearancePreference.Night, AppearancePreference.Day).forEach { preference ->
+            if (appearance.value != preference) {
+                compose.runOnUiThread { appearance.value = preference }
+            }
+            compose.waitForIdle()
+            awaitTag("fresh-login-background-ready-workspace")
+            awaitTag("fresh-login-glass-ready-workspace")
+
+            val day = preference == AppearancePreference.Day
+            val panel = workspaceGlassRoleStyle(WorkspaceGlassRole.PANEL, day)
+            val prompt = workspaceGlassRoleStyle(WorkspaceGlassRole.CONTROL, day)
+            assertEquals(panel.primaryContent.toArgb(), textColor("fresh-login-title"))
+            assertEquals(panel.secondaryContent.toArgb(), textColor("fresh-login-employee"))
+            assertEquals(prompt.iconContent.toArgb(), textColor("fresh-login-up-arrow"))
+            assertEquals(prompt.secondaryContent.toArgb(), textColor("fresh-login-instruction"))
+
+            listOf(
+                "fresh-login-success-card",
+                "fresh-login-swipe-owner",
+                "fresh-login-title",
+                "fresh-login-employee",
+                "fresh-login-up-arrow",
+                "fresh-login-instruction",
+                "fresh-login-continue",
+            ).forEach { tag ->
+                compose.onNodeWithTag(tag, useUnmergedTree = true).assertIsDisplayed()
+                assertFullyInsideRoot(tag)
+            }
+            compose.onNodeWithTag("fresh-login-continue").assertHeightIsAtLeast(48.dp)
+            assertTaggedForegroundContrast("fresh-login-title", 4.8, 8, preference)
+            assertTaggedForegroundContrast("fresh-login-employee", 4.8, 8, preference)
+            assertTaggedForegroundContrast("fresh-login-instruction", 4.8, 8, preference)
+            assertTaggedForegroundContrast("fresh-login-up-arrow", 3.2, 1, preference)
+            listOf(
+                "Login successful",
+                "Welcome, Contrast Employee",
+                "Swipe up to open your workspace",
+            ).forEach { text -> assertTextDoesNotOverflow(text, scrollIntoView = false) }
+        }
+    }
+
+    @Test
+    fun freshLoginBackUsesTheSameBoundedCosmeticContinuation() {
+        val acknowledgements = mutableListOf<Long>()
+        render(widthDp = 1_280, heightDp = 800) {
+            FreshLoginSuccessScreen(
+                nonce = 94L,
+                employeeName = "Back Employee",
+                backgroundState = WorkspaceBackgroundUiState(),
+                onContinue = {
+                    acknowledgements.add(it)
+                    true
+                },
+            )
+        }
+
+        compose.activity.onBackPressedDispatcher.onBackPressed()
+        compose.waitUntil(timeoutMillis = 5_000) { acknowledgements == listOf(94L) }
+        assertEquals(listOf(94L), acknowledgements)
+    }
+
+    @Test
+    fun splashUsesSelectedSceneOriginalMarkAndHonestInitializationCopy() {
         render(widthDp = 1_280, heightDp = 800) {
             ExecutiveEntrySplash()
         }
         captureRoot(
             name = "entry-splash-1280x800",
-            testName = "splashUsesSelectedSceneStandaloneMarkAndHonestInitializationCopy",
+            testName = "splashUsesSelectedSceneOriginalMarkAndHonestInitializationCopy",
             widthDp = 1_280,
             heightDp = 800,
             fontScale = 1.0f,
@@ -225,19 +509,27 @@ class ExecutiveEntryPresentationUiTest {
     }
 
     @Test
-    fun landscapeLoginMatchesMeasuredCompositionAndPreservesArtworkAspect() {
+    fun landscapeLoginFillsMeasuredViewportAndKeepsControlsInitiallyReachable() {
         renderLogin(widthDp = 1_280, heightDp = 800)
-        captureRoot(
-            name = "entry-login-landscape-1280x800",
-            testName = "landscapeLoginMatchesMeasuredCompositionAndPreservesArtworkAspect",
-            widthDp = 1_280,
-            heightDp = 800,
-            fontScale = 1.0f,
-            photoExpected = true,
+
+        compose.waitUntil(timeoutMillis = 8_000) {
+            compose.onAllNodes(hasTestTag("login-scene-background-ready-workspace"))
+                .fetchSemanticsNodes().size == 1 &&
+                compose.onAllNodes(hasTestTag("login-scene-glass-ready-workspace"))
+                    .fetchSemanticsNodes().size == 1
+        }
+        compose.onNodeWithTag("login-scene-background-ready-workspace").assertIsDisplayed()
+        compose.onNodeWithTag("login-scene-glass-ready-workspace").assertIsDisplayed()
+        assertEquals(
+            "Login must never substitute the unrelated workspace fallback artwork",
+            0,
+            compose.onAllNodes(hasTestTag("login-scene-background-fallback-workspace"))
+                .fetchSemanticsNodes().size,
         )
 
         val root = mainEntryRoot().getUnclippedBoundsInRoot()
         val composition = compose.onNodeWithTag("login-composition").getUnclippedBoundsInRoot()
+        val backdrop = compose.onNodeWithTag("login-backdrop").getUnclippedBoundsInRoot()
         val formZone = compose.onNodeWithTag("login-form-zone").getUnclippedBoundsInRoot()
         val photoZone = compose.onNodeWithTag("login-photo-zone").getUnclippedBoundsInRoot()
         val form = compose.onNodeWithTag("login-form").getUnclippedBoundsInRoot()
@@ -250,32 +542,54 @@ class ExecutiveEntryPresentationUiTest {
         val formWidth = form.right - form.left
         val formFraction = formZoneWidth / compositionWidth
         val controlFraction = formWidth / formZoneWidth
-        val aspect = compositionWidth.value / compositionHeight.value
-        assertTrue("Composition must preserve 16:9: $aspect", abs(aspect - 16f / 9f) <= 0.01f)
-        assertTrue("Composition must be horizontally centered", abs(composition.left.value + composition.right.value - root.right.value) <= 1f)
-        assertTrue("Composition must be vertically centered", abs(composition.top.value + composition.bottom.value - root.bottom.value) <= 1f)
-        assertTrue("Form zone must occupy 42–44%: $formFraction", formFraction in 0.42f..0.44f)
+        assertBoundsMatch("Composition must fill the measured safe viewport", composition, root)
+        assertBoundsMatch("Backdrop must cover the full composition without letterboxing", backdrop, root)
+        assertTrue("Glass panel must occupy 35–37%: $formFraction", formFraction in 0.35f..0.37f)
         assertTrue("Controls must occupy 78–80% of form zone: $controlFraction", controlFraction in 0.78f..0.80f)
         assertTrue("Photo must begin after the form zone", photoZone.left >= formZone.right)
+        assertTrue("Glass panel must retain a 47–49dp left inset: $formZone", (formZone.left - composition.left).value in 47f..49f)
+        assertTrue("Glass panel must retain a 47–49dp top inset: $formZone", (formZone.top - composition.top).value in 47f..49f)
+        assertTrue("Glass panel must retain a 47–49dp bottom inset: $formZone", (composition.bottom - formZone.bottom).value in 47f..49f)
+        compose.onNodeWithTag("login-glass-material").assertIsDisplayed()
         val brandCenterOffset = abs(
             ((brand.left.value + brand.right.value) / 2f) -
                 ((formZone.left.value + formZone.right.value) / 2f),
         )
         assertTrue("Brand must stay centered in the form panel: $brandCenterOffset", brandCenterOffset <= 1f)
-        val brandTopFraction = (brand.top - composition.top) / compositionHeight
-        val brandEndFraction = (brand.bottom - composition.top) / compositionHeight
-        val markCenterFraction = (((brandMark.top + brandMark.bottom) / 2f) - composition.top) / compositionHeight
-        val formStartFraction = (emailLabel.top - composition.top) / compositionHeight
-        assertTrue("Brand band must begin near 12%: $brandTopFraction", brandTopFraction in 0.11f..0.13f)
-        assertTrue("Brand subtitle band must end near 36%: $brandEndFraction", brandEndFraction in 0.35f..0.37f)
-        assertTrue("Standalone D must center near 19%: $markCenterFraction", markCenterFraction in 0.15f..0.21f)
-        assertTrue("First field label must begin near 43%: $formStartFraction", formStartFraction in 0.42f..0.45f)
-        assertInkWidthFraction("login-brand-name", compositionWidth, 0.19f..0.24f)
-        assertInkWidthFraction("login-brand-subtitle", compositionWidth, 0.11f..0.17f)
-        compose.onNodeWithTag("login-version").assertIsDisplayed()
+        val panelHeight = formZone.bottom - formZone.top
+        val brandTopFraction = (brand.top - formZone.top) / panelHeight
+        val brandEndFraction = (brand.bottom - formZone.top) / panelHeight
+        val markCenterFraction = (((brandMark.top + brandMark.bottom) / 2f) - formZone.top) / panelHeight
+        val formStartFraction = (emailLabel.top - formZone.top) / panelHeight
+        assertTrue("Brand band must begin near 6% of glass: $brandTopFraction", brandTopFraction in 0.05f..0.07f)
+        assertTrue("Brand subtitle band must end near 30% of glass: $brandEndFraction", brandEndFraction in 0.29f..0.31f)
+        assertTrue("Original brand mark must center near 11% of glass: $markCenterFraction", markCenterFraction in 0.09f..0.13f)
+        assertTrue("First field label must begin near 36% of glass: $formStartFraction", formStartFraction in 0.35f..0.38f)
+        assertInkWidthFraction("login-brand-name", formZoneWidth, 0.48f..0.62f)
+        assertInkWidthFraction("login-brand-subtitle", formZoneWidth, 0.30f..0.46f)
+        listOf("login-email", "login-password", "login-recover", "login-submit", "login-version")
+            .forEach { tag -> assertInitiallyVisibleTarget(tag, root, formZone) }
+        compose.onNodeWithTag("login-email").assertHeightIsAtLeast(64.dp)
+        compose.onNodeWithTag("login-password").assertHeightIsAtLeast(64.dp)
+        compose.onNodeWithTag("login-recover").assertHeightIsAtLeast(48.dp)
+        compose.onNodeWithTag("login-submit")
+            .assertHeightIsAtLeast(64.dp)
+            .assertIsNotEnabled()
         assertTextDoesNotOverflow("v${BuildConfig.VERSION_NAME}", scrollIntoView = false)
+        assertTextDoesNotOverflow("Login", scrollIntoView = false)
+        val submit = compose.onNodeWithTag("login-submit").getUnclippedBoundsInRoot()
+        val version = compose.onNodeWithTag("login-version").getUnclippedBoundsInRoot()
+        assertTrue("Disabled Login and version must not overlap: submit=$submit version=$version", submit.bottom <= version.top)
+        assertDisabledLoginContrast()
         compose.onNodeWithContentDescription("D Company illustrated login artwork").assertIsDisplayed()
-        assertEssentialTargets()
+        captureRoot(
+            name = "entry-login-landscape-1280x800",
+            testName = "landscapeLoginFillsMeasuredViewportAndKeepsControlsInitiallyReachable",
+            widthDp = 1_280,
+            heightDp = 800,
+            fontScale = 1.0f,
+            photoExpected = true,
+        )
 
         compose.onNodeWithTag("login-email").performTextReplacement("splash-preview@example.test")
         compose.onNodeWithTag("login-password").performTextReplacement("dummy-secret")
@@ -287,7 +601,7 @@ class ExecutiveEntryPresentationUiTest {
         compose.onNodeWithTag("login-submit").assertIsEnabled()
         captureRoot(
             name = "entry-login-landscape-enabled-1280x800",
-            testName = "landscapeLoginMatchesMeasuredCompositionAndPreservesArtworkAspect",
+            testName = "landscapeLoginFillsMeasuredViewportAndKeepsControlsInitiallyReachable",
             widthDp = 1_280,
             heightDp = 800,
             fontScale = 1.0f,
@@ -304,13 +618,14 @@ class ExecutiveEntryPresentationUiTest {
             widthDp = 600,
             heightDp = 800,
             fontScale = 1.3f,
-            photoExpected = false,
+            photoExpected = true,
         )
 
         compose.onNodeWithTag("login-layout-compact").assertIsDisplayed()
         compose.onNodeWithTag("login-layout-wide").assertDoesNotExist()
-        compose.onNodeWithTag("login-photo").assertDoesNotExist()
+        compose.onNodeWithTag("login-photo").assertIsDisplayed()
         compose.onNodeWithTag("login-photo-zone").assertDoesNotExist()
+        compose.onNodeWithTag("login-glass-material").assertIsDisplayed()
         compose.onNodeWithTag("login-version").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("login-submit").performScrollTo().assertIsDisplayed()
         assertEssentialTargets()
@@ -400,6 +715,17 @@ class ExecutiveEntryPresentationUiTest {
         compose.onNodeWithTag("login-layout-compact").assertDoesNotExist()
         compose.onNodeWithTag("login-photo").assertIsDisplayed()
         compose.onNodeWithTag("login-brand-mark").assertDoesNotExist()
+        val reducedRoot = mainEntryRoot().getUnclippedBoundsInRoot()
+        assertBoundsMatch(
+            "Simulated IME-sized composition must follow the reduced safe viewport",
+            compose.onNodeWithTag("login-composition").getUnclippedBoundsInRoot(),
+            reducedRoot,
+        )
+        assertBoundsMatch(
+            "Simulated IME-sized backdrop must still cover the reduced safe viewport",
+            compose.onNodeWithTag("login-backdrop").getUnclippedBoundsInRoot(),
+            reducedRoot,
+        )
         compose.onNodeWithTag("login-email")
             .performScrollTo()
             .assertTextEquals(expectedEmail)
@@ -456,7 +782,7 @@ class ExecutiveEntryPresentationUiTest {
             )
         }
 
-        compose.onNodeWithTag("login-photo").assertDoesNotExist()
+        compose.onNodeWithTag("login-photo").assertIsDisplayed()
         compose.onNodeWithTag("login-email").performScrollTo().assertIsDisplayed().assertIsEnabled()
         compose.onNodeWithTag("login-recover").performScrollTo().assertIsDisplayed().assertIsEnabled()
         compose.onNodeWithText(error).performScrollTo().assertIsDisplayed()
@@ -489,7 +815,7 @@ class ExecutiveEntryPresentationUiTest {
             widthDp = 600,
             heightDp = 360,
             fontScale = 1.3f,
-            photoExpected = false,
+            photoExpected = true,
         )
         compose.onNodeWithTag("login-email").assertIsNotEnabled()
         compose.onNodeWithTag("login-recover").assertIsNotEnabled()
@@ -543,7 +869,7 @@ class ExecutiveEntryPresentationUiTest {
                 widthDp = 600,
                 heightDp = 360,
                 fontScale = 1.3f,
-                photoExpected = false,
+                photoExpected = true,
             )
             assertBusyButtonContrast(preference)
             assertBusyAuxiliaryContrast(preference)
@@ -647,6 +973,62 @@ class ExecutiveEntryPresentationUiTest {
             control.left >= root.left && control.top >= root.top &&
                 control.right <= root.right && control.bottom <= root.bottom,
         )
+    }
+
+    private fun assertInitiallyVisibleTarget(
+        tag: String,
+        root: androidx.compose.ui.unit.DpRect,
+        formZone: androidx.compose.ui.unit.DpRect,
+    ) {
+        val target = compose.onNodeWithTag(tag).assertIsDisplayed()
+        val bounds = target.getUnclippedBoundsInRoot()
+        assertTrue(
+            "$tag must be initially visible without semantic scrolling: target=$bounds root=$root",
+            bounds.left >= root.left && bounds.top >= root.top &&
+                bounds.right <= root.right && bounds.bottom <= root.bottom,
+        )
+        assertTrue(
+            "$tag must remain inside the form zone: target=$bounds formZone=$formZone",
+            bounds.left >= formZone.left && bounds.top >= formZone.top &&
+                bounds.right <= formZone.right && bounds.bottom <= formZone.bottom,
+        )
+    }
+
+    private fun assertBoundsMatch(
+        message: String,
+        actual: androidx.compose.ui.unit.DpRect,
+        expected: androidx.compose.ui.unit.DpRect,
+    ) {
+        assertTrue(
+            "$message: actual=$actual expected=$expected",
+            abs(actual.left.value - expected.left.value) <= 1f &&
+                abs(actual.top.value - expected.top.value) <= 1f &&
+                abs(actual.right.value - expected.right.value) <= 1f &&
+                abs(actual.bottom.value - expected.bottom.value) <= 1f,
+        )
+    }
+
+    private fun assertDisabledLoginContrast() {
+        val bitmap = compose.onNodeWithTag("login-submit").captureToImage().asAndroidBitmap()
+        try {
+            val background = dominantOpaqueColor(bitmap)
+            val proof = contrastProof(
+                bitmap = bitmap,
+                background = background,
+                left = (bitmap.width * 0.05f).roundToInt(),
+                right = (bitmap.width * 0.70f).roundToInt(),
+                threshold = 4.5,
+                top = 0,
+                bottom = bitmap.height,
+            )
+            assertTrue("Disabled Login must remain legible at 4.5:1; actual=${proof.peak}", proof.peak >= 4.5)
+            assertTrue(
+                "Disabled Login must retain resolved core label pixels; count=${proof.pixelsMeetingThreshold}",
+                proof.pixelsMeetingThreshold >= 8,
+            )
+        } finally {
+            bitmap.recycle()
+        }
     }
 
     private fun controlGeometry(tags: List<String>): Map<String, List<Float>> =
@@ -855,6 +1237,54 @@ class ExecutiveEntryPresentationUiTest {
             ?: error("Busy button capture has no opaque pixels")
     }
 
+    private fun awaitTag(tag: String) {
+        compose.waitUntil(timeoutMillis = 15_000) {
+            compose.onAllNodes(hasTestTag(tag), useUnmergedTree = true)
+                .fetchSemanticsNodes().size == 1
+        }
+    }
+
+    private fun textColor(tag: String): Int {
+        val layouts = mutableListOf<TextLayoutResult>()
+        compose.onNodeWithTag(tag, useUnmergedTree = true)
+            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        assertEquals("$tag must expose one text layout", 1, layouts.size)
+        return layouts.single().layoutInput.style.color.toArgb()
+    }
+
+    private fun assertTaggedForegroundContrast(
+        tag: String,
+        threshold: Double,
+        minimumPixels: Int,
+        preference: AppearancePreference,
+    ) {
+        val bitmap = compose.onNodeWithTag(tag, useUnmergedTree = true)
+            .captureToImage().asAndroidBitmap()
+        try {
+            val background = dominantOpaqueColor(bitmap)
+            val proof = contrastProof(
+                bitmap = bitmap,
+                background = background,
+                left = 0,
+                right = bitmap.width,
+                threshold = threshold,
+                top = 0,
+                bottom = bitmap.height,
+            )
+            assertTrue(
+                "$preference $tag must resolve at $threshold:1; actual=${proof.peak}",
+                proof.peak >= threshold,
+            )
+            assertTrue(
+                "$preference $tag must contain at least $minimumPixels resolved foreground pixels; " +
+                    "count=${proof.pixelsMeetingThreshold}",
+                proof.pixelsMeetingThreshold >= minimumPixels,
+            )
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
     private fun contrastProof(
         bitmap: Bitmap,
         background: Int,
@@ -978,7 +1408,11 @@ class ExecutiveEntryPresentationUiTest {
             if (host.requestedDisplayId == null) {
                 assertEquals("Default entry host must use display 0", 0, host.observedDisplayId)
             } else {
-                assertEquals("HD entry host must use display 2", 2, host.observedDisplayId)
+                assertEquals(
+                    "HD entry host must use its requested display",
+                    host.requestedDisplayId,
+                    host.observedDisplayId,
+                )
                 assertEquals(2_560, host.modeWidthPx)
                 assertEquals(1_600, host.modeHeightPx)
                 assertEquals(320, host.densityDpi)
@@ -1020,7 +1454,8 @@ class ExecutiveEntryPresentationUiTest {
             }
             val requested = host.requestedDisplayId?.toString() ?: "null"
             val splashExpected = photoExpected && name.startsWith("entry-splash")
-            val loginArtworkExpected = photoExpected && !splashExpected
+            val freshLoginExpected = photoExpected && name.startsWith("entry-fresh-login")
+            val loginArtworkExpected = photoExpected && !splashExpected && !freshLoginExpected
             val splashCropJson = if (splashExpected) {
                 val bounds = compose.onNodeWithTag("entry-splash-scene", useUnmergedTree = true)
                     .getUnclippedBoundsInRoot()
@@ -1039,7 +1474,7 @@ class ExecutiveEntryPresentationUiTest {
             directory.resolve("$name.provenance.json").writeText(
                 """
                 {
-                  "phase": "C1_SPLASH",
+                  "phase": "${if (freshLoginExpected) "FRESH_LOGIN_HANDOFF" else "C1_SPLASH"}",
                   "capture_api": "ComposeTestRule.onNode(isRoot + entry descendant).captureToImage()",
                   "test_class": "cloud.dcompany.erp.ui.screens.ExecutiveEntryPresentationUiTest",
                   "test_name": "$testName",
@@ -1060,7 +1495,7 @@ class ExecutiveEntryPresentationUiTest {
                   "login_scene_hd_r1_source_rect": $loginSceneSourceJson,
                   "login_scene_hd_r1_dimensions_px": "1672x941",
                   "login_scene_provenance": "AI reconstruction from supplied Login reference; clean scene with no baked controls or branding; not original pixels and not 4K",
-                  "login_scene_rendering": "entire generated scene, width-locked canonical 16:9 framing with vertical clipping at reduced height and native overlays",
+                  "login_scene_rendering": "viewport-filling centerCrop with proportional edge cropping and native overlays",
                   "requested_display_id": $requested,
                   "observed_display_id": ${host.observedDisplayId},
                   "display_mode_width_px": ${host.modeWidthPx},
@@ -1092,13 +1527,14 @@ class ExecutiveEntryPresentationUiTest {
         isRoot() and hasAnyDescendant(
             hasTestTag("executive-entry-splash") or
                 hasTestTag("login-layout-wide") or
-                hasTestTag("login-layout-compact"),
+                hasTestTag("login-layout-compact") or
+                hasTestTag("fresh-login-root"),
         ),
         useUnmergedTree = true,
     )
 
     private fun outputDirectory(): File {
-        val profile = if (RequestedEntryDisplayId == null) "default-display" else "display-2-hd"
+        val profile = RequestedEntryDisplayId?.let { "display-$it-hd" } ?: "default-display"
         return InstrumentationRegistry.getInstrumentation().targetContext.filesDir
             .resolve("phase-c1-splash-screenshots-v1")
             .resolve(profile)

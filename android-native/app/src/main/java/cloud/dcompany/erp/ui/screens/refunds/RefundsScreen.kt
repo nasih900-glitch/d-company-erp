@@ -37,7 +37,7 @@ import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -81,9 +81,11 @@ import cloud.dcompany.erp.ui.components.PanelDivider
 import cloud.dcompany.erp.ui.components.SearchInput
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.UiTone
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
 import java.text.DateFormat
 import java.util.Date
 
@@ -225,7 +227,8 @@ fun RefundsScreen(
                 if (state.tasks.isNotEmpty()) {
                     item("task-heading") {
                         Column(
-                            Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
+                            Modifier.fillMaxWidth()
+                                .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.CONTROL)
                                 .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
                             verticalArrangement = Arrangement.spacedBy(2.dp),
                         ) {
@@ -271,7 +274,8 @@ fun RefundsScreen(
 
                 item("orders-heading") {
                     Column(
-                        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
+                        Modifier.fillMaxWidth()
+                            .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.CONTROL)
                             .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
@@ -359,7 +363,8 @@ fun RefundsScreen(
                     item("history-divider") { PanelDivider() }
                     item("history-heading") {
                         Column(
-                            Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
+                            Modifier.fillMaxWidth()
+                                .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.CONTROL)
                                 .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
                             verticalArrangement = Arrangement.spacedBy(2.dp),
                         ) {

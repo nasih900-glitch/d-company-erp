@@ -38,8 +38,9 @@ from app.core.errors import (
 )
 from app.core.idempotency import check_or_reserve, store_response
 from app.core.middleware import parse_client_version_code
-from app.core.permissions import requires
+from app.core.permissions import require_permission, requires
 from app.core.pricing_lock import require_pricing_unlock
+from app.core.roles import has_owner_role
 from app.core.tenant import TenantContext
 from app.core.timezone import company_timezone, local_date_bounds_utc, local_today
 from app.models import (
@@ -56,12 +57,15 @@ from app.models import (
     GamingSessionExtension,
     GamingSessionPackageAmendment,
     GamingSessionParticipant,
+    GamingVoidAddonLine,
+    GamingVoidReceipt,
     IdempotencyKey,
     MenuCategory,
     MenuItem,
     MenuModifier,
     MenuModifierGroup,
     MenuVariant,
+    MembershipBenefitReservation,
     Order,
     OrderLine,
     Payment,
@@ -89,6 +93,7 @@ from app.services.gaming.billing_mode import (
     is_package_billed,
     resolved_billing_mode,
 )
+from app.services.gaming.void import create_retained_addon_order
 from app.services.gaming.pause_clock import (
     billable_whole_minutes,
     completed_pause_ms,
@@ -131,6 +136,8 @@ _GAMING_SOURCE_TERMINAL_PURPOSES = frozenset({"gaming", "hybrid"})
 # actions remain on the generic conservative recovery path.
 _REJECTED_START_RECEIPT_MIN_ANDROID_VERSION_CODE = 18
 _POS_DESTINATION_TERMINAL_PURPOSES = frozenset({"cafe_pos", "hybrid"})
+_VOID_REASON_REQUIRED_AFTER_MS = 30 * 60 * 1_000
+_VOID_WITHOUT_USER_REASON = "Voided before 30 minutes; no user reason supplied"
 _PS5_30M_AMENDMENT_TARGETS = {
     spec.variant: spec
     for spec in D_COMPANY_GAMING_TARIFF
@@ -389,7 +396,12 @@ class SessionRead(BaseModel):
     customer_id: UUID | None = None
     rate_per_hour_minor: int | None = None
     order_id: UUID | None = None
+    retained_addon_order_id: UUID | None = None
     cancel_reason: str | None = None
+    cancelled_at: datetime | None = None
+    cancelled_by: UUID | None = None
+    server_play_elapsed_ms: int | None = None
+    void_reason_required: bool = True
     cancellation_receipt_id: UUID | None = None
     cancellation_idempotency_key: str | None = None
     cancellation_request_hash: str | None = None
@@ -534,18 +546,20 @@ class SessionPackageAmend(BaseModel):
 class SessionCancel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    reason: str = Field(min_length=1, max_length=500)
+    reason: str | None = Field(default=None, max_length=500)
+    expected_order_id: UUID | None = None
+    retained_target_shift_id: UUID | None = None
     expected_participant_revision: int | None = Field(default=None, ge=0, strict=True)
     expected_billing_revision: int | None = Field(default=None, ge=0, strict=True)
     expected_amount_minor: int | None = Field(default=None, ge=0, le=9_999_999_999, strict=True)
 
     @field_validator("reason")
     @classmethod
-    def require_meaningful_reason(cls, value: str) -> str:
+    def normalize_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         value = value.strip()
-        if not value:
-            raise ValueError("cancellation reason cannot be blank")
-        return value
+        return value or None
 
 
 class ParticipantVoidOriginal(BaseModel):
@@ -901,8 +915,71 @@ def _effective_base_duration_minutes(gs: GamingSession) -> int:
     return int(_effective_package_value(gs, "package_duration_minutes_snapshot") or 0)
 
 
+def _session_void_elapsed_ms(
+    gs: GamingSession,
+    *,
+    server_now: datetime | None = None,
+) -> int | None:
+    """Return the server-authoritative play meter used by Void policy.
+
+    A pre-0068 paused row without ``paused_at`` has no trustworthy frozen play
+    boundary.  It remains voidable with a reason, but callers must not infer a
+    duration from wall-clock time.  Ended rows are measured at their immutable
+    end; live rows are measured at the supplied/current server instant.
+    """
+    if gs.status == "paused" and getattr(gs, "paused_at", None) is None:
+        return None
+    start_at = getattr(gs, "start_at", None)
+    if gs.status in {"ended", "cancelled"}:
+        at = getattr(gs, "end_at", None)
+    elif gs.status == "paused":
+        at = getattr(gs, "paused_at", None)
+    else:
+        at = server_now
+    if at is None and gs.status not in {"ended", "cancelled"}:
+        at = datetime.now(timezone.utc)
+    if (
+        at is None
+        or start_at is None
+        or at.tzinfo is None
+        or start_at.tzinfo is None
+        or at < start_at
+    ):
+        return None
+    total_elapsed_ms = duration_ms(at - start_at)
+    if completed_pause_ms(gs) > total_elapsed_ms:
+        # A corrupt legacy row must never turn an unknown played duration into
+        # a trustworthy zero through play_elapsed_ms()'s defensive clamp.
+        return None
+    return play_elapsed_ms(gs, at)
+
+
+def _void_reason_policy(
+    payload: SessionCancel,
+    *,
+    elapsed_ms: int | None,
+) -> tuple[str, bool]:
+    user_reason = payload.reason
+    required = elapsed_ms is None or elapsed_ms >= _VOID_REASON_REQUIRED_AFTER_MS
+    if user_reason is None and required:
+        if elapsed_ms is None:
+            detail = "The exact played time is unavailable"
+        else:
+            detail = "This session has reached 30 minutes of played time"
+        raise BusinessRuleError(
+            f"{detail}. Enter a reason before voiding it.",
+            details={
+                "issue": "gaming_void_reason_required",
+                "server_play_elapsed_ms": elapsed_ms,
+                "reason_required_after_ms": _VOID_REASON_REQUIRED_AFTER_MS,
+            },
+        )
+    return user_reason or _VOID_WITHOUT_USER_REASON, user_reason is not None
+
+
 def session_read(gs: GamingSession) -> SessionRead:
     timer_ends_at = timer_deadline(gs)
+    void_elapsed_ms = _session_void_elapsed_ms(gs)
     return SessionRead(
         id=gs.id,
         station_id=gs.station_id,
@@ -926,7 +1003,15 @@ def session_read(gs: GamingSession) -> SessionRead:
         customer_id=gs.customer_id,
         rate_per_hour_minor=gs.rate_per_hour_minor,
         order_id=gs.order_id,
+        retained_addon_order_id=getattr(gs, "retained_addon_order_id", None),
         cancel_reason=gs.cancel_reason,
+        cancelled_at=getattr(gs, "cancelled_at", None),
+        cancelled_by=getattr(gs, "cancelled_by", None),
+        server_play_elapsed_ms=void_elapsed_ms,
+        void_reason_required=(
+            void_elapsed_ms is None
+            or void_elapsed_ms >= _VOID_REASON_REQUIRED_AFTER_MS
+        ),
         billing_mode=resolved_billing_mode(gs),
         package_id=gs.package_id,
         package_price_minor_snapshot=getattr(gs, "package_price_minor_snapshot", None),
@@ -3027,9 +3112,28 @@ async def list_sessions(
     session: SessionDep,
     status_filter: str | None = Query(default=None, alias="status"),
     unbilled_only: bool = Query(default=False),
+    include_pos_linked_reviewable: bool = Query(default=False),
     limit: int = Query(default=80, ge=1, le=500),
     tenant: TenantContext = Depends(requires("gaming.read")),
 ) -> list[SessionRead]:
+    if include_pos_linked_reviewable:
+        if not unbilled_only:
+            raise BusinessRuleError(
+                "The Owner POS-linked review projection is available only with unbilled_only=true."
+            )
+        if tenant.branch_id is None or tenant.terminal_id is None:
+            raise BusinessRuleError(
+                "Select the exact branch and POS terminal holding the Gaming bill."
+            )
+        if not has_owner_role(tenant.roles):
+            raise ForbiddenError(
+                "Only an Owner can review Gaming charges that have reached POS."
+            )
+        await require_permission(session, tenant, "gaming.write")
+        await require_permission(session, tenant, "pos.read")
+        await require_permission(session, tenant, "pos.write")
+        await require_permission(session, tenant, "pos.void")
+
     stmt = select(GamingSession).where(GamingSession.company_id == tenant.company_id)
     if tenant.branch_id is not None:
         stmt = stmt.join(Station, Station.id == GamingSession.station_id).where(
@@ -3080,7 +3184,51 @@ async def list_sessions(
     else:
         stmt = stmt.order_by(GamingSession.start_at.desc())
     stmt = stmt.limit(limit)
-    rows = (await session.execute(stmt)).scalars().all()
+    rows = list((await session.execute(stmt)).scalars().all())
+
+    # The ordinary board always consumes the bound first. Only an explicitly
+    # authorized Owner may use remaining capacity for current, financially
+    # untouched POS-linked review work. Paid/issued/refunded history stays in
+    # the refund and receipt surfaces and can never evict live Gaming work.
+    if include_pos_linked_reviewable and len(rows) < limit and status_filter in {None, "ended"}:
+        reviewable = (
+            select(GamingSession)
+            .join(Station, Station.id == GamingSession.station_id)
+            .join(Order, Order.id == GamingSession.order_id)
+            .join(Shift, Shift.id == Order.shift_id)
+            .where(
+                GamingSession.company_id == tenant.company_id,
+                GamingSession.status == "ended",
+                GamingSession.order_id.is_not(None),
+                Station.company_id == tenant.company_id,
+                Station.branch_id == tenant.branch_id,
+                Order.company_id == tenant.company_id,
+                Order.branch_id == tenant.branch_id,
+                Order.terminal_id == tenant.terminal_id,
+                Order.status == "held",
+                Order.invoice_no.is_(None),
+                Order.invoice_issued_at.is_(None),
+                Order.irn.is_(None),
+                Order.tip_minor == 0,
+                Order.manual_discount_minor == 0,
+                Order.points_redeemed_minor == 0,
+                Shift.company_id == tenant.company_id,
+                Shift.branch_id == tenant.branch_id,
+                Shift.terminal_id == tenant.terminal_id,
+                Shift.status == "open",
+                Shift.closed_at.is_(None),
+                ~exists(select(Payment.id).where(Payment.order_id == Order.id)),
+                ~exists(select(Refund.id).where(Refund.order_id == Order.id)),
+                ~exists(
+                    select(MembershipBenefitReservation.id).where(
+                        MembershipBenefitReservation.order_id == Order.id
+                    )
+                ),
+            )
+            .order_by(GamingSession.start_at.desc(), GamingSession.id.desc())
+            .limit(limit - len(rows))
+        )
+        rows.extend((await session.execute(reviewable)).scalars().all())
     return [session_read(row) for row in rows]
 
 
@@ -3106,11 +3254,59 @@ async def get_session(
     ).scalar_one_or_none()
     if gaming_session is None:
         raise NotFoundError("session not found")
-    if gaming_session.status == "cancelled" and int(gaming_session.participant_revision or 0) > 0:
-        await _assert_participant_settlement_consistent(session, gaming_session)
-        await _assert_package_amendment_consistent(session, gaming_session)
-        _audit, receipt = await _participant_void_receipt(session, gaming_session)
-        return receipt.response
+    if gaming_session.status == "cancelled":
+        relational_receipt = await _validated_relational_void_receipt(
+            session, gaming_session
+        )
+        if int(gaming_session.participant_revision or 0) > 0:
+            await _assert_participant_settlement_consistent(session, gaming_session)
+            await _assert_package_amendment_consistent(session, gaming_session)
+            if relational_receipt is None:
+                _audit, receipt = await _participant_void_receipt(
+                    session, gaming_session
+                )
+                return _session_read_with_void_identity(
+                    gaming_session,
+                    receipt_id=receipt.receipt_id,
+                    idempotency_key=receipt.idempotency_key,
+                    request_hash=receipt.request_hash,
+                )
+        if relational_receipt is not None:
+            return _session_read_with_void_identity(
+                gaming_session,
+                receipt_id=relational_receipt.id,
+                idempotency_key=relational_receipt.idempotency_key,
+                request_hash=relational_receipt.request_hash,
+            )
+        audit_count = int(
+            await session.scalar(
+                select(func.count(AuditLog.id)).where(
+                    AuditLog.company_id == gaming_session.company_id,
+                    AuditLog.action == "gaming_session_voided",
+                    AuditLog.entity_type == "GamingSession",
+                    AuditLog.entity_id == str(gaming_session.id),
+                )
+            )
+            or 0
+        )
+        if audit_count == 0:
+            # Historical cancelled rows predate durable Void receipts. They
+            # remain readable, but intentionally expose no command identity
+            # and therefore cannot confirm a new client attempt.
+            return session_read(gaming_session)
+        audit, _request, response, request_hash = await _nonparticipant_void_receipt(
+            session, gaming_session
+        )
+        if audit.operation_id is None:
+            raise GamingBillingRepairRequiredError(
+                "The non-participant Void receipt is missing its command identity."
+            )
+        return _session_read_with_void_identity(
+            gaming_session,
+            receipt_id=response.cancellation_receipt_id or audit.id,
+            idempotency_key=audit.operation_id,
+            request_hash=request_hash,
+        )
     return session_read(gaming_session)
 
 
@@ -5076,6 +5272,34 @@ def _participant_totals(rows: list[GamingSessionParticipant]) -> dict[UUID, tupl
     return totals
 
 
+def _void_request_reason_matches(
+    gs: GamingSession,
+    request: SessionCancel,
+    audit: AuditLog,
+    *,
+    request_hash: str,
+) -> bool:
+    """Keep the raw command reason distinct from its immutable policy explanation."""
+    if request.reason is not None:
+        return request.reason == gs.cancel_reason
+    facts = audit.business_details if isinstance(audit.business_details, dict) else {}
+    elapsed_ms = facts.get("server_play_elapsed_ms")
+    return (
+        gs.cancel_reason == _VOID_WITHOUT_USER_REASON
+        and audit.reason == gs.cancel_reason
+        and facts.get("reason") == gs.cancel_reason
+        and facts.get("user_reason_supplied") is False
+        and type(elapsed_ms) is int
+        and 0 <= elapsed_ms < _VOID_REASON_REQUIRED_AFTER_MS
+        and facts.get("reason_required_after_ms") == _VOID_REASON_REQUIRED_AFTER_MS
+        and facts.get("pre_stop_status") in {"active", "paused", "ended"}
+        and _session_void_elapsed_ms(gs) == elapsed_ms
+        and facts.get("request") == request.model_dump(mode="json")
+        and facts.get("idempotency_key") == audit.operation_id
+        and facts.get("request_hash") == request_hash
+    )
+
+
 async def _participant_void_receipt(session, gs: GamingSession) -> tuple[AuditLog, ParticipantVoidReceipt]:
     rows = list((await session.execute(select(AuditLog).where(
         AuditLog.company_id == gs.company_id,
@@ -5092,6 +5316,32 @@ async def _participant_void_receipt(session, gs: GamingSession) -> tuple[AuditLo
         raise GamingBillingRepairRequiredError("The participant Void receipt is incomplete or inconsistent.") from exc
     original, request, response = receipt.original, receipt.request, receipt.response
     facts = audit.business_details if isinstance(audit.business_details, dict) else {}
+    reviewed_amount_minor = original.amount_minor
+    reviewed_participant_revision = original.participant_revision
+    if facts.get("pre_stop_status") in {"active", "paused"}:
+        # Atomic Void reviews the running projection, before Stop closes player
+        # intervals and adds their charge. Bind it to that immutable Stop receipt.
+        settlement = (await session.execute(select(GamingParticipantSettlement).where(
+            GamingParticipantSettlement.company_id == gs.company_id,
+            GamingParticipantSettlement.gaming_session_id == gs.id,
+            GamingParticipantSettlement.id == original.settlement_id,
+        ))).scalar_one_or_none()
+        if (
+            settlement is None
+            or settlement.stop_idempotency_key != receipt.idempotency_key
+            or settlement.stop_request_hash != receipt.request_hash
+            or settlement.settled_by != audit.actor_user_id
+            or settlement.terminal_id != audit.terminal_id
+            or settlement.settled_at != gs.cancelled_at
+            or settlement.settled_at != original.end_at
+            or int(settlement.participant_revision) != original.participant_revision
+            or int(settlement.amount_after_minor) != original.amount_minor
+        ):
+            raise GamingBillingRepairRequiredError(
+                "The running participant Void does not match its atomic Stop receipt."
+            )
+        reviewed_participant_revision = int(settlement.participant_revision_before)
+        reviewed_amount_minor = int(settlement.base_amount_minor) if is_package_billed(gs) else None
     if (
         gs.status != "cancelled" or gs.order_id is not None
         or gs.amount_minor != 0 or gs.billable_minutes != 0
@@ -5099,9 +5349,9 @@ async def _participant_void_receipt(session, gs: GamingSession) -> tuple[AuditLo
         or audit.actor_user_id != gs.cancelled_by or audit.terminal_id is None
         or audit.operation_id != receipt.idempotency_key or audit.reason != gs.cancel_reason
         or audit.created_at != gs.cancelled_at
-        or request.reason != gs.cancel_reason
-        or request.expected_amount_minor != original.amount_minor
-        or request.expected_participant_revision != original.participant_revision
+        or not _void_request_reason_matches(gs, request, audit, request_hash=receipt.request_hash)
+        or request.expected_amount_minor != reviewed_amount_minor
+        or request.expected_participant_revision != reviewed_participant_revision
         or request.expected_billing_revision != original.billing_revision
         or original.station_id != gs.station_id or original.shift_id != gs.shift_id
         or original.start_at != gs.start_at or original.end_at != gs.end_at
@@ -5130,6 +5380,207 @@ async def _participant_void_receipt(session, gs: GamingSession) -> tuple[AuditLo
     ):
         raise GamingBillingRepairRequiredError("The participant Void receipt does not match the cancelled session projection.")
     return audit, receipt
+
+
+async def _nonparticipant_void_receipt(
+    session,
+    gs: GamingSession,
+) -> tuple[AuditLog, SessionCancel, SessionRead, str]:
+    """Validate the immutable command identity for a non-participant Void."""
+    rows = list((await session.execute(select(AuditLog).where(
+        AuditLog.company_id == gs.company_id,
+        AuditLog.action == "gaming_session_voided",
+        AuditLog.entity_type == "GamingSession",
+        AuditLog.entity_id == str(gs.id),
+    ))).scalars().all())
+    if len(rows) != 1:
+        raise GamingBillingRepairRequiredError(
+            "The cancelled session requires one immutable Void receipt."
+        )
+    audit = rows[0]
+    facts = audit.business_details if isinstance(audit.business_details, dict) else {}
+    try:
+        original_request = SessionCancel.model_validate(facts.get("request"))
+        response = SessionRead.model_validate(audit.after)
+    except ValidationError as exc:
+        raise GamingBillingRepairRequiredError(
+            "The non-participant Void receipt is incomplete or inconsistent."
+        ) from exc
+    request_hash = facts.get("request_hash")
+    if (
+        gs.status != "cancelled"
+        or gs.cancelled_at is None
+        or gs.cancelled_by is None
+        or gs.order_id is not None
+        or gs.amount_minor != 0
+        or gs.billable_minutes != 0
+        or not isinstance(request_hash, str)
+        or len(request_hash) != 64
+        or audit.operation_id is None
+        or audit.actor_user_id != gs.cancelled_by
+        or audit.terminal_id is None
+        or audit.created_at != gs.cancelled_at
+        or audit.reason != gs.cancel_reason
+        or response.id != gs.id
+        or response.status != "cancelled"
+        or response.order_id is not None
+        or response.amount_minor != 0
+        or response.billable_minutes != 0
+        or response.cancel_reason != gs.cancel_reason
+        or facts.get("reason") != gs.cancel_reason
+        or facts.get("idempotency_key") != audit.operation_id
+        or not _void_request_reason_matches(gs, original_request, audit, request_hash=request_hash)
+    ):
+        raise GamingBillingRepairRequiredError(
+            "The non-participant Void receipt does not match the cancelled session projection."
+        )
+    return audit, original_request, response, request_hash
+
+
+def _session_read_with_void_identity(
+    gs: GamingSession,
+    *,
+    receipt_id: UUID,
+    idempotency_key: str,
+    request_hash: str,
+) -> SessionRead:
+    """Project current state plus one validated immutable Void identity."""
+    if (
+        gs.status != "cancelled"
+        or gs.cancelled_at is None
+        or gs.cancelled_by is None
+        or not (gs.cancel_reason or "").strip()
+        or not idempotency_key.strip()
+        or len(request_hash) != 64
+    ):
+        raise GamingBillingRepairRequiredError(
+            "The cancelled session is missing canonical Void evidence."
+        )
+    return session_read(gs).model_copy(
+        update={
+            "cancellation_receipt_id": receipt_id,
+            "cancellation_idempotency_key": idempotency_key,
+            "cancellation_request_hash": request_hash,
+        }
+    )
+
+
+async def _validated_relational_void_receipt(
+    session,
+    gs: GamingSession,
+) -> GamingVoidReceipt | None:
+    """Validate the immutable 0093 receipt before exposing it through SessionRead."""
+    rows = list(
+        (
+            await session.execute(
+                select(GamingVoidReceipt).where(
+                    GamingVoidReceipt.company_id == gs.company_id,
+                    GamingVoidReceipt.gaming_session_id == gs.id,
+                )
+            )
+        ).scalars()
+    )
+    if not rows:
+        return None
+    if len(rows) != 1:
+        raise GamingBillingRepairRequiredError(
+            "The cancelled session has conflicting immutable Void receipts."
+        )
+    receipt = rows[0]
+    request = receipt.request_payload if isinstance(receipt.request_payload, dict) else {}
+    response = receipt.response_payload if isinstance(receipt.response_payload, dict) else {}
+    response_receipt_id = response.get("receipt_id") or response.get(
+        "cancellation_receipt_id"
+    )
+    if (
+        gs.status != "cancelled"
+        or gs.order_id is not None
+        or gs.amount_minor != 0
+        or gs.billable_minutes != 0
+        or gs.cancelled_at is None
+        or gs.cancelled_by is None
+        or receipt.actor_user_id != gs.cancelled_by
+        or receipt.voided_at != gs.cancelled_at
+        or receipt.reason != gs.cancel_reason
+        or receipt.session_billing_revision != _billing_revision(gs)
+        or receipt.session_participant_revision != int(gs.participant_revision or 0)
+        or receipt.retained_order_id != getattr(gs, "retained_addon_order_id", None)
+        or str(response_receipt_id) != str(receipt.id)
+        or not receipt.idempotency_key.strip()
+        or len(receipt.request_hash) != 64
+    ):
+        raise GamingBillingRepairRequiredError(
+            "The relational Void receipt does not match the cancelled session projection."
+        )
+    if receipt.mode == "linked_pos":
+        if (
+            request.get("reason") != gs.cancel_reason
+            or str(request.get("session_id")) != str(gs.id)
+            or str(response.get("session_id")) != str(gs.id)
+            or str(response.get("source_order_id")) != str(receipt.source_order_id)
+            or "retained_order_id" not in response
+            or str(response.get("retained_order_id"))
+            != str(receipt.retained_order_id)
+            or response.get("session_status") != "cancelled"
+        ):
+            raise GamingBillingRepairRequiredError(
+                "The linked POS Void receipt does not match its canonical request."
+            )
+    elif receipt.mode == "unlinked_addons":
+        try:
+            original_request = SessionCancel.model_validate(request)
+        except ValidationError as exc:
+            raise GamingBillingRepairRequiredError(
+                "The retained add-on Void request is incomplete or inconsistent."
+            ) from exc
+        if original_request.model_dump(mode="json") != request:
+            raise GamingBillingRepairRequiredError(
+                "The retained add-on Void request is not its canonical saved command."
+            )
+        reason_matches = original_request.reason == gs.cancel_reason
+        if original_request.reason is None:
+            # A missing user reason is valid only with the original under-30
+            # audit proof, not merely a duration inferred after cancellation.
+            audits = list((await session.execute(select(AuditLog).where(
+                AuditLog.company_id == gs.company_id,
+                AuditLog.action == "gaming_session_voided",
+                AuditLog.entity_type == "GamingSession",
+                AuditLog.entity_id == str(gs.id),
+            ))).scalars().all())
+            if len(audits) != 1:
+                raise GamingBillingRepairRequiredError(
+                    "The retained add-on Void requires one immutable policy audit."
+                )
+            audit = audits[0]
+            audit_after = audit.after if isinstance(audit.after, dict) else {}
+            audit_response = (
+                audit_after.get("response") if int(gs.participant_revision or 0) > 0
+                else audit_after
+            )
+            reason_matches = (
+                audit.actor_user_id == receipt.actor_user_id
+                and audit.terminal_id == receipt.terminal_id
+                and audit.operation_id == receipt.idempotency_key
+                and audit.created_at == receipt.voided_at
+                and audit_response == response
+                and _void_request_reason_matches(
+                    gs, original_request, audit, request_hash=receipt.request_hash
+                )
+            )
+        if (
+            not reason_matches
+            or request.get("expected_order_id") is not None
+            or str(response.get("id")) != str(gs.id)
+            or response.get("status") != "cancelled"
+            or str(response.get("retained_addon_order_id"))
+            != str(receipt.retained_order_id)
+        ):
+            raise GamingBillingRepairRequiredError(
+                "The retained add-on Void receipt does not match its canonical request."
+            )
+    else:
+        raise GamingBillingRepairRequiredError("The Void receipt mode is not supported.")
+    return receipt
 
 
 async def _assert_participant_void_extension_chain(session, gs: GamingSession, settlement: GamingParticipantSettlement) -> None:
@@ -5215,18 +5666,35 @@ async def _assert_participant_settlement_consistent(session, gs: GamingSession) 
         expected_charge += hours * 3000
     projected_amount = gs.amount_minor
     if gs.status == "cancelled":
-        audit, void_receipt = await _participant_void_receipt(session, gs)
-        original = void_receipt.original
-        if (
-            original.settlement_id != settlement.id
-            or original.settlement_amount_minor != int(settlement.amount_after_minor)
-            or original.settlement_revision != int(settlement.participant_revision)
-            or original.settlement_final_play_elapsed_ms != int(settlement.final_play_elapsed_ms)
-            or audit.business_details.get("added_player_interval_count") != sum(int(line.interval_count) for line in lines)
-        ):
-            raise GamingBillingRepairRequiredError("The Void receipt does not match the immutable participant settlement.")
+        relational_receipt = await _validated_relational_void_receipt(session, gs)
+        if relational_receipt is not None:
+            if (
+                relational_receipt.original_amount_minor
+                != int(settlement.amount_after_minor)
+                or relational_receipt.session_participant_revision
+                != int(settlement.participant_revision)
+                or relational_receipt.session_billing_revision != _billing_revision(gs)
+            ):
+                raise GamingBillingRepairRequiredError(
+                    "The relational Void receipt does not match the immutable participant settlement."
+                )
+            projected_amount = relational_receipt.original_amount_minor
+        else:
+            audit, void_receipt = await _participant_void_receipt(session, gs)
+            original = void_receipt.original
+            if (
+                original.settlement_id != settlement.id
+                or original.settlement_amount_minor != int(settlement.amount_after_minor)
+                or original.settlement_revision != int(settlement.participant_revision)
+                or original.settlement_final_play_elapsed_ms != int(settlement.final_play_elapsed_ms)
+                or audit.business_details.get("added_player_interval_count")
+                != sum(int(line.interval_count) for line in lines)
+            ):
+                raise GamingBillingRepairRequiredError(
+                    "The Void receipt does not match the immutable participant settlement."
+                )
+            projected_amount = original.amount_minor
         await _assert_participant_void_extension_chain(session, gs, settlement)
-        projected_amount = original.amount_minor
     if (
         any(row.left_at is None for row in rows)
         or any(int(row.left_play_elapsed_ms or 0) > int(settlement.final_play_elapsed_ms) for row in rows)
@@ -5361,6 +5829,88 @@ def _stop_replay_matches_current(stored: SessionRead, current: SessionRead) -> b
     return all(
         getattr(stored, field) == getattr(current, field)
         for field in _STOP_REPLAY_IMMUTABLE_FIELDS
+    )
+
+
+async def _apply_locked_session_stop(
+    session,
+    *,
+    gs: GamingSession,
+    participant_rows: list[GamingSessionParticipant],
+    participant_revision: int,
+    stopped_at: datetime,
+    actor_id: UUID,
+    terminal_id: UUID,
+    operation_id: str | None,
+    request_hash: str | None,
+    timing_source: Literal["server", "offline_capture"],
+) -> None:
+    """Apply the financial Stop transition to an already locked session.
+
+    Both the public Stop endpoint and an atomic active/paused Void use this
+    single mutation path.  Callers remain responsible for scope, revision and
+    participant-event ordering checks before entering it.
+    """
+    package_billing = is_package_billed(gs)
+    if package_billing:
+        if has_partial_package_snapshot(gs):
+            _require_complete_package_billing_snapshot(gs, operation="stopped")
+        if gs.amount_minor is None:
+            raise GamingBillingRepairRequiredError(
+                "This package session is missing its locked billed amount. Nothing was "
+                "stopped. A protected owner must review and repair billing first."
+            )
+    last_transition = getattr(gs, "last_pause_transition_at", None)
+    if last_transition is not None and stopped_at < last_transition:
+        raise ConflictError(
+            "This stop was captured before a later pause or resume on another screen. "
+            "Your session is still saved. Refresh Gaming and review its current timing before stopping.",
+            details={
+                "issue": "stop_predates_pause_transition",
+                "next_action": "Refresh Gaming and review the current session before retrying Stop.",
+            },
+        )
+    participant_final_meter = play_elapsed_ms(gs, stopped_at)
+    gs.end_at = stopped_at
+    finish_pause(gs, stopped_at)
+    gs.billable_minutes = billable_whole_minutes(gs, stopped_at)
+    if not package_billing:
+        gs.amount_minor = session_amount_minor(gs.billable_minutes, gs.rate_per_hour_minor)
+    if participant_revision > 0:
+        if operation_id is None or request_hash is None:
+            raise ConflictError("Participant billing requires a durable idempotent Stop action.")
+        _require_monotonic_participant_meter(participant_rows, participant_final_meter)
+        await _settle_participants(
+            session,
+            gs=gs,
+            rows=participant_rows,
+            stopped_at=stopped_at,
+            final_meter=participant_final_meter,
+            actor_id=actor_id,
+            terminal_id=terminal_id,
+            stop_key=operation_id,
+            stop_hash=request_hash,
+            leave_timing_source=timing_source,
+        )
+    gs.status = "ended"
+    gs.stopped_by = actor_id
+    record_operation(
+        session,
+        company_id=gs.company_id,
+        actor_user_id=actor_id,
+        terminal_id=terminal_id,
+        action="gaming_session_stopped",
+        entity_type="GamingSession",
+        entity_id=gs.id,
+        operation_id=operation_id,
+        after={
+            "station_id": str(gs.station_id),
+            "shift_id": str(gs.shift_id),
+            "end_at": gs.end_at.isoformat(),
+            "amount_minor": gs.amount_minor,
+            "billable_minutes": gs.billable_minutes,
+            "status": gs.status,
+        },
     )
 
 
@@ -5518,67 +6068,17 @@ async def stop_session(
                 ),
             },
         )
-    package_billing = is_package_billed(gs)
-    if package_billing:
-        # A discriminator-only legacy package row can still stop safely because
-        # its amount was locked before play. A *partial* snapshot is evidence of
-        # corrupt/incomplete financial provenance and must be repaired first.
-        if has_partial_package_snapshot(gs):
-            _require_complete_package_billing_snapshot(gs, operation="stopped")
-        if gs.amount_minor is None:
-            raise GamingBillingRepairRequiredError(
-                "This package session is missing its locked billed amount. Nothing was "
-                "stopped. A protected owner must review and repair billing first."
-            )
-    last_transition = getattr(gs, "last_pause_transition_at", None)
-    if last_transition is not None and captured_end < last_transition:
-        raise ConflictError(
-            "This stop was captured before a later pause or resume on another screen. "
-            "Your session is still saved. Refresh Gaming and review its current timing before stopping.",
-            details={
-                "issue": "stop_predates_pause_transition",
-                "next_action": "Refresh Gaming and review the current session before retrying Stop.",
-            },
-        )
-    # Read the clock before closing an active pause. Computing it again after
-    # folding that pause into paused_duration_ms can lose one millisecond at a
-    # flooring boundary even though the authoritative play duration is equal.
-    participant_final_meter = play_elapsed_ms(gs, captured_end)
-    gs.end_at = captured_end
-    finish_pause(gs, captured_end)
-    gs.billable_minutes = billable_whole_minutes(gs, captured_end)
-    if not package_billing:
-        # Open-ended session — bill by actual elapsed time, as before.
-        gs.amount_minor = session_amount_minor(gs.billable_minutes, gs.rate_per_hour_minor)
-    # else: a package session's amount_minor was locked in at start (plus any
-    # paid extensions) and never changes based on how long they actually
-    # played — billable_minutes above is still recorded for the audit trail.
-    if participant_revision > 0:
-        if idempotency_key is None or request_hash is None:
-            raise ConflictError("Participant billing requires a durable idempotent Stop action.")
-        final_meter = participant_final_meter
-        _require_monotonic_participant_meter(participant_rows, final_meter)
-        await _settle_participants(
-            session,
-            gs=gs,
-            rows=participant_rows,
-            stopped_at=captured_end,
-            final_meter=final_meter,
-            actor_id=tenant.user_id,
-            terminal_id=tenant.terminal_id,
-            stop_key=idempotency_key,
-            stop_hash=request_hash,
-            leave_timing_source=("offline_capture" if has_captured_end else "server"),
-        )
-    gs.status = "ended"
-    gs.stopped_by = tenant.user_id
-    record_operation(
-        session, company_id=tenant.company_id, actor_user_id=tenant.user_id,
-        terminal_id=tenant.terminal_id, action="gaming_session_stopped",
-        entity_type="GamingSession", entity_id=gs.id, operation_id=idempotency_key,
-        after={"station_id": str(gs.station_id), "shift_id": str(gs.shift_id),
-               "end_at": gs.end_at.isoformat(), "amount_minor": gs.amount_minor,
-               "billable_minutes": gs.billable_minutes, "status": gs.status},
+    await _apply_locked_session_stop(
+        session,
+        gs=gs,
+        participant_rows=participant_rows,
+        participant_revision=participant_revision,
+        stopped_at=captured_end,
+        actor_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+        operation_id=idempotency_key,
+        request_hash=request_hash,
+        timing_source=("offline_capture" if has_captured_end else "server"),
     )
     response = session_read(gs)
     if idempotency_key is not None:
@@ -6097,6 +6597,34 @@ async def void_session_addon(
     return response
 
 
+def _require_void_source_authority(
+    shift: Shift | None, *, station: Station, tenant: TenantContext,
+) -> Shift:
+    """Share only existing Void source authority; mutation/replay rules stay at the caller."""
+    owner_void = has_owner_role(tenant.roles)
+    if shift is None or shift.company_id != tenant.company_id:
+        raise NotFoundError("Shift not found for this company.")
+    if shift.branch_id != station.branch_id or shift.branch_id != tenant.branch_id:
+        raise BusinessRuleError("Shift branch does not match the gaming station branch.")
+    if shift.status == "open" or not owner_void:
+        shift = require_operational_shift_scope(
+            shift,
+            company_id=tenant.company_id,
+            branch_id=tenant.branch_id,
+            terminal_id=tenant.terminal_id,
+            operation="voiding a gaming session",
+            resource_branch_id=station.branch_id,
+            resource_name="gaming station",
+        )
+    require_shift_opener(
+        shift,
+        user_id=tenant.user_id,
+        protected_access=owner_void,
+        operation="void a gaming session on this shift",
+    )
+    return shift
+
+
 @router.post("/sessions/{session_id}/cancel", response_model=SessionRead)
 async def cancel_session(
     session_id: UUID,
@@ -6105,20 +6633,15 @@ async def cancel_session(
     request: Request,
     tenant: TenantContext = Depends(requires("gaming.write")),
 ) -> SessionRead:
-    """Cancel a mistaken/unbillable session with an auditable reason.
+    """Void an eligible Gaming session while preserving financial evidence.
 
-    Operational staff may cancel a session on the exact current branch and
-    terminal while its shift is open. A protected owner may also clean up a
-    legacy ended session whose shift was already closed, but cannot cancel a
-    session that already produced an order.
+    The shift opener or any public Owner may void an unlinked session in the
+    exact operational scope. Sessions already handed to POS are refused here;
+    their exact unpaid charge requires the dedicated Owner POS review workflow.
     """
-    key = getattr(request.state, "idempotency_key", None)
-    request_hash = getattr(request.state, "idempotency_request_hash", None)
-    cached = None
-    if key:
-        key, request_hash = _require_idempotency(request)
-        cached = await check_or_reserve(session, key=key, request_hash=request_hash,
-            user_id=tenant.user_id, terminal_id=tenant.terminal_id)
+    key, request_hash = _require_idempotency(request)
+    cached = await check_or_reserve(session, key=key, request_hash=request_hash,
+        user_id=tenant.user_id, terminal_id=tenant.terminal_id)
     gs = (
         await session.execute(
             select(GamingSession).where(GamingSession.id == session_id).with_for_update()
@@ -6129,18 +6652,39 @@ async def cancel_session(
     station = await session.get(Station, gs.station_id)
     if not station or station.company_id != tenant.company_id:
         raise NotFoundError("station not found")
-    shift = (
-        await session.execute(select(Shift).where(Shift.id == gs.shift_id).with_for_update())
-    ).scalar_one_or_none()
-    shift = require_operational_shift_scope(
-        shift,
-        company_id=tenant.company_id,
-        branch_id=tenant.branch_id,
-        terminal_id=tenant.terminal_id,
-        operation="cancelling a gaming session",
-        resource_branch_id=station.branch_id,
-        resource_name="gaming station",
-    )
+    owner_void = has_owner_role(tenant.roles)
+    linked_order_at_request = gs.order_id is not None
+    if payload.expected_order_id != gs.order_id:
+        raise ConflictError(
+            "The session's POS link changed after review. Refresh Gaming; nothing was voided."
+        )
+    if linked_order_at_request:
+        if not owner_void:
+            raise ForbiddenError(
+                "Only an Owner can void a gaming charge after it reaches POS."
+            )
+        raise BusinessRuleError(
+            "This session has reached POS. Void its exact unpaid gaming charge from the Owner POS review."
+        )
+
+    # Linked review locks Order before Shift before GamingSession. Refuse that
+    # path before taking a Shift lock here, so the two workflows cannot form a
+    # GS->Shift / Order->Shift->GS cycle.
+    shift_ids = {gs.shift_id}
+    if payload.retained_target_shift_id is not None:
+        shift_ids.add(payload.retained_target_shift_id)
+    locked_shifts = (
+        await session.execute(
+            select(Shift)
+            .where(Shift.id.in_(sorted(shift_ids, key=str)))
+            .order_by(Shift.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalars().all()
+    shifts_by_id = {row.id: row for row in locked_shifts}
+    shift = shifts_by_id.get(gs.shift_id)
+    shift = _require_void_source_authority(shift, station=station, tenant=tenant)
     has_participant_evidence = (
         int(getattr(gs, "participant_revision", 0) or 0) > 0
         or await _has_participant_evidence(session, gs)
@@ -6158,65 +6702,214 @@ async def cancel_session(
                 raise IdempotencyConflict("This session already has a different immutable Void receipt. Refresh to review the recorded result.")
             await store_response(session, key=key, status_code=200, body=receipt.response.model_dump(mode="json"))
             return receipt.response
-        response = session_read(gs)
-        if key:
-            await store_response(session, key=key, status_code=200, body=response.model_dump(mode="json"))
+        audit, original_request, response, original_hash = await _nonparticipant_void_receipt(
+            session, gs
+        )
+        if (
+            key != audit.operation_id
+            or request_hash != original_hash
+            or payload.model_dump(mode="json") != original_request.model_dump(mode="json")
+            or audit.actor_user_id != tenant.user_id
+            or audit.terminal_id != tenant.terminal_id
+        ):
+            raise IdempotencyConflict(
+                "This session already has a different immutable Void receipt. "
+                "Refresh to review the recorded result."
+            )
+        await store_response(session, key=key, status_code=200, body=response.model_dump(mode="json"))
         return response
     if cached is not None:
         raise ConflictError("A stored Void response does not match this session's current state. Nothing was changed.")
-    if has_participant_evidence:
-        if gs.status != "ended":
-            raise BusinessRuleError("Player joins are recorded. Stop this session, then Void it here. No POS bill is required.")
+    if gs.status not in ("active", "paused", "ended"):
+        raise BusinessRuleError(f"cannot cancel a session in status={gs.status}")
+    original_status = gs.status
+    stopped_before_void = False
+    server_now = datetime.now(timezone.utc)
+    void_elapsed_ms = _session_void_elapsed_ms(gs, server_now=server_now)
+    reason, user_reason_supplied = _void_reason_policy(
+        payload,
+        elapsed_ms=void_elapsed_ms,
+    )
+    active_addons = (
+        (
+            await session.execute(
+                select(GamingSessionAddon)
+                .where(
+                    GamingSessionAddon.company_id == tenant.company_id,
+                    GamingSessionAddon.gaming_session_id == gs.id,
+                    GamingSessionAddon.voided_at.is_(None),
+                )
+                .order_by(GamingSessionAddon.created_at, GamingSessionAddon.id)
+                .with_for_update()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    retained_target_shift: Shift | None = None
+    if active_addons:
+        await require_permission(session, tenant, "pos.read")
+        if payload.retained_target_shift_id is None:
+            raise BusinessRuleError(
+                "Choose the open POS shift that will retain the consumed add-ons. "
+                "Nothing was voided."
+            )
+        retained_target_shift = shifts_by_id.get(payload.retained_target_shift_id)
+        if retained_target_shift is None or retained_target_shift.company_id != tenant.company_id:
+            raise NotFoundError("Target POS shift not found for this company.")
+        if retained_target_shift.branch_id != station.branch_id:
+            raise BusinessRuleError(
+                "Target POS shift branch does not match the gaming station branch."
+            )
+        if retained_target_shift.status != "open":
+            raise BusinessRuleError(
+                "The selected POS shift is not open. Refresh and choose an open shift."
+            )
+        target_terminal = await session.get(Terminal, retained_target_shift.terminal_id)
+        if (
+            target_terminal is None
+            or target_terminal.branch_id != retained_target_shift.branch_id
+            or getattr(target_terminal, "is_active", True) is False
+            or target_terminal.purpose not in _POS_DESTINATION_TERMINAL_PURPOSES
+        ):
+            raise BusinessRuleError(
+                "The selected shift is not an active Cafe POS or Hybrid destination."
+            )
+    elif payload.retained_target_shift_id is not None:
+        raise ConflictError(
+            "This session has no consumed add-ons to retain. Refresh Gaming before voiding."
+        )
+    if gs.status in {"active", "paused"} and not (
+        gs.status == "paused" and getattr(gs, "paused_at", None) is None
+    ):
+        if shift.status != "open":
+            raise BusinessRuleError(
+                f"Shift is {shift.status}. Only an ended legacy session can be voided after shift close."
+            )
+        _require_expected_billing_revision(
+            gs,
+            payload.expected_billing_revision,
+            operation="Void",
+        )
+        amendment = await _assert_package_amendment_consistent(session, gs, lock=True)
+        if amendment is not None and server_now <= amendment.occurred_at:
+            raise ConflictError(
+                "Void was requested before the package amendment. Refresh Gaming and retry."
+            )
+        participant_rows = await _participant_rows(session, gs, lock=True)
+        participant_revision = int(getattr(gs, "participant_revision", 0) or 0)
+        settlement_before = (
+            await session.execute(
+                select(GamingParticipantSettlement).where(
+                    GamingParticipantSettlement.company_id == tenant.company_id,
+                    GamingParticipantSettlement.gaming_session_id == gs.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if participant_revision == 0 and (participant_rows or settlement_before is not None):
+            raise GamingBillingRepairRequiredError(
+                "Participant revision is missing despite saved attendance evidence. Void is blocked for review."
+            )
+        if participant_revision > 0:
+            if key is None or request_hash is None:
+                raise ConflictError(
+                    "A session with player attendance requires one durable idempotent Void action."
+                )
+            if (
+                payload.expected_participant_revision is None
+                or payload.expected_billing_revision is None
+            ):
+                raise BusinessRuleError(
+                    "Void requires the reviewed participant and billing revisions plus "
+                    "an Idempotency-Key. Update the app and refresh Gaming."
+                )
+            package_billing = is_package_billed(gs)
+            if package_billing:
+                amount_changed = (
+                    payload.expected_amount_minor is None
+                    or payload.expected_amount_minor != gs.amount_minor
+                )
+            else:
+                # Hourly billing is intentionally uncomputed until the atomic
+                # Stop below. Both reviewed and current values must remain null.
+                amount_changed = (
+                    payload.expected_amount_minor is not None
+                    or gs.amount_minor is not None
+                )
+            if (
+                payload.expected_participant_revision != participant_revision
+                or payload.expected_billing_revision != _billing_revision(gs)
+                or amount_changed
+            ):
+                raise ConflictError(
+                    "The running session changed after review. Refresh Gaming before voiding."
+                )
+            latest_event_at = max(
+                (row.left_at or row.joined_at for row in participant_rows),
+                default=gs.start_at,
+            )
+            if server_now <= latest_event_at:
+                raise ConflictError(
+                    "Void time must follow the latest player action. Upload saved actions and retry."
+                )
+        await _apply_locked_session_stop(
+            session,
+            gs=gs,
+            participant_rows=participant_rows,
+            participant_revision=participant_revision,
+            stopped_at=server_now,
+            actor_id=tenant.user_id,
+            terminal_id=tenant.terminal_id,
+            operation_id=key,
+            request_hash=request_hash,
+            timing_source="server",
+        )
+        # AsyncSession deliberately disables autoflush.  The atomic Void now
+        # validates the just-created participant settlement before it mutates
+        # the ended projection, so make the staged receipt visible to those
+        # read-after-write consistency queries without committing the transaction.
+        await session.flush()
+        stopped_before_void = True
+        has_participant_evidence = participant_revision > 0
+    elif gs.status == "paused" and getattr(gs, "paused_at", None) is None:
+        # The legacy meter is unknowable. A reason is mandatory and the Void
+        # intentionally preserves that fact instead of inventing a Stop bill.
+        if not user_reason_supplied:
+            raise BusinessRuleError("This legacy paused session requires a void reason.")
+        if has_participant_evidence:
+            raise GamingBillingRepairRequiredError(
+                "Legacy pause timing is unknown and player attendance exists. Protected review is required."
+            )
+    elif has_participant_evidence:
         await _assert_participant_settlement_consistent(session, gs)
         await _assert_package_amendment_consistent(session, gs, lock=True)
-        if key is None or request_hash is None or any(value is None for value in (
-            payload.expected_participant_revision, payload.expected_billing_revision, payload.expected_amount_minor,
-        )):
-            raise BusinessRuleError("Void requires the reviewed participant revision, billing revision, amount and Idempotency-Key. Update the app and refresh Gaming.")
+        if key is None or request_hash is None or any(
+            value is None
+            for value in (
+                payload.expected_participant_revision,
+                payload.expected_billing_revision,
+                payload.expected_amount_minor,
+            )
+        ):
+            raise BusinessRuleError(
+                "Void requires the reviewed participant revision, billing revision, amount and Idempotency-Key. Update the app and refresh Gaming."
+            )
         if (
             payload.expected_participant_revision != int(gs.participant_revision or 0)
             or payload.expected_billing_revision != _billing_revision(gs)
             or payload.expected_amount_minor != gs.amount_minor
         ):
             raise ConflictError("The stopped session changed after review. Refresh and review Void again.")
-    if gs.order_id is not None:
-        raise BusinessRuleError("cannot cancel a session that was already sent to POS")
-    if gs.status not in ("active", "paused", "ended"):
-        raise BusinessRuleError(f"cannot cancel a session in status={gs.status}")
-    active_addon_count = int(
-        (
-            await session.execute(
-                select(func.count(GamingSessionAddon.id)).where(
-                    GamingSessionAddon.company_id == tenant.company_id,
-                    GamingSessionAddon.gaming_session_id == gs.id,
-                    GamingSessionAddon.voided_at.is_(None),
-                )
-            )
-        ).scalar_one()
-        or 0
-    )
-    if active_addon_count:
-        raise BusinessRuleError(
-            "Void every active Gaming add-on before cancelling this session; "
-            "consumed items must not disappear from the bill."
-        )
     if gs.status == "ended":
         _require_repaired_ended_amount(gs)
-    if shift.status != "open" and not tenant.protected_access:
+    if shift.status != "open" and not owner_void:
         raise BusinessRuleError(
-            f"Shift is {shift.status}. Ask a protected owner to cancel this legacy session."
+            f"Shift is {shift.status}. Ask an Owner to void this legacy ended session."
         )
     if shift.status != "open" and gs.status != "ended":
         raise BusinessRuleError(
-            "A protected owner may only cancel a legacy ended session after its shift closed."
+            "An Owner may only void a legacy ended session after its shift closed."
         )
-    require_shift_opener(
-        shift,
-        user_id=tenant.user_id,
-        protected_access=tenant.protected_access,
-        operation="cancel a gaming or shisha session on this shift",
-    )
-
     settlement = None
     original = None
     if has_participant_evidence:
@@ -6238,18 +6931,34 @@ async def cancel_session(
             settlement_revision=int(settlement.participant_revision),
             settlement_final_play_elapsed_ms=int(settlement.final_play_elapsed_ms),
         )
-    now = datetime.now(timezone.utc)
-    finish_pause(gs, now)
+    retained_order: Order | None = None
+    retained_mappings: list[tuple[GamingSessionAddon, OrderLine]] = []
+    if active_addons:
+        if retained_target_shift is None:  # defensive; validated above
+            raise BusinessRuleError("A reviewed POS target is required for retained add-ons.")
+        retained_order, retained_mappings = await create_retained_addon_order(
+            session,
+            gaming_session=gs,
+            target_shift=retained_target_shift,
+            addons=active_addons,
+            actor_user_id=tenant.user_id,
+            at=server_now,
+        )
+
+    voided_amount_minor = int(gs.amount_minor or 0)
+    voided_billable_minutes = int(gs.billable_minutes or 0)
+    finish_pause(gs, server_now)
     gs.status = "cancelled"
-    gs.end_at = gs.end_at or now
+    gs.end_at = gs.end_at or server_now
     gs.billable_minutes = 0
     gs.amount_minor = 0
-    gs.cancelled_at = now
+    gs.cancelled_at = server_now
     gs.cancelled_by = tenant.user_id
-    gs.cancel_reason = payload.reason
+    gs.cancel_reason = reason
     response = session_read(gs)
+    relational_receipt_id = uuid4() if active_addons else None
     if original is not None:
-        receipt_id = uuid4()
+        receipt_id = relational_receipt_id or uuid4()
         response = response.model_copy(update={
             "cancellation_receipt_id": receipt_id,
             "cancellation_idempotency_key": key,
@@ -6262,8 +6971,8 @@ async def cancel_session(
             terminal_id=tenant.terminal_id, action="gaming_session_voided",
             entity_type="GamingSession", entity_id=gs.id, operation_id=key,
             before={"status": "ended", **original.model_dump(mode="json")},
-            after=receipt.model_dump(mode="json"), reason=payload.reason)
-        audit.created_at = now
+            after=receipt.model_dump(mode="json"), reason=reason)
+        audit.created_at = server_now
         audit.business_details = {
             "voided_amount_minor": original.amount_minor,
             "amount_after_void_minor": 0,
@@ -6278,11 +6987,104 @@ async def cancel_session(
             ),
             "attendance_retained": True,
             "status": "cancelled",
-            "reason": payload.reason,
+            "reason": reason,
+            "user_reason_supplied": user_reason_supplied,
+            "server_play_elapsed_ms": void_elapsed_ms,
+            "reason_required_after_ms": _VOID_REASON_REQUIRED_AFTER_MS,
+            "linked_pos_order_retained": gs.order_id is not None,
+            "retained_addon_count": len(active_addons),
+            "pre_stop_status": original_status,
+            "idempotency_key": key,
+            "request_hash": request_hash,
+            "request": payload.model_dump(mode="json"),
         }
+    else:
+        receipt_id = relational_receipt_id or uuid4()
+        response = response.model_copy(update={
+            "cancellation_receipt_id": receipt_id,
+            "cancellation_idempotency_key": key,
+            "cancellation_request_hash": request_hash,
+        })
+        audit = record_operation(
+            session,
+            company_id=tenant.company_id,
+            actor_user_id=tenant.user_id,
+            terminal_id=tenant.terminal_id,
+            action="gaming_session_voided",
+            entity_type="GamingSession",
+            entity_id=gs.id,
+            operation_id=key,
+            before={
+                "status": "ended" if stopped_before_void else original_status,
+                "amount_minor": voided_amount_minor,
+                "billable_minutes": voided_billable_minutes,
+                "order_id": str(gs.order_id) if gs.order_id is not None else None,
+            },
+            after=response.model_dump(mode="json"),
+            reason=reason,
+        )
+        audit.created_at = server_now
+        audit.business_details = {
+            "voided_amount_minor": voided_amount_minor,
+            "amount_after_void_minor": 0,
+            "original_billable_minutes": voided_billable_minutes,
+            "attendance_retained": False,
+            "status": "cancelled",
+            "reason": reason,
+            "user_reason_supplied": user_reason_supplied,
+            "server_play_elapsed_ms": void_elapsed_ms,
+            "reason_required_after_ms": _VOID_REASON_REQUIRED_AFTER_MS,
+            "linked_pos_order_retained": gs.order_id is not None,
+            "retained_addon_count": len(active_addons),
+            "pre_stop_status": original_status,
+            "idempotency_key": key,
+            "request_hash": request_hash,
+            "request": payload.model_dump(mode="json"),
+        }
+    if retained_order is not None:
+        if relational_receipt_id is None:
+            raise RuntimeError("retained add-on bill requires a receipt id")
+        relational_receipt = GamingVoidReceipt(
+            id=relational_receipt_id,
+            company_id=tenant.company_id,
+            gaming_session_id=gs.id,
+            source_order_id=None,
+            retained_order_id=retained_order.id,
+            gaming_charge_line_id=None,
+            actor_user_id=tenant.user_id,
+            terminal_id=tenant.terminal_id,
+            mode="unlinked_addons",
+            original_session_status=original_status,
+            original_amount_minor=voided_amount_minor,
+            session_billing_revision=_billing_revision(gs),
+            session_participant_revision=int(gs.participant_revision or 0),
+            source_order_status=None,
+            source_checkout_version=None,
+            source_total_minor=None,
+            retained_total_minor=int(retained_order.total_minor),
+            addon_count=len(active_addons),
+            reason=reason,
+            idempotency_key=key,
+            request_hash=request_hash,
+            request_payload=payload.model_dump(mode="json"),
+            response_payload=response.model_dump(mode="json"),
+            voided_at=server_now,
+        )
+        session.add(relational_receipt)
+        await session.flush([relational_receipt])
+        for addon, line in retained_mappings:
+            session.add(
+                GamingVoidAddonLine(
+                    id=uuid4(),
+                    receipt_id=relational_receipt_id,
+                    addon_id=addon.id,
+                    order_line_id=line.id,
+                    source_order_id=None,
+                    retained_order_id=retained_order.id,
+                )
+            )
     await session.flush()
-    if key:
-        await store_response(session, key=key, status_code=200, body=response.model_dump(mode="json"))
+    await store_response(session, key=key, status_code=200, body=response.model_dump(mode="json"))
     return response
 
 
@@ -7749,6 +8551,74 @@ async def _create_session_pos_order(
         )
     await session.flush()
     return order
+
+
+@router.get(
+    "/sessions/{session_id}/void-retention-targets",
+    response_model=list[PosTargetShiftRead],
+)
+async def list_session_void_retention_targets(
+    session_id: UUID,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("gaming.write", "pos.read")),
+) -> list[PosTargetShiftRead]:
+    """Discover candidate tills for consumed add-ons retained by an unlinked Void.
+
+    This is not POS handoff: running sessions and the same open Hybrid shift
+    are eligible. The cancellation command still locks and revalidates the
+    source, target, billing revisions, add-ons and reason before any write.
+    """
+    gs = await session.get(GamingSession, session_id)
+    if not gs or gs.company_id != tenant.company_id:
+        raise NotFoundError("session not found")
+    station = await session.get(Station, gs.station_id)
+    if not station or station.company_id != tenant.company_id:
+        raise NotFoundError("station not found")
+    if gs.order_id is not None:
+        if not has_owner_role(tenant.roles):
+            raise ForbiddenError("Only an Owner can void a gaming charge after it reaches POS.")
+        raise BusinessRuleError(
+            "This session has reached POS. Void its exact unpaid gaming charge from the Owner POS review."
+        )
+    source_shift = _require_void_source_authority(
+        await session.get(Shift, gs.shift_id), station=station, tenant=tenant,
+    )
+    if gs.status not in {"active", "paused", "ended"}:
+        raise BusinessRuleError(f"cannot cancel a session in status={gs.status}")
+    if source_shift.status != "open" and (
+        not has_owner_role(tenant.roles) or gs.status != "ended"
+    ):
+        raise BusinessRuleError("An Owner may only void a legacy ended session after its shift closed.")
+
+    # Unlike handoff destinations, the source Hybrid shift is intentionally
+    # included: its consumed items remain payable after Gaming time is voided.
+    rows = (
+        await session.execute(
+            select(Shift, Terminal, User)
+            .join(Terminal, (Terminal.id == Shift.terminal_id) & (Terminal.branch_id == Shift.branch_id))
+            .join(User, User.id == Shift.opened_by)
+            .where(
+                Shift.company_id == tenant.company_id,
+                Shift.branch_id == station.branch_id,
+                Shift.status == "open",
+                Terminal.is_active.is_(True),
+                Terminal.purpose.in_(_POS_DESTINATION_TERMINAL_PURPOSES),
+                User.company_id == tenant.company_id,
+            )
+            .order_by(Terminal.name, Shift.opened_at, Shift.id)
+        )
+    ).all()
+    return [
+        PosTargetShiftRead(
+            shift_id=target.id,
+            terminal_id=terminal.id,
+            terminal_name=terminal.name,
+            opened_by=opener.id,
+            opened_by_name=opener.name,
+            opened_at=target.opened_at,
+        )
+        for target, terminal, opener in rows
+    ]
 
 
 @router.get(

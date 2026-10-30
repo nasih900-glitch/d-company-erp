@@ -82,6 +82,10 @@ data class GamingSessionCacheEntity(
     val customerName: String? = null,
     val customerPhone: String? = null,
     val orderId: String? = null,
+    val retainedAddonOrderId: String? = null,
+    /** Exact server policy evidence; active rows still advance across the 30-minute boundary. */
+    val serverPlayElapsedMs: Long? = null,
+    val voidReasonRequired: Boolean? = null,
 )
 
 /** Server-authoritative late-player presence. Customer identity is optional. */

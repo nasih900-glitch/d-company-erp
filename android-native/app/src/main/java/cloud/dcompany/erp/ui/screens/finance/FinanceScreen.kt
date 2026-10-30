@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.screens.finance
 
+import cloud.dcompany.erp.ui.components.LiquidDatePickerDialog as DatePickerDialog
 import cloud.dcompany.erp.ui.theme.operationalDanger
 import cloud.dcompany.erp.ui.theme.operationalDangerContainer
 import cloud.dcompany.erp.ui.theme.operationalGood
@@ -42,7 +43,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -108,6 +109,9 @@ import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
+import cloud.dcompany.erp.ui.components.workspaceContentCanvas
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -154,7 +158,7 @@ private fun FinanceContent(
     val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    Column(Modifier.fillMaxSize().workspaceContentCanvas()) {
         if (!imeVisible) Header(state, onRefresh = vm::load)
         else Row(Modifier.fillMaxWidth().padding(horizontal=Spacing.lg), verticalAlignment=Alignment.CenterVertically) {
             Text("Finance · ${tabs[tab]}",style=MaterialTheme.typography.titleSmall,modifier=Modifier.weight(1f))
@@ -1592,8 +1596,7 @@ private fun StatCard(stat: StatSpec, surface: Color, modifier: Modifier = Modifi
     Column(
         modifier = modifier
             .clip(Radius.shapeLg)
-            .background(surface)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg)
+            .liquidWorkspaceSurface(Radius.shapeLg, WorkspaceGlassRole.PANEL)
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
@@ -1664,8 +1667,8 @@ private fun Panel(
         modifier = modifier
             .fillMaxWidth()
             .clip(Radius.shapeLg)
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, border ?: MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg)
+            .liquidWorkspaceSurface(Radius.shapeLg, WorkspaceGlassRole.PANEL)
+            .then(border?.let { Modifier.border(1.dp, it, Radius.shapeLg) } ?: Modifier)
             .padding(14.dp),
         content = content,
     )
@@ -1715,7 +1718,7 @@ private fun ErrorBanner(message: String, onRetry: () -> Unit) {
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
             .clip(Radius.shapeMd)
-            .background(MaterialTheme.colorScheme.surface)
+            .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.PANEL)
             .border(1.dp, MaterialTheme.colorScheme.operationalDanger, Radius.shapeMd)
             .padding(12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1780,7 +1783,7 @@ private fun PendingFinanceChangesPanel(
 ) {
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeMd)
-            .background(MaterialTheme.colorScheme.surface).padding(12.dp),
+            .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.PANEL).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text("Pending finance changes", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
@@ -1906,7 +1909,7 @@ private fun FinancePendingRow(
     Column(
         Modifier.fillMaxWidth()
             .clip(Radius.shapeSm)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.UTILITY)
             .padding(8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1993,7 +1996,7 @@ private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
     Row(
         Modifier.fillMaxWidth()
             .clip(Radius.shapeSm)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.UTILITY)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -2594,7 +2597,8 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
             selectedCashShift?.let { shift ->
                 Column(
                     Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                        .background(MaterialTheme.colorScheme.surfaceVariant).padding(Spacing.sm),
+                        .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.UTILITY)
+                        .padding(Spacing.sm),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     Text(
@@ -2692,7 +2696,8 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
         receipt?.let { selected ->
             Row(
                 Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                    .background(MaterialTheme.colorScheme.surfaceVariant).padding(Spacing.sm),
+                    .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.CONTROL)
+                    .padding(Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {

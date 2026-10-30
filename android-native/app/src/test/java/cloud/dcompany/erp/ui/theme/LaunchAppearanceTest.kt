@@ -26,7 +26,7 @@ class LaunchAppearanceTest {
     }
 
     @Test
-    fun `starting styles align Android launch surface with selected Splash ink and standalone D`() {
+    fun `starting styles align Android launch surface with selected Splash ink and original mark`() {
         val styles = DocumentBuilderFactory.newInstance().newDocumentBuilder()
             .parse(root().resolve("src/main/res/values-v31/launch_themes.xml").toFile())
             .getElementsByTagName("style")
@@ -43,7 +43,7 @@ class LaunchAppearanceTest {
             for (name in listOf("windowSplashScreenBackground", "windowBackground", "statusBarColor", "navigationBarColor")) {
                 assertEquals("#0E061F", values["android:$name"])
             }
-            assertEquals("@drawable/login_logo_d", values["android:windowSplashScreenAnimatedIcon"])
+            assertEquals("@mipmap/ic_launcher_foreground", values["android:windowSplashScreenAnimatedIcon"])
             assertEquals("false", values["android:windowLightStatusBar"])
             assertEquals("false", values["android:windowLightNavigationBar"])
         }
@@ -55,7 +55,7 @@ class LaunchAppearanceTest {
             item.getAttribute("name") to item.textContent.trim()
         }
         assertEquals("#0E061F", fallbackValues["android:windowSplashScreenBackground"])
-        assertEquals("@drawable/login_logo_d", fallbackValues["android:windowSplashScreenAnimatedIcon"])
+        assertEquals("@mipmap/ic_launcher_foreground", fallbackValues["android:windowSplashScreenAnimatedIcon"])
     }
 
     @Test

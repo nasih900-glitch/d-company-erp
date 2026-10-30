@@ -24,7 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PrivacyTip
 import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material.icons.filled.SupportAgent
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -218,6 +218,7 @@ internal fun RemoteAssistanceActiveBanner(
             Button(
                 onClick = onStop,
                 modifier = Modifier
+                    .heightIn(min = 48.dp)
                     .testTag("remote-assistance-stop")
                     .semantics { role = Role.Button },
                 colors = ButtonDefaults.buttonColors(
@@ -277,6 +278,7 @@ internal fun RemoteAssistanceRequestWaitingBanner(
             TextButton(
                 onClick = onReview,
                 modifier = Modifier
+                    .heightIn(min = 48.dp)
                     .testTag("remote-assistance-review-request")
                     .semantics { role = Role.Button },
             ) {

@@ -424,7 +424,19 @@ def test_guard_owner_and_schema_are_bound_independently_of_function_body(bridge_
     dsn, _, _ = bridge_db
     with psycopg.connect(dsn) as c:
         role = "bridge_guard_" + uuid4().hex[:12]
+        current_user = c.execute("SELECT current_user").fetchone()[0]
         c.execute(psycopg.sql.SQL("CREATE ROLE {}").format(psycopg.sql.Identifier(role)))
+        c.execute(
+            psycopg.sql.SQL("GRANT {} TO {} WITH SET TRUE").format(
+                psycopg.sql.Identifier(role),
+                psycopg.sql.Identifier(current_user),
+            )
+        )
+        c.execute(
+            psycopg.sql.SQL("GRANT CREATE ON SCHEMA public TO {}").format(
+                psycopg.sql.Identifier(role)
+            )
+        )
         c.execute(
             psycopg.sql.SQL("ALTER FUNCTION dcompany_collection_lock(uuid) OWNER TO {}").format(
                 psycopg.sql.Identifier(role)

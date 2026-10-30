@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { gamingCancellationBlock, matchesCancellationIdentity, isConfirmedCancellation, removeConfirmedCancelledSession, participantVoidReview, participantVoidMetadataReady, type GamingCancellationContext } from './GamingCancellation';
 
 const ready: GamingCancellationContext = {
-  online: true, status: 'active', hasOrder: false, ownsCurrentShift: true,
+  online: true, status: 'active', hasOrder: false, isOwner: false, ownsCurrentShift: true,
   hasPendingActions: false, hasParticipantEvidence: false, addonLedgerReady: true,
   hasActiveAddons: false, hasUnresolvedExtension: false,
 };
@@ -13,21 +13,40 @@ describe('active session cancellation', () => {
       expect(gamingCancellationBlock({ ...ready, status })).toBeNull();
     }
   });
-  it('keeps running players on Stop then Void and permits metadata-verified stopped Void here', () => {
-    for (const status of ['active', 'paused']) {
-      expect(gamingCancellationBlock({ ...ready, status, hasParticipantEvidence: true }))
-        .toContain('Stop this session, then Void it here');
-    }
+  it('permits atomic active, paused and ended participant Void only with billing-mode evidence', () => {
+    const activePackage = {
+      status: 'active', billing_mode: 'package' as const,
+      participant_revision: 3, billing_revision: 1, amount_minor: 18_000,
+    };
+    const pausedHourly = {
+      status: 'paused', billing_mode: 'hourly' as const,
+      participant_revision: 4, billing_revision: 2, amount_minor: null,
+    };
+    expect(participantVoidMetadataReady(activePackage)).toBe(true);
+    expect(participantVoidReview('package', activePackage)).toEqual({
+      idempotencyKey: 'gaming-session-void:package', expected_participant_revision: 3,
+      expected_billing_revision: 1, expected_amount_minor: 18_000,
+    });
+    expect(participantVoidMetadataReady(pausedHourly)).toBe(true);
+    expect(participantVoidReview('hourly', pausedHourly)).toEqual({
+      idempotencyKey: 'gaming-session-void:hourly', expected_participant_revision: 4,
+      expected_billing_revision: 2,
+    });
+    expect(gamingCancellationBlock({
+      ...ready, status: 'active', hasParticipantEvidence: true, participantVoidReady: true,
+    })).toBeNull();
     expect(gamingCancellationBlock({ ...ready, status: 'ended', hasParticipantEvidence: true })).toContain('Refresh Gaming');
     expect(gamingCancellationBlock({ ...ready, status: 'ended', hasParticipantEvidence: true, participantVoidReady: true })).toBeNull();
-    const ended = { status: 'ended', participant_revision: 3, billing_revision: 1, amount_minor: 18_000 };
+    const ended = { status: 'ended', billing_mode: 'package' as const, participant_revision: 3, billing_revision: 1, amount_minor: 18_000 };
     expect(participantVoidReview('session', ended)).toEqual({
       idempotencyKey: 'gaming-session-void:session', expected_participant_revision: 3,
       expected_billing_revision: 1, expected_amount_minor: 18_000,
     });
     expect(participantVoidMetadataReady({ ...ended, billing_revision: undefined })).toBe(false);
     expect(participantVoidMetadataReady({ ...ended, amount_minor: null })).toBe(false);
-    expect(participantVoidReview('session', { ...ended, status: 'active' })).toBeUndefined();
+    expect(participantVoidMetadataReady({ ...activePackage, amount_minor: null })).toBe(false);
+    expect(participantVoidMetadataReady({ ...pausedHourly, amount_minor: 1 })).toBe(false);
+    expect(participantVoidMetadataReady({ ...activePackage, billing_mode: 'legacy_ambiguous' })).toBe(false);
   });
   it('blocks offline, foreign shift, consumed work, and every unresolved operation', () => {
     const changes: Partial<GamingCancellationContext>[] = [
@@ -37,6 +56,8 @@ describe('active session cancellation', () => {
       { hasUnresolvedExtension: true }, { status: 'cancelled' }, { status: 'starting' },
     ];
     for (const change of changes) expect(gamingCancellationBlock({ ...ready, ...change })).toBeTruthy();
+    expect(gamingCancellationBlock({ ...ready, hasOrder: true, isOwner: true })).toContain('Owner POS review');
+    expect(gamingCancellationBlock({ ...ready, ownsCurrentShift: false, isOwner: true })).toBeNull();
   });
 });
 

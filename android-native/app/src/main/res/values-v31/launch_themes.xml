@@ -4,7 +4,7 @@
          visually continuous with the native Splash while System is selected. -->
     <style name="Theme.DCompany" parent="Base.Theme.DCompany">
         <item name="android:windowSplashScreenBackground">#0E061F</item>
-        <item name="android:windowSplashScreenAnimatedIcon">@drawable/login_logo_d</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_foreground</item>
         <item name="android:windowBackground">#0E061F</item>
         <item name="android:statusBarColor">#0E061F</item>
         <item name="android:navigationBarColor">#0E061F</item>
@@ -15,7 +15,7 @@
          System resets to the aligned manifest fallback above. -->
     <style name="Theme.DCompany.Start.Day" parent="Theme.DCompany">
         <item name="android:windowSplashScreenBackground">#0E061F</item>
-        <item name="android:windowSplashScreenAnimatedIcon">@drawable/login_logo_d</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_foreground</item>
         <item name="android:windowBackground">#0E061F</item>
         <item name="android:statusBarColor">#0E061F</item>
         <item name="android:navigationBarColor">#0E061F</item>
@@ -24,7 +24,7 @@
     </style>
     <style name="Theme.DCompany.Start.Night" parent="Theme.DCompany">
         <item name="android:windowSplashScreenBackground">#0E061F</item>
-        <item name="android:windowSplashScreenAnimatedIcon">@drawable/login_logo_d</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_foreground</item>
         <item name="android:windowBackground">#0E061F</item>
         <item name="android:statusBarColor">#0E061F</item>
         <item name="android:navigationBarColor">#0E061F</item>

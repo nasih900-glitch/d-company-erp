@@ -58,9 +58,8 @@ fun allowedDestinations(
                 ErpPermission.StaffAttendanceWrite,
             )
             Destination.Inventory -> permissions.has(ErpPermission.InventoryRead)
-            Destination.Reports,
-            Destination.Analytics,
-            -> permissions.has(ErpPermission.AnalyticsRead)
+            Destination.Reports -> permissions.reportsAccess().canReadAny
+            Destination.Analytics -> permissions.has(ErpPermission.AnalyticsRead)
             Destination.Finance -> permissions.has(ErpPermission.FinanceRead)
             Destination.Events -> permissions.has(ErpPermission.GamingRead)
             Destination.Memberships -> permissions.has(ErpPermission.PosRead)

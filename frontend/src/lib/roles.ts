@@ -6,6 +6,7 @@ export function roleLabel(role: string): string {
     partner: 'Partner',
     manager: 'Manager',
     cashier: 'Cashier',
+    gaming_cashier: 'Gaming & POS staff',
     kitchen: 'Kitchen',
     gaming_supervisor: 'Gaming Supervisor',
     auditor: 'Auditor',

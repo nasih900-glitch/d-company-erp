@@ -243,6 +243,8 @@ data class OrderLine(
 @Serializable
 data class Order(
     val id: String,
+    @SerialName("created_at") val createdAt: String = "",
+    @SerialName("held_at") val heldAt: String? = null,
     @SerialName("invoice_no") val invoiceNo: String? = null,
     @SerialName("fiscal_year") val fiscalYear: String? = null,
     @SerialName("invoice_issued_at") val invoiceIssuedAt: String? = null,

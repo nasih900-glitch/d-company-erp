@@ -693,6 +693,161 @@ class AndroidReleaseStagingTest(unittest.TestCase):
             self.assertEqual("--", command[destination_index - 1])
             self.assertNotIn("--", command[destination_index + 1 :])
 
+    def test_ssh_sudo_defaults_off_and_parser_requires_explicit_opt_in(self) -> None:
+        arguments = [
+            "--manifest",
+            "/safe/manifest.json",
+            "--apk",
+            "/safe/app.apk",
+            "--release-notes",
+            "Reviewed update",
+            "--expected-signer-sha256",
+            SIGNER,
+        ]
+        self.assertFalse(staging._build_parser().parse_args(arguments).ssh_sudo)
+        self.assertTrue(
+            staging._build_parser().parse_args([*arguments, "--ssh-sudo"]).ssh_sudo
+        )
+        target = staging.RemoteTarget(
+            "ubuntu@example.test", Path("/safe/key"), 22, "/opt/d-company-erp"
+        )
+        self.assertFalse(target.ssh_sudo)
+        self.assertEqual(["python3"], target.python_command)
+
+    def test_ssh_sudo_fixed_prefix_preserves_binary_upload_and_destination(
+        self,
+    ) -> None:
+        target = staging.RemoteTarget(
+            "ubuntu@example.test",
+            Path("/safe/key"),
+            22,
+            "/opt/d-company-erp",
+            ssh_sudo=True,
+        )
+        binary = b"PK\x03\x04\x00\xff\n\rpayload"
+        uploaded = []
+
+        def run(command, **kwargs):
+            if "stdin" in kwargs:
+                uploaded.append(kwargs["stdin"].read())
+            return SimpleNamespace(stdout=b'{"ok":true}')
+
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            patch.object(staging.subprocess, "run", side_effect=run) as mocked,
+        ):
+            apk = Path(temporary) / "candidate.apk"
+            apk.write_bytes(binary)
+            staging._ssh_json(target, "runtime", {})
+            staging._ssh_upload_apk(target, apk, {})
+        self.assertEqual([binary], uploaded)
+        self.assertEqual(2, mocked.call_count)
+        for invocation in mocked.call_args_list:
+            command = invocation.args[0]
+            destination = command.index(target.host)
+            self.assertEqual("--", command[destination - 1])
+            self.assertEqual(
+                ["sudo", "-n", "--", "python3"],
+                command[destination + 1 : destination + 5],
+            )
+            self.assertEqual(
+                "/opt/d-company-erp/ops/stage_android_release.py",
+                command[destination + 5],
+            )
+
+    def test_ssh_sudo_flag_rejects_non_bool_before_either_transport(self) -> None:
+        for value in (None, 0, 1, "true", "sudo -S", []):
+            target = staging.RemoteTarget(
+                "ubuntu@example.test",
+                Path("/safe/key"),
+                22,
+                "/opt/d-company-erp",
+                ssh_sudo=value,
+            )
+            for helper in ("json", "upload"):
+                with (
+                    self.subTest(value=value, helper=helper),
+                    patch.object(staging.subprocess, "run") as run,
+                ):
+                    with self.assertRaisesRegex(
+                        staging.AndroidReleaseStagingError, "sudo flag"
+                    ):
+                        if helper == "json":
+                            staging._ssh_json(target, "runtime", {})
+                        else:
+                            staging._ssh_upload_apk(
+                                target, Path("/must-not-open.apk"), {}
+                            )
+                    run.assert_not_called()
+
+    def test_invalid_ssh_sudo_rejects_before_artifact_subprocesses(self) -> None:
+        args = Namespace(
+            ssh_host="ubuntu@example.test",
+            ssh_key=Path("/safe/key"),
+            ssh_port=22,
+            remote_root="/opt/d-company-erp",
+            ssh_sudo="true",
+        )
+        with patch.object(staging.subprocess, "run") as run:
+            with self.assertRaisesRegex(
+                staging.AndroidReleaseStagingError, "sudo flag"
+            ):
+                staging.stage_release(args)
+            run.assert_not_called()
+
+    def test_ssh_sudo_does_not_relax_host_or_root_validation(self) -> None:
+        for host, root in (
+            ("ubuntu@example.test;id", "/opt/d-company-erp"),
+            ("-Jattacker.example", "/opt/d-company-erp"),
+            ("ubuntu@example.test", "/opt/../unsafe"),
+            ("ubuntu@example.test", "/opt/safe;id"),
+        ):
+            target = staging.RemoteTarget(
+                host, Path("/safe/key"), 22, root, ssh_sudo=True
+            )
+            for helper in ("json", "upload"):
+                with (
+                    self.subTest(host=host, root=root, helper=helper),
+                    patch.object(staging.subprocess, "run") as run,
+                ):
+                    with self.assertRaises(staging.AndroidReleaseStagingError):
+                        if helper == "json":
+                            staging._ssh_json(target, "runtime", {})
+                        else:
+                            staging._ssh_upload_apk(
+                                target, Path("/must-not-open.apk"), {}
+                            )
+                    run.assert_not_called()
+
+    def test_ssh_sudo_denial_has_no_unprivileged_retry(self) -> None:
+        target = staging.RemoteTarget(
+            "ubuntu@example.test",
+            Path("/safe/key"),
+            22,
+            "/opt/d-company-erp",
+            ssh_sudo=True,
+        )
+        for helper in ("json", "upload"):
+            with tempfile.TemporaryDirectory() as temporary:
+                apk = Path(temporary) / "candidate.apk"
+                apk.write_bytes(b"private-test-apk")
+                with (
+                    self.subTest(helper=helper),
+                    patch.object(
+                        staging.subprocess,
+                        "run",
+                        side_effect=staging.subprocess.CalledProcessError(
+                            1, ["ssh"], stderr=b"sudo denied"
+                        ),
+                    ) as run,
+                ):
+                    with self.assertRaises(staging.AndroidReleaseStagingError):
+                        if helper == "json":
+                            staging._ssh_json(target, "runtime", {})
+                        else:
+                            staging._ssh_upload_apk(target, apk, {})
+                    self.assertEqual(1, run.call_count)
+
     def test_verification_only_does_not_require_vps_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             manifest_path, apk, _ = self.make_package(Path(temporary))
@@ -1049,6 +1204,7 @@ class AndroidReleaseStagingTest(unittest.TestCase):
                 ssh_host="root@example.test",
                 ssh_key=key,
                 ssh_port=22,
+                ssh_sudo=True,
                 remote_root="/opt/d-company-erp",
                 apkanalyzer=None,
                 apksigner=None,
@@ -1065,6 +1221,7 @@ class AndroidReleaseStagingTest(unittest.TestCase):
             )
 
             def remote(_target, action: str, payload: dict) -> dict:
+                self.assertIs(_target.ssh_sudo, True)
                 events.append(action)
                 if action == "runtime":
                     return {"ok": True, "runtime_parity": runtime}

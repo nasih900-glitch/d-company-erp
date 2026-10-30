@@ -53,6 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
@@ -63,6 +64,7 @@ import cloud.dcompany.erp.ui.components.PremiumTabBar
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.TabOption
 import cloud.dcompany.erp.ui.components.UiTone
+import cloud.dcompany.erp.ui.components.workspaceContentCanvas
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
@@ -73,19 +75,24 @@ fun AnalyticsScreen(
     presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
 ) {
     val vm: AnalyticsViewModel = viewModel()
-    val state by vm.state.collectAsStateWithLifecycle()
+    val rawState by vm.state.collectAsStateWithLifecycle()
+    val profile by DCompanyApp.instance.shiftCache.profile.collectAsStateWithLifecycle()
+    val lease by DCompanyApp.instance.cacheIsolation.activeLeaseFlow.collectAsStateWithLifecycle()
+    val state = visibleAnalyticsState(rawState, profile, lease)
 
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    Column(Modifier.fillMaxSize().workspaceContentCanvas()) {
         PremiumTabBar(
-            options = AnalyticsTab.entries.map { TabOption(it.name, it.label) },
+            options = AnalyticsTab.entries.filter {
+                if (it == AnalyticsTab.Today) state.canReadToday else state.canReadGrowth
+            }.map { TabOption(it.name, it.label) },
             selectedId = state.tab.name,
             onSelect = { id -> AnalyticsTab.entries.firstOrNull { it.name == id }?.let(vm::selectTab) },
             modifier = Modifier.padding(horizontal = Spacing.lgPlus, vertical = Spacing.md),
         )
         Box(Modifier.fillMaxSize()) {
             when (state.tab) {
-                AnalyticsTab.Today -> TodayTab(state, presentation, vm::retryToday)
-                AnalyticsTab.Growth -> GrowthTab(
+                AnalyticsTab.Today -> if (state.canReadToday) TodayTab(state, presentation, vm::retryToday)
+                AnalyticsTab.Growth -> if (state.canReadGrowth) GrowthTab(
                     state,
                     presentation,
                     vm::selectGrowthPeriod,

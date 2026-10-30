@@ -35,6 +35,7 @@ import cloud.dcompany.erp.core.net.Terminal
 import cloud.dcompany.erp.ui.screens.gaming.GamingApi
 import cloud.dcompany.erp.ui.screens.shift.ShiftApi
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -61,7 +62,11 @@ sealed interface AuthState {
     data object SigningOut : AuthState
     data class SignOutFailed(val message: String) : AuthState
     data object SignedOut : AuthState
-    data class SignedIn(val me: MeResponse) : AuthState
+    data class SignedIn(
+        val me: MeResponse,
+        /** Nonsecret, process-local proof for a newly completed explicit login. */
+        val freshLoginNonce: Long? = null,
+    ) : AuthState
     /** A branch has multiple tills and this tablet has no valid saved assignment. */
     data class SelectTerminal(
         val me: MeResponse,
@@ -116,6 +121,17 @@ internal fun loginErrorAfterSignOutDecision(
     OutboxGateResult.Allowed -> null
     is OutboxGateResult.Blocked -> currentLoginError
 }
+
+/**
+ * Authority refresh is allowed to publish only into the exact SignedIn object
+ * that launched it. Owner equality is insufficient because a same employee's
+ * later explicit login has a different token lineage and fresh-login nonce.
+ */
+internal fun authorityRefreshMayPublish(
+    expected: AuthState.SignedIn,
+    current: AuthState,
+    refreshLeaseCurrent: Boolean,
+): Boolean = refreshLeaseCurrent && current === expected
 
 internal enum class RestoreFailureAction {
     KEEP_CACHED_SESSION,
@@ -226,6 +242,16 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private var terminalChangeJob: Job? = null
     private val terminalChangeGate = TerminalReassignmentRequestGate()
     private var pendingTerminalSession: PendingTerminalSession? = null
+    private val freshLoginNonce = AtomicLong(0L)
+    private val freshLoginHandoff = FreshLoginHandoffCoordinator(
+        nextNonce = {
+            freshLoginNonce.updateAndGet { current ->
+                if (current == Long.MAX_VALUE) 1L else current + 1L
+            }
+        },
+        isLoginCurrent = tokens::isCurrent,
+        currentScopeLease = cacheIsolation::currentLease,
+    )
     private val authorityRefresh = SessionAuthorityRefreshCoordinator(viewModelScope) {
         refreshSessionAuthority()
     }
@@ -240,20 +266,22 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             // The owner record is deliberately retained. If the refresh token
             // expires with writes still queued, only this same identity may
             // sign back in and drain them.
-            realtime.disconnect()
-            terminalChangeJob?.cancel()
-            terminalChangeGate.finish()
-            _terminalChange.value = TerminalChangeUiState.Idle
-            deactivateTerminalRuntime()
-            PricingLock.lock()
-            // Remove feature ViewModels immediately so no new action can
-            // capture the old lease while revocation waits for an already-
-            // entered Room commit to finish.
-            pendingTerminalSession = null
-            _accessChangeNotice.value = null
-            _loginError.value = FORCED_LOGOUT_MESSAGE
-            _state.value = AuthState.Loading
-            viewModelScope.launch {
+            viewModelScope.launch(Dispatchers.Main.immediate) {
+                authorityRefresh.cancelPending()
+                realtime.disconnect()
+                terminalChangeJob?.cancel()
+                terminalChangeGate.finish()
+                _terminalChange.value = TerminalChangeUiState.Idle
+                deactivateTerminalRuntime()
+                PricingLock.lock()
+                // Serialize state and handoff revocation on the VM dispatcher
+                // so an old authority refresh cannot publish SignedIn after
+                // forced logout has started.
+                pendingTerminalSession = null
+                freshLoginHandoff.clear()
+                _accessChangeNotice.value = null
+                _loginError.value = FORCED_LOGOUT_MESSAGE
+                _state.value = AuthState.Loading
                 cacheIsolation.deactivate()
                 sync.clearSessionFeedback()
                 cache.rememberProfile(null)
@@ -271,11 +299,18 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * employee's profile.
      */
     private suspend fun refreshSessionAuthority() {
-        val previous = (_state.value as? AuthState.SignedIn)?.me ?: return
+        val previousState = _state.value as? AuthState.SignedIn ?: return
+        val previous = previousState.me
         val lease = tokens.refreshLease() ?: return
         try {
             val refreshed = ApiClient.api.me()
             val activeAccess = tokens.currentAccessFor(lease) ?: return
+            if (!authorityRefreshMayPublish(
+                    expected = previousState,
+                    current = _state.value,
+                    refreshLeaseCurrent = tokens.currentAccessFor(lease) != null,
+                )
+            ) return
             if (!canApplyAuthorityProfile(previous, refreshed, activeAccess)) {
                 blockWorkspace(
                     "This session could not be safely verified after an access change. " +
@@ -283,8 +318,12 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 )
                 return
             }
-            val current = (_state.value as? AuthState.SignedIn)?.me ?: return
-            if (OutboxOwnerIdentity.from(current) != OutboxOwnerIdentity.from(previous)) return
+            if (!authorityRefreshMayPublish(
+                    expected = previousState,
+                    current = _state.value,
+                    refreshLeaseCurrent = tokens.currentAccessFor(lease) != null,
+                )
+            ) return
 
             val authorityChanged = accessAuthorityChanged(previous, refreshed)
             val gainedOperationalWorkspace =
@@ -299,35 +338,76 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 return
             }
 
-            if (tokens.currentAccessFor(lease) == null) return
+            if (!authorityRefreshMayPublish(
+                    expected = previousState,
+                    current = _state.value,
+                    refreshLeaseCurrent = tokens.currentAccessFor(lease) != null,
+                )
+            ) return
             cache.rememberProfile(json.encodeToString(MeResponse.serializer(), refreshed))
-            if (tokens.currentAccessFor(lease) == null) {
-                // Forced logout may win while DataStore is committing. Remove
-                // only the just-written old profile before Login is exposed.
-                cache.rememberProfile(null)
+            if (!authorityRefreshMayPublish(
+                    expected = previousState,
+                    current = _state.value,
+                    refreshLeaseCurrent = tokens.currentAccessFor(lease) != null,
+                )
+            ) {
+                // Forced logout clears its profile on the serialized VM path.
+                // If another SignedIn object already won, never erase that
+                // newer login's profile from this stale refresh callback.
+                if (_state.value === previousState) cache.rememberProfile(null)
                 return
             }
-            val stillCurrent = (_state.value as? AuthState.SignedIn)?.me ?: return
-            if (OutboxOwnerIdentity.from(stillCurrent) != OutboxOwnerIdentity.from(previous)) return
-            _state.value = AuthState.SignedIn(refreshed)
+            val preservedNonce = freshLoginHandoff.preserve(
+                visibleNonce = previousState.freshLoginNonce,
+                previous = previous,
+                refreshed = refreshed,
+            )
+            if (!authorityRefreshMayPublish(
+                    expected = previousState,
+                    current = _state.value,
+                    refreshLeaseCurrent = tokens.currentAccessFor(lease) != null,
+                )
+            ) return
+            _state.value = AuthState.SignedIn(refreshed, preservedNonce)
             if (authorityChanged) _accessChangeNotice.value = ACCESS_CHANGED_MESSAGE
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: ApiException) {
-            if (error.status == 401 || error.status == 403) {
+            if (
+                (error.status == 401 || error.status == 403) &&
+                authorityRefreshMayPublish(
+                    expected = previousState,
+                    current = _state.value,
+                    refreshLeaseCurrent = tokens.currentAccessFor(lease) != null,
+                )
+            ) {
                 _loginError.value = FORCED_LOGOUT_MESSAGE
                 rejectRestoredSession(lease, message = null)
             }
             // Connectivity failures retain the last verified authority. A
             // reconnect produces another refresh request automatically.
         } catch (error: CacheScopeException) {
-            blockWorkspace(
-                error.message ?: "The updated access could not safely open this tablet's saved workspace.",
-            )
+            if (authorityRefreshMayPublish(
+                    expected = previousState,
+                    current = _state.value,
+                    refreshLeaseCurrent = tokens.currentAccessFor(lease) != null,
+                )
+            ) {
+                blockWorkspace(
+                    error.message ?: "The updated access could not safely open this tablet's saved workspace.",
+                )
+            }
         } catch (error: TerminalScopeException) {
-            blockWorkspace(
-                error.message ?: "The updated access could not safely verify this tablet's till.",
-            )
+            if (authorityRefreshMayPublish(
+                    expected = previousState,
+                    current = _state.value,
+                    refreshLeaseCurrent = tokens.currentAccessFor(lease) != null,
+                )
+            ) {
+                blockWorkspace(
+                    error.message ?: "The updated access could not safely verify this tablet's till.",
+                )
+            }
         }
     }
 
@@ -338,11 +418,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
      * credentials intact.
      */
     fun restore() {
+        authorityRefresh.cancelPending()
         restoreJob?.cancel()
         terminalChangeJob?.cancel()
         terminalChangeGate.finish()
         _terminalChange.value = TerminalChangeUiState.Idle
         pendingTerminalSession = null
+        freshLoginHandoff.clear()
         deactivateTerminalRuntime()
         _state.value = AuthState.Loading
         restoreJob = viewModelScope.launch {
@@ -561,6 +643,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         message: String,
     ) {
         if (tokens.currentAccessFor(restoreLease) == null) return
+        freshLoginHandoff.clear()
         deactivateTerminalRuntime()
         cacheIsolation.deactivate()
         sync.clearSessionFeedback()
@@ -573,6 +656,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     fun signIn(email: String, password: String) {
         if (_signingIn.value) return
+        authorityRefresh.pauseForLogin()
         // A pricing re-auth belongs to one login lineage, not merely a user id.
         // Relogging as the same owner must require the password again.
         PricingLock.lock()
@@ -580,6 +664,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         terminalChangeGate.finish()
         _terminalChange.value = TerminalChangeUiState.Idle
         pendingTerminalSession = null
+        freshLoginHandoff.clear()
         _accessChangeNotice.value = null
         _signingIn.value = true
         _loginError.value = null
@@ -625,7 +710,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 if (EffectivePermissions.from(me).has(ErpPermission.PosRead)) {
                     refreshShiftAuthorityAtLogin()
                 }
-                _state.value = AuthState.SignedIn(me)
+                _state.value = freshLoginState(me, installedLogin)
                 sync.requestSync()
                 realtime.connect()
                 refreshReceiptHistoryAfterLogin(me)
@@ -653,8 +738,28 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     "Could not verify this tablet's unsynced work. No account was changed; try again or ask support."
             } finally {
                 _signingIn.value = false
+                authorityRefresh.resumeAfterLogin(_state.value is AuthState.SignedIn)
             }
         }
+    }
+
+    private fun freshLoginState(
+        me: MeResponse,
+        installedLogin: LoginSessionLease,
+    ): AuthState.SignedIn {
+        // This presentation is cosmetic, not authentication authority. If an
+        // unexpected scope race prevents an exact binding, keep the already
+        // accepted session usable and simply omit the one-shot handoff.
+        val nonce = freshLoginHandoff.arm(me, installedLogin)
+        return AuthState.SignedIn(me = me, freshLoginNonce = nonce)
+    }
+
+    /** Continue only the currently visible, exact-login success handoff. */
+    fun acknowledgeFreshLoginHandoff(nonce: Long): Boolean {
+        val current = _state.value as? AuthState.SignedIn ?: return false
+        if (!freshLoginHandoff.consume(current.freshLoginNonce, nonce, current.me)) return false
+        _state.value = current.copy(freshLoginNonce = null)
+        return true
     }
     /**
      * Establish the exact branch/till cache scope before any feature ViewModel
@@ -727,6 +832,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 sync.clearSessionFeedback()
                 deactivateTerminalRuntime()
                 realtime.disconnect()
+                freshLoginHandoff.clear()
                 pendingTerminalSession = PendingTerminalSession(
                     me = me,
                     installedLogin = installedLogin,
@@ -1088,8 +1194,14 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 cache.rememberProfile(json.encodeToString(MeResponse.serializer(), pending.me))
                 refreshShiftAuthorityAtLogin()
                 if (!pending.isTokenCurrent()) return@launch
+                val signedIn = if (pending.installedLogin != null && pending.previousTerminal == null) {
+                    freshLoginState(pending.me, pending.installedLogin)
+                } else {
+                    freshLoginHandoff.clear()
+                    AuthState.SignedIn(pending.me)
+                }
                 pendingTerminalSession = null
-                _state.value = AuthState.SignedIn(pending.me)
+                _state.value = signedIn
                 reconcileOperationalAlarms()
                 sync.requestSync()
                 realtime.connect()
@@ -1412,6 +1524,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun signOut() {
+        authorityRefresh.cancelPending()
         terminalChangeJob?.cancel()
         terminalChangeGate.finish()
         _terminalChange.value = TerminalChangeUiState.Idle
@@ -1436,6 +1549,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             // tappable with an already-deactivated cache lease and actions can
             // appear to do nothing during sign-out.
             _state.value = AuthState.SigningOut
+            freshLoginHandoff.clear()
             sync.clearSessionFeedback()
             deactivateTerminalRuntime()
             realtime.disconnect()
@@ -1488,6 +1602,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         terminalChangeGate.finish()
         _terminalChange.value = TerminalChangeUiState.Idle
         _state.value = AuthState.SigningOut
+        freshLoginHandoff.clear()
         sync.clearSessionFeedback()
         deactivateTerminalRuntime()
         realtime.disconnect()
@@ -1594,6 +1709,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         terminalChangeGate.finish()
         _terminalChange.value = TerminalChangeUiState.Idle
         pendingTerminalSession = null
+        freshLoginHandoff.clear()
         cacheIsolation.deactivate()
         sync.clearSessionFeedback()
         deactivateTerminalRuntime()
@@ -1627,6 +1743,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         terminalChangeGate.finish()
         _terminalChange.value = TerminalChangeUiState.Idle
         pendingTerminalSession = null
+        freshLoginHandoff.clear()
         PricingLock.lock()
         deactivateTerminalRuntime()
         cache.rememberProfile(null)
@@ -1657,6 +1774,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         terminalChangeGate.finish()
         _terminalChange.value = TerminalChangeUiState.Idle
         pendingTerminalSession = null
+        freshLoginHandoff.clear()
         PricingLock.lock()
         deactivateTerminalRuntime()
         cacheIsolation.deactivate()

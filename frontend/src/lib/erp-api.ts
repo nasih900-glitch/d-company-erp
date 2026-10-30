@@ -3515,6 +3515,8 @@ export interface GameSessionDTO {
   rate_per_hour_minor: number | null;
   order_id: string | null;
   cancel_reason: string | null;
+  server_play_elapsed_ms?: number | null;
+  void_reason_required?: boolean | null;
   cancellation_receipt_id?: string | null;
   cancellation_idempotency_key?: string | null;
   cancellation_request_hash?: string | null;
@@ -3539,18 +3541,25 @@ export interface GameSessionDTO {
 
 export interface GamingSessionCancelReview {
   idempotencyKey: string;
-  expected_participant_revision: number;
-  expected_billing_revision: number;
-  expected_amount_minor: number;
+  expected_participant_revision?: number;
+  expected_billing_revision?: number;
+  expected_amount_minor?: number;
 }
 
-export function gamingSessionCancelBody(reason: string, review?: GamingSessionCancelReview) {
-  return review ? {
+export function gamingSessionCancelBody(reason: string | null, review?: GamingSessionCancelReview) {
+  return {
     reason,
-    expected_participant_revision: review.expected_participant_revision,
-    expected_billing_revision: review.expected_billing_revision,
-    expected_amount_minor: review.expected_amount_minor,
-  } : { reason };
+    expected_order_id: null,
+    ...(review?.expected_participant_revision === undefined ? {} : {
+      expected_participant_revision: review.expected_participant_revision,
+    }),
+    ...(review?.expected_billing_revision === undefined ? {} : {
+      expected_billing_revision: review.expected_billing_revision,
+    }),
+    ...(review?.expected_amount_minor === undefined ? {} : {
+      expected_amount_minor: review.expected_amount_minor,
+    }),
+  };
 }
 
 export interface GamingParticipantDTO {
@@ -3734,7 +3743,10 @@ export const gaming = {
 
   /** One database snapshot: status transitions cannot straddle separate list reads. */
   listOperationalSessions: () => api.get<GameSessionDTO[]>('/gaming/sessions', {
-    params: { unbilled_only: true, limit: 500 },
+    params: {
+      unbilled_only: true,
+      limit: 500,
+    },
   }).then((r) => r.data),
 
   listSessions: (
@@ -3904,7 +3916,7 @@ export const gaming = {
   }, {
     headers: { 'Idempotency-Key': idempotencyKey },
   }).then((r) => r.data),
-  cancelSession: (id: string, reason: string, review?: GamingSessionCancelReview) =>
+  cancelSession: (id: string, reason: string | null, review?: GamingSessionCancelReview) =>
     api.post<GameSessionDTO>(`/gaming/sessions/${id}/cancel`, gamingSessionCancelBody(reason, review),
       review ? { headers: { 'Idempotency-Key': review.idempotencyKey } } : undefined).then((r) => r.data),
   sendToPos: (id: string) =>

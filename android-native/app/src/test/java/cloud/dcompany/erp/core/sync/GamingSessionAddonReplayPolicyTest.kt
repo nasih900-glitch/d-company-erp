@@ -384,7 +384,7 @@ class GamingSessionAddonReplayPolicyTest {
     }
 
     @Test
-    fun `whole-session cancellation explains the exact unresolved item prerequisite`() {
+    fun `whole-session cancellation retains confirmed items but blocks unresolved item actions`() {
         val base = GamingSessionAddonUi(
             id = "addon-1",
             serverAddonId = "addon-1",
@@ -399,10 +399,7 @@ class GamingSessionAddonReplayPolicyTest {
         )
 
         assertNull(sessionCancellationAddonBlockMessage(listOf(base.copy(voided = true))))
-        assertTrue(
-            sessionCancellationAddonBlockMessage(listOf(base))
-                .orEmpty().contains("Void 1 active Gaming item", ignoreCase = true),
-        )
+        assertNull(sessionCancellationAddonBlockMessage(listOf(base)))
         assertTrue(
             sessionCancellationAddonBlockMessage(
                 listOf(

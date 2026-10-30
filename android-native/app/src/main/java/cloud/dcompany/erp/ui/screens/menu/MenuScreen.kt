@@ -30,7 +30,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -70,6 +69,7 @@ import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
 import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.components.PricingUnlockDialog
+import cloud.dcompany.erp.ui.components.LiquidDropdownMenu
 import cloud.dcompany.erp.ui.components.ActionIntent
 import cloud.dcompany.erp.ui.components.AdaptiveStatGrid
 import cloud.dcompany.erp.ui.components.CompactStatCard
@@ -81,10 +81,13 @@ import cloud.dcompany.erp.ui.components.OperationalStatusBadge
 import cloud.dcompany.erp.ui.components.SearchInput
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.UiTone
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
+import cloud.dcompany.erp.ui.components.workspaceContentCanvas
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
 
 internal fun menuItemTypeOptions(
     presentation: WorkspacePresentationPolicy,
@@ -131,7 +134,7 @@ fun MenuScreen(
     }
 
     Column(
-        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+        Modifier.fillMaxSize().workspaceContentCanvas()
             .padding(horizontal = Spacing.lgPlus, vertical = Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
@@ -482,8 +485,7 @@ private fun ItemRowCard(
         Modifier
             .fillMaxWidth()
             .clip(Radius.shapeMd)
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
+            .liquidWorkspaceSurface(Radius.shapeMd)
             .padding(Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm),
     ) {
@@ -843,7 +845,11 @@ private fun CategoryDropdown(categories: List<CategoryRow>, selectedId: String, 
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true),
         )
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        LiquidDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            role = WorkspaceGlassRole.CONTROL,
+        ) {
             categories.forEach { cat ->
                 DropdownMenuItem(text = { Text(cat.name) }, onClick = { onSelect(cat.id); expanded = false })
             }
@@ -868,7 +874,11 @@ private fun TypeDropdown(
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true),
         )
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        LiquidDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            role = WorkspaceGlassRole.CONTROL,
+        ) {
             menuItemTypeOptions(presentation).forEach { (id, label) ->
                 DropdownMenuItem(text = { Text(label) }, onClick = { onSelect(id); expanded = false })
             }

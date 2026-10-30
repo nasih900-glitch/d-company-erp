@@ -19,8 +19,11 @@ class OptionalUpdateInteractionContractTest {
         val activity = read("src/main/java/cloud/dcompany/erp/MainActivity.kt")
         val appRoot = activity.substringAfter("private fun AppRoot(")
             .substringBefore("@Composable\nprivate fun CompatibilityCheckOverlay")
+        val optionalOfferGuard =
+            "else if (!freshLoginPending && " +
+                "compatibilityState is ClientCompatibilityState.UpdateAvailable)"
         val bannerWiring = appRoot
-            .substringAfter("else if (compatibilityState is ClientCompatibilityState.UpdateAvailable)")
+            .substringAfter(optionalOfferGuard)
 
         assertTrue(
             "Later must only dismiss the optional compatibility notice",
@@ -43,13 +46,21 @@ class OptionalUpdateInteractionContractTest {
             "onDiscardDownload = appUpdate::discard" in bannerWiring,
         )
         val authStateRendering = appRoot.indexOf("when (val s = state)")
-        val optionalOffer = appRoot.indexOf(
-            "else if (compatibilityState is ClientCompatibilityState.UpdateAvailable)",
-        )
+        val optionalOffer = appRoot.indexOf(optionalOfferGuard)
+        val mandatoryUpdate = appRoot.indexOf("is ClientCompatibilityState.UpdateRequired ->")
         assertTrue("The activity must still render auth states", authStateRendering >= 0)
         assertTrue("The activity must still expose the optional update offer", optionalOffer >= 0)
         assertTrue(
-            "The optional offer must remain available after every auth-state screen is rendered",
+            "Only the exact fresh-login presentation may temporarily suppress the optional offer",
+            "val freshLoginPending = " +
+                "(state as? AuthState.SignedIn)?.freshLoginNonce != null" in appRoot,
+        )
+        assertTrue(
+            "A mandatory update must retain priority over authentication and the cosmetic handoff",
+            mandatoryUpdate in 0 until authStateRendering,
+        )
+        assertTrue(
+            "The optional offer must resume after the auth-state screen and cosmetic handoff",
             authStateRendering < optionalOffer,
         )
     }

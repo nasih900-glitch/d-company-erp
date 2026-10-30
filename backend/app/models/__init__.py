@@ -56,6 +56,8 @@ from app.models.gaming import (
     GamingSessionExtension,
     GamingSessionPackageAmendment,
     GamingSessionParticipant,
+    GamingVoidAddonLine,
+    GamingVoidReceipt,
     Station,
     Tournament,
 )
@@ -181,6 +183,8 @@ __all__ = [
     "GamingSessionExtension",
     "GamingSessionPackageAmendment",
     "GamingSessionParticipant",
+    "GamingVoidAddonLine",
+    "GamingVoidReceipt",
     "GamingParticipantSettlement",
     "GamingParticipantSettlementLine",
     "GoogleSheetsDelivery",

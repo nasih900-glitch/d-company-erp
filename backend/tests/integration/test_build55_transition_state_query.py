@@ -1,4 +1,4 @@
-"""Real0091→0092 full-row proof with nonempty immutable finance receipts."""
+"""Real0091→0093 full-row proof with nonempty immutable finance receipts."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from tests.integration import test_android_update_policy as policy_fixtures
@@ -59,26 +60,26 @@ async def stable_owned_schema(owned_policy_database, tmp_path):
     Copy the actual Alembic data separately so the restored revision is genuine.
     """
     original_engine = owned_policy_database.kw["bind"]
-    url = original_engine.url.set(drivername="postgresql+psycopg").render_as_string(
-        hide_password=False
-    )
-    dsn = url.replace("postgresql+psycopg://", "postgresql://", 1)
-    migration = _run_alembic(url, "downgrade", "0091")
-    assert migration.returncode == 0, migration.stderr
     schema = tmp_path / "owned-empty0091-schema.dump"
     revision = tmp_path / "owned-empty0091-alembic.dump"
-    for destination, arguments in (
-        (schema, ["--schema-only"]),
-        (revision, ["--data-only", "--table=public.alembic_version"]),
-    ):
-        result = subprocess.run(  # noqa: S603 - fixed tool and own empty database
-            [_tool("pg_dump"), "--format=custom", *arguments, "--file", str(destination), dsn],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert result.returncode == 0, result.stderr
-        destination.chmod(0o600)
+    # Build the predecessor directly: a downgrade from0093 can preserve
+    # semantically equivalent rewritten function text rather than real0091 bytes.
+    with _disposable_database("erp_build55_predecessor") as predecessor_url:
+        migration = _run_alembic(predecessor_url, "upgrade", "0091")
+        assert migration.returncode == 0, migration.stderr
+        dsn = predecessor_url.replace("postgresql+psycopg://", "postgresql://", 1)
+        for destination, arguments in (
+            (schema, ["--schema-only"]),
+            (revision, ["--data-only", "--table=public.alembic_version"]),
+        ):
+            result = subprocess.run(  # noqa: S603 - fixed tool and own empty database
+                [_tool("pg_dump"), "--format=custom", *arguments, "--file", str(destination), dsn],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert result.returncode == 0, result.stderr
+            destination.chmod(0o600)
     with _disposable_database("erp_build55_stable_schema") as restored_url:
         restored_dsn = restored_url.replace("postgresql+psycopg://", "postgresql://", 1)
         for archive in (schema, revision):
@@ -121,7 +122,12 @@ async def session(owned_policy_database, stable_owned_schema):
 async def test_build55_retains_nonempty_finance_audit_and_exact_stopped_restore(
     client, session, seed_owner, owned_policy_database, tmp_path
 ):
-    headers, day, order, payment, _ = await case(session, seed_owner)
+    headers, day, order, payment, shift = await case(session, seed_owner)
+    gaming_ids = {
+        "station": uuid4(), "session": uuid4(), "company": order.company_id,
+        "branch": order.branch_id, "shift": shift.id, "owner": shift.opened_by,
+        "start_at": shift.opened_at,
+    }
     protected = await unlock(client, seed_owner, headers, "payment")
     preview = await client.post(
         "/api/v1/finance/tender-corrections/payment/prepare",
@@ -166,7 +172,23 @@ async def test_build55_retains_nonempty_finance_audit_and_exact_stopped_restore(
     dsn = url.replace("postgresql+psycopg://", "postgresql://", 1)
     migration = _run_alembic(url, "downgrade", "0091")
     assert migration.returncode == 0, migration.stderr
+    # Exercise the new NULL-field projection with real predecessor rows, not
+    # an empty-table hash. These explicit columns exist in0091; the current ORM
+    # GamingSession would try to write the not-yet-created0093 link column.
+    await session.execute(text(
+        "INSERT INTO stations(id,company_id,branch_id,code,name,type,"
+        "rate_per_hour_minor,is_active,tax_rate,sac_code,rate_includes_tax) "
+        "VALUES(:station,:company,:branch,'GUARD0093','Guard migration PS5',"
+        "'ps5',12000,true,0,'999692',true)"
+    ), gaming_ids)
+    await session.execute(text(
+        "INSERT INTO gaming_sessions(id,company_id,station_id,shift_id,opened_by,"
+        "start_at,rate_per_hour_minor,status,billing_mode,extra_controllers) "
+        "VALUES(:session,:company,:station,:shift,:owner,:start_at,12000,'ended','hourly',0)"
+    ), gaming_ids)
+    await session.commit()
     before = _snapshot(dsn)
+    assert before["tables"]["gaming_sessions"]["row_count"] > 0
     before_receipt = tmp_path / "actual-before0091.json"
     before_receipt.write_text(json.dumps(before, sort_keys=True))
     before_receipt.chmod(0o600)
@@ -186,10 +208,10 @@ async def test_build55_retains_nonempty_finance_audit_and_exact_stopped_restore(
         check=False,
     )
     assert archived.returncode == 0, archived.stderr
-    migration = _run_alembic(url, "upgrade", "0092")
+    migration = _run_alembic(url, "upgrade", "0093")
     assert migration.returncode == 0, migration.stderr
     after = _snapshot(dsn)
-    after_receipt = tmp_path / "actual-after0092.json"
+    after_receipt = tmp_path / "actual-after0093.json"
     after_receipt.write_text(json.dumps(after, sort_keys=True))
     after_receipt.chmod(0o600)
     spec = importlib.util.spec_from_file_location(
@@ -201,10 +223,18 @@ async def test_build55_retains_nonempty_finance_audit_and_exact_stopped_restore(
     spec.loader.exec_module(verifier)
     proof = verifier.verify_pair(before, after, mode="post")
     assert proof["full_audit_finance_rows_preserved"] is True
-    assert len(after["tables"]) == len(before["tables"]) + 1
-    assert after["tables"]["android_update_policy"] == {
-        "row_count": 0,
-        "row_sha256": verifier.EMPTY_SHA256,
+    assert len(after["tables"]) == len(before["tables"]) + 3
+    for name in verifier.NEW_TABLES:
+        assert after["tables"][name] == {
+            "row_count": 0,
+            "row_sha256": verifier.EMPTY_SHA256,
+        }
+    assert after["tables"]["gaming_sessions"]["row_sha256"] != before["tables"]["gaming_sessions"]["row_sha256"]
+    assert after["gaming_sessions_legacy_projection"] == {
+        "column_present": True,
+        "row_count": before["tables"]["gaming_sessions"]["row_count"],
+        "row_sha256": before["tables"]["gaming_sessions"]["row_sha256"],
+        "nonnull_count": 0,
     }
     with _disposable_database("code17_restore_verify") as restored_url:
         restored_dsn = restored_url.replace("postgresql+psycopg://", "postgresql://", 1)
