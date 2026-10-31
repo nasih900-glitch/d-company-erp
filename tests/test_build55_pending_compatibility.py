@@ -322,6 +322,8 @@ def runtime(verifier, monkeypatch):
             env += [
                 "APP_VERSION=3.1.46",
                 "APP_REVISION=" + verifier.PRIOR_REVISION,
+                "PYTHON_VERSION=3.14.8",
+                "PYTHON_SHA256=c2215904f02b175596dc49351585104f4bc20341e1c47378b26a2c274360ce73",
                 "ANDROID_MIN_SUPPORTED_VERSION_CODE=54",
                 "ANDROID_LATEST_VERSION_CODE=54",
                 "CLIENT_COMPATIBILITY_POLICY_REVISION=4",
@@ -414,7 +416,7 @@ def test_candidate_and_restored_actual_runtime_include_effective_env_and_command
         row["Image"] = identity["candidate_images"][name]
         if name == "backend":
             env = verifier.environment(row["Config"]["Env"])
-            env.update(APP_VERSION="3.1.47", APP_REVISION="b" * 40)
+            env = verifier.candidate_backend_environment(env, "b" * 40)
             row["Config"]["Env"] = [key + "=" + value for key, value in env.items()]
     assert (
         verifier.verify_running_runtime(runtime, actual, identity)[
@@ -915,3 +917,60 @@ def test_0093_unreviewed_schema_delta_stays_closed(verifier, inventories, monkey
     monkeypatch.setattr(verifier, "EXPECTED_0093_SCHEMA_REMOVED_ROWS", ())
     with pytest.raises(verifier.CompatibilityError, match="unreviewed"):
         verifier.verify_pair(before, after, mode="post")
+
+
+def test_candidate_backend_admits_only_exact_reviewed_python_patch(verifier):
+    before = {
+        "APP_VERSION": "3.1.46", "APP_REVISION": verifier.PRIOR_REVISION,
+        "PYTHON_VERSION": "3.14.8",
+        "PYTHON_SHA256": "c2215904f02b175596dc49351585104f4bc20341e1c47378b26a2c274360ce73",
+        "PATH": "/usr/local/bin:/usr/bin:/bin", "KEEP": "unchanged",
+    }
+    original = deepcopy(before)
+    candidate = verifier.candidate_backend_environment(before, "b" * 40)
+    assert before == original
+    assert candidate == {
+        **before, "APP_VERSION": "3.1.47", "APP_REVISION": "b" * 40,
+        "PYTHON_VERSION": "3.14.10",
+        "PYTHON_SHA256": "de414a57119abef52784d8993e341d53aed635fc2b05c2607d9f98a2c5b72032",
+        "LANG": "C.UTF-8",
+    }
+    for key, value in (
+        ("PYTHON_VERSION", "3.14.10"), ("PYTHON_SHA256", "0" * 64),
+        ("APP_VERSION", "3.1.45"), ("APP_REVISION", "0" * 40),
+        ("LANG", "C.UTF-8"),
+    ):
+        with pytest.raises(verifier.CompatibilityError, match="prior backend"):
+            verifier.candidate_backend_environment({**before, key: value}, "b" * 40)
+    with pytest.raises(verifier.CompatibilityError):
+        verifier.candidate_backend_environment(before, "not-a-revision")
+
+
+@pytest.mark.parametrize("key", ["PATH", "PYTHON_VERSION", "PYTHON_SHA256", "LANG"])
+def test_candidate_compose_cannot_mask_python_image_metadata(verifier, key):
+    with pytest.raises(verifier.CompatibilityError, match="masks Python"):
+        verifier.candidate_image_environment(["KEEP=1"], {key: "spoofed"}, service="backend")
+
+
+@pytest.mark.parametrize("version,checksum", [
+    ("3.14.8", "c2215904f02b175596dc49351585104f4bc20341e1c47378b26a2c274360ce73"),
+    ("3.14.10", "0" * 64),
+    ("3.14.11", "de414a57119abef52784d8993e341d53aed635fc2b05c2607d9f98a2c5b72032"),
+])
+def test_candidate_runtime_rejects_old_or_mismatched_python(verifier, runtime, version, checksum):
+    actual = {
+        row["Config"]["Labels"]["com.docker.compose.service"]: deepcopy(row)
+        for row in runtime["containers"]
+    }
+    identity = {"candidate_revision": "b" * 40, "candidate_images": {
+        name: "sha256:" + str(index) * 64
+        for index, name in enumerate(verifier.SERVICES, 1)
+    }}
+    for name, row in actual.items():
+        row["Image"] = identity["candidate_images"][name]
+        if name == "backend":
+            env = verifier.candidate_backend_environment(verifier.environment(row["Config"]["Env"]), "b" * 40)
+            env.update(PYTHON_VERSION=version, PYTHON_SHA256=checksum)
+            row["Config"]["Env"] = [key + "=" + value for key, value in env.items()]
+    with pytest.raises(verifier.CompatibilityError, match="environment changed"):
+        verifier.verify_running_runtime(runtime, actual, identity)

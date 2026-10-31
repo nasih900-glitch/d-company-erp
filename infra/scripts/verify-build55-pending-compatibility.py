@@ -90,8 +90,8 @@ BACKEND_UVICORN_ENTRYPOINT = [
 # Independent review fills these final closure values; the helper cannot hash
 # its own enclosing archive. Historical release maps remain immutable.
 CANDIDATE_RELEASE_FROZEN = True
-CANDIDATE_BACKEND_MANIFEST_SHA256: str | None = '145db490ce39ac9d6151e520abb0e5c45228ebce98e0769d2ac02e0063c48d9e'
-CANDIDATE_PROTECTED_SOURCE_SHA256: str | None = '48d1cf1f56bb9fdd04d26b7997e85e72274dd954877af8e262e8fe12cf4bd027'
+CANDIDATE_BACKEND_MANIFEST_SHA256: str | None = '232ba21c930bcda32f246ab443d1db8d39aa53eb63f94843f5c653ee146c1dfa'
+CANDIDATE_PROTECTED_SOURCE_SHA256: str | None = '8691c7478f29b4a6505112920bc9bd1f672ea637d5e22dd66bbdbacf5654f0fc'
 EXPECTED_POLICY_SCHEMA_ROWS: tuple[str, ...] = (
     "column|android_update_policy|1|id|integer|NO||||32|2|0||||||||||pg_catalog|int4|NO||||||NO|NEVER||YES",
     "column|android_update_policy|2|mode|character varying|NO||20|80|||||||||||||pg_catalog|varchar|NO||||||NO|NEVER||YES",
@@ -944,6 +944,46 @@ def environment(values: object) -> dict[str, str]:
     return result
 
 
+PRIOR_PYTHON_VERSION = "3.14.8"
+PRIOR_PYTHON_SHA256 = "c2215904f02b175596dc49351585104f4bc20341e1c47378b26a2c274360ce73"
+CANDIDATE_PYTHON_VERSION = "3.14.10"
+CANDIDATE_PYTHON_SHA256 = "de414a57119abef52784d8993e341d53aed635fc2b05c2607d9f98a2c5b72032"
+
+
+def candidate_backend_environment(before: dict[str, str], revision: str) -> dict[str, str]:
+    """Admit only this release identity and the reviewed CPython security patch."""
+    if (
+        before.get("APP_VERSION") != PRIOR_VERSION
+        or before.get("APP_REVISION") != PRIOR_REVISION
+        or before.get("PYTHON_VERSION") != PRIOR_PYTHON_VERSION
+        or before.get("PYTHON_SHA256") != PRIOR_PYTHON_SHA256
+        or "LANG" in before
+        or not isinstance(revision, str)
+        or not re.fullmatch(r"[a-f0-9]{40}", revision)
+    ):
+        raise CompatibilityError("reviewed prior backend Python or release identity changed")
+    return {
+        **before,
+        "APP_VERSION": CANDIDATE_VERSION,
+        "APP_REVISION": revision,
+        "PYTHON_VERSION": CANDIDATE_PYTHON_VERSION,
+        "PYTHON_SHA256": CANDIDATE_PYTHON_SHA256,
+        "LANG": "C.UTF-8",
+    }
+
+
+def candidate_image_environment(image_values: object, overrides: object, *, service: str) -> dict[str, str]:
+    effective = environment(image_values)
+    if not isinstance(overrides, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in overrides.items()
+    ):
+        raise CompatibilityError("candidate effective environment is malformed")
+    if service == "backend" and {"PATH", "PYTHON_VERSION", "PYTHON_SHA256", "LANG"} & overrides.keys():
+        raise CompatibilityError("candidate Compose masks Python image metadata")
+    effective.update(overrides)
+    return effective
+
+
 def verify_runtime_journal(document: dict) -> dict:
     if (
         set(document) != {"schema_version", "containers", "configuration_files"}
@@ -1168,25 +1208,16 @@ def verify_pre_bindings(args) -> None:
             raise CompatibilityError(
                 "candidate image labels are not the coordinated release"
             )
-        effective = environment(image.get("Config", {}).get("Env"))
-        overrides = config.get("environment", {})
-        if not isinstance(overrides, dict) or not all(
-            isinstance(k, str) and isinstance(v, str) for k, v in overrides.items()
-        ):
-            raise CompatibilityError("candidate effective environment is malformed")
-        effective.update(overrides)
+        if service == "backend" and "env_file" in config:
+            raise CompatibilityError("candidate Compose masks Python image metadata")
+        effective = candidate_image_environment(
+            image.get("Config", {}).get("Env"), config.get("environment", {}), service=service,
+        )
         before = environment(runtime[service]["Config"]["Env"])
-        if service == "backend":
-            if (
-                effective.pop("APP_VERSION", None) != CANDIDATE_VERSION
-                or effective.pop("APP_REVISION", None) != revision
-                or before.pop("APP_VERSION", None) != PRIOR_VERSION
-                or before.pop("APP_REVISION", None) != PRIOR_REVISION
-            ):
-                raise CompatibilityError("effective backend release identity changed")
-        if before != effective:
+        expected = candidate_backend_environment(before, revision) if service == "backend" else before
+        if effective != expected:
             raise CompatibilityError(
-                "effective runtime environment changed beyond reviewed identity"
+                "effective runtime environment changed beyond reviewed identity and Python patch"
             )
         executable = [
             config.get("entrypoint", image["Config"].get("Entrypoint")),
@@ -1250,7 +1281,7 @@ def verify_running_runtime(
             raise CompatibilityError("actual running executable/user changed")
         expected = environment(before[service]["Config"]["Env"])
         if not prior and service == "backend":
-            expected.update(APP_VERSION=CANDIDATE_VERSION, APP_REVISION=revision)
+            expected = candidate_backend_environment(expected, revision)
         if environment(config.get("Env")) != expected:
             raise CompatibilityError("actual effective runtime environment changed")
     return {

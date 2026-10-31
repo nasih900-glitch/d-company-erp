@@ -1705,8 +1705,8 @@ REVIEWED_CODE30_4_BUILD54_SHA256 = {
 # deployment or replace any historical map/signing/physical-tablet evidence.
 REVIEWED_CODE30_4_BUILD55_SHA256 = {
     ".env.production.example": "b45aa3dc9492aa07c83ac9ba7960a93b67bd14b4eedee8753ced79d5722a58d5",
-    ".github/workflows/ci.yml": "e6964e70985877384496b44db4b7923417810ed19059b8da71d9338e89d4c07d",
-    ".github/workflows/release.yml": "d749f555cb6ecf2083a44c9ee5ad7eb2d9700a4f488359c6c4e1c99c30540f1d",
+    ".github/workflows/ci.yml": "3fa9998937a6b44cee1422e4b733027126e0b45ac0918eba89e09ae43dcbe744",
+    ".github/workflows/release.yml": "327276dc721d0a452d49de822d39529740fced5e51fef74bd02bf6ef1ff1c06d",
     "PROJECT_STATE.md": "db534e40a5ee8a37167276de58be318a238ac9a536307705d6dee5b344b6b187",
     "README.md": "fd781b0ca123bcf13ac02478153a66cad740bf04df814c53b5fae806429eb35d",
     "android-native/app/build.gradle.kts": "f2e9a1fa2f2525c7137205c2e93c344bd96c12a18affd61b89e5538c75d1bfca",
@@ -1970,6 +1970,7 @@ REVIEWED_CODE30_4_BUILD55_SHA256 = {
     "backend/tests/integration/test_gaming_void_retention_migration.py": "7c8ba45cd2f91dc506992c249b05942def3ee99d06ab5ca1edd47eaf642275e9",
     "backend/tests/integration/test_home_analytics.py": "652867c560d8a2e94871917206eb06b5ceb8a15f50a269514937463add0a5de7",
     "backend/tests/integration/test_image_encoder_upgrade_replay.py": "9c2859c203e498631f8c1d5bea3cb341fd5704a02b93bfe0182987fadb15bf71",
+    "backend/tests/integration/test_remote_assistance.py": "5b264145459986223f5bbc96945592d68ad96e5ed38cd45c97a59e12cd0b6f32",
     "backend/tests/integration/test_reports_overview.py": "898286178be6cb746796965240055e869c1786ab314887da88dd33784c8409e6",
     "backend/tests/integration/test_tender_correction_migration.py": "3568620720787d92e71455daef2ac22879c6f51600b6fa8e88b8f06124aeb3ee",
     "backend/tests/unit/test_android_update_policy.py": "0d9c0ca03789e6e1efc333c31f3e755d0721e154419bfa6f57bebef46f171fc0",
@@ -1986,7 +1987,7 @@ REVIEWED_CODE30_4_BUILD55_SHA256 = {
     "backend/tests/unit/test_runtime_release_parity.py": "dce44ab147f28bd95da7fe2ba8380abef9214c3340a07190acbc2dbaaf866e28",
     "docker-compose.prod.yml": "07c6c619e450a85a60aac2c5269bd9c194b3487744908a1115eeb023e5f4629c",
     "docs/BUILD55_ACCEPTANCE.md": "7f67b167c32bbb60c6ffc71ef79756c09a97befd383cf11a340249d308e3525e",
-    "docs/BUILD55_GUARDED_DEPLOYMENT.md": "65fcff2ba524cf8842038b47938993af8d850fd16aa78fafe4f558e94a82b154",
+    "docs/BUILD55_GUARDED_DEPLOYMENT.md": "18ff1ceb1bbf280c1b8d4938ee50066e61a882cfff85cb56d451d7c639cc9d84",
     "docs/SERVER_DRIVEN_ANDROID_UPDATES.md": "fdb3e3c577d2e687a9f72bc1a9b306a529937b21e5c6bea8e089a596a777fa17",
     "docs/V3_1_47_RELEASE_CANDIDATE.md": "d3a44e2bc26b0302bf5187d901e888a0ee2e8a96442034eb4f7f3e870289cfbd",
     "frontend/.env.example": "25ecc546c19ab44b9638397be1944adffeb12fe673c9228cc2e1496349d0115f",
@@ -2012,7 +2013,7 @@ REVIEWED_CODE30_4_BUILD55_SHA256 = {
     "frontend/src/modules/settings/tabs/DevicesUpdatesTab.tsx": "3219df29ac30de2ae5fdf18fe1b073d20b3e2ad4a25e271ba8190c0dbbd3f547",
     "frontend/src/modules/staff/StaffScreen.tsx": "693b8b8f27374fb015366294303fb42ebad45630bdb9e6e7c7144ea8d6c7c345",
     "frontend/src/modules/staff/staff-edit-policy.test.ts": "483517575b79a732daf445394806e37ed8d6ae03c7e59a3cb01f9f9c0cf9bfd5",
-    "infra/docker/backend.Dockerfile": "653379854fdf118dba911cbcb2233e4b13865a4d77892e671837cdec8ad60be2",
+    "infra/docker/backend.Dockerfile": "0f571150baf0b30184e2359f65b1e8d806fe420b501ca789d625247ffe1ef609",
     "infra/docker/caddy-build/verify-system-ca/main.go": "1c95c147abc496e15ac6b64820e14272f2e4a6d4eedb6f9b6071bec67a59025a",
     "infra/docker/caddy-build/verify-system-ca/main_test.go": "6bceeb70512ce5c5604463d438c0ab447e64861a04e59937b3c2f459e5d5f9a1",
     "infra/docker/caddy.Dockerfile": "0b754c893d68e9a309623575ac4fd2a76ff46ba78db5d004f751c2136dd7ea81",
@@ -2023,7 +2024,7 @@ REVIEWED_CODE30_4_BUILD55_SHA256 = {
     "infra/scripts/install-operations-monitor.sh": "278c106ee30f34cfabf7209d20827b893a309fb251b0d6dded8c4afc6d50281c",
     "infra/scripts/select-ci-postgres16-client.sh": "df7ac8dfe2fbb70e2936587b610b75bcbc1debc16b81a9e6ee6f4fa6b14d02cd",
     "infra/scripts/verify-build55-authenticated-acceptance.py": "f4d59c7f967b6cc7cc4176bf3f6729fbd70f321007185697dd9fcea84401b417",
-    "infra/scripts/verify-build55-pending-compatibility.py": "23087b6af393cd8ada2f88b00ee8dd5280a3b42078fd6c6f679b2cb36c8a42bf",
+    "infra/scripts/verify-build55-pending-compatibility.py": "fb9307dfeff3371b6a05c48172ef158e2ec8a1180c4c1475fb943fea8d755692",
     "infra/scripts/verify-build55-transition-state.sql": "7658c7f07cd64994530b892a2902b83e243236a7eb0a89ff63ac7a4c5a6fc844",
     "infra/scripts/verify-production-runtime-images.sh": "108543d98921b27ade329a3eb33aaa6bc39e94494a55b681ea1385d5abf32a2c",
     "ops/stage_android_release.py": "46c3988f28bf66cd8291202ea4f48de2ac9753a1b60be9370bf93e0a933e1938",
@@ -2038,11 +2039,12 @@ REVIEWED_CODE30_4_BUILD55_SHA256 = {
     "tests/test_build53_pending_compatibility.py": "68301cf1e8eafe8b3c3258f956c41022a53edf00296f169d98c5383d438e182f",
     "tests/test_build54_pending_compatibility.py": "7e80fa9dc3d27f9975af59856b33bfce944f88720fb2e9661384cdf6ba45cab2",
     "tests/test_build55_authenticated_acceptance.py": "8d8e8239ac42d019e9b2c9b919dfae20ebb77e14c89a4952fa4134837f824923",
-    "tests/test_build55_pending_compatibility.py": "2a36963def639fa6ea699ed025fef9c1a5d00953ec75a62099d867e0070527bc",
-    "tests/test_caddy_dependency_security.py": "4439633d99570d49d0017d4839c78c94fd4d92ec8fb17c58b831d76c0591e464",
+    "tests/test_build55_pending_compatibility.py": "75b0ede3a6444fcbab73b38a1f21691dd507b7b0c781e0363b89322473dec212",
+    "tests/test_caddy_dependency_security.py": "dba03e2ebcdccb59309ac2384bc583b0ad48630241ba651be4935d16121a6e41",
     "tests/test_ci_postgres16_client.py": "88f11dd7e3252381f220b3aa93512cbbe0b20448f13823e21a304b581fe86378",
     "tests/test_code26_physical_audit_lane.py": "9706544d6bde4b4f07e717dd5be6bdd6bd3a5bca5207e19c20111b218e774fbe",
-    "tests/test_verified_pip_bootstrap.py": "1918963f31c20b59b0499a5ac29c27f96e8f88037c9bd04444894ab8e676c9ec"
+    "tests/test_verified_pip_bootstrap.py": "1918963f31c20b59b0499a5ac29c27f96e8f88037c9bd04444894ab8e676c9ec",
+    "tests/test_zlib_security_remediation.py": "69450f4b2d5b54638032fef5aa7cdf4129dbf279984076ebf3ee4f18fb968a7a"
 }
 
 REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(

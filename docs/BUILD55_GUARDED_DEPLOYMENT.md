@@ -38,6 +38,16 @@ Existing environment bytes must remain identical except the coordinated
 latest54 and policy revision4 stay unchanged. Installing55 is separate from
 activating its APK offer or changing the protected Optional/Required policy.
 
+The backend image additionally receives the reviewed CPython trust-store
+security patch, from 3.14.8 to 3.14.10. The55 gate admits only that exact version
+and upstream source-checksum pair, plus the new official image's `LANG=C.UTF-8`
+where the prior image had no `LANG`. Every other effective environment value is
+retained. Compose cannot override `PATH`, `PYTHON_VERSION`, `PYTHON_SHA256` or
+`LANG` to disguise the image. Prior-runtime and
+rollback verification still require the original54 image and environment;
+historical45–54 compatibility helpers are unchanged. All five candidate images
+must pass fresh vulnerability scans before maintenance.
+
 ## Legitimate authenticated acceptance
 
 Supply `--build55-acceptance-credential-file /ABSOLUTE/PRIVATE/INPUT.json` only

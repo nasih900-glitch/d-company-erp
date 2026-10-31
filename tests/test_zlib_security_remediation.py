@@ -151,8 +151,8 @@ def test_every_alpine_runtime_installs_and_proves_the_patched_library() -> None:
 
     backend = (ROOT / "infra/docker/backend.Dockerfile").read_text()
     assert backend.count(
-        "python:3.14.8-alpine3.24@sha256:"
-        "f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72"
+        "python:3.14.10-alpine3.24@sha256:"
+        "eb2c62658b8d51bff0acc408504b76521d02030de56a8a3c1e830083e89b89d2"
     ) == 3
     redis = (ROOT / "infra/docker/redis.Dockerfile").read_text()
     assert redis.count(

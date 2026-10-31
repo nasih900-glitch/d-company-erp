@@ -487,6 +487,15 @@ def test_backend_image_changes_only_reviewed_openssl_runtime_controls() -> None:
     expected = expected.replace(package_install, ca_install)
     expected = _replace_once(expected, "COPY backend/requirements.lock .\n", "COPY backend/requirements.lock .\n" + helper_install)
     expected = _replace_once(expected, "WORKDIR /app\nCOPY --from=builder /install", helper_install + "WORKDIR /app\nCOPY --from=builder /install")
+    # Build55's later CPython trust-store fix is an exact additive transform.
+    # Keep the historical 3.14.7 -> 3.14.8 reconstruction above unchanged.
+    assert expected.count("python:3.14.8-alpine3.24@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72") == 3
+    expected = expected.replace(
+        "python:3.14.8-alpine3.24@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72",
+        "python:3.14.10-alpine3.24@sha256:eb2c62658b8d51bff0acc408504b76521d02030de56a8a3c1e830083e89b89d2",
+    )
+    expected = _replace_once(expected, 'com.dcompany.python.version="3.14.8"', 'com.dcompany.python.version="3.14.10"')
+    expected = _replace_once(expected, "'Python 3.14.8'", "'Python 3.14.10'")
     assert BACKEND_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
@@ -494,8 +503,8 @@ def test_backend_python_patch_version_is_exact_in_ci_and_release() -> None:
     ci = CI_WORKFLOW.read_text(encoding="utf-8")
     release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
 
-    assert ci.count("python-version: '3.14.8'") == 1
-    assert release.count("python-version: '3.14.8'") == 1
+    assert ci.count("python-version: '3.14.10'") == 1
+    assert release.count("python-version: '3.14.10'") == 1
     assert "python-version: '3.14.7'" not in ci
     assert "python-version: '3.14.7'" not in release
 
