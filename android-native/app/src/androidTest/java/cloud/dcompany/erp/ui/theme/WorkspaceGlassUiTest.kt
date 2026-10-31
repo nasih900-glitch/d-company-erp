@@ -511,124 +511,151 @@ class WorkspaceGlassUiTest {
 
     @Test
     fun brightCustomSceneDrivesMaterialWithoutReplacingCrispChildren() {
-        val cool = createControlledFixture(
-            name = "cool-home.jpg",
-            generation = 90,
-            colors = intArrayOf(
-                Color.rgb(14, 44, 220),
-                Color.rgb(20, 82, 244),
-                Color.rgb(36, 132, 236),
-                Color.rgb(11, 53, 170),
-            ),
-        )
-        val bright = createControlledFixture(
-            name = "bright-home.jpg",
-            generation = 91,
-            colors = intArrayOf(
-                Color.rgb(255, 252, 224),
-                Color.rgb(246, 255, 75),
-                Color.rgb(255, 190, 35),
-                Color.rgb(238, 244, 255),
-            ),
-        )
-        val sceneState = mutableStateOf(WorkspaceBackgroundUiState(workspace = cool))
-        render(
-            1280,
-            800,
-            1f,
-            AppearancePreference.Night,
-            backgroundState = sceneState,
-        )
-        val coolScene = awaitExactReadyScene(cool)
-        assertExactPilotViewport(coolScene)
-        val samples = JSONArray()
-        val diagnostics = JSONObject()
-            .put("test_class", "cloud.dcompany.erp.ui.theme.WorkspaceGlassUiTest")
-            .put("capture_run_id", InstrumentationRegistry.getArguments().getString(GlassRunArgument))
-            .put("source_inventory_sha256", InstrumentationRegistry.getArguments().getString(GlassSourceArgument))
-            .put("target_apk_sha256", InstrumentationRegistry.getArguments().getString(GlassTargetArgument))
-            .put("test_apk_sha256", InstrumentationRegistry.getArguments().getString(GlassTestArgument))
-            .put("required_panel_distance", 30)
-            .put("required_header_distance", 80)
-            .put("latest_scene_distance", JSONObject.NULL)
-            .put("maximum_scene_distance", JSONObject.NULL)
-            .put("bright_panel_samples", samples)
-        val coolSample = blankPanelMaterialSample { diagnostics.put("cool_panel", it) }
-        val coolHeaderSample = blankHeaderHostSample { diagnostics.put("cool_header", it) }
-        capture("glass-cool-custom", 1280, 800, 1f, "Night")
-        writeMaterialSamples(diagnostics.put("stage", "COOL_CAPTURED"))
-
-        compose.runOnIdle { sceneState.value = WorkspaceBackgroundUiState(workspace = bright) }
-        var brightSample: Int? = null
-        var maximumSceneDistance = -1
-        var brightHeaderSample: Int? = null
-        var collectionFailure: Throwable? = null
+        val originalNavigationContrast = if (Build.VERSION.SDK_INT >= 29) {
+            compose.activity.window.isNavigationBarContrastEnforced
+        } else false
         try {
-            val brightScene = awaitExactReadyScene(bright)
-            assertExactPilotViewport(brightScene)
-            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(12)
-            while (System.nanoTime() < deadline) {
-                compose.waitForIdle()
-                if (compose.onAllNodesWithTag("workspace-glass-ready-workspace").fetchSemanticsNodes().size == 1) {
-                    val candidate = blankPanelMaterialSample { sample ->
-                        check(samples.length() < 256) { "Material sample diagnostic capacity exceeded" }
-                        samples.put(sample)
-                    }
-                    // Retain every latest candidate, including failures below the threshold.
-                    brightSample = candidate
-                    val distance = colorDistance(coolSample, candidate)
-                    maximumSceneDistance = max(maximumSceneDistance, distance)
-                    diagnostics.put("latest_scene_distance", distance)
-                        .put("maximum_scene_distance", maximumSceneDistance)
-                    if (distance >= 30) break
+            val cool = createControlledFixture(
+                name = "cool-home.jpg",
+                generation = 90,
+                colors = intArrayOf(
+                    Color.rgb(14, 44, 220),
+                    Color.rgb(20, 82, 244),
+                    Color.rgb(36, 132, 236),
+                    Color.rgb(11, 53, 170),
+                ),
+            )
+            val bright = createControlledFixture(
+                name = "bright-home.jpg",
+                generation = 91,
+                colors = intArrayOf(
+                    Color.rgb(255, 252, 224),
+                    Color.rgb(246, 255, 75),
+                    Color.rgb(255, 190, 35),
+                    Color.rgb(238, 244, 255),
+                ),
+            )
+            val sceneState = mutableStateOf(WorkspaceBackgroundUiState(workspace = cool))
+            render(
+                1280,
+                800,
+                1f,
+                AppearancePreference.Night,
+                backgroundState = sceneState,
+            )
+            val coolScene = awaitExactReadyScene(cool)
+            assertExactPilotViewport(coolScene)
+            val samples = JSONArray()
+            val diagnostics = JSONObject()
+                .put("test_class", "cloud.dcompany.erp.ui.theme.WorkspaceGlassUiTest")
+                .put("capture_run_id", InstrumentationRegistry.getArguments().getString(GlassRunArgument))
+                .put("source_inventory_sha256", InstrumentationRegistry.getArguments().getString(GlassSourceArgument))
+                .put("target_apk_sha256", InstrumentationRegistry.getArguments().getString(GlassTargetArgument))
+                .put("test_apk_sha256", InstrumentationRegistry.getArguments().getString(GlassTestArgument))
+                .put("required_panel_distance", 30)
+                .put("required_header_distance", 80)
+                .put("latest_scene_distance", JSONObject.NULL)
+                .put("maximum_scene_distance", JSONObject.NULL)
+                .put("bright_panel_samples", samples)
+            diagnostics.put("original_navigation_bar_contrast_enforced", originalNavigationContrast)
+            diagnostics.put("original_navigation_overlay_probe", JSONObject().also { originalProbe ->
+                blankPanelMaterialSample { originalProbe.put("panel", it) }
+            })
+            // This plain ComponentActivity is a component host, not MainActivity's
+            // safeDrawing-inset workspace. Android 15's 80% three-button bar would
+            // otherwise cover the unchanged bottom-padding material probe.
+            if (Build.VERSION.SDK_INT >= 29) {
+                compose.runOnUiThread {
+                    compose.activity.window.isNavigationBarContrastEnforced = false
+                    compose.activity.window.decorView.requestApplyInsets()
+                    compose.activity.window.decorView.invalidate()
                 }
-                Thread.sleep(50)
+                compose.waitForIdle()
             }
-            brightHeaderSample = blankHeaderHostSample { diagnostics.put("bright_header", it) }
-            diagnostics.put("header_scene_distance", colorDistance(coolHeaderSample, checkNotNull(brightHeaderSample)))
-        } catch (error: Throwable) {
-            collectionFailure = error
-            throw error
-        } finally {
-            diagnostics.put("stage", "BRIGHT_COLLECTION_FINISHED")
-                .put("sample_count", samples.length())
-                .put("collection_failure", collectionFailure?.let { it.javaClass.simpleName + ": " + it.message } ?: JSONObject.NULL)
-                .put("panel_threshold_met", brightSample?.let { colorDistance(coolSample, it) >= 30 } ?: false)
-                .put("header_threshold_met", brightHeaderSample?.let { colorDistance(coolHeaderSample, it) >= 80 } ?: false)
+            val coolSample = blankPanelMaterialSample { diagnostics.put("cool_panel", it) }
+            val coolHeaderSample = blankHeaderHostSample { diagnostics.put("cool_header", it) }
+            capture("glass-cool-custom", 1280, 800, 1f, "Night")
+            writeMaterialSamples(diagnostics.put("stage", "COOL_CAPTURED"))
+
+            compose.runOnIdle { sceneState.value = WorkspaceBackgroundUiState(workspace = bright) }
+            var brightSample: Int? = null
+            var maximumSceneDistance = -1
+            var brightHeaderSample: Int? = null
+            var collectionFailure: Throwable? = null
             try {
-                writeMaterialSamples(diagnostics)
-                capture("glass-bright-custom", 1280, 800, 1f, "Night")
-            } catch (diagnosticError: Throwable) {
-                val original = collectionFailure
-                if (original == null) throw diagnosticError else original.addSuppressed(diagnosticError)
+                val brightScene = awaitExactReadyScene(bright)
+                assertExactPilotViewport(brightScene)
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(12)
+                while (System.nanoTime() < deadline) {
+                    compose.waitForIdle()
+                    if (compose.onAllNodesWithTag("workspace-glass-ready-workspace").fetchSemanticsNodes().size == 1) {
+                        val candidate = blankPanelMaterialSample { sample ->
+                            check(samples.length() < 256) { "Material sample diagnostic capacity exceeded" }
+                            samples.put(sample)
+                        }
+                        // Retain every latest candidate, including failures below the threshold.
+                        brightSample = candidate
+                        val distance = colorDistance(coolSample, candidate)
+                        maximumSceneDistance = max(maximumSceneDistance, distance)
+                        diagnostics.put("latest_scene_distance", distance)
+                            .put("maximum_scene_distance", maximumSceneDistance)
+                        if (distance >= 30) break
+                    }
+                    Thread.sleep(50)
+                }
+                brightHeaderSample = blankHeaderHostSample { diagnostics.put("bright_header", it) }
+                diagnostics.put("header_scene_distance", colorDistance(coolHeaderSample, checkNotNull(brightHeaderSample)))
+            } catch (error: Throwable) {
+                collectionFailure = error
+                throw error
+            } finally {
+                diagnostics.put("stage", "BRIGHT_COLLECTION_FINISHED")
+                    .put("sample_count", samples.length())
+                    .put("collection_failure", collectionFailure?.let { it.javaClass.simpleName + ": " + it.message } ?: JSONObject.NULL)
+                    .put("panel_threshold_met", brightSample?.let { colorDistance(coolSample, it) >= 30 } ?: false)
+                    .put("header_threshold_met", brightHeaderSample?.let { colorDistance(coolHeaderSample, it) >= 80 } ?: false)
+                try {
+                    writeMaterialSamples(diagnostics)
+                    capture("glass-bright-custom", 1280, 800, 1f, "Night")
+                } catch (diagnosticError: Throwable) {
+                    val original = collectionFailure
+                    if (original == null) throw diagnosticError else original.addSuppressed(diagnosticError)
+                }
+            }
+            val latestBrightSample = checkNotNull(brightSample) { "No bright material candidate was sampled" }
+            assertGlassHierarchy(wide = true)
+            val sceneDistance = colorDistance(coolSample, latestBrightSample)
+            assertTrue(
+                "the same blank production material region must respond to its scene: " +
+                    "cool=${Integer.toHexString(coolSample)} bright=${Integer.toHexString(latestBrightSample)} " +
+                    "distance=$sceneDistance maximum=$maximumSceneDistance samples=${samples.length()}",
+                sceneDistance >= 30,
+            )
+            val mutedText = workspaceGlassRoleStyle(
+                WorkspaceGlassRole.PANEL,
+                day = false,
+            ).secondaryContent.toArgb()
+            assertTrue("cool material must retain muted-text contrast", contrast(mutedText, coolSample) >= 4.5)
+            assertTrue("bright material must retain muted-text contrast", contrast(mutedText, latestBrightSample) >= 4.5)
+            val latestBrightHeaderSample = checkNotNull(brightHeaderSample)
+            val headerSceneDistance = colorDistance(coolHeaderSample, latestBrightHeaderSample)
+            assertTrue(
+                "wide Home header host must expose the scene between floating controls: " +
+                    "cool=${Integer.toHexString(coolHeaderSample)} " +
+                    "bright=${Integer.toHexString(latestBrightHeaderSample)} distance=$headerSceneDistance",
+                headerSceneDistance >= 80,
+            )
+            assertStatusAndRefreshContrast()
+            assertDateTimeContrast()
+            assertUnavailableCaptionContrast()
+        } finally {
+            if (Build.VERSION.SDK_INT >= 29) {
+                compose.runOnUiThread {
+                    compose.activity.window.isNavigationBarContrastEnforced = originalNavigationContrast
+                    compose.activity.window.decorView.requestApplyInsets()
+                }
             }
         }
-        val latestBrightSample = checkNotNull(brightSample) { "No bright material candidate was sampled" }
-        assertGlassHierarchy(wide = true)
-        val sceneDistance = colorDistance(coolSample, latestBrightSample)
-        assertTrue(
-            "the same blank production material region must respond to its scene: " +
-                "cool=${Integer.toHexString(coolSample)} bright=${Integer.toHexString(latestBrightSample)} " +
-                "distance=$sceneDistance maximum=$maximumSceneDistance samples=${samples.length()}",
-            sceneDistance >= 30,
-        )
-        val mutedText = workspaceGlassRoleStyle(
-            WorkspaceGlassRole.PANEL,
-            day = false,
-        ).secondaryContent.toArgb()
-        assertTrue("cool material must retain muted-text contrast", contrast(mutedText, coolSample) >= 4.5)
-        assertTrue("bright material must retain muted-text contrast", contrast(mutedText, latestBrightSample) >= 4.5)
-        val latestBrightHeaderSample = checkNotNull(brightHeaderSample)
-        val headerSceneDistance = colorDistance(coolHeaderSample, latestBrightHeaderSample)
-        assertTrue(
-            "wide Home header host must expose the scene between floating controls: " +
-                "cool=${Integer.toHexString(coolHeaderSample)} " +
-                "bright=${Integer.toHexString(latestBrightHeaderSample)} distance=$headerSceneDistance",
-            headerSceneDistance >= 80,
-        )
-        assertStatusAndRefreshContrast()
-        assertDateTimeContrast()
-        assertUnavailableCaptionContrast()
     }
 
     @Test
@@ -2700,6 +2727,17 @@ class WorkspaceGlassUiTest {
     ): JSONObject {
         val scene = renderedScene.get()
         val evidence = JSONObject().put("node_tag", tag)
+        if (Build.VERSION.SDK_INT >= 30) {
+            val window = compose.activity.window
+            val navigation = window.decorView.rootWindowInsets?.getInsets(android.view.WindowInsets.Type.navigationBars())
+            val tappable = window.decorView.rootWindowInsets?.getInsets(android.view.WindowInsets.Type.tappableElement())
+            evidence.put("navigation_bar_contrast_enforced", window.isNavigationBarContrastEnforced)
+                .put("navigation_bar_insets", navigation?.let { "${it.left},${it.top},${it.right},${it.bottom}" })
+                .put("tappable_element_insets", tappable?.let { "${it.left},${it.top},${it.right},${it.bottom}" })
+                .put("decor_width_px", window.decorView.width)
+                .put("decor_height_px", window.decorView.height)
+        }
+        evidence.put("sample_role", "production_material_blank_padding")
             .put("semantic_bounds_in_root_px", JSONObject()
                 .put("left", bounds.left).put("top", bounds.top)
                 .put("right", bounds.right).put("bottom", bounds.bottom))
