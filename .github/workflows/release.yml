@@ -82,7 +82,7 @@ jobs:
   # migration/tests and complete web gate here before any release is signed.
   coordinated-release-gates:
     needs: release-authority
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     services:
       postgres:

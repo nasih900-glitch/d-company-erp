@@ -122,6 +122,7 @@ class CiPostgres16ClientTest(unittest.TestCase):
         for workflow, job in (("ci.yml", "backend"), ("release.yml", "coordinated-release-gates")):
             with self.subTest(workflow=workflow):
                 document = yaml.safe_load((ROOT / ".github/workflows" / workflow).read_text())
+                self.assertEqual("ubuntu-24.04", document["jobs"][job]["runs-on"])
                 steps = document["jobs"][job]["steps"]
                 installs = [index for index, step in enumerate(steps)
                             if "apt-get install" in step.get("run", "")

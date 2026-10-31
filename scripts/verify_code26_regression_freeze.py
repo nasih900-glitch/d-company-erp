@@ -1705,8 +1705,8 @@ REVIEWED_CODE30_4_BUILD54_SHA256 = {
 # deployment or replace any historical map/signing/physical-tablet evidence.
 REVIEWED_CODE30_4_BUILD55_SHA256 = {
     ".env.production.example": "b45aa3dc9492aa07c83ac9ba7960a93b67bd14b4eedee8753ced79d5722a58d5",
-    ".github/workflows/ci.yml": "62d66976fcfabea527b1efde2aab46f8a174e9e63c41551bfe76366b705f968b",
-    ".github/workflows/release.yml": "6c989a83e41badbb7ab342e40f6cdc657a70a8d414facd1ce36c76b00e683240",
+    ".github/workflows/ci.yml": "e6964e70985877384496b44db4b7923417810ed19059b8da71d9338e89d4c07d",
+    ".github/workflows/release.yml": "d749f555cb6ecf2083a44c9ee5ad7eb2d9700a4f488359c6c4e1c99c30540f1d",
     "PROJECT_STATE.md": "db534e40a5ee8a37167276de58be318a238ac9a536307705d6dee5b344b6b187",
     "README.md": "fd781b0ca123bcf13ac02478153a66cad740bf04df814c53b5fae806429eb35d",
     "android-native/app/build.gradle.kts": "f2e9a1fa2f2525c7137205c2e93c344bd96c12a18affd61b89e5538c75d1bfca",
@@ -2040,7 +2040,7 @@ REVIEWED_CODE30_4_BUILD55_SHA256 = {
     "tests/test_build55_authenticated_acceptance.py": "8d8e8239ac42d019e9b2c9b919dfae20ebb77e14c89a4952fa4134837f824923",
     "tests/test_build55_pending_compatibility.py": "2a36963def639fa6ea699ed025fef9c1a5d00953ec75a62099d867e0070527bc",
     "tests/test_caddy_dependency_security.py": "4439633d99570d49d0017d4839c78c94fd4d92ec8fb17c58b831d76c0591e464",
-    "tests/test_ci_postgres16_client.py": "30b84691a02408c92d39119ac1fab4632640c8d18045b27ad15e56cc1d91210a",
+    "tests/test_ci_postgres16_client.py": "88f11dd7e3252381f220b3aa93512cbbe0b20448f13823e21a304b581fe86378",
     "tests/test_code26_physical_audit_lane.py": "9706544d6bde4b4f07e717dd5be6bdd6bd3a5bca5207e19c20111b218e774fbe",
     "tests/test_verified_pip_bootstrap.py": "1918963f31c20b59b0499a5ac29c27f96e8f88037c9bd04444894ab8e676c9ec"
 }
