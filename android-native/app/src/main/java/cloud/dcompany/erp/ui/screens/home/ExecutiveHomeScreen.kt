@@ -1322,7 +1322,7 @@ private fun HomeHero(greeting: String, locationLabel: String, compact: Boolean) 
         compact -> 124.dp
         else -> 138.dp
     }
-    BoxWithConstraints(
+    Box(
         Modifier.fillMaxWidth().height(heroHeight)
             .clip(RoundedCornerShape(16.dp)).testTag("home-hero"),
     ) {

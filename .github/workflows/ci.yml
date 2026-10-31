@@ -249,10 +249,10 @@ jobs:
           # Request swiftshader directly with Vulkan disabled. These flags do
           # not prove the selected mode; retained runtime diagnostics must.
           emulator-options: -no-window -gpu swiftshader -feature -Vulkan -no-snapshot -noaudio -no-boot-anim
-          # Pixel C boots with a 2560x1800 host graphics buffer. A post-boot
-          # `wm size` override does not shrink that buffer, and the hosted
-          # emulator can disappear during the Compose suite. Keep tablet dp
-          # coverage while setting its physical buffer before first boot.
+          # Full-resolution captures and system gestures require physical
+          # 2560x1600 at 320dpi, preserving the 1280x800dp tablet layout.
+          # Configure before boot; this renders four times as many pixels as
+          # the former 1280x800 framebuffer, so retain host health diagnostics.
           pre-emulator-launch-script: python3 scripts/configure_ci_android_avd.py test
           # The pinned action runs each nonempty line in a fresh shell. Keep
           # capture, normalization, logging, and assertion in one command.

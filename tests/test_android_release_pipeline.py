@@ -192,8 +192,8 @@ class AndroidReleasePipelineTest(unittest.TestCase):
 
         self.assertIn("profile: pixel_c", ci_workflow)
         self.assertIn("profile: pixel_c", release_workflow)
-        self.assertIn("shell wm size 1280x800", instrumentation)
-        self.assertIn("shell wm density 160", instrumentation)
+        self.assertIn("shell wm size 2560x1600", instrumentation)
+        self.assertIn("shell wm density 320", instrumentation)
         self.assertIn("logical_viewport=1280x800dp", instrumentation)
         self.assertIn("shell wm size reset", instrumentation)
         self.assertIn("shell wm density reset", instrumentation)
@@ -885,7 +885,7 @@ class AndroidReleasePipelineTest(unittest.TestCase):
             self.assertEqual(
                 config.read_text(encoding="utf-8"),
                 "hw.cpu.ncore=2\nhw.ramSize=2048M\n"
-                "hw.lcd.width=1280\nhw.lcd.height=800\nhw.lcd.density=160\n",
+                "hw.lcd.width=2560\nhw.lcd.height=1600\nhw.lcd.density=320\n",
             )
 
     def test_ci_and_release_request_same_bounded_linux_emulator_quadrant(self) -> None:

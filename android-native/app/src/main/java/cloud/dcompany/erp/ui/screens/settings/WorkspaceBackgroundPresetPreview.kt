@@ -9,7 +9,10 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -46,31 +49,34 @@ internal fun WorkspaceBackgroundPresetPreview(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val bitmap by produceState<Bitmap?>(initialValue = WorkspacePresetThumbnailCache.get(preset.contentId), preset.contentId) {
-        if (value != null) return@produceState
-        value = withContext(WorkspacePresetThumbnailDispatcher) {
+    var bitmap by remember(preset.contentId) {
+        mutableStateOf(WorkspacePresetThumbnailCache.get(preset.contentId))
+    }
+    LaunchedEffect(preset.contentId) {
+        if (bitmap != null) return@LaunchedEffect
+        bitmap = withContext(WorkspacePresetThumbnailDispatcher) {
             WorkspacePresetThumbnailCache.get(preset.contentId) ?: run {
                 var owned: Bitmap? = null
                 try {
-                val options = BitmapFactory.Options().apply {
-                    inSampleSize = 8
-                    inPreferredConfig = Bitmap.Config.ARGB_8888
-                }
-                val decoded = BitmapFactory.decodeResource(context.resources, preset.resource, options)
-                    ?: return@run null
-                owned = decoded
-                val thumbnail = if (decoded.width == 320 && decoded.height == 180) decoded else {
-                    Bitmap.createScaledBitmap(decoded, 320, 180, true).also { scaled ->
-                        if (scaled !== decoded) {
-                            decoded.recycle()
-                            owned = scaled
+                    val options = BitmapFactory.Options().apply {
+                        inSampleSize = 8
+                        inPreferredConfig = Bitmap.Config.ARGB_8888
+                    }
+                    val decoded = BitmapFactory.decodeResource(context.resources, preset.resource, options)
+                        ?: return@run null
+                    owned = decoded
+                    val thumbnail = if (decoded.width == 320 && decoded.height == 180) decoded else {
+                        Bitmap.createScaledBitmap(decoded, 320, 180, true).also { scaled ->
+                            if (scaled !== decoded) {
+                                decoded.recycle()
+                                owned = scaled
+                            }
                         }
                     }
-                }
-                coroutineContext.ensureActive()
-                WorkspacePresetThumbnailCache.put(preset.contentId, thumbnail)
-                owned = null
-                thumbnail
+                    coroutineContext.ensureActive()
+                    WorkspacePresetThumbnailCache.put(preset.contentId, thumbnail)
+                    owned = null
+                    thumbnail
                 } finally {
                     owned?.takeUnless(Bitmap::isRecycled)?.recycle()
                 }

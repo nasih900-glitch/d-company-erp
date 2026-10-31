@@ -6,8 +6,55 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from pathlib import Path
+import re
 import sys
 import xml.etree.ElementTree as ET
+
+
+PERSISTENCE_STAGES = (
+    ("persistence-stage-a", "stageAImportBothSlotsAndPersist"),
+    ("persistence-stage-b", "stageBVerifyBothSlotsAfterProcessRestart"),
+)
+
+
+def parse_single_test_log(path: Path, expected: str) -> str:
+    """Require one real start/completion pair and a successful terminal result."""
+    status: dict[str, str] = {}
+    started: list[str] = []
+    completed: list[str] = []
+    terminal: list[int] = []
+    success_counts: list[int] = []
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if line.startswith(("INSTRUMENTATION_FAILED:", "INSTRUMENTATION_ABORTED:")):
+            raise ValueError("Instrumentation reported a failed/aborted process")
+        if line.startswith("INSTRUMENTATION_STATUS: "):
+            key, separator, value = line.removeprefix("INSTRUMENTATION_STATUS: ").partition("=")
+            if separator:
+                status[key] = value
+        elif line.startswith("INSTRUMENTATION_STATUS_CODE:"):
+            code = int(line.split(":", 1)[1])
+            identity = f"{status.get('class', '')}#{status.get('test', '')}"
+            if terminal or status.get("numtests") != "1" or identity != expected:
+                raise ValueError(f"Unexpected single-test status identity/count: {identity}")
+            if code == 1 and not started and not completed:
+                started.append(identity)
+            elif code == 0 and started == [identity] and not completed:
+                completed.append(identity)
+            else:
+                raise ValueError(f"Failed, skipped, duplicated or unordered test status: {code}")
+            status = {}
+        elif line.startswith("INSTRUMENTATION_CODE:"):
+            if started != [expected] or completed != [expected] or success_counts != [1]:
+                raise ValueError("Instrumentation terminated before its successful test result")
+            terminal.append(int(line.split(":", 1)[1]))
+        elif match := re.fullmatch(r"OK \((\d+) tests?\)", line):
+            success_counts.append(int(match[1]))
+    if started != [expected] or completed != [expected]:
+        raise ValueError(f"Single-test start/completion proof is missing for {expected}")
+    if status or terminal != [-1] or success_counts != [1]:
+        raise ValueError("Single-test instrumentation lacked one terminal success")
+    return expected
 
 
 def parse_discovery_log(path: Path) -> list[str]:
@@ -107,6 +154,13 @@ def verify(args: argparse.Namespace) -> str:
         raise ValueError(
             f"Discovery did not include dedicated gaming class {args.gaming_board_class}"
         )
+    persistence_prefix = f"{args.persistence_class}#"
+    expected_persistence = {
+        f"{args.persistence_class}#{stage}" for _, stage in PERSISTENCE_STAGES
+    }
+    discovered_persistence = {test for test in expected if test.startswith(persistence_prefix)}
+    if discovered_persistence != expected_persistence:
+        raise ValueError("Discovery did not include the exact dedicated persistence stages")
 
     gaming_lane = args.evidence_root / "gaming-board"
     functional_lanes = [
@@ -119,6 +173,14 @@ def verify(args: argparse.Namespace) -> str:
     stress_observed: list[str] = []
     skipped: set[str] = set()
     failures: list[str] = []
+    persistence_observed = [
+        parse_single_test_log(
+            args.evidence_root / lane / "instrumentation.log",
+            f"{args.persistence_class}#{stage}",
+        )
+        for lane, stage in PERSISTENCE_STAGES
+    ]
+    all_observed.extend(persistence_observed)
 
     gaming_observed, gaming_skipped, gaming_failures = _read_lane(gaming_lane)
     all_observed.extend(gaming_observed)
@@ -169,6 +231,15 @@ def verify(args: argparse.Namespace) -> str:
             "Dedicated gaming board tests leaked into functional shards:\n  "
             + "\n  ".join(gaming_in_functional)
         )
+    persistence_leaks = sorted(
+        test for test in (*functional_observed, *gaming_observed, *stress_observed)
+        if test.startswith(persistence_prefix)
+    )
+    if persistence_leaks:
+        problems.append(
+            "Dedicated persistence tests leaked into other lanes:\n  "
+            + "\n  ".join(persistence_leaks)
+        )
     if gaming_only != expected_gaming:
         problems.append(
             "Dedicated gaming board coverage differed from discovery: "
@@ -195,6 +266,7 @@ def verify(args: argparse.Namespace) -> str:
             f"gaming_board={len(gaming_observed)}",
             f"functional={len(functional_observed)}",
             f"physical_frame_stress={len(stress_observed)}",
+            f"persistence={len(persistence_observed)}",
             f"skipped={len(skipped)}",
             *[f"skip={identity}" for identity in sorted(skipped)],
         ]
@@ -213,12 +285,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     discover = subparsers.add_parser("discover")
     discover.add_argument("--log", type=Path, required=True)
     discover.add_argument("--expected-tests", type=Path, required=True)
+    single = subparsers.add_parser("single")
+    single.add_argument("--log", type=Path, required=True)
+    single.add_argument("--expected-test", required=True)
     verify_parser = subparsers.add_parser("verify")
     verify_parser.add_argument("--expected-tests", type=Path, required=True)
     verify_parser.add_argument("--evidence-root", type=Path, required=True)
     verify_parser.add_argument("--functional-shards", type=int, required=True)
     verify_parser.add_argument("--stress-class", required=True)
     verify_parser.add_argument("--gaming-board-class", required=True)
+    verify_parser.add_argument("--persistence-class", required=True)
     verify_parser.add_argument("--expected-skip", action="append", default=[])
     verify_parser.add_argument("--summary", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -235,6 +311,8 @@ def main(argv: list[str] | None = None) -> int:
             args.expected_tests.parent.mkdir(parents=True, exist_ok=True)
             args.expected_tests.write_text("\n".join(identities) + "\n", encoding="utf-8")
             print(f"discovered={len(identities)}")
+        elif args.command == "single":
+            print(parse_single_test_log(args.log, args.expected_test))
         else:
             sys.stdout.write(verify(args))
     except (ET.ParseError, OSError, ValueError) as error:

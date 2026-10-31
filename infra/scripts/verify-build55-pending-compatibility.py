@@ -90,8 +90,8 @@ BACKEND_UVICORN_ENTRYPOINT = [
 # Independent review fills these final closure values; the helper cannot hash
 # its own enclosing archive. Historical release maps remain immutable.
 CANDIDATE_RELEASE_FROZEN = True
-CANDIDATE_BACKEND_MANIFEST_SHA256: str | None = '6dbc3f003a7921101acf835ee45ea1f8a8f374b941f40998078c887924a13aae'
-CANDIDATE_PROTECTED_SOURCE_SHA256: str | None = '59d68e99c2dae1f910b43b68b79f2c40e62fde00aab18f3856fa6e1a25be3bef'
+CANDIDATE_BACKEND_MANIFEST_SHA256: str | None = '145db490ce39ac9d6151e520abb0e5c45228ebce98e0769d2ac02e0063c48d9e'
+CANDIDATE_PROTECTED_SOURCE_SHA256: str | None = '48d1cf1f56bb9fdd04d26b7997e85e72274dd954877af8e262e8fe12cf4bd027'
 EXPECTED_POLICY_SCHEMA_ROWS: tuple[str, ...] = (
     "column|android_update_policy|1|id|integer|NO||||32|2|0||||||||||pg_catalog|int4|NO||||||NO|NEVER||YES",
     "column|android_update_policy|2|mode|character varying|NO||20|80|||||||||||||pg_catalog|varchar|NO||||||NO|NEVER||YES",

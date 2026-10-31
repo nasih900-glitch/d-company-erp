@@ -10,9 +10,9 @@ import sys
 
 
 DISPLAY_PROPERTIES = {
-    "hw.lcd.width": "1280",
-    "hw.lcd.height": "800",
-    "hw.lcd.density": "160",
+    "hw.lcd.width": "2560",
+    "hw.lcd.height": "1600",
+    "hw.lcd.density": "320",
 }
 
 
@@ -34,7 +34,7 @@ def main() -> None:
         f"{name}={value}" for name, value in DISPLAY_PROPERTIES.items()
     ]
     config_path.write_text("\n".join(configured) + "\n", encoding="utf-8")
-    print("Physical CI tablet framebuffer: 1280x800 at 160 dpi")
+    print("Physical CI tablet framebuffer: 2560x1600 at 320 dpi")
 
 
 if __name__ == "__main__":
