@@ -596,8 +596,8 @@ class WorkspaceGlassUiTest {
                 .put("panel_threshold_met", brightSample?.let { colorDistance(coolSample, it) >= 30 } ?: false)
                 .put("header_threshold_met", brightHeaderSample?.let { colorDistance(coolHeaderSample, it) >= 80 } ?: false)
             try {
-                capture("glass-bright-custom", 1280, 800, 1f, "Night")
                 writeMaterialSamples(diagnostics)
+                capture("glass-bright-custom", 1280, 800, 1f, "Night")
             } catch (diagnosticError: Throwable) {
                 val original = collectionFailure
                 if (original == null) throw diagnosticError else original.addSuppressed(diagnosticError)
@@ -2699,7 +2699,7 @@ class WorkspaceGlassUiTest {
         color: Int,
     ): JSONObject {
         val scene = renderedScene.get()
-        return JSONObject().put("node_tag", tag)
+        val evidence = JSONObject().put("node_tag", tag)
             .put("semantic_bounds_in_root_px", JSONObject()
                 .put("left", bounds.left).put("top", bounds.top)
                 .put("right", bounds.right).put("bottom", bounds.bottom))
@@ -2712,9 +2712,44 @@ class WorkspaceGlassUiTest {
             .put("workspace_content_id", scene?.frame?.actualKey?.contentId ?: JSONObject.NULL)
             .put("workspace_frame_epoch", scene?.frame?.epoch ?: JSONObject.NULL)
             .put("workspace_derivative_epoch", scene?.derivative?.key?.frameEpoch ?: JSONObject.NULL)
+        if (scene != null) {
+            val sceneX = bounds.left - scene.rootBoundsInRoot.left + (left + right) / 2f
+            val sceneY = bounds.top - scene.rootBoundsInRoot.top + (top + bottom) / 2f
+            fun bitmapSample(source: Bitmap): String {
+                val x = (sceneX / scene.frame.actualKey.viewportWidth * source.width).toInt()
+                    .coerceIn(0, source.width - 1)
+                val y = (sceneY / scene.frame.actualKey.viewportHeight * source.height).toInt()
+                    .coerceIn(0, source.height - 1)
+                return Integer.toHexString(averageRegion(source, x, y, 2, 2))
+            }
+            evidence.put("scene_sample_x", sceneX).put("scene_sample_y", sceneY)
+                .put("diagnostic_patch_radius_px", 2)
+                .put("clear_bitmap_argb", bitmapSample(scene.frame.clearBitmap))
+                .put("derivative_bitmap_argb", scene.derivative?.bitmap?.let(::bitmapSample))
+                .put("scene_root_left", scene.rootBoundsInRoot.left)
+                .put("scene_root_top", scene.rootBoundsInRoot.top)
+            val root = compose.onRoot().captureToImage().asAndroidBitmap()
+            try {
+                evidence.put("root_window_argb", Integer.toHexString(averageRegion(
+                    root, (bounds.left + (left + right) / 2f).roundToInt(),
+                    (bounds.top + (top + bottom) / 2f).roundToInt(), 2, 2,
+                )))
+            } finally {
+                root.recycle()
+            }
+        }
+        return evidence
     }
 
     private fun writeMaterialSamples(diagnostics: JSONObject) {
+        // UTP uninstalls the target after a lane. Retain bounded diagnostics in its
+        // per-test logcat as well as private files, including on assertion failure.
+        val encoded = diagnostics.toString()
+        check(encoded.length <= 256_000) { "Glass diagnostic output exceeded its bound" }
+        val chunks = encoded.chunked(2_000)
+        chunks.forEachIndexed { index, chunk ->
+            android.util.Log.i("DCompanyGlassProof", "${index + 1}/${chunks.size}:$chunk")
+        }
         val directory = outputDirectory()
         val temporary = directory.resolve("glass-bright-custom.samples.json.tmp")
         temporary.writeText(diagnostics.toString(2) + "\n")
