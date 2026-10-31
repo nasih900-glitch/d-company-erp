@@ -1373,22 +1373,38 @@ private class DelayedLoadWorkspaceBackgroundRepository(
 
 private const val BackgroundTestDisplayIdArgument = "dcompany.testDisplayId"
 
+private val RequestedBackgroundDisplay: Int? by lazy {
+    InstrumentationRegistry.getArguments().getString(BackgroundTestDisplayIdArgument)?.let { value ->
+        val requested = value.toIntOrNull()
+        require(requested in setOf(0, 2, 5, 6)) {
+            "Only verified HD displays 0, 2, 5 and 6 are supported: $value"
+        }
+        requested
+    }
+}
+
 private fun ActivityScenarioRule<ComponentActivity>.backgroundActivity(): ComponentActivity {
     var activity: ComponentActivity? = null
     scenario.onActivity { activity = it }
-    return checkNotNull(activity)
+    return checkNotNull(activity).also { current ->
+        if (RequestedBackgroundDisplay == 0) {
+            val display = checkNotNull(current.display)
+            check(display.displayId == 0 && display.mode.physicalWidth == 2_560 &&
+                display.mode.physicalHeight == 1_600 && current.resources.displayMetrics.densityDpi == 320) {
+                "Display 0 background proof requires the verified 2560x1600px, 320dpi host"
+            }
+        }
+    }
 }
 
 private fun createBackgroundComposeRule(): AndroidComposeTestRule<
     ActivityScenarioRule<ComponentActivity>,
     ComponentActivity,
 > {
-    val requested = InstrumentationRegistry.getArguments()
-        .getString(BackgroundTestDisplayIdArgument)?.toIntOrNull()
+    val requested = RequestedBackgroundDisplay
     val rule = if (requested == null) {
         ActivityScenarioRule(ComponentActivity::class.java)
     } else {
-        require(requested in setOf(2, 5, 6)) { "Only verified HD displays 2, 5 and 6 are supported" }
         ActivityScenarioRule(
             ComponentActivity::class.java,
             ActivityOptions.makeBasic().setLaunchDisplayId(requested).toBundle(),

@@ -1705,8 +1705,8 @@ REVIEWED_CODE30_4_BUILD54_SHA256 = {
 # deployment or replace any historical map/signing/physical-tablet evidence.
 REVIEWED_CODE30_4_BUILD55_SHA256 = {
     ".env.production.example": "b45aa3dc9492aa07c83ac9ba7960a93b67bd14b4eedee8753ced79d5722a58d5",
-    ".github/workflows/ci.yml": "3f302d61ecac26ed06f53c6aca072441339ba6607b2b87f2c6aa54347bf6aa6b",
-    ".github/workflows/release.yml": "1e39154022f769823e1422d90a8397acf57be286dcdf507aa7a1475709ade5e1",
+    ".github/workflows/ci.yml": "62d66976fcfabea527b1efde2aab46f8a174e9e63c41551bfe76366b705f968b",
+    ".github/workflows/release.yml": "6c989a83e41badbb7ab342e40f6cdc657a70a8d414facd1ce36c76b00e683240",
     "PROJECT_STATE.md": "db534e40a5ee8a37167276de58be318a238ac9a536307705d6dee5b344b6b187",
     "README.md": "fd781b0ca123bcf13ac02478153a66cad740bf04df814c53b5fae806429eb35d",
     "android-native/app/build.gradle.kts": "f2e9a1fa2f2525c7137205c2e93c344bd96c12a18affd61b89e5538c75d1bfca",
@@ -1745,8 +1745,8 @@ REVIEWED_CODE30_4_BUILD55_SHA256 = {
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundFixtureProvider.java": "381bc667d379023f3df80f2b5bd10dcaa1e074d1755df271cbc7df4dec0c8fad",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundFixtureProvider.kt": "00df3d93ecbbfc96eaa61f8c31a012057ca580c72f6bacafc0c4b0297de5b69e",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundPersistenceUiTest.kt": "958b9072a2b1d426ce1250dce7d066c0734ebcfea246a39960e4a81682e7a715",
-    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundUiTest.kt": "1a0c85f13d47660cbd4e789afded65618932df9fef7d3244678b81a370ef099d",
-    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceGlassUiTest.kt": "349cf9010aefd2d1b6c448c743cda04af742164766e61e86e968ddf0925c058b",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundUiTest.kt": "368443e49e142856ae388b964a0735a0c27f24838af02a02611cfa57ed8dd874",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceGlassUiTest.kt": "5c056190245314a9c7adaab65726319c52e8ed758bded01a327e135ed26ec2be",
     "android-native/app/src/executiveReview/AndroidManifest.xml": "bca75ab0123193a75c3941b643631e4e90813f4cbebe0507814b44c4de39a5a6",
     "android-native/app/src/executiveReview/java/cloud/dcompany/erp/review/ExecutiveReviewActivity.kt": "bbfdcfaa3fd2cac30c909e923c35932d12f679accbb48c904ac628c31064762a",
     "android-native/app/src/executiveReview/java/cloud/dcompany/erp/review/ExecutiveReviewApplication.kt": "35c356c67eaefc5bd799c86b89c31dc94c0847eafbe27cec978e85478f1badd8",
@@ -2021,6 +2021,7 @@ REVIEWED_CODE30_4_BUILD55_SHA256 = {
     "infra/scripts/capture-build55-runtime.py": "0dd1b4474229b5a57ab640a8399f9231bc0ff90f03cb6780823e61016e07a00a",
     "infra/scripts/install-on-vm.sh": "62c6f11f786cbbfcc8188f28cee0107b385ee6ad4361721fece9c51b6225f336",
     "infra/scripts/install-operations-monitor.sh": "278c106ee30f34cfabf7209d20827b893a309fb251b0d6dded8c4afc6d50281c",
+    "infra/scripts/select-ci-postgres16-client.sh": "df7ac8dfe2fbb70e2936587b610b75bcbc1debc16b81a9e6ee6f4fa6b14d02cd",
     "infra/scripts/verify-build55-authenticated-acceptance.py": "f4d59c7f967b6cc7cc4176bf3f6729fbd70f321007185697dd9fcea84401b417",
     "infra/scripts/verify-build55-pending-compatibility.py": "23087b6af393cd8ada2f88b00ee8dd5280a3b42078fd6c6f679b2cb36c8a42bf",
     "infra/scripts/verify-build55-transition-state.sql": "7658c7f07cd64994530b892a2902b83e243236a7eb0a89ff63ac7a4c5a6fc844",
@@ -2039,6 +2040,7 @@ REVIEWED_CODE30_4_BUILD55_SHA256 = {
     "tests/test_build55_authenticated_acceptance.py": "8d8e8239ac42d019e9b2c9b919dfae20ebb77e14c89a4952fa4134837f824923",
     "tests/test_build55_pending_compatibility.py": "2a36963def639fa6ea699ed025fef9c1a5d00953ec75a62099d867e0070527bc",
     "tests/test_caddy_dependency_security.py": "4439633d99570d49d0017d4839c78c94fd4d92ec8fb17c58b831d76c0591e464",
+    "tests/test_ci_postgres16_client.py": "30b84691a02408c92d39119ac1fab4632640c8d18045b27ad15e56cc1d91210a",
     "tests/test_code26_physical_audit_lane.py": "9706544d6bde4b4f07e717dd5be6bdd6bd3a5bca5207e19c20111b218e774fbe",
     "tests/test_verified_pip_bootstrap.py": "1918963f31c20b59b0499a5ac29c27f96e8f88037c9bd04444894ab8e676c9ec"
 }

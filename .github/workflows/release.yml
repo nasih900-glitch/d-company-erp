@@ -152,7 +152,9 @@ jobs:
       - name: Install physical-audit contract prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends ripgrep
+          sudo apt-get install --yes --no-install-recommends ripgrep postgresql-client-16
+      - name: Select and verify PostgreSQL 16 clients
+        run: bash infra/scripts/select-ci-postgres16-client.sh
       - name: Install pinned CI Redis prerequisite
         run: bash infra/scripts/install-ci-redis.sh
       - name: Run complete repository contract suite
