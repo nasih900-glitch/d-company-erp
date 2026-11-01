@@ -493,6 +493,7 @@ class AndroidReleaseStagingTest(unittest.TestCase):
             (root / "releases/android").mkdir(parents=True)
             private = root / staging.PRIVATE_UPLOAD_DIRECTORY_NAME
             private.mkdir(mode=0o755)
+            private.chmod(0o755)
             payload = {
                 "remote_root": str(root),
                 "apk_filename": "d-company-erp-v3.1.4-direct.apk",
@@ -1158,6 +1159,7 @@ class AndroidReleaseStagingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             parent = Path(temporary) / "locks"
             parent.mkdir(mode=0o755)
+            parent.chmod(0o755)
             lock_file = parent / "production-install.lock"
             with (
                 self.assertRaisesRegex(

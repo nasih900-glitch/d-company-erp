@@ -122,7 +122,7 @@ candidate_images=$(python3 ops/runtime_release_parity.py candidate \
 # Build55 proves the actual final-image trust stores and image encoders offline.
 # Bind the helper from this exact source checkout read-only; never install or
 # download while checking a runtime image, and never run a mutable image tag.
-if [ "$APP_VERSION" = 3.1.48 ]; then
+if [ "$APP_VERSION" = 3.1.49 ]; then
   TRUST_BACKEND_IMAGE_ID=$(python3 -c \
     'import json,sys; print(json.loads(sys.argv[1])["services"]["backend"]["image_id"])' \
     "$candidate_images")

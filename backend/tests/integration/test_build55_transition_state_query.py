@@ -93,6 +93,10 @@ async def stable_owned_schema(owned_policy_database, tmp_path):
         restored_snapshot = _snapshot(restored_dsn)
         assert restored_snapshot["database_revision"] == "0091"
         assert restored_snapshot["tables"]["alembic_version"]["row_count"] == 1
+        assert restored_snapshot["tables"]["gaming_sessions"] == {
+            "row_count": 0,
+            "row_sha256": restored_snapshot["gaming_sessions_legacy_projection"]["row_sha256"],
+        }
         for name in (
             "users",
             "payments",
@@ -119,8 +123,9 @@ async def session(owned_policy_database, stable_owned_schema):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("gaming_session_count", [1, 3])
 async def test_build55_retains_nonempty_finance_audit_and_exact_stopped_restore(
-    client, session, seed_owner, owned_policy_database, tmp_path
+    client, session, seed_owner, owned_policy_database, tmp_path, gaming_session_count
 ):
     headers, day, order, payment, shift = await case(session, seed_owner)
     gaming_ids = {
@@ -181,14 +186,19 @@ async def test_build55_retains_nonempty_finance_audit_and_exact_stopped_restore(
         "VALUES(:station,:company,:branch,'GUARD0093','Guard migration PS5',"
         "'ps5',12000,true,0,'999692',true)"
     ), gaming_ids)
-    await session.execute(text(
-        "INSERT INTO gaming_sessions(id,company_id,station_id,shift_id,opened_by,"
-        "start_at,rate_per_hour_minor,status,billing_mode,extra_controllers) "
-        "VALUES(:session,:company,:station,:shift,:owner,:start_at,12000,'ended','hourly',0)"
-    ), gaming_ids)
+    for index in range(gaming_session_count):
+        await session.execute(text(
+            "INSERT INTO gaming_sessions(id,company_id,station_id,shift_id,opened_by,"
+            "start_at,rate_per_hour_minor,status,billing_mode,extra_controllers) "
+            "VALUES(:session,:company,:station,:shift,:owner,:start_at,12000,'ended','hourly',0)"
+        ), {**gaming_ids, "session": gaming_ids["session"] if index == 0 else uuid4()})
     await session.commit()
     before = _snapshot(dsn)
-    assert before["tables"]["gaming_sessions"]["row_count"] > 0
+    assert before["tables"]["gaming_sessions"]["row_count"] == gaming_session_count
+    assert (
+        before["gaming_sessions_legacy_projection"]["row_sha256"]
+        == before["tables"]["gaming_sessions"]["row_sha256"]
+    )
     before_receipt = tmp_path / "actual-before0091.json"
     before_receipt.write_text(json.dumps(before, sort_keys=True))
     before_receipt.chmod(0o600)
@@ -255,3 +265,16 @@ async def test_build55_retains_nonempty_finance_audit_and_exact_stopped_restore(
         )
         assert restored["tables"] == before["tables"]
         assert restored["sequences"] == before["sequences"]
+
+    # Consistent hashing must still reject a changed historical financial value.
+    await session.execute(text(
+        "UPDATE gaming_sessions SET rate_per_hour_minor=rate_per_hour_minor+1 "
+        "WHERE id=:session"
+    ), {"session": gaming_ids["session"]})
+    await session.commit()
+    tampered = _snapshot(dsn)
+    assert tampered["tables"]["gaming_sessions"]["row_count"] == gaming_session_count
+    with pytest.raises(
+        verifier.CompatibilityError, match="full legacy Gaming session history changed"
+    ):
+        verifier.verify_pair(before, tampered, mode="post")

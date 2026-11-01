@@ -10,11 +10,13 @@ SET LOCAL timezone = 'UTC';
 SET LOCAL bytea_output = 'hex';
 SET LOCAL search_path = pg_catalog, public;
 
+-- chr(10) avoids an extra escape layer in the generated SQL: the full-row
+-- digest must use the same newline separator as the direct Gaming projection.
 WITH table_terms AS (
     SELECT string_agg(
         format(
             '(%L, (SELECT count(*)::bigint FROM public.%I), '
-            ' (SELECT encode(sha256(convert_to(coalesce(string_agg(row_text, E''\\n'' ORDER BY row_text), ''''), ''UTF8'')), ''hex'') '
+            ' (SELECT encode(sha256(convert_to(coalesce(string_agg(row_text, chr(10) ORDER BY row_text), ''''), ''UTF8'')), ''hex'') '
             ' FROM (SELECT to_jsonb(t)::text AS row_text FROM public.%I AS t) AS rows))',
             c.relname, c.relname, c.relname
         ), E',\n' ORDER BY c.relname
