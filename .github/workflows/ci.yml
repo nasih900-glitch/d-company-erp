@@ -260,6 +260,7 @@ jobs:
           # capture, normalization, logging, and assertion in one command.
           script: |
             guest_cpu_online_raw="$(adb shell cat /sys/devices/system/cpu/online)" && guest_cpu_online="$(printf '%s' "$guest_cpu_online_raw" | tr -d '\r')" && printf 'guest_cpu_online=%s\n' "$guest_cpu_online" && test "$guest_cpu_online" = "0-1"
+            navigation_qemu_raw="$(adb shell getprop ro.kernel.qemu)" && test "$(printf '%s' "$navigation_qemu_raw" | tr -d '\r')" = "1" && adb shell cmd overlay enable-exclusive --category com.android.internal.systemui.navbar.gestural && navigation_overlay_raw="$(adb shell cmd overlay list --user 0)" && printf '%s\n' "$navigation_overlay_raw" | python3 -c 'import sys; rows=[line.strip() for line in sys.stdin.read().replace("\r", "").splitlines() if line.strip().startswith("[x] com.android.internal.systemui.navbar.")]; assert rows==["[x] com.android.internal.systemui.navbar.gestural"], "Gesture-navigation proof requires exactly one active gestural overlay"; print("guest_navigation=gestural")'
             D_COMPANY_REQUIRE_NATIVE_AVD_SIZE=1 bash scripts/run_android_instrumentation_ci.sh
       - name: Upload Android instrumentation reports
         if: always()

@@ -1420,11 +1420,13 @@ async def test_slow_frame_upload_releases_database_lock_and_revoke_prevents_stor
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+@pytest.mark.parametrize("request_start_delay", [0.0, 3.0])
 async def test_frame_read_waits_for_revoke_commit_and_discloses_nothing(
     client,
     session,
     seed_owner,
     monkeypatch,
+    request_start_delay: float,
 ) -> None:
     installation = await _installation(session, seed_owner)
     grant, support = await _active_support_session(session, seed_owner, installation)
@@ -1473,10 +1475,13 @@ async def test_frame_read_waits_for_revoke_commit_and_discloses_nothing(
     monkeypatch.setattr(remote_router, "_lock_device", observed_lock_device)
 
     async def await_barrier(event: asyncio.Event, operation: asyncio.Task, label: str) -> None:
+        # Readiness includes auth/connection setup, not the lock-contention proof.
+        loop = asyncio.get_running_loop()
+        started = loop.time()
         waiter = asyncio.create_task(event.wait())
         try:
             done, _ = await asyncio.wait(
-                {waiter, operation}, timeout=2, return_when=asyncio.FIRST_COMPLETED,
+                {waiter, operation}, timeout=10, return_when=asyncio.FIRST_COMPLETED,
             )
             if operation in done:
                 response = operation.result()  # Surface an early request exception.
@@ -1486,7 +1491,10 @@ async def test_frame_read_waits_for_revoke_commit_and_discloses_nothing(
                     "SELECT pid, state, wait_event_type, wait_event FROM pg_stat_activity "
                     "WHERE pid = ANY(CAST(:pids AS integer[])) ORDER BY pid"
                 ), {"pids": list(request_pids.values())})).all()
-                pytest.fail(f"{label} did not reach its 2s barrier; database waits={states!r}")
+                pytest.fail(
+                    f"{label} startup readiness exceeded 10s "
+                    f"(elapsed={loop.time() - started:.3f}s); database waits={states!r}"
+                )
             assert waiter.result()
         finally:
             if not waiter.done():
@@ -1496,12 +1504,14 @@ async def test_frame_read_waits_for_revoke_commit_and_discloses_nothing(
     async def labelled_request(label: str, request):
         token = request_label.set(label)
         try:
-            return await request
+            if label == "support-revoke-proof" and request_start_delay:
+                await asyncio.sleep(request_start_delay)
+            return await request()
         finally:
             request_label.reset(token)
 
     revoke_task = asyncio.create_task(
-        labelled_request("support-revoke-proof", client.post(
+        labelled_request("support-revoke-proof", lambda: client.post(
             f"/api/v1/remote-assistance/grants/{grant.id}/revoke",
             headers=admin_headers,
             json={"revoke_id": str(uuid4())},
@@ -1512,7 +1522,7 @@ async def test_frame_read_waits_for_revoke_commit_and_discloses_nothing(
     try:
         await await_barrier(revoke_terminalized, revoke_task, "revoke")
         frame_task = asyncio.create_task(
-            labelled_request("support-frame-proof", client.get(
+            labelled_request("support-frame-proof", lambda: client.get(
                 f"/api/v1/remote-assistance/sessions/{support.id}/frame",
                 headers=admin_headers,
             )),

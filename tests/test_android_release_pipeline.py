@@ -27,6 +27,7 @@ EMULATOR_CPU_GUARD = (
     'printf \'guest_cpu_online=%s\\n\' "$guest_cpu_online" && '
     'test "$guest_cpu_online" = "0-1"'
 )
+EMULATOR_GESTURE_GUARD = 'navigation_qemu_raw="$(adb shell getprop ro.kernel.qemu)" && test "$(printf \'%s\' "$navigation_qemu_raw" | tr -d \'\\r\')" = "1" && adb shell cmd overlay enable-exclusive --category com.android.internal.systemui.navbar.gestural && navigation_overlay_raw="$(adb shell cmd overlay list --user 0)" && printf \'%s\\n\' "$navigation_overlay_raw" | python3 -c \'import sys; rows=[line.strip() for line in sys.stdin.read().replace("\\r", "").splitlines() if line.strip().startswith("[x] com.android.internal.systemui.navbar.")]; assert rows==["[x] com.android.internal.systemui.navbar.gestural"], "Gesture-navigation proof requires exactly one active gestural overlay"; print("guest_navigation=gestural")\''
 EMULATOR_SUITE_COMMAND = (
     "D_COMPANY_REQUIRE_NATIVE_AVD_SIZE=1 "
     "bash scripts/run_android_instrumentation_ci.sh"
@@ -34,6 +35,7 @@ EMULATOR_SUITE_COMMAND = (
 EMULATOR_CPU_GUARD_AND_SUITE = (
     "          script: |\n"
     f"            {EMULATOR_CPU_GUARD}\n"
+    f"            {EMULATOR_GESTURE_GUARD}\n"
     f"            {EMULATOR_SUITE_COMMAND}\n"
 )
 GRADLE_WRAPPER = (
@@ -933,6 +935,38 @@ class AndroidReleasePipelineTest(unittest.TestCase):
                     flags=re.MULTILINE,
                 )
                 self.assertEqual(options, [expected])
+
+    def test_ci_gesture_guard_requires_an_owned_emulator_and_exact_overlay(self) -> None:
+        cases = (
+            ("valid", "1", "[x] com.android.internal.systemui.navbar.gestural\r\n", 0, 0, True),
+            ("three button", "1", "[x] com.android.internal.systemui.navbar.threebutton\n", 0, 0, False),
+            ("missing", "1", "", 0, 0, False),
+            ("ambiguous", "1", "[x] com.android.internal.systemui.navbar.gestural\n[x] com.android.internal.systemui.navbar.threebutton\n", 0, 0, False),
+            ("physical device", "0", "[x] com.android.internal.systemui.navbar.gestural\n", 0, 0, False),
+            ("apply failure", "1", "[x] com.android.internal.systemui.navbar.gestural\n", 7, 0, False),
+            ("partial read failure", "1", "[x] com.android.internal.systemui.navbar.gestural\n", 0, 7, False),
+        )
+        for name, qemu, overlays, apply_status, read_status, expected in cases:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                adb = root / "adb"
+                adb.write_text(
+                    '#!/bin/sh\ncase "$*" in\n'
+                    '"shell getprop ro.kernel.qemu") printf "%s\\n" "$FAKE_QEMU" ;;\n'
+                    '"shell cmd overlay enable-exclusive --category com.android.internal.systemui.navbar.gestural") exit "$FAKE_APPLY_STATUS" ;;\n'
+                    '"shell cmd overlay list --user 0") printf "%s" "$FAKE_OVERLAYS"; exit "$FAKE_READ_STATUS" ;;\n'
+                    '*) exit 91 ;;\nesac\n',
+                    encoding="utf-8",
+                )
+                adb.chmod(0o755)
+                result = subprocess.run(
+                    ["sh", "-c", EMULATOR_GESTURE_GUARD], capture_output=True, text=True,
+                    env={**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"],
+                         "FAKE_QEMU": qemu, "FAKE_OVERLAYS": overlays,
+                         "FAKE_APPLY_STATUS": str(apply_status), "FAKE_READ_STATUS": str(read_status)},
+                )
+                self.assertEqual(result.returncode == 0, expected, result.stderr)
+                if expected: self.assertIn("guest_navigation=gestural", result.stdout)
 
     def test_emulator_cpu_guard_fails_closed_before_the_full_suite(self) -> None:
         cases = (
