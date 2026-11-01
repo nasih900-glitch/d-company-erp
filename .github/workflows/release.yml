@@ -281,8 +281,8 @@ jobs:
         run: >-
           docker run --rm --entrypoint sh erp-caddy:release-gate -ceu
           'test "$(sha256sum /usr/bin/caddy | cut -d" " -f1)" =
-          1b95bdb9ca9ffaec90a9e3a9592e8cedc2212abd64c709219149b8b4285d07d7;
-          caddy version | grep -F v2.11.4-dcompany.1;
+          f2fcd13d0aeb36b7622b041fb6a607bd9cd0bef846291f0751a2e20ee4ab827b;
+          caddy version | grep -F v2.11.4-dcompany.2;
           getcap /usr/bin/caddy | grep -F cap_net_bind_service'
       - name: Prove PostgreSQL 16 volume and rollback compatibility
         env:

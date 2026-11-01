@@ -2,7 +2,7 @@
 
 This is a preservation profile for the deployed Build54 source
 `5ad146ae076f5178acc2c8e4cb840ecbb0d0343a`, version3.1.46 and schema0091.
-The candidate is version3.1.47, Android code55 and schema0093. It is not a
+The candidate is version3.1.48, Android code55 and schema0093. It is not a
 general migration bypass. Historical release helpers remain unchanged.
 
 The profile admits only its independently reviewed source closures, exact

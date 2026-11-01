@@ -1236,7 +1236,7 @@ def test_build54_reviewed_overlay_rejects_any_byte_change(path, expected_sha256)
 
 def test_build55_release_identity_normalisation_is_narrow() -> None:
     identity = "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt"
-    current = 'assertEquals(55, BuildConfig.VERSION_CODE)\n"3.1.47"\nversion_code = 55\n'
+    current = 'assertEquals(55, BuildConfig.VERSION_CODE)\n"3.1.48"\nversion_code = 55\n'
     expected = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(identity, current) == expected
     for path in (
@@ -1246,7 +1246,7 @@ def test_build55_release_identity_normalisation_is_narrow() -> None:
         "android-native/app/src/test/java/cloud/dcompany/erp/core/net/ClientPolicyMonotonicTest.kt",
     ):
         assert _normalise_release_identity(path, current) == current
-    future = 'assertEquals(56, BuildConfig.VERSION_CODE)\n"3.1.48"\nversion_code = 56\n'
+    future = 'assertEquals(56, BuildConfig.VERSION_CODE)\n"3.1.49"\nversion_code = 56\n'
     assert _normalise_release_identity(identity, future) == future
 
 

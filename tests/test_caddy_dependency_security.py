@@ -19,7 +19,7 @@ BUILD43_RELEASE_BASE = "8418e349eac0707ef62629f6cd3b7dc434690436"
 BUILD45_RUNTIME_BASE = "5b8ef38597871599fde4a42a5b895cd9a05c4d11"
 OLD_BINARY_SHA256 = "73c0169f0b72b465e2ae20bdb67a3e017044b2ab3d267816398b9d6ece243fb0"
 PATCHED_BINARY_SHA256 = "951a0136950bb9edf60ff5cec6ca2df0a041b27ded9e610f0aab49b168739dac"
-CURRENT_BINARY_SHA256 = "1b95bdb9ca9ffaec90a9e3a9592e8cedc2212abd64c709219149b8b4285d07d7"
+CURRENT_BINARY_SHA256 = "f2fcd13d0aeb36b7622b041fb6a607bd9cd0bef846291f0751a2e20ee4ab827b"
 OLD_GOSU_SHA256 = "cdcdfbe2a74dc15d62f6f73da877a372641b80104ff04ca5bee7bc36ee9936ab"
 CURRENT_GOSU_SHA256 = "ffd70d9dcf141b9f13ae293ec5a6c48cf8d04f56bddc80cf244c62398b24f2ea"
 OLD_GO_BUILDER = (
@@ -93,6 +93,13 @@ def test_caddy_graph_applies_only_the_reviewed_go_security_closure() -> None:
             f"{module} {old} // indirect",
             f"{module} {new} // indirect",
         )
+    for module, old, new in (
+        ("github.com/go-jose/go-jose/v3", "v3.0.5", "v3.0.6-0.20261030183946-0e502b87c7aa"),
+        ("github.com/go-jose/go-jose/v4", "v4.1.4", "v4.1.7"),
+    ):
+        expected_go_mod = _replace_once(
+            expected_go_mod, f"{module} {old} // indirect", f"{module} {new} // indirect"
+        )
     assert GO_MOD.read_text(encoding="utf-8") == expected_go_mod
 
     signed_go_sum = _replace_once(
@@ -158,8 +165,21 @@ def test_caddy_graph_applies_only_the_reviewed_go_security_closure() -> None:
         expected_go_sum = _replace_once(
             expected_go_sum, anchor, f"{anchor}\n{added}"
         )
+    for anchor, added in (
+        (
+            "github.com/go-jose/go-jose/v3 v3.0.5/go.mod h1:5b+7YgP7ZICgJDBdfjZaIt+H/9L9T/YQrVfLAMboGkQ=",
+            "github.com/go-jose/go-jose/v3 v3.0.6-0.20261030183946-0e502b87c7aa h1:AHZcbOqCCO38+3UfsccMAi5D+c0D+JnVGopumm3zLfg=\n"
+            "github.com/go-jose/go-jose/v3 v3.0.6-0.20261030183946-0e502b87c7aa/go.mod h1:5b+7YgP7ZICgJDBdfjZaIt+H/9L9T/YQrVfLAMboGkQ=",
+        ),
+        (
+            "github.com/go-jose/go-jose/v4 v4.1.4/go.mod h1:x4oUasVrzR7071A4TnHLGSPpNOm2a21K9Kf04k1rs08=",
+            "github.com/go-jose/go-jose/v4 v4.1.7 h1:Nac/98uT5LPkfbiFuYa8ktf62a2VxwQ4xbq1GK8pV5E=\n"
+            "github.com/go-jose/go-jose/v4 v4.1.7/go.mod h1:x4oUasVrzR7071A4TnHLGSPpNOm2a21K9Kf04k1rs08=",
+        ),
+    ):
+        expected_go_sum = _replace_once(expected_go_sum, anchor, f"{anchor}\n{added}")
     assert GO_SUM.read_text(encoding="utf-8") == expected_go_sum
-    assert len(expected_go_sum.splitlines()) == len(signed_go_sum.splitlines()) + 16
+    assert len(expected_go_sum.splitlines()) == len(signed_go_sum.splitlines()) + 20
 
 
 def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> None:
@@ -374,6 +394,26 @@ def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> No
         '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'ca-certificates-20261020-r0\'; \\\n'
         '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'ca-certificates-bundle-20261020-r0\'; \\\n'
         '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'c-ares-1.34.9-r0\'; \\\n',
+    )
+    # Preserve the full historical reconstruction, then admit only these
+    # checksum-verified official JOSE and Brotli security corrections.
+    module_anchor = '    test "$(go list -mod=readonly -m -f \'{{.Version}}\' github.com/caddyserver/caddy/v2)" = "v2.11.4"; \\\n'
+    expected = _replace_once(
+        expected, module_anchor,
+        module_anchor
+        + '    test "$(go list -mod=readonly -m -f \'{{.Version}}\' github.com/go-jose/go-jose/v3)" = "v3.0.6-0.20261030183946-0e502b87c7aa"; \\\n'
+        + '    test "$(go list -mod=readonly -m -f \'{{.Version}}\' github.com/go-jose/go-jose/v4)" = "v4.1.7"; \\\n',
+    )
+    assert expected.count("v2.11.4-dcompany.1") == 2
+    expected = expected.replace("v2.11.4-dcompany.1", "v2.11.4-dcompany.2")
+    expected = _replace_once(
+        expected, "      'libssl3=3.5.9-r0' \\\n",
+        "      'libssl3=3.5.9-r0' \\\n      'brotli-libs=1.2.1-r0' \\\n",
+    )
+    package_anchor = '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'libssl3-3.5.9-r0\'; \\\n'
+    expected = _replace_once(
+        expected, package_anchor,
+        package_anchor + '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'brotli-libs-1.2.1-r0\'; \\\n',
     )
     assert CADDY_DOCKERFILE.read_text(encoding="utf-8") == expected
 
@@ -684,4 +724,4 @@ def test_caddy_binary_hash_is_coordinated_across_ci_and_release() -> None:
     assert "github.com/caddyserver/caddy/v2 v2.11.4" in GO_MOD.read_text(
         encoding="utf-8"
     )
-    assert "v2.11.4-dcompany.1" in CADDY_DOCKERFILE.read_text(encoding="utf-8")
+    assert "v2.11.4-dcompany.2" in CADDY_DOCKERFILE.read_text(encoding="utf-8")

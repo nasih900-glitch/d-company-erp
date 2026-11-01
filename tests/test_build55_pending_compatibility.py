@@ -579,6 +579,8 @@ def test_live_production_expanded_query_pin_is_distinct_from_old54_query(verifie
 
 def test_main_installer_orders_preservation_before_any_writer_and_never_reopens_credentials():
     source = (ROOT / "infra/scripts/install-on-vm.sh").read_text()
+    assert "grep -qx 'APP_VERSION=3.1.48'" in source
+    assert "APP_VERSION=3.1.47" not in source
     profile = source.index(
         'if [ "$BUILD55_EXACT_TRANSITION" = true ]; then\n    BUILD55_PRE_TRANSITION='
     )
@@ -596,6 +598,29 @@ def test_main_installer_orders_preservation_before_any_writer_and_never_reopens_
     assert '"$BUILD55_AUTH_TOOL" internal-probe' in source
     assert '< "$BUILD55_ACCEPTANCE_CREDENTIAL_FILE"' not in source
     assert 'sha256sum "$BUILD55_ACCEPTANCE_CREDENTIAL_FILE"' not in source
+
+
+@pytest.mark.parametrize("version", ["3.1.46", "3.1.47", "3.1.49"])
+def test_current_profile_rejects_withheld_or_other_release_identity(verifier, monkeypatch, version):
+    from types import SimpleNamespace
+
+    identity = {
+        "prior_revision": verifier.PRIOR_REVISION,
+        "prior_version": verifier.PRIOR_VERSION,
+        "prior_database_head": verifier.PRIOR_DATABASE_HEAD,
+        "candidate_revision": "b" * 40,
+        "candidate_version": version,
+        "candidate_database_head": verifier.CANDIDATE_DATABASE_HEAD,
+        "prior_source_archive_sha256": verifier.PRIOR_SOURCE_ARCHIVE_SHA256,
+        "candidate_source_archive_sha256": "c" * 64,
+        "prior_backend_manifest_sha256": verifier.PRIOR_BACKEND_MANIFEST_SHA256,
+        "candidate_backend_manifest_sha256": verifier.CANDIDATE_BACKEND_MANIFEST_SHA256,
+        "prior_images": verifier.PRIOR_IMAGES,
+        "candidate_images": {service: "sha256:" + "d" * 64 for service in verifier.SERVICES},
+    }
+    monkeypatch.setattr(verifier, "private_file", lambda _path: json.dumps(identity).encode())
+    with pytest.raises(verifier.CompatibilityError, match="unsupported or unfrozen release identity"):
+        verifier.verify_pre_bindings(SimpleNamespace(identity="synthetic-identity-only"))
 
 
 def test_installer_backend_manifest_uses_verifier_posix_name_order(tmp_path, verifier):
@@ -930,7 +955,7 @@ def test_candidate_backend_admits_only_exact_reviewed_python_patch(verifier):
     candidate = verifier.candidate_backend_environment(before, "b" * 40)
     assert before == original
     assert candidate == {
-        **before, "APP_VERSION": "3.1.47", "APP_REVISION": "b" * 40,
+        **before, "APP_VERSION": "3.1.48", "APP_REVISION": "b" * 40,
         "PYTHON_VERSION": "3.14.10",
         "PYTHON_SHA256": "de414a57119abef52784d8993e341d53aed635fc2b05c2607d9f98a2c5b72032",
         "LANG": "C.UTF-8",

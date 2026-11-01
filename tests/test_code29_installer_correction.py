@@ -59,7 +59,7 @@ from scripts.verify_code26_regression_freeze import (
 ROOT = Path(__file__).resolve().parents[1]
 ORIGINAL_CODE29 = "0949620b4632ebd6accdfa62a203be8d85b31a24"
 CADDY_SHA256 = "951a0136950bb9edf60ff5cec6ca2df0a041b27ded9e610f0aab49b168739dac"
-CURRENT_CADDY_SHA256 = "1b95bdb9ca9ffaec90a9e3a9592e8cedc2212abd64c709219149b8b4285d07d7"
+CURRENT_CADDY_SHA256 = "f2fcd13d0aeb36b7622b041fb6a607bd9cd0bef846291f0751a2e20ee4ab827b"
 LOCK_VERIFIER_SHA256 = "338cea91b56c2d85be109d259af1d77aa6d4ceaab4b13b379876c02e4485c029"
 HISTORICAL_CODE29_GUARD_SHA256 = (
     "2d761a871369d891849e0170c85533a0269d209f7949b376300eb0994bd5fc15"
@@ -820,7 +820,7 @@ def test_live_coordinated_identity_is_version_name_3_1_47_with_build_55() -> Non
 
     build = _current("android-native/app/build.gradle.kts")
     assert build.count("versionCode = 55") == 1
-    assert build.count('versionName = "3.1.47"') == 1
+    assert build.count('versionName = "3.1.48"') == 1
 
     historical_build44 = _historical_bytes(
         CODE30_4_BUILD44_BASE, "android-native/app/build.gradle.kts"
@@ -856,7 +856,7 @@ def test_live_coordinated_identity_is_version_name_3_1_47_with_build_55() -> Non
             REVIEWED_CODE30_2_SHA256[".env.production.example"],
         ),
     )
-    assert "APP_VERSION=3.1.47" in actual_env
+    assert "APP_VERSION=3.1.48" in actual_env
     assert "ANDROID_MIN_SUPPORTED_VERSION_CODE=8" in actual_env
     assert "ANDROID_LATEST_VERSION_CODE=8" in actual_env
     assert "CLIENT_COMPATIBILITY_POLICY_REVISION=1" in actual_env

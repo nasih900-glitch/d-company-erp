@@ -1,5 +1,13 @@
 # v3.1.47 / Android build 55 release candidate
 
+**Withheld before signing.** The immutable `v3.1.47` tag at
+`58d89f7ea1ccf33d9415cfe361eb59af3d104e91` failed Caddy security scanning;
+its release workflow was cancelled before Android signing or draft publication.
+Do not deploy or offer this candidate. The replacement is documented in
+[V3_1_48_RELEASE_CANDIDATE.md](V3_1_48_RELEASE_CANDIDATE.md); the still-unused
+Android installation code remains 55. The original scope below is retained as
+history, and this tag must not be moved or reused.
+
 This candidate implements the owner-directed liquid-glass workspace and Gaming
 workflow corrections. The local core-screen review is separate from final
 performance acceptance, release signing, in-place upgrades, production

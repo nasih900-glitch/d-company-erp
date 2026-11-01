@@ -11,12 +11,12 @@ class AndroidReleaseIdentityTest {
         assertEquals(55, BuildConfig.VERSION_CODE)
         if (BuildConfig.BUILD_TYPE == "physicalAudit") {
             assertEquals("cloud.dcompany.erp.physicalaudit", BuildConfig.APPLICATION_ID)
-            assertEquals("3.1.47-physical-audit", BuildConfig.VERSION_NAME)
+            assertEquals("3.1.48-physical-audit", BuildConfig.VERSION_NAME)
             assertEquals("managed", BuildConfig.DISTRIBUTION_CHANNEL)
             assertFalse(BuildConfig.DIRECT_UPDATES_ENABLED)
         } else {
             assertEquals("cloud.dcompany.erp", BuildConfig.APPLICATION_ID)
-            assertEquals("3.1.47", BuildConfig.VERSION_NAME)
+            assertEquals("3.1.48", BuildConfig.VERSION_NAME)
         }
     }
 }

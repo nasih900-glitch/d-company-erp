@@ -85,7 +85,7 @@ android {
         // Room 56 under a direct version code so CI and upgrade checks cannot
         // produce different identities from a local Gradle property.
         versionCode = 55
-        versionName = "3.1.47"
+        versionName = "3.1.48"
         buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "false")
         buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("play"))
 
