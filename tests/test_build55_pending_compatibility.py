@@ -9,11 +9,288 @@ import json
 import subprocess
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def reviewed_command_triples(verifier):
+    # This immutable public Compose block contains variable references, not secrets.
+    source = subprocess.check_output(
+        ['git', 'show', verifier.PRIOR_REVISION+':docker-compose.prod.yml'], cwd=ROOT, text=True,
+    )
+    lines = source.splitlines(keepends=True)
+    redis = lines.index('  redis:\n')
+    block = lines.index('      - |\n', redis)+1
+    body = []
+    for line in lines[block:]:
+        if line.strip() and not line.startswith('        '):
+            break
+        body.append(line[8:] if line.startswith('        ') else line)
+    redis_shell = ''.join(body).replace('$$', '$')
+    triples = {
+        'backend': [verifier.BACKEND_UVICORN_ENTRYPOINT, [], 'erp'],
+        'caddy': [None, ['caddy', 'run', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile'], ''],
+        'frontend': [['/docker-entrypoint.sh'], ['nginx', '-g', 'daemon off;'], ''],
+        'postgres': [['docker-entrypoint.sh'], ['postgres'], ''],
+        'redis': [['docker-entrypoint.sh'], ['/bin/sh', '-ec', redis_shell], ''],
+    }
+    for name, triple in triples.items():
+        assert verifier.sha(json.dumps(triple, separators=(',', ':')).encode()) == verifier.PRIOR_COMMAND_SHA256[name]
+    return triples
+
+
+@pytest.fixture
+def pre_binding_documents(verifier, runtime, monkeypatch):
+    """Exercise the complete preflight with synthetic privileged I/O, never live secrets."""
+    monkeypatch.setattr(verifier, 'CANDIDATE_RELEASE_FROZEN', True)
+    class OwnedSource:
+        def __init__(self, name):
+            self.name = name
+
+        def is_symlink(self):
+            return False
+
+        def is_dir(self):
+            return True
+
+        def stat(self):
+            return SimpleNamespace(st_uid=0, st_mode=0o40700)
+
+        def resolve(self):
+            return Path('/synthetic-owned-source') / self.name
+
+    roots = [OwnedSource('prior'), OwnedSource('candidate')]
+    source_files = {
+        root.name: {
+            'backend/app.py': verifier.sha((root.name+' backend').encode()),
+            'frontend/app.ts': verifier.sha((root.name+' frontend').encode()),
+        }
+        for root in roots
+    }
+
+    def inventory(root, scopes):
+        return {
+            name: digest for name, digest in source_files[root.name].items()
+            if scopes != ('backend',) or name.startswith('backend/')
+        }
+
+    monkeypatch.setattr(verifier, 'inventory', inventory)
+    manifests = []
+    for root, protected_key, backend_key in (
+        (roots[0], 'PRIOR_PROTECTED_SOURCE_SHA256', 'PRIOR_BACKEND_MANIFEST_SHA256'),
+        (roots[1], 'CANDIDATE_PROTECTED_SOURCE_SHA256', 'CANDIDATE_BACKEND_MANIFEST_SHA256'),
+    ):
+        monkeypatch.setattr(verifier, protected_key, verifier.inventory_hash(inventory(root, ())))
+        rows = inventory(root, ('backend',))
+        manifest = ''.join(
+            f"{digest}\t{name.removeprefix('backend/')}\n" for name, digest in sorted(rows.items())
+        ).encode()
+        manifests.append(verifier.sha(manifest))
+        monkeypatch.setattr(verifier, backend_key, manifests[-1])
+    revision = 'b'*40
+    image_ids = {name: 'sha256:'+str(index)*64 for index, name in enumerate(verifier.SERVICES, 1)}
+    identity = {
+        'prior_revision': verifier.PRIOR_REVISION,
+        'prior_version': verifier.PRIOR_VERSION,
+        'prior_database_head': verifier.PRIOR_DATABASE_HEAD,
+        'candidate_revision': revision,
+        'candidate_version': verifier.CANDIDATE_VERSION,
+        'candidate_database_head': verifier.CANDIDATE_DATABASE_HEAD,
+        'prior_source_archive_sha256': verifier.PRIOR_SOURCE_ARCHIVE_SHA256,
+        'candidate_source_archive_sha256': 'b'*64,
+        'prior_backend_manifest_sha256': manifests[0],
+        'candidate_backend_manifest_sha256': manifests[1],
+        'prior_images': verifier.PRIOR_IMAGES,
+        'candidate_images': image_ids,
+    }
+    images, services = {}, {}
+    for row in runtime['containers']:
+        name = row['Config']['Labels']['com.docker.compose.service']
+        before = verifier.environment(row['Config']['Env'])
+        env = verifier.candidate_backend_environment(before, revision) if name == 'backend' else before
+        config = {'Env': [key+'='+value for key, value in env.items()],
+                  'Entrypoint': deepcopy(row['Config']['Entrypoint']), 'Cmd': deepcopy(row['Config']['Cmd']) or None,
+                  'Labels': {'org.opencontainers.image.revision': revision,
+                             'org.opencontainers.image.version': verifier.CANDIDATE_VERSION}}
+        service = {'image': f'd-company-erp-{name}:{revision}', 'entrypoint': None,
+                   'command': None, 'user': None, 'environment': {}}
+        if name == 'backend':
+            config['User'] = 'erp'
+            config['Entrypoint'] = ['/entrypoint.sh']
+            service['entrypoint'] = verifier.BACKEND_UVICORN_ENTRYPOINT
+            service['command'] = []
+            service['environment']['CLIENT_UPDATE_MESSAGE'] = env['CLIENT_UPDATE_MESSAGE']
+            config['Env'] = [item for item in config['Env'] if not item.startswith('CLIENT_UPDATE_MESSAGE=')]
+        elif name == 'redis' and row['Config']['Cmd']:
+            config['Cmd'] = ['redis-server']
+            service['command'] = deepcopy(row['Config']['Cmd'])
+        images[name] = {'Id': image_ids[name], 'Config': config}
+        services[name] = service
+    prior_env = f'APP_VERSION={verifier.PRIOR_VERSION}\nAPP_REVISION={verifier.PRIOR_REVISION}\nKEEP=$literal\n'.encode()
+    candidate_env = prior_env.replace(verifier.PRIOR_VERSION.encode(), verifier.CANDIDATE_VERSION.encode()).replace(verifier.PRIOR_REVISION.encode(), revision.encode())
+    documents = {'identity': identity, 'journal': runtime, 'images': images,
+                 'attestation': {'services': {name: {'image_id': image_id} for name, image_id in image_ids.items()}},
+                 'compose': {'services': services}, 'prior_env': prior_env, 'live_env': prior_env,
+                 'candidate_env': candidate_env}
+
+    def private_file(name):
+        name = str(name)
+        value = documents[name]
+        if isinstance(value, bytes):
+            return value
+        raw = json.dumps(value, separators=(',', ':')).encode()
+        return raw.replace(b'$', b'$$') if name == 'compose' else raw
+
+    monkeypatch.setattr(verifier, 'private_file', private_file)
+    args = SimpleNamespace(identity='identity', runtime_journal='journal',
+                           candidate_image_inspect='images', candidate_compose_config='compose',
+                           prior_env='prior_env', live_env='live_env', candidate_env='candidate_env',
+                           prior_source_root=roots[0], candidate_source_root=roots[1])
+    return args, documents
+
+
+def test_all_five_pre_bindings_accept_actual_export_default_shapes(verifier, pre_binding_documents):
+    args, _ = pre_binding_documents
+    verifier.verify_pre_bindings(args)
+
+
+@pytest.mark.parametrize('runtime', ['reviewed_commands'], indirect=True)
+def test_all_five_pre_bindings_preserves_real_frozen_command_pins(verifier, runtime, pre_binding_documents):
+    args, _ = pre_binding_documents
+    verifier.verify_pre_bindings(args)
+
+
+@pytest.mark.parametrize('runtime', ['reviewed_commands'], indirect=True)
+def test_real_redis_dollar_argument_change_is_rejected(verifier, runtime, pre_binding_documents):
+    args, documents = pre_binding_documents
+    verifier.verify_pre_bindings(args)
+    documents['compose']['services']['redis']['command'][2] += '$'
+    with pytest.raises(verifier.CompatibilityError, match='executable/user drifted'):
+        verifier.verify_pre_bindings(args)
+
+
+def test_early_candidate_runtime_cli_uses_the_same_verified_contract(verifier, pre_binding_documents, monkeypatch, capsys):
+    monkeypatch.setattr(verifier.sys, 'argv', [
+        'verify', 'candidate-runtime', '--runtime-journal', 'journal',
+        '--candidate-image-inspect', 'images', '--candidate-compose-config', 'compose',
+        '--candidate-images', 'attestation', '--candidate-revision', 'b'*40,
+    ])
+    assert verifier.main() == 0
+    assert json.loads(capsys.readouterr().out) == {
+        'status': 'candidate_operational_runtime_verified', 'service_count': 5,
+    }
+
+
+def test_early_candidate_runtime_cli_refuses_unfrozen_source(verifier, pre_binding_documents, monkeypatch, capsys):
+    monkeypatch.setattr(verifier, 'CANDIDATE_RELEASE_FROZEN', False)
+    monkeypatch.setattr(verifier.sys, 'argv', [
+        'verify', 'candidate-runtime', '--runtime-journal', 'journal',
+        '--candidate-image-inspect', 'images', '--candidate-compose-config', 'compose',
+        '--candidate-images', 'attestation', '--candidate-revision', 'b'*40,
+    ])
+    assert verifier.main() == 1
+    assert 'freeze is incomplete' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('entrypoint', ([], ''))
+@pytest.mark.parametrize('command', (None, [], ''))
+def test_unreviewed_cleared_entrypoint_without_explicit_executable_fails_closed(verifier, entrypoint, command):
+    with pytest.raises(verifier.CompatibilityError, match='requires a nonempty explicit command'):
+        verifier.candidate_executable({'Entrypoint':['image-entry'], 'Cmd':['image-command']},
+                                      {'entrypoint':entrypoint, 'command':command})
+
+
+def test_early_runtime_preflight_precedes_scans_and_keeps_stopped_guard():
+    source = (ROOT/'infra/scripts/install-on-vm.sh').read_text()
+    early = source.index('capture_build55_candidate_runtime early')
+    scans = source.index('bash "$HARDENED_SCANNER_TOOL"')
+    stopped = source.index('capture_build55_candidate_runtime stopped')
+    final_guard = source.index('"$BUILD55_VERIFIER" pre --pre-transition-state')
+    assert early < scans < stopped < final_guard
+    assert source.index('MAINTENANCE_ACTIVE=true') > early
+    assert '${prefix}-candidate-compose.json' in source
+
+
+@pytest.mark.parametrize('service', ('backend', 'caddy', 'frontend', 'postgres', 'redis'))
+@pytest.mark.parametrize('field,value', (
+    ('entrypoint', ['different-program']), ('command', ['changed', 'argument']),
+    ('user', 'root'), ('user', '0'),
+))
+def test_complete_pre_bindings_rejects_real_executable_drift(verifier, pre_binding_documents, service, field, value):
+    args, documents = pre_binding_documents
+    documents['compose']['services'][service][field] = value
+    with pytest.raises(verifier.CompatibilityError, match='executable/user drifted'):
+        verifier.verify_pre_bindings(args)
+
+
+@pytest.mark.parametrize('service', ('backend', 'caddy', 'frontend', 'postgres', 'redis'))
+def test_complete_pre_bindings_still_rejects_environment_drift(verifier, pre_binding_documents, service):
+    args, documents = pre_binding_documents
+    documents['compose']['services'][service]['environment']['UNREVIEWED'] = 'added'
+    with pytest.raises(verifier.CompatibilityError, match='environment changed'):
+        verifier.verify_pre_bindings(args)
+
+
+@pytest.mark.parametrize('value', ('$', '$$', '$$$$', '${NAME}', '$NAME', 'value $x $$pid $$$$pairs'))
+def test_compose_export_is_decoded_once_in_command_and_environment(verifier, value):
+    document = {'command': ['sh', '-c', value], 'environment': {'VALUE': value}}
+    raw = json.dumps(document).encode().replace(b'$', b'$$')
+    assert verifier.decode_compose_export(raw) == document
+
+
+@pytest.mark.parametrize('raw', (b'{"x":"$"}', b'{"x":"$$$"}', b'{"x":"$$$$$"}', b'{"x":1,"x":2}', b'{"x":NaN}'))
+def test_malformed_compose_exports_fail_closed(verifier, raw):
+    with pytest.raises(verifier.CompatibilityError):
+        verifier.decode_compose_export(raw)
+
+
+def test_empty_user_inherits_image_but_explicit_user_spelling_is_preserved(verifier):
+    image = {'Entrypoint': ['fixed'], 'Cmd': ['default'], 'User': 'erp'}
+    for value in (None, ''):
+        assert verifier.candidate_executable(image, {'user': value})[-1] == 'erp'
+    for value in ('root', '0', 'another-user'):
+        assert verifier.candidate_executable(image, {'user': value})[-1] == value
+
+
+@pytest.mark.parametrize('command', (None, [], ''))
+def test_real_daemon_empty_command_inherits_only_with_inherited_entrypoint(verifier, command):
+    image = {'Entrypoint':['image-entry'], 'Cmd':['image-command', '$literal$$pair'], 'User':''}
+    assert verifier.candidate_executable(image, {'command':command}) == [
+        ['image-entry'], ['image-command', '$literal$$pair'], '',
+    ]
+    assert verifier.candidate_executable(image, {'entrypoint':['explicit-entry'], 'command':command}) == [
+        ['explicit-entry'], [], '',
+    ]
+
+
+def test_runtime_canonicalization_never_joins_or_reinterprets_arguments(verifier):
+    assert verifier.canonical_executable(None, [], None) == [[], [], '']
+    assert verifier.canonical_executable(['fixed'], [''], '') == [['fixed'], [''], '']
+    assert verifier.canonical_executable(['fixed'], ['a', 'b'], '') != verifier.canonical_executable(['fixed'], ['a b'], '')
+    for value in (False, 0, 'unparsed shell', {'argv': []}):
+        with pytest.raises(verifier.CompatibilityError):
+            verifier.canonical_executable(value, [], '')
+
+
+@pytest.mark.parametrize('case', json.loads((ROOT/'tests/fixtures/build57-compose-daemon-oracle.json').read_text())['cases'], ids=lambda case:case['name'])
+def test_captured_real_compose_daemon_contract_cannot_regress(verifier, case):
+    fixture = json.loads((ROOT/'tests/fixtures/build57-compose-daemon-oracle.json').read_text())
+    assert fixture['synthetic_only'] is True
+    assert fixture['docker_version'] == '29.6.1'
+    assert fixture['compose_version'] == '5.2.0'
+    raw = case['compose_export_json'].encode()
+    assert hashlib.sha256(raw).hexdigest() == case['compose_export_sha256']
+    compose = verifier.decode_compose_export(raw)
+    assert set(case['actual_daemon']) == set(verifier.SERVICES)
+    for service, actual in case['actual_daemon'].items():
+        image = fixture['images'][service]
+        config = compose['services'][service]
+        assert verifier.candidate_executable(image, config) == actual['executable']
+        assert verifier.candidate_image_environment(image['Env'], config.get('environment', {}), service=service) == actual['environment']
 
 
 @pytest.fixture
@@ -314,10 +591,12 @@ def test_opaque_queue_or_identity_reclassification_is_rejected(verifier, fleet, 
 
 
 @pytest.fixture
-def runtime(verifier, monkeypatch):
+def runtime(verifier, monkeypatch, request):
     records = []
+    reviewed = getattr(request, 'param', None) == 'reviewed_commands'
+    triples = reviewed_command_triples(verifier) if reviewed else None
     for service in verifier.SERVICES:
-        env = ["PATH=/usr/local/bin:/usr/bin:/bin"]
+        env = ["PATH=/usr/local/bin:/usr/bin:/bin", "IMAGE_LITERAL=keep$$image"]
         if service == "backend":
             env += [
                 "APP_VERSION=3.1.46",
@@ -341,21 +620,24 @@ def runtime(verifier, monkeypatch):
                 "com.docker.compose.project.config_files": "/var/lib/dcompany-erp/prior/compose.yml,/var/lib/dcompany-erp/prior/override.yml",
             },
         }
+        if reviewed:
+            config['Entrypoint'], config['Cmd'], config['User'] = deepcopy(triples[service])
         monkeypatch.setitem(
             verifier.PRIOR_ENVIRONMENT_SHA256,
             service,
             verifier.sha(json.dumps(sorted(env), separators=(",", ":")).encode()),
         )
-        monkeypatch.setitem(
-            verifier.PRIOR_COMMAND_SHA256,
-            service,
-            verifier.sha(
-                json.dumps(
-                    [config["Entrypoint"], config["Cmd"], config["User"]],
-                    separators=(",", ":"),
-                ).encode()
-            ),
-        )
+        if not reviewed:
+            monkeypatch.setitem(
+                verifier.PRIOR_COMMAND_SHA256,
+                service,
+                verifier.sha(
+                    json.dumps(
+                        [config["Entrypoint"], config["Cmd"], config["User"]],
+                        separators=(",", ":"),
+                    ).encode()
+                ),
+            )
         records.append({"Image": verifier.PRIOR_IMAGES[service], "Config": config})
     files = [
         {
@@ -579,7 +861,7 @@ def test_live_production_expanded_query_pin_is_distinct_from_old54_query(verifie
 
 def test_main_installer_orders_preservation_before_any_writer_and_never_reopens_credentials():
     source = (ROOT / "infra/scripts/install-on-vm.sh").read_text()
-    assert "grep -qx 'APP_VERSION=3.1.49'" in source
+    assert "grep -qx 'APP_VERSION=3.1.50'" in source
     assert "APP_VERSION=3.1.47" not in source
     profile = source.index(
         'if [ "$BUILD55_EXACT_TRANSITION" = true ]; then\n    BUILD55_PRE_TRANSITION='
@@ -600,7 +882,7 @@ def test_main_installer_orders_preservation_before_any_writer_and_never_reopens_
     assert 'sha256sum "$BUILD55_ACCEPTANCE_CREDENTIAL_FILE"' not in source
 
 
-@pytest.mark.parametrize("version", ["3.1.46", "3.1.47", "3.1.48", "3.1.50"])
+@pytest.mark.parametrize("version", ["3.1.46", "3.1.47", "3.1.48", "3.1.49", "3.1.51"])
 def test_current_profile_rejects_withheld_or_other_release_identity(verifier, monkeypatch, version):
     from types import SimpleNamespace
 
@@ -956,7 +1238,7 @@ def test_candidate_backend_admits_only_exact_reviewed_python_patch(verifier):
     candidate = verifier.candidate_backend_environment(before, "b" * 40)
     assert before == original
     assert candidate == {
-        **before, "APP_VERSION": "3.1.49", "APP_REVISION": "b" * 40,
+        **before, "APP_VERSION": "3.1.50", "APP_REVISION": "b" * 40,
         "PYTHON_VERSION": "3.14.10",
         "PYTHON_SHA256": "de414a57119abef52784d8993e341d53aed635fc2b05c2607d9f98a2c5b72032",
         "LANG": "C.UTF-8",

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exact Build54/0091 -> Build56/0093 preservation admission.
+"""Exact Build54/0091 -> Build57/0093 preservation admission.
 
 Opaque tablet work is retained as reported, including current-build work. This
 profile never drains queues, reclassifies old rows, edits telemetry, or grants an
@@ -23,7 +23,7 @@ from uuid import UUID
 PRIOR_REVISION = "5ad146ae076f5178acc2c8e4cb840ecbb0d0343a"
 PRIOR_VERSION = "3.1.46"
 PRIOR_DATABASE_HEAD = "0091"
-CANDIDATE_VERSION = "3.1.49"
+CANDIDATE_VERSION = "3.1.50"
 CANDIDATE_DATABASE_HEAD = "0093"
 PRIOR_SOURCE_ARCHIVE_SHA256 = (
     "7ded1fbc0afb2fb0dc93421bd6fc9b9e9ecef677e69b28ec1a4830d8252f6db5"
@@ -90,8 +90,8 @@ BACKEND_UVICORN_ENTRYPOINT = [
 # Independent review fills these final closure values; the helper cannot hash
 # its own enclosing archive. Historical release maps remain immutable.
 CANDIDATE_RELEASE_FROZEN = True
-CANDIDATE_BACKEND_MANIFEST_SHA256: str | None = '9cf803249412d8cb8b5b08c5f7ca6f29e023a6b994ed646e0e3850ecdcbd4e4f'
-CANDIDATE_PROTECTED_SOURCE_SHA256: str | None = 'a1cba4ef525beffa76a7d9bd651878218332bd64014de09b69d1bcfab0b0fcf0'
+CANDIDATE_BACKEND_MANIFEST_SHA256: str | None = "73dc4ad2c1b7ca4142ff8d316373a7cf25e5eacae894dcad6bd6386da4443d2c"
+CANDIDATE_PROTECTED_SOURCE_SHA256: str | None = "61bff3f11fe7f6e5063e074ea0dda6c07d507563ab3d80a2565061e003da9d5d"
 EXPECTED_POLICY_SCHEMA_ROWS: tuple[str, ...] = (
     "column|android_update_policy|1|id|integer|NO||||32|2|0||||||||||pg_catalog|int4|NO||||||NO|NEVER||YES",
     "column|android_update_policy|2|mode|character varying|NO||20|80|||||||||||||pg_catalog|varchar|NO||||||NO|NEVER||YES",
@@ -984,6 +984,53 @@ def candidate_image_environment(image_values: object, overrides: object, *, serv
     return effective
 
 
+def decode_compose_export(raw: bytes) -> dict:
+    # `compose config` escapes every dollar after serialization for re-import.
+    # Undo that one export layer only here, never in OCI or runtime records.
+    if any(len(run) % 2 for run in re.findall(rb"\$+", raw)):
+        raise CompatibilityError("candidate Compose export has unmatched dollar escaping")
+    return decode(raw.replace(b"$$", b"$"))
+
+
+def canonical_executable(entrypoint: object, command: object, user: object) -> list:
+    result = []
+    for vector in (entrypoint, command):
+        if vector is None:
+            result.append([])
+        elif isinstance(vector, list) and all(isinstance(arg, str) for arg in vector):
+            result.append(vector)
+        else:
+            raise CompatibilityError("executable argv is malformed")
+    if user is None:
+        user = ""
+    if not isinstance(user, str):
+        raise CompatibilityError("executable user is malformed")
+    return [*result, user]
+
+
+def candidate_executable(image: dict, compose: dict) -> list:
+    # Resolve the exported model through the tested Compose/daemon merge:
+    # inherited entrypoint lets the daemon inherit an empty Cmd from the image;
+    # a non-null explicit entrypoint suppresses that command inheritance.
+    entrypoint = compose.get("entrypoint")
+    command = compose.get("command")
+    user = compose.get("user")
+    if (entrypoint == [] or entrypoint == "") and (command is None or command == [] or command == ""):
+        # This profile never clears both vectors; do not guess daemon fallback.
+        raise CompatibilityError("cleared candidate entrypoint requires a nonempty explicit command")
+    if command is None or command == [] or command == "":
+        command = image.get("Cmd") if entrypoint is None else []
+    if entrypoint is None:
+        entrypoint = image.get("Entrypoint")
+    if user is None or user == "":
+        user = image.get("User")
+    if entrypoint == "":
+        entrypoint = []
+    if command == "":
+        command = []
+    return canonical_executable(entrypoint, command, user)
+
+
 def verify_runtime_journal(document: dict) -> dict:
     if (
         set(document) != {"schema_version", "containers", "configuration_files"}
@@ -1076,6 +1123,63 @@ def rollback_override(document: dict) -> dict:
             }
         }
     }
+
+
+def verify_candidate_runtime(journal: dict, image_records: dict, compose: dict, revision: str, images: dict) -> None:
+    runtime = verify_runtime_journal(journal)
+    if not re.fullmatch(r"[a-f0-9]{40}", str(revision)) or revision == PRIOR_REVISION:
+        raise CompatibilityError("candidate runtime revision is invalid")
+    if not isinstance(images, dict) or set(images) != set(SERVICES) or any(
+        not re.fullmatch(r"sha256:[a-f0-9]{64}", str(value)) or value == PRIOR_IMAGES[key]
+        for key, value in images.items()
+    ):
+        raise CompatibilityError("candidate runtime image attestations are incomplete")
+    if not isinstance(image_records, dict) or set(image_records) != set(SERVICES) or any(
+        not isinstance(row, dict) or not isinstance(row.get("Config"), dict)
+        for row in image_records.values()
+    ):
+        raise CompatibilityError("candidate image runtime inventory is incomplete")
+    if not isinstance(compose, dict) or not isinstance(compose.get("services"), dict) or set(compose["services"]) != set(SERVICES):
+        raise CompatibilityError("candidate Compose service inventory changed")
+    for service in SERVICES:
+        image = image_records[service]
+        config = compose.get("services", {}).get(service)
+        if (
+            not isinstance(config, dict)
+            or image.get("Id") != images[service]
+            or config.get("image") != f"d-company-erp-{service}:{revision}"
+        ):
+            raise CompatibilityError("candidate Compose/image identity changed")
+        labels = image.get("Config", {}).get("Labels", {})
+        if (
+            labels.get("org.opencontainers.image.revision") != revision
+            or labels.get("org.opencontainers.image.version") != CANDIDATE_VERSION
+        ):
+            raise CompatibilityError(
+                "candidate image labels are not the coordinated release"
+            )
+        if service == "backend" and "env_file" in config:
+            raise CompatibilityError("candidate Compose masks Python image metadata")
+        effective = candidate_image_environment(
+            image.get("Config", {}).get("Env"), config.get("environment", {}), service=service,
+        )
+        before = environment(runtime[service]["Config"]["Env"])
+        expected = candidate_backend_environment(before, revision) if service == "backend" else before
+        if effective != expected:
+            raise CompatibilityError(
+                "effective runtime environment changed beyond reviewed identity and Python patch"
+            )
+        executable = candidate_executable(image["Config"], config)
+        prior_config = runtime[service]["Config"]
+        approved = canonical_executable(
+            prior_config.get("Entrypoint"), prior_config.get("Cmd"), prior_config.get("User")
+        )
+        if executable != approved:
+            raise CompatibilityError(
+                f"candidate executable/user drifted from reviewed operational runtime ({service}; "
+                f"expected={sha(json.dumps(approved, separators=(',', ':')).encode())}; "
+                f"actual={sha(json.dumps(executable, separators=(',', ':')).encode())})"
+            )
 
 
 def verify_pre_bindings(args) -> None:
@@ -1186,51 +1290,13 @@ def verify_pre_bindings(args) -> None:
         raise CompatibilityError(
             "environment bytes changed beyond reviewed release identity"
         )
-    runtime = verify_runtime_journal(decode(private_file(args.runtime_journal)))
-    image_records = decode(private_file(args.candidate_image_inspect))
-    compose = decode(private_file(args.candidate_compose_config))
-    if set(image_records) != set(SERVICES):
-        raise CompatibilityError("candidate image runtime inventory is incomplete")
-    for service in SERVICES:
-        image = image_records[service]
-        config = compose.get("services", {}).get(service)
-        if (
-            not isinstance(config, dict)
-            or image.get("Id") != images[service]
-            or config.get("image") != f"d-company-erp-{service}:{revision}"
-        ):
-            raise CompatibilityError("candidate Compose/image identity changed")
-        labels = image.get("Config", {}).get("Labels", {})
-        if (
-            labels.get("org.opencontainers.image.revision") != revision
-            or labels.get("org.opencontainers.image.version") != CANDIDATE_VERSION
-        ):
-            raise CompatibilityError(
-                "candidate image labels are not the coordinated release"
-            )
-        if service == "backend" and "env_file" in config:
-            raise CompatibilityError("candidate Compose masks Python image metadata")
-        effective = candidate_image_environment(
-            image.get("Config", {}).get("Env"), config.get("environment", {}), service=service,
-        )
-        before = environment(runtime[service]["Config"]["Env"])
-        expected = candidate_backend_environment(before, revision) if service == "backend" else before
-        if effective != expected:
-            raise CompatibilityError(
-                "effective runtime environment changed beyond reviewed identity and Python patch"
-            )
-        executable = [
-            config.get("entrypoint", image["Config"].get("Entrypoint")),
-            config.get("command", image["Config"].get("Cmd")),
-            config.get("user", image["Config"].get("User")),
-        ]
-        if (
-            sha(json.dumps(executable, separators=(",", ":")).encode())
-            != PRIOR_COMMAND_SHA256[service]
-        ):
-            raise CompatibilityError(
-                "candidate executable/user drifted from reviewed operational runtime"
-            )
+    verify_candidate_runtime(
+        decode(private_file(args.runtime_journal)),
+        decode(private_file(args.candidate_image_inspect)),
+        decode_compose_export(private_file(args.candidate_compose_config)),
+        revision,
+        images,
+    )
 
 
 def verify_migration_compose(base: dict, pinned: dict, images: dict) -> None:
@@ -1274,10 +1340,17 @@ def verify_running_runtime(
                 "running image does not match its immutable attestation"
             )
         command = [config.get("Entrypoint"), config.get("Cmd"), config.get("User")]
-        if (
-            sha(json.dumps(command, separators=(",", ":")).encode())
-            != PRIOR_COMMAND_SHA256[service]
-        ):
+        prior_config = before[service]["Config"]
+        if prior:
+            command_matches = (
+                sha(json.dumps(command, separators=(",", ":")).encode())
+                == PRIOR_COMMAND_SHA256[service]
+            )
+        else:
+            command_matches = canonical_executable(*command) == canonical_executable(
+                prior_config.get("Entrypoint"), prior_config.get("Cmd"), prior_config.get("User")
+            )
+        if not command_matches:
             raise CompatibilityError("actual running executable/user changed")
         expected = environment(before[service]["Config"]["Env"])
         if not prior and service == "backend":
@@ -1318,6 +1391,12 @@ def main() -> int:
             command.add_argument("--pre-fleet-sha256", required=True)
     runtime = commands.add_parser("runtime")
     runtime.add_argument("--runtime-journal", type=Path, required=True)
+    candidate_runtime = commands.add_parser("candidate-runtime")
+    candidate_runtime.add_argument("--runtime-journal", type=Path, required=True)
+    candidate_runtime.add_argument("--candidate-image-inspect", type=Path, required=True)
+    candidate_runtime.add_argument("--candidate-compose-config", type=Path, required=True)
+    candidate_runtime.add_argument("--candidate-images", type=Path, required=True)
+    candidate_runtime.add_argument("--candidate-revision", required=True)
     migration = commands.add_parser("migration-runtime")
     migration.add_argument("--base-compose", type=Path, required=True)
     migration.add_argument("--pinned-compose", type=Path, required=True)
@@ -1329,7 +1408,24 @@ def main() -> int:
     running.add_argument("--prior", action="store_true")
     args = parser.parse_args()
     try:
-        if args.phase == "migration-runtime":
+        if args.phase == "candidate-runtime":
+            if not CANDIDATE_RELEASE_FROZEN:
+                raise CompatibilityError("candidate source freeze is incomplete")
+            attestation = decode(private_file(args.candidate_images))
+            services = attestation.get("services", {})
+            if not isinstance(services, dict) or set(services) != set(SERVICES) or any(
+                not isinstance(row, dict) for row in services.values()
+            ):
+                raise CompatibilityError("candidate runtime image inventory is incomplete")
+            verify_candidate_runtime(
+                decode(private_file(args.runtime_journal)),
+                decode(private_file(args.candidate_image_inspect)),
+                decode_compose_export(private_file(args.candidate_compose_config)),
+                args.candidate_revision,
+                {name: row.get("image_id") for name, row in services.items()},
+            )
+            result = {"status": "candidate_operational_runtime_verified", "service_count": len(SERVICES)}
+        elif args.phase == "migration-runtime":
             identity = decode(private_file(args.identity))
             verify_migration_compose(
                 decode(private_file(args.base_compose)),

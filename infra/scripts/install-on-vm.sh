@@ -674,7 +674,7 @@ YAML
       exit 1
     fi
   fi
-  if grep -qx 'APP_VERSION=3.1.49' "$CANDIDATE_BUILD_ROOT/.env.production.example"; then
+  if grep -qx 'APP_VERSION=3.1.50' "$CANDIDATE_BUILD_ROOT/.env.production.example"; then
     if [ "$PRIOR_REVISION" != 5ad146ae076f5178acc2c8e4cb840ecbb0d0343a ] || \
        [ "$PRIOR_APP_VERSION" != 3.1.46 ] || [ "$PRIOR_DB_HEAD" != 0091 ] || \
        [ -n "$LEGACY_MINIO_CONTAINER" ] || [ -z "$BUILD55_ACCEPTANCE_CREDENTIAL_FILE" ]; then
@@ -844,6 +844,37 @@ PYACTUAL55
   chmod 600 "$output"
 }
 
+capture_build55_candidate_runtime() {
+  local phase=$1 prefix image_id output
+  local -a image_ids=()
+  case "$phase" in
+    early) prefix="$UPGRADE_SNAPSHOT/build55-preflight" ;;
+    stopped) prefix="$UPGRADE_SNAPSHOT/build55" ;;
+    *) echo "Invalid candidate runtime capture phase." >&2; return 1 ;;
+  esac
+  BUILD55_CANDIDATE_IMAGES="${prefix}-candidate-images.json"
+  BUILD55_IMAGE_INSPECT="${prefix}-candidate-image-inspect.json"
+  BUILD55_CANDIDATE_COMPOSE="${prefix}-candidate-compose.json"
+  for output in "$BUILD55_CANDIDATE_IMAGES" "$BUILD55_IMAGE_INSPECT" \
+    "$BUILD55_CANDIDATE_COMPOSE" "${prefix}-image-inspect-array.json"; do
+    if [ -e "$output" ] || [ -L "$output" ]; then
+      echo "Refusing to overwrite candidate runtime evidence." >&2; return 1
+    fi
+  done
+  printf '%s\n' "$CANDIDATE_IMAGE_ATTESTATION" > "$BUILD55_CANDIDATE_IMAGES"
+  while IFS= read -r image_id; do image_ids+=("$image_id"); done < <(
+    python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("\n".join(d["services"][s]["image_id"] for s in sorted(d["services"])))' "$BUILD55_CANDIDATE_IMAGES")
+  docker image inspect "${image_ids[@]}" > "${prefix}-image-inspect-array.json"
+  python3 - "$BUILD55_CANDIDATE_IMAGES" "${prefix}-image-inspect-array.json" <<'PYIMAGE' > "$BUILD55_IMAGE_INSPECT"
+import json,sys
+attestation=json.load(open(sys.argv[1]))
+images={row["Id"]:row for row in json.load(open(sys.argv[2]))}
+print(json.dumps({service:images[row["image_id"]] for service,row in attestation["services"].items()},sort_keys=True))
+PYIMAGE
+  "${candidate_compose[@]}" --env-file "$ENV_CANDIDATE" config --format json > "$BUILD55_CANDIDATE_COMPOSE"
+  chmod 600 "$BUILD55_CANDIDATE_IMAGES" "$BUILD55_IMAGE_INSPECT" \
+    "$BUILD55_CANDIDATE_COMPOSE" "${prefix}-image-inspect-array.json"
+}
 verify_build55_baseline_seal() {
   if ! [[ "$BUILD55_BASELINE_MANIFEST_SHA256" =~ ^[a-f0-9]{64}$ ]] || \
      ! [[ "$BUILD55_PRE_TRANSITION_SHA256" =~ ^[a-f0-9]{64}$ ]] || \
@@ -1353,6 +1384,21 @@ if ! [[ "$CANDIDATE_REDIS_IMAGE_REF" =~ ^d-company-erp-redis:[0-9a-f]{40}$ ]] ||
 fi
 echo "==> Patched Redis release image is built and attested before maintenance."
 
+# Catch config-export/runtime mismatches while the prior release is still live.
+# The stopped-writer source/history/runtime checks below remain mandatory.
+if [ "$BUILD55_EXACT_TRANSITION" = true ]; then
+  capture_build55_candidate_runtime early
+  python3 "$BUILD55_VERIFIER" candidate-runtime \
+    --runtime-journal "$BUILD55_RUNTIME_JOURNAL" \
+    --candidate-image-inspect "$BUILD55_IMAGE_INSPECT" \
+    --candidate-compose-config "$BUILD55_CANDIDATE_COMPOSE" \
+    --candidate-images "$BUILD55_CANDIDATE_IMAGES" \
+    --candidate-revision "$CURRENT_REVISION" \
+    > "$UPGRADE_SNAPSHOT/build55-preflight-runtime-verification.json"
+  chmod 600 "$UPGRADE_SNAPSHOT/build55-preflight-runtime-verification.json"
+  echo "==> Candidate operational runtime preflight passed before scanning."
+fi
+
 # Fetch the exact scanner images before entering the helper's bounded Docker
 # create lifecycle. A cold registry transfer must not consume that deadline.
 timeout --foreground --signal TERM --kill-after=30s 600s \
@@ -1506,20 +1552,7 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
     docker exec -i "$EXISTING_POSTGRES_CONTAINER" psql -X --no-psqlrc --quiet -U erp -d erp --tuples-only --no-align \
     < "$BUILD45_PENDING_STATE_SQL" > "$BUILD55_PRE_FLEET"
     chmod 600 "$BUILD55_PRE_TRANSITION" "$BUILD55_PRE_FLEET"
-    BUILD55_CANDIDATE_IMAGES="$UPGRADE_SNAPSHOT/build55-candidate-images.json"
-    BUILD55_IMAGE_INSPECT="$UPGRADE_SNAPSHOT/build55-candidate-image-inspect.json"
-    printf '%s\n' "$CANDIDATE_IMAGE_ATTESTATION" > "$BUILD55_CANDIDATE_IMAGES"
-    BUILD55_IMAGE_IDS=()
-    while IFS= read -r image_id; do BUILD55_IMAGE_IDS+=("$image_id"); done < <(
-      python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("\n".join(d["services"][s]["image_id"] for s in sorted(d["services"])))' "$BUILD55_CANDIDATE_IMAGES")
-    docker image inspect "${BUILD55_IMAGE_IDS[@]}" > "$UPGRADE_SNAPSHOT/build55-image-inspect-array.json"
-    python3 - "$BUILD55_CANDIDATE_IMAGES" "$UPGRADE_SNAPSHOT/build55-image-inspect-array.json" <<'PYIMAGE' > "$BUILD55_IMAGE_INSPECT"
-import json,sys
-attestation=json.load(open(sys.argv[1]))
-images={row["Id"]:row for row in json.load(open(sys.argv[2]))}
-print(json.dumps({service:images[row["image_id"]] for service,row in attestation["services"].items()},sort_keys=True))
-PYIMAGE
-    "${candidate_compose[@]}" --env-file "$ENV_CANDIDATE" config --format json > "$UPGRADE_SNAPSHOT/build55-candidate-compose.json"
+    capture_build55_candidate_runtime stopped
     python3 - "$PRIOR_REVISION" "$CURRENT_REVISION" "$PRIOR_SOURCE_ARCHIVE_SHA256" \
       "$CANDIDATE_SOURCE_ARCHIVE_SHA256" "$SOURCE_MANIFEST_DIGEST" "$BUILD55_CANDIDATE_IMAGES" \
       "$CANDIDATE_BUILD_ROOT" <<'PYIDENTITY' > "$UPGRADE_SNAPSHOT/build55-identity.json"
@@ -1533,7 +1566,7 @@ for path in sorted((root/"backend").rglob("*"), key=lambda path: path.relative_t
 candidate_manifest=hashlib.sha256("".join(manifest_rows).encode()).hexdigest()
 attestation=json.load(open(images))
 print(json.dumps({"prior_revision":prior,"prior_version":"3.1.46","prior_database_head":"0091",
- "candidate_revision":revision,"candidate_version":"3.1.49","candidate_database_head":"0093",
+ "candidate_revision":revision,"candidate_version":"3.1.50","candidate_database_head":"0093",
  "prior_source_archive_sha256":archive,"candidate_source_archive_sha256":candidate_archive,
  "prior_backend_manifest_sha256":manifest,
  "candidate_backend_manifest_sha256":candidate_manifest,
