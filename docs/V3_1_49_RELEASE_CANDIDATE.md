@@ -20,6 +20,16 @@ finance/Audit preservation and full backup/restore. An actual same-count change
 to a historical Gaming rate remains rejected. Empty-table hashing is also
 checked against the projection.
 
+## Native form verification
+
+The first56 branch run exposed a keyboard-dependent assumption in the shared
+form test: after text entry opened the IME, it expected the lower picker to
+already be visible. The test now reaches fields through the existing form
+scroll owner and checks visibility before pixel sampling. Its disabled-control,
+contrast and callback assertions remain intact. No production form behavior is
+changed. The failed run is retained; the corrected candidate requires a fresh
+complete instrumentation run before signing.
+
 ## Preserved application and release boundaries
 
 The liquid glass design, shared backgrounds, original logo, sidebar gestures,

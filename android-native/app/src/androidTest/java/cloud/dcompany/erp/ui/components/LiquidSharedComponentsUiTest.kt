@@ -56,6 +56,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.click
@@ -870,6 +871,8 @@ class LiquidSharedComponentsUiTest {
         val disabledPicker = compose.onNodeWithContentDescription(
             "Disabled destination, No destination",
         )
+            // Typing may open the IME; reach lower fields through the form's scroll owner.
+            .performScrollTo()
             .assertIsDisplayed()
             .assertIsNotEnabled()
         val disabledText = compose.onNodeWithText("No destination", useUnmergedTree = true)
@@ -893,9 +896,12 @@ class LiquidSharedComponentsUiTest {
             .75f,
             disabledY,
         )
+        val picker = compose.onNodeWithTag("shared-form-picker")
+        picker.performScrollTo().assertIsDisplayed()
         val pickerDark = popupSample(formRoot, "shared-form-picker", .88f, .78f)
         compose.runOnIdle { scene.value = bright }
         compose.waitForIdle()
+        picker.assertIsDisplayed()
         val pickerBright = popupSample(formRoot, "shared-form-picker", .88f, .78f)
         assertTrue(
             "A real FormDialog PickerField must project the scene instead of drawing a solid slab",
@@ -904,6 +910,7 @@ class LiquidSharedComponentsUiTest {
         compose.onNodeWithText("Counter one").assertIsDisplayed().performClick()
         compose.onNodeWithText("Counter two").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals("Counter two", selected.value) }
+        disabledPicker.performScrollTo().assertIsDisplayed()
         val disabledBrightSurface = popupSample(
             formRoot,
             "shared-disabled-picker",
