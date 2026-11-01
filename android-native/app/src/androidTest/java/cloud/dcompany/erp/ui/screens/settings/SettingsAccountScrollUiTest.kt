@@ -23,7 +23,24 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import cloud.dcompany.erp.MainActivity
+import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Modifier
+import androidx.core.view.WindowCompat
+import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.core.sync.OutboxWorkStatus
+import cloud.dcompany.erp.ui.Destination
+import cloud.dcompany.erp.ui.WorkspaceScaffold
+import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
+import cloud.dcompany.erp.ui.theme.AppearancePreference
+import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import cloud.dcompany.erp.ui.theme.WorkspaceBackgroundPresets
 import kotlin.math.abs
 import org.junit.Assert.assertNotNull
@@ -42,18 +59,18 @@ private val RequestedSettingsDisplayId: Int by lazy {
         ?: error("Only verified HD displays 0, 2, 5 and 6 are supported: $raw")
 }
 
-private fun ActivityScenarioRule<MainActivity>.settingsActivity(): MainActivity {
-    var activity: MainActivity? = null
+private fun ActivityScenarioRule<ComponentActivity>.settingsActivity(): ComponentActivity {
+    var activity: ComponentActivity? = null
     scenario.onActivity { activity = it }
     return checkNotNull(activity)
 }
 
 private fun createSettingsComposeRule(): AndroidComposeTestRule<
-    ActivityScenarioRule<MainActivity>,
-    MainActivity,
+    ActivityScenarioRule<ComponentActivity>,
+    ComponentActivity,
 > {
     val activityRule = ActivityScenarioRule(
-        MainActivity::class.java,
+        ComponentActivity::class.java,
         ActivityOptions.makeBasic().setLaunchDisplayId(RequestedSettingsDisplayId).toBundle(),
     )
     return AndroidComposeTestRule(activityRule) { it.settingsActivity() }
@@ -66,11 +83,48 @@ class SettingsAccountScrollUiTest {
 
     @Test
     fun offlineAccountViewportScrollsFromStaticWorkspaceCopyAndReturns() {
-        assertVerified1280By800Host()
-        compose.waitUntil(15_000L) {
-            compose.onAllNodes(hasTestTag("workspace-rail-Settings"), useUnmergedTree = true)
-                .fetchSemanticsNodes().size == 1
+        // Presentation proof owns its shell; a fresh signed-out install must
+        // never be expected to expose MainActivity's authenticated workspace.
+        check(!DCompanyApp.instance.tokens.hasSession()) {
+            "Offline Account proof requires an isolated signed-out test installation"
         }
+        val destination = mutableStateOf(Destination.Dashboard)
+        compose.activityRule.scenario.onActivity {
+            WindowCompat.setDecorFitsSystemWindows(it.window, false)
+        }
+        compose.setContent {
+            DCompanyTheme(AppearancePreference.Night) {
+                Surface(Modifier.fillMaxSize()) {
+                    Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                        WorkspaceScaffold(
+                            destinations = listOf(Destination.Dashboard, Destination.Settings),
+                            currentDestination = destination.value,
+                            employeeName = "Settings presentation test",
+                            locationLabel = "Isolated offline fixture",
+                            connectivityProblem = SyncAvailabilityProblem.NO_NETWORK,
+                            outboxWorkStatus = OutboxWorkStatus(),
+                            syncing = false,
+                            canChangeTill = false,
+                            appearancePreference = AppearancePreference.Night,
+                            onOpenSupport = {},
+                            onChangeTill = {},
+                            onSignOut = {},
+                            onDestinationChanged = { destination.value = it },
+                        ) { current, _ ->
+                            if (current == Destination.Settings) {
+                                // The real VM fails closed without credentials;
+                                // no tokens, cache records or session are fabricated.
+                                SettingsScreen(canManageSystem = false)
+                            } else {
+                                Text("Settings presentation fixture")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assertVerified1280By800Host()
+        awaitRouteReadiness("test-owned Settings rail") { tagCount("workspace-rail-Settings") == 1 }
         compose.onNodeWithTag("workspace-rail-Settings", useUnmergedTree = true)
             .assertIsDisplayed()
             .performClick()

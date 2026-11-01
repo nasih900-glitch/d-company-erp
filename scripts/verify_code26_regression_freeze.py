@@ -1705,6 +1705,7 @@ REVIEWED_CODE30_4_BUILD54_SHA256 = {
 # deployment or replace any historical map/signing/physical-tablet evidence.
 REVIEWED_CODE30_4_BUILD55_SHA256 = {
     ".env.production.example": "b45aa3dc9492aa07c83ac9ba7960a93b67bd14b4eedee8753ced79d5722a58d5",
+    ".github/actions/scan-production-images/action.yml": "8677c8a4a1d5b7bce9b1a45ee8203b08ab3250be03e3b689c4d81ddb93d71d5e",
     ".github/workflows/ci.yml": "3fa9998937a6b44cee1422e4b733027126e0b45ac0918eba89e09ae43dcbe744",
     ".github/workflows/release.yml": "327276dc721d0a452d49de822d39529740fced5e51fef74bd02bf6ef1ff1c06d",
     "PROJECT_STATE.md": "db534e40a5ee8a37167276de58be318a238ac9a536307705d6dee5b344b6b187",
@@ -1740,7 +1741,7 @@ REVIEWED_CODE30_4_BUILD55_SHA256 = {
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/home/ExecutiveHomePresentationUiTest.kt": "8080e0553bacc75ca17cdf122fe50b85ec5e391a3c53c811896bb442ff8e029a",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewExportUiTest.kt": "a5578e8119153ed7cd13deeaa670aa6dcc2a0af7931b09c722985eb87d7a9730",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewUiTest.kt": "d91e93adc8757facf80cc230bc9a9b8a34510a33536939afc945e58a761b15fa",
-    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/settings/SettingsAccountScrollUiTest.kt": "fc7ead68c6312a2aa72aa4f5f9fba83a4a8d9b0888612d980742f04d3daa867c",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/settings/SettingsAccountScrollUiTest.kt": "17502762c7e35bee163d09b53c399ee10d55a4cb26b74bf0e9e4dfc2fdb5556c",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/shift/ShiftOverviewUiTest.kt": "f7537b87185f6aae42a7a9356ab01fbcc20608a812b5b3029babb49edd33ae19",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundFixtureProvider.java": "381bc667d379023f3df80f2b5bd10dcaa1e074d1755df271cbc7df4dec0c8fad",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundFixtureProvider.kt": "00df3d93ecbbfc96eaa61f8c31a012057ca580c72f6bacafc0c4b0297de5b69e",
@@ -1987,7 +1988,7 @@ REVIEWED_CODE30_4_BUILD55_SHA256 = {
     "backend/tests/unit/test_runtime_release_parity.py": "dce44ab147f28bd95da7fe2ba8380abef9214c3340a07190acbc2dbaaf866e28",
     "docker-compose.prod.yml": "07c6c619e450a85a60aac2c5269bd9c194b3487744908a1115eeb023e5f4629c",
     "docs/BUILD55_ACCEPTANCE.md": "7f67b167c32bbb60c6ffc71ef79756c09a97befd383cf11a340249d308e3525e",
-    "docs/BUILD55_GUARDED_DEPLOYMENT.md": "18ff1ceb1bbf280c1b8d4938ee50066e61a882cfff85cb56d451d7c639cc9d84",
+    "docs/BUILD55_GUARDED_DEPLOYMENT.md": "844f9f9f54164a59a413ed501d23f59a9caf886c5f87b38017bf0203f170c13f",
     "docs/SERVER_DRIVEN_ANDROID_UPDATES.md": "fdb3e3c577d2e687a9f72bc1a9b306a529937b21e5c6bea8e089a596a777fa17",
     "docs/V3_1_47_RELEASE_CANDIDATE.md": "d3a44e2bc26b0302bf5187d901e888a0ee2e8a96442034eb4f7f3e870289cfbd",
     "frontend/.env.example": "25ecc546c19ab44b9638397be1944adffeb12fe673c9228cc2e1496349d0115f",
@@ -2013,7 +2014,7 @@ REVIEWED_CODE30_4_BUILD55_SHA256 = {
     "frontend/src/modules/settings/tabs/DevicesUpdatesTab.tsx": "3219df29ac30de2ae5fdf18fe1b073d20b3e2ad4a25e271ba8190c0dbbd3f547",
     "frontend/src/modules/staff/StaffScreen.tsx": "693b8b8f27374fb015366294303fb42ebad45630bdb9e6e7c7144ea8d6c7c345",
     "frontend/src/modules/staff/staff-edit-policy.test.ts": "483517575b79a732daf445394806e37ed8d6ae03c7e59a3cb01f9f9c0cf9bfd5",
-    "infra/docker/backend.Dockerfile": "0f571150baf0b30184e2359f65b1e8d806fe420b501ca789d625247ffe1ef609",
+    "infra/docker/backend.Dockerfile": "63b3500382030243110fe629ffa198039c72d0199cda7781c22af3d98c3c872a",
     "infra/docker/caddy-build/verify-system-ca/main.go": "1c95c147abc496e15ac6b64820e14272f2e4a6d4eedb6f9b6071bec67a59025a",
     "infra/docker/caddy-build/verify-system-ca/main_test.go": "6bceeb70512ce5c5604463d438c0ab447e64861a04e59937b3c2f459e5d5f9a1",
     "infra/docker/caddy.Dockerfile": "0b754c893d68e9a309623575ac4fd2a76ff46ba78db5d004f751c2136dd7ea81",
@@ -2022,11 +2023,13 @@ REVIEWED_CODE30_4_BUILD55_SHA256 = {
     "infra/scripts/capture-build55-runtime.py": "0dd1b4474229b5a57ab640a8399f9231bc0ff90f03cb6780823e61016e07a00a",
     "infra/scripts/install-on-vm.sh": "62c6f11f786cbbfcc8188f28cee0107b385ee6ad4361721fece9c51b6225f336",
     "infra/scripts/install-operations-monitor.sh": "278c106ee30f34cfabf7209d20827b893a309fb251b0d6dded8c4afc6d50281c",
+    "infra/scripts/run-hardened-image-scanners.sh": "b2333526501fe5987ec839f193ce8c6bc56c6ef6935fe40343e19c8480096e3c",
     "infra/scripts/select-ci-postgres16-client.sh": "df7ac8dfe2fbb70e2936587b610b75bcbc1debc16b81a9e6ee6f4fa6b14d02cd",
     "infra/scripts/verify-build55-authenticated-acceptance.py": "f4d59c7f967b6cc7cc4176bf3f6729fbd70f321007185697dd9fcea84401b417",
-    "infra/scripts/verify-build55-pending-compatibility.py": "fb9307dfeff3371b6a05c48172ef158e2ec8a1180c4c1475fb943fea8d755692",
+    "infra/scripts/verify-build55-pending-compatibility.py": "55b66b1083a6f349e85ff25105798922cf653636a99b01b0d676febfd9b721db",
     "infra/scripts/verify-build55-transition-state.sql": "7658c7f07cd64994530b892a2902b83e243236a7eb0a89ff63ac7a4c5a6fc844",
     "infra/scripts/verify-production-runtime-images.sh": "108543d98921b27ade329a3eb33aaa6bc39e94494a55b681ea1385d5abf32a2c",
+    "infra/scripts/verify-zlib-vex.py": "a1f06247ad91cc0744c5a4a4a470e49b2fb2460b437f425c3afb835c6b20f41f",
     "ops/stage_android_release.py": "46c3988f28bf66cd8291202ea4f48de2ac9753a1b60be9370bf93e0a933e1938",
     "scripts/android_instrumentation_provenance.py": "18e39e9635ad073c543776fa672ce485610cbfa40676e59daf1c8c63b8f0892d",
     "scripts/configure_ci_android_avd.py": "7522cff72722b6c50cfb237fa8a5aeb4927be2bd999b4af3ec217061126beb85",
@@ -2040,11 +2043,14 @@ REVIEWED_CODE30_4_BUILD55_SHA256 = {
     "tests/test_build54_pending_compatibility.py": "7e80fa9dc3d27f9975af59856b33bfce944f88720fb2e9661384cdf6ba45cab2",
     "tests/test_build55_authenticated_acceptance.py": "8d8e8239ac42d019e9b2c9b919dfae20ebb77e14c89a4952fa4134837f824923",
     "tests/test_build55_pending_compatibility.py": "75b0ede3a6444fcbab73b38a1f21691dd507b7b0c781e0363b89322473dec212",
-    "tests/test_caddy_dependency_security.py": "dba03e2ebcdccb59309ac2384bc583b0ad48630241ba651be4935d16121a6e41",
+    "tests/test_caddy_dependency_security.py": "8d687085a0b4d6c07b9ecdc3dd503b4ce2c4a298bcd5bbffcae7edcc6dfda7d4",
+    "tests/test_ci_docker_connection.py": "413146841877d130bafebde5bce31102a9cf92bf269e9e24f1a576c7a9705929",
     "tests/test_ci_postgres16_client.py": "88f11dd7e3252381f220b3aa93512cbbe0b20448f13823e21a304b581fe86378",
     "tests/test_code26_physical_audit_lane.py": "9706544d6bde4b4f07e717dd5be6bdd6bd3a5bca5207e19c20111b218e774fbe",
+    "tests/test_docker_context_safety.py": "0c5c7fb5e5e7e4ff9ad69a1f6c7eb8ce2f9a41ba35730a436a2717b9a596a05c",
+    "tests/test_hardened_scanner_runtime.py": "8b5621586135358f4d9e9f8ddd975c0643bad4d849f2a0e18ef8ab0926fb288f",
     "tests/test_verified_pip_bootstrap.py": "1918963f31c20b59b0499a5ac29c27f96e8f88037c9bd04444894ab8e676c9ec",
-    "tests/test_zlib_security_remediation.py": "69450f4b2d5b54638032fef5aa7cdf4129dbf279984076ebf3ee4f18fb968a7a"
+    "tests/test_zlib_security_remediation.py": "3d7d7610d2bc744752e6688911c3bca4f012c4d373c676afdc497298d4dd811d"
 }
 
 REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(

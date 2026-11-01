@@ -407,7 +407,7 @@ def test_composite_gates_every_scanner_on_verified_connection_and_hardened_scan(
             f"vex: ${{{{ runner.temp }}}}/container-security/"
             f"{input_name}-zlib.openvex.json"
         )
-        if input_name == "caddy":
+        if input_name in {"backend", "caddy"}:
             assert vex_input not in scan
             assert "vex:" not in scan
         else:
@@ -424,7 +424,7 @@ def test_composite_gates_every_scanner_on_verified_connection_and_hardened_scan(
     )[1].split("    - name: Retain container security evidence", 1)[0]
     assert zlib_validation.count(hardened_guard) == 1
     assert "services=(backend frontend caddy postgres redis)" in zlib_validation
-    assert action.count("vex: ${{ runner.temp }}/container-security/") == 4
+    assert action.count("vex: ${{ runner.temp }}/container-security/") == 3
     assert "caddy-zlib.openvex.json" not in action
     assert '"$evidence_dir/$service-zlib.openvex.json"' in zlib_validation
     assert '"$service=$evidence_dir/$service-grype.json"' in zlib_validation

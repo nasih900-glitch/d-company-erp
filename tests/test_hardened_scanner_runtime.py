@@ -126,7 +126,7 @@ elif args[0] == "start":
                 "manifestDigest": "sha256:" + "e" * 64,
             }},
         }
-        if service == "caddy":
+        if service in {"backend", "caddy"}:
             report["artifacts"].insert(0, {
                 "id": "zlib-r1",
                 "name": "zlib",
@@ -151,6 +151,9 @@ elif args[0] == "start":
                     "files": [{"path": "/usr/lib/libz.so.1.3.2"}],
                 },
             })
+        if service == "backend":
+            report["distro"]["versionID"] = "3.24.3"
+            report["artifacts"][0]["purl"] = "pkg:apk/alpine/zlib@1.3.2-r1?arch=x86_64&distro=alpine-3.24.3"
         print(json.dumps(report))
     else:
         valid = os.environ.get("FAKE_GRYPE_VALID", "true") == "true"
@@ -175,7 +178,7 @@ elif args[0] == "start":
                 "vex-status": "fixed",
             }],
         }]
-        if service == "caddy" or os.environ.get("FAKE_GRYPE_IGNORED_COUNT") == "0":
+        if service in {"backend", "caddy"} or os.environ.get("FAKE_GRYPE_IGNORED_COUNT") == "0":
             ignored = []
         report = {
             "descriptor": {
@@ -190,7 +193,7 @@ elif args[0] == "start":
             }},
             "matches": [],
         }
-        if service != "caddy":
+        if service not in {"backend", "caddy"}:
             report["ignoredMatches"] = ignored
         print(json.dumps(report))
 elif args[0] == "inspect":
@@ -493,7 +496,10 @@ def test_batch_scanner_executes_hardened_path_for_every_archive(tmp_path: Path) 
     )
     assert "--vex" not in caddy_grype
     assert "/scan/zlib.openvex.json" not in caddy_grype
-    r0_grype_creates = [call for call in grype_creates if call is not caddy_grype]
+    backend_grype = next(call for call in grype_creates if any("/backend image.tar" in argument for argument in call))
+    assert "--vex" not in backend_grype
+    assert "/scan/zlib.openvex.json" not in backend_grype
+    r0_grype_creates = [call for call in grype_creates if call is not caddy_grype and call is not backend_grype]
     assert all("--vex" in call for call in r0_grype_creates)
     assert all(
         "/scan/zlib.openvex.json" in call for call in r0_grype_creates
@@ -506,18 +512,21 @@ def test_batch_scanner_executes_hardened_path_for_every_archive(tmp_path: Path) 
         assert f"{service}_grype_db_schema=v6.1.9" in metadata_text
         assert f"{service}_grype_db_valid=true" in metadata_text
         assert f"{service}_source_image_id={IMAGE_ID}" in metadata_text
-    for service in ("backend", "frontend", "postgres", "redis"):
+    for service in ("frontend", "postgres", "redis"):
         assert f"{service}_zlib_vex_fixed_ignored_matches=1" in metadata_text
     assert "caddy_fixed_zlib_ignored_matches=0" in metadata_text
     assert "caddy_fixed_zlib_version=1.3.2-r1" in metadata_text
     assert "caddy_fixed_sbom_sha256=" in metadata_text
-    assert metadata_text.count("zlib_vex_sha256=") == 4
-    for service in ("backend", "frontend", "postgres", "redis"):
+    assert metadata_text.count("zlib_vex_sha256=") == 3
+    for service in ("frontend", "postgres", "redis"):
         vex = metadata.parent / f"{service}-zlib.openvex.json"
         assert vex.is_file()
         assert "__D_COMPANY_" not in vex.read_text(encoding="utf-8")
         assert f'"@id": "erp-{service}:test"' in vex.read_text(encoding="utf-8")
     assert not (metadata.parent / "caddy-zlib.openvex.json").exists()
+    assert not (metadata.parent / "backend-zlib.openvex.json").exists()
+    assert "backend_fixed_zlib_ignored_matches=0" in metadata_text
+    assert "backend_fixed_zlib_version=1.3.2-r1" in metadata_text
     assert "scanner_cache_sampled_max_bytes=" in metadata_text
     assert "scanner_disk_preflight_is_quota=false" in metadata_text
     assert (
@@ -620,7 +629,7 @@ def test_linux_ci_invokes_same_helper_for_all_five_candidate_archives() -> None:
     assert "caddy-zlib.openvex.json" not in action
     assert action.count(".syft.json") >= 10
     assert action.count("-grype.json") >= 11
-    assert action.count("vex: ${{ runner.temp }}/container-security/") == 4
+    assert action.count("vex: ${{ runner.temp }}/container-security/") == 3
     assert "/var/run/docker.sock" not in action
 
 

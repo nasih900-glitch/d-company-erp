@@ -47,6 +47,11 @@ retained. Compose cannot override `PATH`, `PYTHON_VERSION`, `PYTHON_SHA256` or
 rollback verification still require the original54 image and environment;
 historical45–54 compatibility helpers are unchanged. All five candidate images
 must pass fresh vulnerability scans before maintenance.
+The new backend base carries Alpine zlib1.3.2-r1. Its installed package and
+fixed APK port are verified directly from the image-bound SBOM, with zero
+suppressed findings. The independently compiled zlib patch, checksum and runtime
+probe remain intact. Backend and Caddy use fixed-r1 evidence; the other three
+images retain their exact, image-bound r0 VEX rules.
 
 ## Legitimate authenticated acceptance
 

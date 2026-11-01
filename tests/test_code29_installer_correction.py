@@ -1149,7 +1149,7 @@ def test_installer_verifier_and_live_workflows_are_exact() -> None:
         current_action,
         flags=re.MULTILINE,
     )
-    assert sorted(vex_inputs) == ["backend", "frontend", "postgres", "redis"]
+    assert sorted(vex_inputs) == ["frontend", "postgres", "redis"]
     assert "caddy-zlib.openvex.json" not in current_action
     assert '--caddy-fixed-sbom "$evidence_dir/caddy.syft.json"' in current_action
 

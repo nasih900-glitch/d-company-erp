@@ -296,7 +296,7 @@ runs:
           caddy.syft.json caddy-hardened-grype.json \
           postgres.syft.json postgres-hardened-grype.json \
           redis.syft.json redis-hardened-grype.json \
-          backend-zlib.openvex.json frontend-zlib.openvex.json \
+          frontend-zlib.openvex.json \
           postgres-zlib.openvex.json \
           redis-zlib.openvex.json; do
           if sudo test -f "$scanner_evidence/$evidence"; then
@@ -317,7 +317,7 @@ runs:
           caddy.syft.json caddy-hardened-grype.json \
           postgres.syft.json postgres-hardened-grype.json \
           redis.syft.json redis-hardened-grype.json \
-          backend-zlib.openvex.json frontend-zlib.openvex.json \
+          frontend-zlib.openvex.json \
           postgres-zlib.openvex.json \
           redis-zlib.openvex.json; do
           sudo rm -f "$scanner_evidence/$evidence"
@@ -325,8 +325,8 @@ runs:
         sudo rmdir "$scanner_work"
         sudo rmdir "$scanner_evidence"
 
-    # Keep SPDX SBOMs as retained audit evidence. The four r0 images use their
-    # per-image VEX; Caddy's fixed r1 APK is proved directly from its SBOM.
+    # Keep SPDX SBOMs as retained audit evidence. The three r0 images use their
+    # per-image VEX; backend and Caddy fixed r1 APKs require direct SBOM proof.
     - name: Scan backend image
       if: ${{ !cancelled() && steps.hardened-scan.outcome == 'success' }}
       uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
@@ -336,7 +336,6 @@ runs:
         fail-build: true
         severity-cutoff: high
         only-fixed: false
-        vex: ${{ runner.temp }}/container-security/backend-zlib.openvex.json
         output-format: json
         output-file: ${{ runner.temp }}/container-security/backend-grype.json
 
@@ -430,6 +429,11 @@ runs:
               --caddy-fixed-sbom "$evidence_dir/caddy.syft.json" \
               "$image" "${config_ids[0]}" \
               "caddy=$evidence_dir/caddy-grype.json" >> "$validation"
+          elif [ "$service" = backend ]; then
+            python3 "$verifier" \
+              --backend-fixed-sbom "$evidence_dir/backend.syft.json" \
+              "$image" "${config_ids[0]}" \
+              "backend=$evidence_dir/backend-grype.json" >> "$validation"
           else
             python3 "$verifier" \
               "$evidence_dir/$service-zlib.openvex.json" \

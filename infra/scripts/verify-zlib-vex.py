@@ -192,7 +192,7 @@ def validate_scanner_source(
         )
 
 
-def validate_caddy_sbom(path: Path, expected_image_id: str) -> str:
+def validate_fixed_sbom(service: str, path: Path, expected_image_id: str) -> str:
     report = load_json(path)
     descriptor = report.get("descriptor")
     configuration = descriptor.get("configuration") if isinstance(descriptor, dict) else None
@@ -205,18 +205,18 @@ def validate_caddy_sbom(path: Path, expected_image_id: str) -> str:
         or descriptor.get("name") != "syft"
         or descriptor.get("version") != SYFT_VERSION
     ):
-        raise SystemExit("Caddy fixed-package SBOM has an unexpected Syft identity")
+        raise SystemExit(f"{service.capitalize()} fixed-package SBOM has an unexpected Syft identity")
     if not isinstance(used_cataloguers, list) or "apk-db-cataloger" not in used_cataloguers:
-        raise SystemExit("Caddy fixed-package SBOM did not use the APK database cataloguer")
+        raise SystemExit(f"{service.capitalize()} fixed-package SBOM did not use the APK database cataloguer")
     if report.get("schema") != SYFT_SCHEMA:
-        raise SystemExit("Caddy fixed-package SBOM has an unexpected Syft schema")
+        raise SystemExit(f"{service.capitalize()} fixed-package SBOM has an unexpected Syft schema")
     if (
         not isinstance(source, dict)
         or source.get("type") != "image"
         or not isinstance(metadata, dict)
         or metadata.get("imageID") != expected_image_id
     ):
-        raise SystemExit("Caddy fixed-package SBOM image ID mismatch")
+        raise SystemExit(f"{service.capitalize()} fixed-package SBOM image ID mismatch")
 
     artifacts = report.get("artifacts")
     relationships = report.get("artifactRelationships")
@@ -235,7 +235,7 @@ def validate_caddy_sbom(path: Path, expected_image_id: str) -> str:
         or not isinstance(distro.get("versionID"), str)
         or not distro["versionID"].strip()
     ):
-        raise SystemExit("Caddy fixed-package SBOM has an empty or incomplete catalogue")
+        raise SystemExit(f"{service.capitalize()} fixed-package SBOM has an empty or incomplete catalogue")
 
     candidates = []
     for item in artifacts:
@@ -248,7 +248,7 @@ def validate_caddy_sbom(path: Path, expected_image_id: str) -> str:
         ):
             candidates.append(item)
     if len(candidates) != 1:
-        raise SystemExit("Caddy fixed-package SBOM must contain exactly one zlib package")
+        raise SystemExit(f"{service.capitalize()} fixed-package SBOM must contain exactly one zlib package")
 
     package = candidates[0]
     package_metadata = package.get("metadata")
@@ -269,7 +269,7 @@ def validate_caddy_sbom(path: Path, expected_image_id: str) -> str:
         or not isinstance(purl, str)
         or re.fullmatch(re.escape(CADDY_PACKAGE_PURL) + r"\?.+", purl) is None
     ):
-        raise SystemExit("Caddy fixed-package SBOM zlib identity is inconsistent")
+        raise SystemExit(f"{service.capitalize()} fixed-package SBOM zlib identity is inconsistent")
 
     architecture = package_metadata.get("architecture")
     apk_port_commit = package_metadata.get("gitCommitOfApkPort")
@@ -282,10 +282,10 @@ def validate_caddy_sbom(path: Path, expected_image_id: str) -> str:
         or query.get("arch") != [architecture]
         or query.get("distro") != [f"alpine-{distro['versionID']}"]
     ):
-        raise SystemExit("Caddy fixed-package SBOM zlib PURL metadata is inconsistent")
+        raise SystemExit(f"{service.capitalize()} fixed-package SBOM zlib PURL metadata is inconsistent")
 
     if not isinstance(locations, list) or len(locations) != 1:
-        raise SystemExit("Caddy fixed-package SBOM zlib location is ambiguous")
+        raise SystemExit(f"{service.capitalize()} fixed-package SBOM zlib location is ambiguous")
     location = locations[0]
     if (
         not isinstance(location, dict)
@@ -294,7 +294,14 @@ def validate_caddy_sbom(path: Path, expected_image_id: str) -> str:
         or IMAGE_ID.fullmatch(str(location.get("layerID", ""))) is None
         or location.get("annotations") != {"evidence": "primary"}
     ):
-        raise SystemExit("Caddy fixed-package SBOM zlib location is inconsistent")
+        raise SystemExit(f"{service.capitalize()} fixed-package SBOM zlib location is inconsistent")
+
+    if service == "backend" and (
+        distro["versionID"] != "3.24.3"
+        or architecture not in {"x86_64", "aarch64"}
+        or apk_port_commit != "0afa2da0e8c8051c6f8f64a7a388e5a259904245"
+    ):
+        raise SystemExit("Backend fixed-package SBOM does not match the reviewed Alpine port")
 
     provides = package_metadata.get("provides")
     package_files = package_metadata.get("files")
@@ -307,16 +314,17 @@ def validate_caddy_sbom(path: Path, expected_image_id: str) -> str:
             for item in package_files
         )
     ):
-        raise SystemExit("Caddy fixed-package SBOM lacks the installed zlib runtime metadata")
+        raise SystemExit(f"{service.capitalize()} fixed-package SBOM lacks the installed zlib runtime metadata")
 
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    print(f"caddy_fixed_sbom_sha256={digest}")
-    print(f"caddy_fixed_sbom_image_id={expected_image_id}")
-    print(f"caddy_fixed_zlib_version={CADDY_PACKAGE_VERSION}")
+    print(f"{service}_fixed_sbom_sha256={digest}")
+    print(f"{service}_fixed_sbom_image_id={expected_image_id}")
+    print(f"{service}_fixed_zlib_version={CADDY_PACKAGE_VERSION}")
     return digest
 
 
-def validate_caddy_report(
+def validate_fixed_report(
+    service: str,
     path: Path,
     expected_product: str,
     expected_image_id: str,
@@ -331,20 +339,20 @@ def validate_caddy_report(
         or descriptor.get("name") != "grype"
         or descriptor.get("version") != GRYPE_VERSION
     ):
-        raise SystemExit("Caddy Grype report has an unexpected scanner identity")
+        raise SystemExit(f"{service.capitalize()} Grype report has an unexpected scanner identity")
     if not isinstance(configuration, dict) or configuration.get("fail-on-severity") != "high":
-        raise SystemExit("Caddy Grype report does not preserve the high severity fail gate")
+        raise SystemExit(f"{service.capitalize()} Grype report does not preserve the high severity fail gate")
     built = status.get("built") if isinstance(status, dict) else None
     schema = status.get("schemaVersion") if isinstance(status, dict) else None
     valid = status.get("valid") if isinstance(status, dict) else None
     if not isinstance(built, str) or not built.strip():
-        raise SystemExit("Caddy Grype report has no vulnerability DB build identity")
+        raise SystemExit(f"{service.capitalize()} Grype report has no vulnerability DB build identity")
     if not isinstance(schema, str) or not schema.strip():
-        raise SystemExit("Caddy Grype report has no vulnerability DB schema identity")
+        raise SystemExit(f"{service.capitalize()} Grype report has no vulnerability DB schema identity")
     if valid is not True:
-        raise SystemExit("Caddy Grype vulnerability DB is not valid")
+        raise SystemExit(f"{service.capitalize()} Grype vulnerability DB is not valid")
     validate_scanner_source(
-        "caddy",
+        service,
         report.get("source"),
         expected_product,
         expected_image_id,
@@ -354,24 +362,24 @@ def validate_caddy_report(
     matches = report.get("matches")
     ignored = report.get("ignoredMatches", [])
     if not isinstance(matches, list) or not isinstance(ignored, list):
-        raise SystemExit("Caddy Grype report match arrays are invalid")
+        raise SystemExit(f"{service.capitalize()} Grype report match arrays are invalid")
     if ignored:
-        raise SystemExit("Caddy fixed zlib report must not contain ignored findings")
+        raise SystemExit(f"{service.capitalize()} fixed zlib report must not contain ignored findings")
     for match in matches:
         if not isinstance(match, dict):
-            raise SystemExit("Caddy Grype report contains an invalid match")
+            raise SystemExit(f"{service.capitalize()} Grype report contains an invalid match")
         vulnerability = match.get("vulnerability")
         if not isinstance(vulnerability, dict):
-            raise SystemExit("Caddy Grype report contains a match without a vulnerability")
+            raise SystemExit(f"{service.capitalize()} Grype report contains a match without a vulnerability")
         if vulnerability.get("id") == CVE:
-            raise SystemExit(f"Residual {CVE} match remains for caddy")
+            raise SystemExit(f"Residual {CVE} match remains for {service}")
         severity = vulnerability.get("severity")
         if isinstance(severity, str) and severity.lower() in {"high", "critical"}:
-            raise SystemExit("Caddy Grype report contains a high or critical finding")
-    print("caddy_fixed_zlib_ignored_matches=0")
-    print(f"caddy_grype_version={GRYPE_VERSION}")
-    print(f"caddy_grype_db_built={built}")
-    print(f"caddy_grype_db_schema={schema}")
+            raise SystemExit(f"{service.capitalize()} Grype report contains a high or critical finding")
+    print(f"{service}_fixed_zlib_ignored_matches=0")
+    print(f"{service}_grype_version={GRYPE_VERSION}")
+    print(f"{service}_grype_db_built={built}")
+    print(f"{service}_grype_db_schema={schema}")
 
 
 def validate_report(
@@ -407,32 +415,33 @@ def validate_report(
     print(f"{service}_zlib_vex_fixed_ignored_matches={len(ignored)}")
 
 
-def validate_caddy_mode(arguments: list[str]) -> int:
+def validate_fixed_mode(arguments: list[str], fixed_service: str) -> int:
     if len(arguments) != 6:
         raise SystemExit(
-            f"Usage: {arguments[0]} --caddy-fixed-sbom SYFT_REPORT "
-            "IMAGE_PRODUCT IMAGE_ID caddy=GRYPE_REPORT"
+            f"Usage: {arguments[0]} --{fixed_service}-fixed-sbom SYFT_REPORT "
+            f"IMAGE_PRODUCT IMAGE_ID {fixed_service}=GRYPE_REPORT"
         )
     sbom_path = Path(arguments[2]).resolve(strict=True)
     expected_product = arguments[3]
     expected_image_id = arguments[4]
     validate_expected_identity(expected_product, expected_image_id)
     service, separator, raw_report_path = arguments[5].partition("=")
-    if service != "caddy" or not separator or not raw_report_path:
+    if service != fixed_service or not separator or not raw_report_path:
         raise SystemExit(
-            "--caddy-fixed-sbom requires exactly one caddy Grype report binding"
+            f"--{fixed_service}-fixed-sbom requires exactly one {fixed_service} Grype report binding"
         )
     report_path = Path(raw_report_path).resolve(strict=True)
-    validate_caddy_sbom(sbom_path, expected_image_id)
-    validate_caddy_report(report_path, expected_product, expected_image_id)
+    validate_fixed_sbom(fixed_service, sbom_path, expected_image_id)
+    validate_fixed_report(fixed_service, report_path, expected_product, expected_image_id)
     return 0
 
 
 def main(arguments: list[str]) -> int:
-    if len(arguments) > 1 and arguments[1] == "--caddy-fixed-sbom":
-        return validate_caddy_mode(arguments)
-    if "--caddy-fixed-sbom" in arguments[2:]:
-        raise SystemExit("--caddy-fixed-sbom must use the separate Caddy verifier mode")
+    fixed_modes = {"--caddy-fixed-sbom": "caddy", "--backend-fixed-sbom": "backend"}
+    if len(arguments) > 1 and arguments[1] in fixed_modes:
+        return validate_fixed_mode(arguments, fixed_modes[arguments[1]])
+    if any(mode in arguments[2:] for mode in fixed_modes):
+        raise SystemExit("Fixed-package flags must use a separate fixed-SBOM verifier mode")
     if len(arguments) < 4:
         raise SystemExit(
             f"Usage: {arguments[0]} VEX_DOCUMENT IMAGE_PRODUCT IMAGE_ID "

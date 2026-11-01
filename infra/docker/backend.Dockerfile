@@ -72,6 +72,7 @@ RUN apk add --no-cache --upgrade \
     && python -c 'import ssl; assert ssl.OPENSSL_VERSION_INFO == (3, 5, 0, 9, 0), (ssl.OPENSSL_VERSION_INFO, ssl.OPENSSL_VERSION)' \
     && test "$(python --version)" = 'Python 3.14.10' \
     && sh /tmp/verify-patched-zlib.sh \
+    && apk info -v zlib | grep -Fx 'zlib-1.3.2-r1' \
     && rm -f /tmp/zlib-runtime-probe /tmp/verify-patched-zlib.sh \
     && addgroup -S -g 1001 erp \
     && adduser -S -D -u 1001 -G erp -h /home/erp erp
