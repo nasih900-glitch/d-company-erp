@@ -6,6 +6,16 @@ import android.os.Process
 import android.view.ViewConfiguration
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.requiredHeight
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -56,6 +66,7 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
 import cloud.dcompany.erp.core.auth.GamingAccess
@@ -511,6 +522,117 @@ class GamingInlineShiftWorkspaceUiTest {
         compose.runOnIdle { assertEquals(0, starts) }
     }
 
+    @Test
+    fun nonScrollingPinnedDetailUsesOuterBoardToRevealAndActivateClippedTarget() {
+        var activated = false
+        compose.setContent {
+            DCompanyTheme {
+                BoxWithConstraints(Modifier.fillMaxSize()) {
+                    val top = (maxHeight - 160.dp).coerceAtLeast(0.dp)
+                    Column(Modifier.fillMaxSize()) {
+                        Spacer(Modifier.height(top))
+                        LazyColumn(
+                            Modifier.fillMaxWidth().requiredHeight(400.dp)
+                                .testTag("gaming-station-board"),
+                        ) {
+                            item {
+                                Box(Modifier.fillMaxWidth().height(900.dp)
+                                    .testTag("gaming-inline-expansion-ps5-2")) {
+                                    Box(Modifier.fillMaxSize().testTag("gaming-control-pane")) {
+                                        Box(Modifier.fillMaxSize().testTag("gaming-detail-viewport")) {
+                                            Column(Modifier.fillMaxSize()
+                                                .testTag("gaming-detail-scroll-owner")) {
+                                                Spacer(Modifier.height(480.dp))
+                                                Button(onClick = { activated = true }, modifier = Modifier.height(48.dp)) {
+                                                    Text("Clipped customer result")
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        val detail = compose.onNodeWithTag("gaming-detail-scroll-owner")
+        assertEquals(null, detail.fetchSemanticsNode()
+            .config.getOrNull(SemanticsProperties.VerticalScrollAxisRange))
+        val target = compose.onNodeWithText("Clipped customer result")
+        target.performScrollTo()
+        compose.waitForIdle()
+        val rootPx = compose.onRoot().fetchSemanticsNode().boundsInRoot
+        val rootDp = compose.onRoot().getUnclippedBoundsInRoot()
+        val density = rootPx.width / (rootDp.right - rootDp.left).value
+        val initiallyClipped = target.getUnclippedBoundsInRoot()
+        assertTrue("Nearest-owner scrolling must leave this target clipped by the root",
+            initiallyClipped.bottom.value * density > rootPx.bottom + 1f ||
+                initiallyClipped.top.value * density < rootPx.top - 1f)
+        val boardBefore = compose.onNodeWithTag("gaming-station-board").fetchSemanticsNode()
+            .config[SemanticsProperties.VerticalScrollAxisRange].value()
+        revealShiftDetailTarget(target, "Non-scrolling pinned detail target")
+        target.assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+        compose.runOnIdle { assertTrue(activated) }
+        assertTrue(compose.onNodeWithTag("gaming-station-board").fetchSemanticsNode()
+            .config[SemanticsProperties.VerticalScrollAxisRange].value() > boardBefore)
+    }
+
+    @Test
+    fun topAndLeftClippedBoardReceivesVisibleSwipeAndActuallyScrolls() {
+        compose.setContent {
+            DCompanyTheme {
+                Box(Modifier.fillMaxSize().clipToBounds()) {
+                    LazyColumn(Modifier.offset(x = (-160).dp, y = (-200).dp)
+                        .width(320.dp).height(400.dp).testTag("clipped-board")) {
+                        items(30) { index -> Text("Row $index", Modifier.height(48.dp)) }
+                    }
+                }
+            }
+        }
+        val board = compose.onNodeWithTag("clipped-board")
+        val root = compose.onRoot().fetchSemanticsNode().boundsInRoot
+        val unclipped = board.getUnclippedBoundsInRoot()
+        assertTrue("The regression must clip both the top and left", unclipped.top < 0.dp && unclipped.left < 0.dp)
+        val range = board.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+        val before = range.value()
+        swipeVisibleBoard(board, root, moveContentUp = true, diagnostic = "Top/left-clipped board")
+        compose.waitUntil(5_000) {
+            board.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > before
+        }
+    }
+
+    private fun swipeVisibleBoard(
+        board: SemanticsNodeInteraction,
+        rootPx: Rect,
+        moveContentUp: Boolean,
+        diagnostic: String,
+    ) {
+        val boardBounds = board.fetchSemanticsNode().boundsInRoot
+        val gestureBounds = Rect(
+            maxOf(rootPx.left, boardBounds.left),
+            maxOf(rootPx.top, boardBounds.top),
+            minOf(rootPx.right, boardBounds.right),
+            minOf(rootPx.bottom, boardBounds.bottom),
+        )
+        assertTrue("$diagnostic requires a visible board gesture viewport: $gestureBounds",
+            gestureBounds.width > 0f && gestureBounds.height > 0f)
+        // Compose 1.7.5 injects local coordinates from the clipped semantics
+        // origin. An unclipped origin misroutes touches on top/left clipping.
+        val gestureX = gestureBounds.left + gestureBounds.width * 0.06f - boardBounds.left
+        val gestureTop = gestureBounds.top - boardBounds.top
+        val gestureHeight = gestureBounds.height
+        board.performTouchInput {
+            swipe(
+                start = Offset(gestureX, gestureTop + gestureHeight *
+                    if (moveContentUp) 0.86f else 0.14f),
+                end = Offset(gestureX, gestureTop + gestureHeight *
+                    if (moveContentUp) 0.14f else 0.86f),
+                durationMillis = 420,
+            )
+        }
+    }
+
     private fun revealShiftDetailTarget(
         target: SemanticsNodeInteraction,
         diagnostic: String,
@@ -554,16 +676,17 @@ class GamingInlineShiftWorkspaceUiTest {
                 targetPx.right <= visible.right + 1f && targetPx.bottom <= visible.bottom + 1f
             if (inside) return
 
+            // Pinned-action layouts deliberately leave this container non-scrollable.
+            // Its outer board still has to reveal the fully clipped target.
             val detailRange = detail.fetchSemanticsNode()
-                .config[SemanticsProperties.VerticalScrollAxisRange]
-            val detailBefore = detailRange.value()
+                .config.getOrNull(SemanticsProperties.VerticalScrollAxisRange)
+            val detailBefore = detailRange?.value() ?: 0f
             val belowDetail = targetPx.bottom > detailBounds.bottom + 1f
             val aboveDetail = targetPx.top < detailBounds.top - 1f
-            val detailCanMove = if (belowDetail) {
-                detailRange.maxValue() > detailBefore
-            } else if (aboveDetail) {
-                detailBefore > 0f
-            } else false
+            val detailCanMove = detailRange?.let { range ->
+                if (belowDetail) range.maxValue() > detailBefore
+                else aboveDetail && detailBefore > 0f
+            } ?: false
             if (detailCanMove) {
                 detail.performTouchInput {
                     swipe(
@@ -574,8 +697,8 @@ class GamingInlineShiftWorkspaceUiTest {
                 }
                 compose.waitUntil(5_000) {
                     val after = detail.fetchSemanticsNode()
-                        .config[SemanticsProperties.VerticalScrollAxisRange].value()
-                    if (belowDetail) after > detailBefore else after < detailBefore
+                        .config.getOrNull(SemanticsProperties.VerticalScrollAxisRange)?.value()
+                    after != null && if (belowDetail) after > detailBefore else after < detailBefore
                 }
                 return@repeat
             }
@@ -596,20 +719,15 @@ class GamingInlineShiftWorkspaceUiTest {
                 error("$diagnostic cannot move a required scroll owner: target=$targetPx visible=$visible " +
                     "detail=$detailRange board=$boardRange")
             }
-            board.performTouchInput {
-                swipe(
-                    start = Offset(width * 0.06f, height * if (moveContentUp) 0.86f else 0.14f),
-                    end = Offset(width * 0.06f, height * if (moveContentUp) 0.14f else 0.86f),
-                    durationMillis = 420,
-                )
-            }
+            swipeVisibleBoard(board, rootPx, moveContentUp, diagnostic)
             compose.waitUntil(5_000) {
                 val after = board.fetchSemanticsNode()
                     .config[SemanticsProperties.VerticalScrollAxisRange].value()
                 if (moveContentUp) after > boardBefore else after < boardBefore
             }
         }
-        error("$diagnostic remained clipped after bounded detail and board movement")
+        error("$diagnostic remained clipped after bounded detail and board movement: " +
+            "target=${target.getUnclippedBoundsInRoot()} root=${compose.onRoot().getUnclippedBoundsInRoot()}")
     }
 
     private fun revealShiftRingWithOuterBoard(

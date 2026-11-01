@@ -1399,23 +1399,55 @@ async def test_slow_frame_upload_releases_database_lock_and_revoke_prevents_stor
             content=b"bounded-jpeg-body",
         )
     )
-    await asyncio.wait_for(body_read_started.wait(), timeout=2)
     try:
-        revoked = await asyncio.wait_for(
-            client.post(
-                f"/api/v1/remote-assistance/grants/{grant.id}/revoke",
-                headers=admin_headers,
-                json={"revoke_id": str(uuid4())},
-            ),
-            timeout=2,
-        )
-        assert revoked.status_code == 200, revoked.text
+        try:
+            await asyncio.wait_for(body_read_started.wait(), timeout=2)
+        except TimeoutError as exc:
+            # A pre-body rejection and a blocked request are different failures.
+            # Retain that distinction without exposing response bodies or credentials.
+            if upload_task.cancelled():
+                diagnostic = "request was cancelled"
+            elif upload_task.done():
+                failure = upload_task.exception()
+                diagnostic = (
+                    f"request raised {type(failure).__name__}"
+                    if failure is not None
+                    else f"request completed with HTTP {upload_task.result().status_code}"
+                )
+            else:
+                diagnostic = "request is still pending at " + ", ".join(
+                    f"{frame.f_code.co_name}:{frame.f_lineno}"
+                    for frame in upload_task.get_stack()
+                )
+            raise AssertionError(
+                "Upload did not reach body reading within the existing 2-second budget; "
+                + diagnostic
+            ) from exc
+        try:
+            revoked = await asyncio.wait_for(
+                client.post(
+                    f"/api/v1/remote-assistance/grants/{grant.id}/revoke",
+                    headers=admin_headers,
+                    json={"revoke_id": str(uuid4())},
+                ),
+                timeout=2,
+            )
+            assert revoked.status_code == 200, revoked.text
+        finally:
+            release_body.set()
+        upload = await asyncio.wait_for(upload_task, timeout=2)
+        assert upload.status_code == 410, upload.text
+        assert upload.json()["error"]["code"] == "remote_action_gone"
+        assert store_calls == []
     finally:
+        # Also clean up when the initial admission barrier fails.
         release_body.set()
-    upload = await asyncio.wait_for(upload_task, timeout=2)
-    assert upload.status_code == 410, upload.text
-    assert upload.json()["error"]["code"] == "remote_action_gone"
-    assert store_calls == []
+        if not upload_task.done():
+            upload_task.cancel()
+        completed, _ = await asyncio.wait({upload_task}, timeout=2)
+        assert upload_task in completed, "Upload task did not finish bounded cleanup"
+        await asyncio.gather(upload_task, return_exceptions=True)
+
 
 
 @pytest.mark.integration

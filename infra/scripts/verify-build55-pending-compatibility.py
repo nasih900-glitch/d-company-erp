@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exact Build54/0091 -> Build57/0093 preservation admission.
+"""Exact Build54/0091 -> Build58/0093 preservation admission.
 
 Opaque tablet work is retained as reported, including current-build work. This
 profile never drains queues, reclassifies old rows, edits telemetry, or grants an
@@ -23,7 +23,7 @@ from uuid import UUID
 PRIOR_REVISION = "5ad146ae076f5178acc2c8e4cb840ecbb0d0343a"
 PRIOR_VERSION = "3.1.46"
 PRIOR_DATABASE_HEAD = "0091"
-CANDIDATE_VERSION = "3.1.50"
+CANDIDATE_VERSION = "3.1.51"
 CANDIDATE_DATABASE_HEAD = "0093"
 PRIOR_SOURCE_ARCHIVE_SHA256 = (
     "7ded1fbc0afb2fb0dc93421bd6fc9b9e9ecef677e69b28ec1a4830d8252f6db5"
@@ -90,8 +90,8 @@ BACKEND_UVICORN_ENTRYPOINT = [
 # Independent review fills these final closure values; the helper cannot hash
 # its own enclosing archive. Historical release maps remain immutable.
 CANDIDATE_RELEASE_FROZEN = True
-CANDIDATE_BACKEND_MANIFEST_SHA256: str | None = "73dc4ad2c1b7ca4142ff8d316373a7cf25e5eacae894dcad6bd6386da4443d2c"
-CANDIDATE_PROTECTED_SOURCE_SHA256: str | None = "61bff3f11fe7f6e5063e074ea0dda6c07d507563ab3d80a2565061e003da9d5d"
+CANDIDATE_BACKEND_MANIFEST_SHA256: str | None = "cf078fd98226d1b9266e3a94c82345ce463235286d6cb2494cac0d9a25fe5e28"
+CANDIDATE_PROTECTED_SOURCE_SHA256: str | None = "f87a8f737307ba5462d12d974f6e674796ede983aa8add20a26116c364f0776a"
 EXPECTED_POLICY_SCHEMA_ROWS: tuple[str, ...] = (
     "column|android_update_policy|1|id|integer|NO||||32|2|0||||||||||pg_catalog|int4|NO||||||NO|NEVER||YES",
     "column|android_update_policy|2|mode|character varying|NO||20|80|||||||||||||pg_catalog|varchar|NO||||||NO|NEVER||YES",

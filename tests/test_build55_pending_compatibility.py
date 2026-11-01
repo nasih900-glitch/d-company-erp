@@ -861,7 +861,7 @@ def test_live_production_expanded_query_pin_is_distinct_from_old54_query(verifie
 
 def test_main_installer_orders_preservation_before_any_writer_and_never_reopens_credentials():
     source = (ROOT / "infra/scripts/install-on-vm.sh").read_text()
-    assert "grep -qx 'APP_VERSION=3.1.50'" in source
+    assert "grep -qx 'APP_VERSION=3.1.51'" in source
     assert "APP_VERSION=3.1.47" not in source
     profile = source.index(
         'if [ "$BUILD55_EXACT_TRANSITION" = true ]; then\n    BUILD55_PRE_TRANSITION='
@@ -882,7 +882,7 @@ def test_main_installer_orders_preservation_before_any_writer_and_never_reopens_
     assert 'sha256sum "$BUILD55_ACCEPTANCE_CREDENTIAL_FILE"' not in source
 
 
-@pytest.mark.parametrize("version", ["3.1.46", "3.1.47", "3.1.48", "3.1.49", "3.1.51"])
+@pytest.mark.parametrize("version", ["3.1.46", "3.1.47", "3.1.48", "3.1.49", "3.1.50", "3.1.52"])
 def test_current_profile_rejects_withheld_or_other_release_identity(verifier, monkeypatch, version):
     from types import SimpleNamespace
 
@@ -1238,7 +1238,7 @@ def test_candidate_backend_admits_only_exact_reviewed_python_patch(verifier):
     candidate = verifier.candidate_backend_environment(before, "b" * 40)
     assert before == original
     assert candidate == {
-        **before, "APP_VERSION": "3.1.50", "APP_REVISION": "b" * 40,
+        **before, "APP_VERSION": "3.1.51", "APP_REVISION": "b" * 40,
         "PYTHON_VERSION": "3.14.10",
         "PYTHON_SHA256": "de414a57119abef52784d8993e341d53aed635fc2b05c2607d9f98a2c5b72032",
         "LANG": "C.UTF-8",
