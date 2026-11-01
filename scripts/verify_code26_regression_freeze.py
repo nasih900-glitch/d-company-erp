@@ -1738,7 +1738,7 @@ REVIEWED_CODE30_4_BUILD55_SHA256 = {
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingGlassUiTest.kt": "7815d3327bc8efc056b0fd5723bd5ee5f28b78ae4fec5d391daa355dbd509f4f",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingInlineShiftWorkspaceUiTest.kt": "875dd7dc566fea0a1590105ab2e15148c41478a504332dac2c0cff95f991eeba",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingRejectedSessionAttentionUiTest.kt": "d5ada9ee7af16b5b0f805e8189d0c6de60f64bf046dc7fe65139a115b618878d",
-    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingVoidImeUiTest.kt": "23c0408ce55ec863810af34af08523091715d3d6a31fb4080f74d9d750f1ba0a",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingVoidImeUiTest.kt": "11352b51d5cc485b2896365d99cb2600b7b7b4d562c7aa0bc5a744d1c5542247",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/home/ExecutiveHomePresentationUiTest.kt": "8080e0553bacc75ca17cdf122fe50b85ec5e391a3c53c811896bb442ff8e029a",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewExportUiTest.kt": "a5578e8119153ed7cd13deeaa670aa6dcc2a0af7931b09c722985eb87d7a9730",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewUiTest.kt": "d91e93adc8757facf80cc230bc9a9b8a34510a33536939afc945e58a761b15fa",
@@ -2015,11 +2015,12 @@ REVIEWED_CODE30_4_BUILD55_SHA256 = {
     "frontend/src/modules/settings/tabs/DevicesUpdatesTab.tsx": "3219df29ac30de2ae5fdf18fe1b073d20b3e2ad4a25e271ba8190c0dbbd3f547",
     "frontend/src/modules/staff/StaffScreen.tsx": "693b8b8f27374fb015366294303fb42ebad45630bdb9e6e7c7144ea8d6c7c345",
     "frontend/src/modules/staff/staff-edit-policy.test.ts": "483517575b79a732daf445394806e37ed8d6ae03c7e59a3cb01f9f9c0cf9bfd5",
-    "infra/docker/backend.Dockerfile": "63b3500382030243110fe629ffa198039c72d0199cda7781c22af3d98c3c872a",
+    "infra/docker/backend.Dockerfile": "af9d733cee2845755427b9922238f74c219b1496a501db142c00cc16cbaec5e4",
     "infra/docker/caddy-build/verify-system-ca/main.go": "1c95c147abc496e15ac6b64820e14272f2e4a6d4eedb6f9b6071bec67a59025a",
     "infra/docker/caddy-build/verify-system-ca/main_test.go": "6bceeb70512ce5c5604463d438c0ab447e64861a04e59937b3c2f459e5d5f9a1",
     "infra/docker/caddy.Dockerfile": "0b754c893d68e9a309623575ac4fd2a76ff46ba78db5d004f751c2136dd7ea81",
     "infra/docker/frontend.Dockerfile": "b9041a5ca722ebd21ba9046f3607534ff536e5c735b4258896097856d7f4d18b",
+    "infra/docker/zlib/build-patched-zlib.sh": "351149e34f3a202e3ac9bbc1c8abae50cf596f42d6599b6ae1b5e046388a66cf",
     "infra/scripts/bootstrap-verified-pip.py": "f38c2113bb2d7c35eea49d55585d60f01b43f2662dc28a6a22fbce2037984dc2",
     "infra/scripts/capture-build55-runtime.py": "0dd1b4474229b5a57ab640a8399f9231bc0ff90f03cb6780823e61016e07a00a",
     "infra/scripts/install-on-vm.sh": "62c6f11f786cbbfcc8188f28cee0107b385ee6ad4361721fece9c51b6225f336",
@@ -2027,7 +2028,7 @@ REVIEWED_CODE30_4_BUILD55_SHA256 = {
     "infra/scripts/run-hardened-image-scanners.sh": "b2333526501fe5987ec839f193ce8c6bc56c6ef6935fe40343e19c8480096e3c",
     "infra/scripts/select-ci-postgres16-client.sh": "df7ac8dfe2fbb70e2936587b610b75bcbc1debc16b81a9e6ee6f4fa6b14d02cd",
     "infra/scripts/verify-build55-authenticated-acceptance.py": "f4d59c7f967b6cc7cc4176bf3f6729fbd70f321007185697dd9fcea84401b417",
-    "infra/scripts/verify-build55-pending-compatibility.py": "3a75d9be19bd03873d4654cda5610ba011981b3d32a358eb33f6cdb71738eb7a",
+    "infra/scripts/verify-build55-pending-compatibility.py": "5f86b77e75c0352cd07a4b7ee947a26c1de9db4884a96d0726ad4e95f25f8335",
     "infra/scripts/verify-build55-transition-state.sql": "7658c7f07cd64994530b892a2902b83e243236a7eb0a89ff63ac7a4c5a6fc844",
     "infra/scripts/verify-production-runtime-images.sh": "108543d98921b27ade329a3eb33aaa6bc39e94494a55b681ea1385d5abf32a2c",
     "infra/scripts/verify-zlib-vex.py": "a1f06247ad91cc0744c5a4a4a470e49b2fb2460b437f425c3afb835c6b20f41f",
@@ -2044,14 +2045,14 @@ REVIEWED_CODE30_4_BUILD55_SHA256 = {
     "tests/test_build54_pending_compatibility.py": "7e80fa9dc3d27f9975af59856b33bfce944f88720fb2e9661384cdf6ba45cab2",
     "tests/test_build55_authenticated_acceptance.py": "8d8e8239ac42d019e9b2c9b919dfae20ebb77e14c89a4952fa4134837f824923",
     "tests/test_build55_pending_compatibility.py": "75b0ede3a6444fcbab73b38a1f21691dd507b7b0c781e0363b89322473dec212",
-    "tests/test_caddy_dependency_security.py": "8d687085a0b4d6c07b9ecdc3dd503b4ce2c4a298bcd5bbffcae7edcc6dfda7d4",
+    "tests/test_caddy_dependency_security.py": "4c4a370a9846f0bd412d4bdb47cfea400c6a7759e2c0c7ef16e214463b4211de",
     "tests/test_ci_docker_connection.py": "413146841877d130bafebde5bce31102a9cf92bf269e9e24f1a576c7a9705929",
     "tests/test_ci_postgres16_client.py": "88f11dd7e3252381f220b3aa93512cbbe0b20448f13823e21a304b581fe86378",
     "tests/test_code26_physical_audit_lane.py": "9706544d6bde4b4f07e717dd5be6bdd6bd3a5bca5207e19c20111b218e774fbe",
     "tests/test_docker_context_safety.py": "0c5c7fb5e5e7e4ff9ad69a1f6c7eb8ce2f9a41ba35730a436a2717b9a596a05c",
     "tests/test_hardened_scanner_runtime.py": "8b5621586135358f4d9e9f8ddd975c0643bad4d849f2a0e18ef8ab0926fb288f",
     "tests/test_verified_pip_bootstrap.py": "1918963f31c20b59b0499a5ac29c27f96e8f88037c9bd04444894ab8e676c9ec",
-    "tests/test_zlib_security_remediation.py": "3d7d7610d2bc744752e6688911c3bca4f012c4d373c676afdc497298d4dd811d"
+    "tests/test_zlib_security_remediation.py": "02ae9d5fe1126918a94547c808765e3328807fa2db7bd2ced218cd478991dab1"
 }
 
 REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(

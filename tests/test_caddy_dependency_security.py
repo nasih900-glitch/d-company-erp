@@ -500,7 +500,7 @@ def test_backend_image_changes_only_reviewed_openssl_runtime_controls() -> None:
         expected,
         "    && sh /tmp/verify-patched-zlib.sh \\\n",
         "    && sh /tmp/verify-patched-zlib.sh \\\n"
-        + "    && apk info -v zlib | grep -Fx 'zlib-1.3.2-r1' \\\n",
+        + "    && printf '%s\\n' \"$installed_packages\" | grep -Fx 'zlib-1.3.2-r1' \\\n",
     )
     assert BACKEND_DOCKERFILE.read_text(encoding="utf-8") == expected
 

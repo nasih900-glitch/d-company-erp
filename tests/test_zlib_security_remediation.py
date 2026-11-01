@@ -58,6 +58,7 @@ def test_official_zlib_source_and_complete_upstream_patch_chain_are_hash_bound()
         "96040ee84d0d187905283912dbd3f7b66ac2033976a2ceefe9b8cca63143d9c2",
     ):
         assert value in build
+    assert "SOURCE_URL='https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz'" in build
     assert "make test" in build
     assert "grep -Fc" in build
     assert "-eq 2" in build
@@ -154,6 +155,8 @@ def test_every_alpine_runtime_installs_and_proves_the_patched_library() -> None:
         "python:3.14.10-alpine3.24@sha256:"
         "eb2c62658b8d51bff0acc408504b76521d02030de56a8a3c1e830083e89b89d2"
     ) == 3
+    assert "apk info -v zlib" not in backend
+    assert 'printf \'%s\\n\' "$installed_packages" | grep -Fx \'zlib-1.3.2-r1\'' in backend
     redis = (ROOT / "infra/docker/redis.Dockerfile").read_text()
     assert redis.count(
         "redis:7.4.11-alpine3.21@sha256:"

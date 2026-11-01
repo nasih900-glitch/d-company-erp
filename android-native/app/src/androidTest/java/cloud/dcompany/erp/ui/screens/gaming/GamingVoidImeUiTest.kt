@@ -54,8 +54,8 @@ private const val VoidImeLogTag = "GamingVoidIme"
 private val RequestedVoidImeDisplayId: Int? by lazy {
     InstrumentationRegistry.getArguments().getString(VoidImeDisplayArgument)?.let { raw ->
         val requested = raw.toIntOrNull()
-        require(requested in setOf(2, 5, 6)) {
-            "Only verified HD displays 2, 5 and 6 are supported: $raw"
+        require(requested in setOf(0, 2, 5, 6)) {
+            "Only verified HD displays 0, 2, 5 and 6 are supported: $raw"
         }
         requested
     }
