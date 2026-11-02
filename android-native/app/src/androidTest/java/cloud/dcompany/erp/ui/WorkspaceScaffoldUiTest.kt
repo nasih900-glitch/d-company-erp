@@ -16,6 +16,9 @@ import android.view.ViewConfiguration
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -39,6 +42,7 @@ import androidx.compose.ui.geometry.Rect as ComposeRect
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.layout.boundsInRoot
@@ -60,6 +64,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
@@ -73,6 +78,10 @@ import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.platform.app.InstrumentationRegistry
 import cloud.dcompany.erp.BuildConfig
 import cloud.dcompany.erp.core.sync.OutboxWorkStatus
+import cloud.dcompany.erp.core.remote.RemoteCapturePrivacyController
+import cloud.dcompany.erp.ui.remote.LocalRemoteCapturePrivacyController
+import cloud.dcompany.erp.ui.remote.RemoteSensitiveContent
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog
 import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
 import cloud.dcompany.erp.ui.screens.home.LocalExecutiveHomeShellLayout
@@ -1080,6 +1089,130 @@ class WorkspaceScaffoldUiTest {
                 .fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
         }
         compose.onNodeWithTag("workspace-glass-ready-workspace").assertIsDisplayed()
+    }
+
+    @Test
+    fun rootOverlayKeepsDraftPrivacyAndCurrentGlassAcrossWideCompactHosts() {
+        assertRequestedDisplayHost()
+        val darkFile = writeSolidWorkspaceFixture("root-overlay-dark", AndroidColor.rgb(22, 48, 156))
+        val brightFile = writeSolidWorkspaceFixture("root-overlay-bright", AndroidColor.WHITE)
+        val background = mutableStateOf(importedWorkspaceState(darkFile, 201L, "root-overlay-dark"))
+        val width = mutableStateOf(1_280.dp)
+        val open = mutableStateOf(true)
+        val scene = AtomicReference<WorkspaceGlassScene?>(null)
+        val popupRoot = AtomicReference<View>()
+        val created = AtomicInteger()
+        val disposed = AtomicInteger()
+        val privacy = RemoteCapturePrivacyController()
+        var confirmed: String? = null
+        fun awaitScene(id: String, generation: Long) {
+            compose.waitUntil(10_000L) {
+                scene.get()?.let {
+                    it.frame.actualKey.contentId == id && it.frame.actualKey.generation == generation &&
+                        it.frame.state.name == "REQUESTED_READY" &&
+                        it.softenedKey?.actualKey == it.frame.actualKey &&
+                        it.softenedKey?.frameEpoch == it.frame.epoch
+                } == true
+            }
+        }
+        try {
+            render(
+                width = width.value, height = 800.dp, widthState = width,
+                backgroundStateState = background,
+                overlays = {
+                    val currentScene = LocalWorkspaceGlassScene.current
+                    SideEffect { scene.set(currentScene) }
+                    if (open.value) {
+                        CompositionLocalProvider(LocalRemoteCapturePrivacyController provides privacy) {
+                            RemoteSensitiveContent {
+                                remember { created.incrementAndGet() }
+                                DisposableEffect(Unit) { onDispose { disposed.incrementAndGet() } }
+                                var draft by remember { mutableStateOf("") }
+                                LiquidAlertDialog(
+                                    modifier = Modifier.testTag("root-overlay-dialog"),
+                                    onDismissRequest = { open.value = false },
+                                    title = {
+                                        val root = LocalView.current.rootView
+                                        SideEffect { popupRoot.set(root) }
+                                        Text("Overlay review")
+                                    },
+                                    text = {
+                                        OutlinedTextField(draft, { draft = it },
+                                            modifier = Modifier.testTag("root-overlay-draft"))
+                                    },
+                                    confirmButton = {
+                                        TextButton(onClick = { confirmed = draft; open.value = false },
+                                            modifier = Modifier.testTag("root-overlay-confirm")) { Text("Confirm") }
+                                    },
+                                )
+                            }
+                        }
+                    }
+                },
+            )
+            awaitScene("root-overlay-dark", 201L)
+            compose.onNodeWithTag("root-overlay-draft").performTextReplacement("Retain this QA draft")
+            val darkPixel = popupSample(popupRoot, "root-overlay-dialog", .88f, .15f)
+            val privacyBefore = privacy.snapshot()
+            assertTrue(privacyBefore.blocked)
+            compose.runOnIdle { width.value = 640.dp }
+            compose.onNodeWithTag("workspace-bottom-dock").assertIsDisplayed()
+            compose.onNodeWithTag("root-overlay-draft").assertTextEquals("Retain this QA draft")
+            compose.runOnIdle {
+                assertEquals(1, created.get())
+                assertEquals(0, disposed.get())
+                assertEquals("Resizing must not release/reacquire the capture shield", privacyBefore, privacy.snapshot())
+                background.value = importedWorkspaceState(brightFile, 202L, "root-overlay-bright")
+            }
+            awaitScene("root-overlay-bright", 202L)
+            val brightPixel = popupSample(popupRoot, "root-overlay-dialog", .88f, .15f)
+            assertTrue("Root modal must project the replacement scene, not a solid/stale fill", colorDistance(darkPixel, brightPixel) >= 12)
+            compose.runOnIdle { width.value = 1_280.dp }
+            compose.onNodeWithTag("workspace-bottom-dock").assertDoesNotExist()
+            compose.onNodeWithTag("root-overlay-draft").assertTextEquals("Retain this QA draft")
+            compose.runOnIdle {
+                assertEquals(1, created.get())
+                assertEquals(0, disposed.get())
+                assertEquals(privacyBefore, privacy.snapshot())
+            }
+            compose.onNodeWithTag("root-overlay-confirm").performClick()
+            compose.onNodeWithTag("root-overlay-dialog").assertDoesNotExist()
+            compose.runOnIdle {
+                assertEquals("Retain this QA draft", confirmed)
+                assertEquals(1, disposed.get())
+                assertFalse(privacy.snapshot().blocked)
+            }
+        } finally {
+            darkFile.delete()
+            brightFile.delete()
+        }
+    }
+
+    @Test
+    fun initializingWorkspaceStillRendersOneSafeRootOverlay() {
+        val width = mutableStateOf(1_280.dp)
+        val constructions = AtomicInteger()
+        val disposals = AtomicInteger()
+        val scene = AtomicReference<WorkspaceGlassScene?>(null)
+        render(
+            width = width.value, height = 800.dp, widthState = width,
+            backgroundStateState = mutableStateOf(WorkspaceBackgroundUiState(initializing = true)),
+            overlays = {
+                val currentScene = LocalWorkspaceGlassScene.current
+                SideEffect { scene.set(currentScene) }
+                remember { constructions.incrementAndGet() }
+                DisposableEffect(Unit) { onDispose { disposals.incrementAndGet() } }
+                Text("Safe root overlay", Modifier.testTag("root-overlay-fallback"))
+            },
+        )
+        compose.onNodeWithTag("root-overlay-fallback").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(null, scene.get()); width.value = 640.dp }
+        compose.onNodeWithTag("root-overlay-fallback").assertIsDisplayed()
+        compose.runOnIdle {
+            assertEquals(null, scene.get())
+            assertEquals(1, constructions.get())
+            assertEquals(0, disposals.get())
+        }
     }
 
     @Test
@@ -2274,6 +2407,7 @@ class WorkspaceScaffoldUiTest {
         workspaceSceneObserver: ((WorkspaceGlassScene?) -> Unit)? = null,
         commandDialogRootObserver: ((View) -> Unit)? = null,
         commandDialogSceneObserver: ((WorkspaceGlassScene?) -> Unit)? = null,
+        overlays: @Composable () -> Unit = {},
         restorationTester: StateRestorationTester? = null,
         onDestinationChanged: (Destination) -> Unit = {},
         onFeatureConstructed: (Destination) -> Unit = {},
@@ -2339,6 +2473,7 @@ class WorkspaceScaffoldUiTest {
                             backgroundState = backgroundStateState?.value ?: WorkspaceBackgroundUiState(),
                             commandDialogRootObserver = commandDialogRootObserver,
                             commandDialogSceneObserver = commandDialogSceneObserver,
+                            overlays = overlays,
                         ) { destination, _ ->
                             val displayedScene = LocalWorkspaceGlassScene.current
                             SideEffect { workspaceSceneObserver?.invoke(displayedScene) }

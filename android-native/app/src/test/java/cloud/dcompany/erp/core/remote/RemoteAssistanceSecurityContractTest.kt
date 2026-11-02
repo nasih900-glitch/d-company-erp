@@ -139,9 +139,15 @@ class RemoteAssistanceSecurityContractTest {
                 "remoteUiAdmissionRemainedStable" in coordinator
         })
         assertTrue("Global workflow dialogs on Help must activate the same privacy/command shield", run {
-            val dialogs = activity.substringAfter("if (confirmSignOut)")
-                .substringBefore("if (compatibilityState is ClientCompatibilityState.UpdateAvailable)")
-            dialogs.countOccurrences("RemoteSensitiveContent") >= 7
+            val notices = activity.substringAfter("val rootOverlays: @Composable () -> Unit = {")
+                .substringBefore("when (val s = state)")
+            val workspaceDialogs = activity.substringAfter("key(s.me.companyId, s.me.userId) {")
+                .substringBefore("rootOverlays()")
+            val sensitiveAlert = Regex("RemoteSensitiveContent\\s*\\{\\s*AlertDialog\\(")
+            sensitiveAlert.findAll(notices).count() == 4 &&
+                sensitiveAlert.findAll(workspaceDialogs).count() == 4 &&
+                Regex("RemoteSensitiveContent\\s*\\{\\s*RemoteAssistanceConsentDialog\\(")
+                    .containsMatchIn(workspaceDialogs)
         })
     }
 

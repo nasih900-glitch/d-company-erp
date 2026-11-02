@@ -48,6 +48,7 @@ class OptionalUpdateInteractionContractTest {
         val authStateRendering = appRoot.indexOf("when (val s = state)")
         val optionalOffer = appRoot.indexOf(optionalOfferGuard)
         val mandatoryUpdate = appRoot.indexOf("is ClientCompatibilityState.UpdateRequired ->")
+        val overlayRenderer = appRoot.indexOf("val rootOverlays: @Composable () -> Unit")
         assertTrue("The activity must still render auth states", authStateRendering >= 0)
         assertTrue("The activity must still expose the optional update offer", optionalOffer >= 0)
         assertTrue(
@@ -60,9 +61,20 @@ class OptionalUpdateInteractionContractTest {
             mandatoryUpdate in 0 until authStateRendering,
         )
         assertTrue(
-            "The optional offer must resume after the auth-state screen and cosmetic handoff",
-            authStateRendering < optionalOffer,
+            "The required update must return before the shared non-blocking overlay renderer",
+            mandatoryUpdate in 0 until overlayRenderer && overlayRenderer < optionalOffer,
         )
+        assertTrue("Login renders its overlay inside its scene", appRoot.substringAfter("is AuthState.SignedOut ->")
+            .substringBefore("is AuthState.SelectTerminal ->").contains("rootOverlays()"))
+        assertTrue("Setup renders its overlay inside its scene", appRoot.substringAfter("is AuthState.SelectTerminal ->")
+            .substringBefore("is AuthState.SignedIn ->").contains("rootOverlays()"))
+        assertTrue("Workspace renders its overlay inside the scaffold scene", appRoot.substringAfter("WorkspaceScaffold(")
+            .substringBefore(") { destination, navigateTo ->").contains("rootOverlays()"))
+        assertTrue("Other auth states retain one fallback overlay host",
+            "state !is AuthState.SignedIn && state !is AuthState.SignedOut &&" in appRoot &&
+                "state !is AuthState.SelectTerminal" in appRoot)
+        assertTrue("The three scene hosts and exclusive fallback are the only render sites",
+            Regex("rootOverlays\\(\\)").findAll(appRoot).count() == 4)
     }
 
     @Test

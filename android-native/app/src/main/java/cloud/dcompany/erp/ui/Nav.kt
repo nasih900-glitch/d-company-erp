@@ -101,6 +101,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -308,8 +309,13 @@ internal fun WorkspaceScaffold(
     railScrubTrace: ExecutiveRailScrubTraceSink? = null,
     commandDialogRootObserver: ((View) -> Unit)? = null,
     commandDialogSceneObserver: ((WorkspaceGlassScene?) -> Unit)? = null,
+    overlays: @Composable () -> Unit = {},
     content: @Composable (Destination, navigateTo: (Destination) -> Unit) -> Unit,
 ) {
+    val currentOverlays by rememberUpdatedState(overlays)
+    // Move the same overlay composition between scene hosts during resizing;
+    // drafts, focus and capture-privacy leases must not be recreated.
+    val sceneOverlays = remember { movableContentOf { currentOverlays() } }
     val current = resolveWorkspaceDestination(currentDestination, destinations)
     LaunchedEffect(currentDestination, current) {
         if (currentDestination != current) onDestinationChanged(current)
@@ -574,6 +580,7 @@ internal fun WorkspaceScaffold(
                           }
                       }
                       commandDialog()
+                      sceneOverlays()
                     }
                 }
             }
@@ -594,6 +601,7 @@ internal fun WorkspaceScaffold(
                         )
                     }
                     commandDialog()
+                    sceneOverlays()
                 }
             }
         }

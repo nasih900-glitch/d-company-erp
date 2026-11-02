@@ -1,10 +1,11 @@
 # v3.1.52 / Android 59 release candidate
 
 This successor corrects the deployment guard for the already pinned frontend
-Nginx package and keeps the wide Login version footer outside the keyboard-visible
-scrolling controls. Android is 59 / 3.1.52; Room remains 58 and Alembic remains
-0093. Dial, billing, permissions, business models, backgrounds, glass and workspace
-navigation retain the immutable Build 58 implementation.
+Nginx package, keeps the wide Login version footer outside the keyboard-visible
+scrolling controls and puts app-level overlays inside their current glass scene.
+Android is 59 / 3.1.52; Room remains 58 and Alembic remains 0093. Dial, billing,
+permissions, business models, background selection and workspace navigation
+retain the immutable Build 58 implementation.
 
 The signed Build 58 candidate passed hosted CI, reproducibility, original-certificate
 signing and original 45/49/50/54 offline empty-database replacement tests. Its
@@ -45,6 +46,23 @@ that the footer cannot cover visible controls, scrolls the complete submit targe
 into the keyboard-visible area, and submits the unchanged values twice. The old
 layout fails the overlap assertion; the measured-footer fix passed repeated
 focused runs and the complete Login test class on the API 35 tablet emulator.
+The check reads all rectangles in one UI-thread snapshot during keyboard/scroll
+animations. Diagnostic capture selects the stable Login node, and any capture
+failure is suppressed onto the original assertion. The previous hosted recovery-
+link failure was not reproduced locally; fresh complete hosted acceptance is
+required rather than attributing that failure to timing without evidence.
+
+Root support, sign-out, till and consent dialogs now render in the scaffold's
+current scene. Global account/access/notification notices and update banners use
+the existing Login, setup or workspace scene host, with one solid fallback for
+other authentication states. Required-update priority, fresh-login suppression,
+notice ordering, callbacks and runtime admission stay unchanged. Overlay state
+remains owned by the app root. A movable overlay composition rebinds the current
+scene across wide/compact layouts without recreating drafts or capture-privacy
+leases; account/company keys prevent state crossing authority changes.
+Missing-scene paths retain readable solid surfaces. Runtime regressions compare
+actual dialog pixels under two controlled scenes and verify draft, callback and
+privacy-revision retention through resizing, plus fallback rendering.
 
 The remote-assistance slow-upload regression now mocks only its router's thread
 adapter instead of changing AnyIO globally. Readiness has a separate ten-second

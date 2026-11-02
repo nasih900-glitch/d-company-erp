@@ -232,13 +232,35 @@ class LoginWorkspaceUiTest {
     }
 
     private fun assertVersionDoesNotCoverVisibleControls() {
-        val footer = compose.onNodeWithTag("login-version").assertIsDisplayed()
-            .fetchSemanticsNode().boundsInRoot
-        for (tag in listOf("login-email", "login-password", "login-recover", "login-submit")) {
-            val control = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
-            if (control.width > 0f && control.height > 0f) {
-                assertTrue("Version footer must not cover visible $tag", !footer.overlaps(control))
+        compose.onNodeWithTag("login-version").assertIsDisplayed()
+        val tags = listOf("login-version", "login-email", "login-password", "login-recover", "login-submit")
+        val nodes = tags.associateWith { compose.onNodeWithTag(it).fetchSemanticsNode() }
+        // IME/bring-into-view animations can relayout between separate semantics
+        // queries. Read every rectangle in one UI-thread snapshot, not mixed frames.
+        val (bounds, imeVisible, safeFrame) = compose.runOnIdle {
+            val frame = AndroidRect()
+            compose.activity.window.decorView.getWindowVisibleDisplayFrame(frame)
+            Triple(
+                nodes.mapValues { (_, node) -> node.boundsInRoot },
+                ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+                    ?.isVisible(WindowInsetsCompat.Type.ime()),
+                frame.toShortString(),
+            )
+        }
+        val footer = bounds.getValue("login-version")
+        try {
+            for (tag in tags.drop(1)) {
+                val control = bounds.getValue(tag)
+                if (control.width > 0f && control.height > 0f) {
+                    assertTrue("Version footer must not cover visible $tag; " +
+                        "bounds=$bounds, imeVisible=$imeVisible, safeFrame=$safeFrame",
+                        !footer.overlaps(control))
+                }
             }
+        } catch (failure: AssertionError) {
+            try { capture("login59-keyboard-overlap-${android.os.SystemClock.uptimeMillis()}", "login-composition") }
+            catch (captureFailure: Throwable) { failure.addSuppressed(captureFailure) }
+            throw failure
         }
     }
 
@@ -311,10 +333,11 @@ class LoginWorkspaceUiTest {
         compose.runOnIdle { assertEquals(LoginSceneHdR1Sha256, observedSceneContentId) }
     }
 
-    private fun capture(name: String) {
+    private fun capture(name: String, tag: String? = null) {
         val destination = File(compose.activity.getExternalFilesDir(null), "login51-review").apply { mkdirs() }
         File(destination, "$name.png").outputStream().use {
-            assertTrue(compose.onRoot().captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it))
+            val target = if (tag == null) compose.onRoot() else compose.onNodeWithTag(tag)
+            assertTrue(target.captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it))
         }
     }
 }

@@ -351,6 +351,7 @@ fun LoginScreen(
     onSignIn: (String, String) -> Unit,
     appearancePreference: AppearancePreference,
     onAppearancePreferenceChanged: (AppearancePreference) -> Unit,
+    overlay: @Composable () -> Unit = {},
 ) {
     val recovery: PasswordRecoveryViewModel = viewModel()
     val recoveryState by recovery.state.collectAsStateWithLifecycle()
@@ -377,6 +378,7 @@ fun LoginScreen(
                 onUseDifferentEmail = recovery::useDifferentEmail,
                 onCancel = recovery::cancel,
             )
+            overlay()
         },
     )
 }
