@@ -162,6 +162,7 @@ def main() -> int:
     parser.add_argument("--pair", type=Path, required=True)
     parser.add_argument("--version", choices=PINS, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--port", type=int, choices=(5564, 5574), required=True)
     args = parser.parse_args()
     assert platform.system() == "Linux" and os.environ.get("GITHUB_ACTIONS") == "true"
     def arm_deadline(_signal, _frame):
@@ -208,10 +209,20 @@ def main() -> int:
     avd_root.mkdir()
     env = {key: os.environ[key] for key in ("HOME", "PATH", "LANG") if key in os.environ}
     env.update(ANDROID_HOME=str(sdk), ANDROID_SDK_ROOT=str(sdk), ANDROID_AVD_HOME=str(avd_root), TMPDIR=str(work))
-    serial = "emulator-5564"
-    for port in (5564, 5565):
-        with socket.socket() as check:
-            check.bind(("127.0.0.1", port))
+    serial = f"emulator-{args.port}"
+    try:
+        for port in (args.port, args.port + 1):
+            with socket.socket() as check:
+                check.bind(("127.0.0.1", port))
+    except OSError as exc:
+        try:
+            socket_probe = subprocess.run(["ss", "-Htanp", f"sport = :{args.port} or sport = :{args.port+1}"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=5, check=False)
+            (output / "port-state.txt").write_bytes(socket_probe.stdout[:32768])
+        except (OSError, subprocess.SubprocessError) as probe_error:
+            (output / "port-state.txt").write_text("Socket-state observation unavailable: " + type(probe_error).__name__)
+        (output / "RESULT.json").write_text(json.dumps({"status": "PORT_PREFLIGHT_FAILED_NO_GUEST_STARTED", "source": COMMIT, "version": args.version, "console_port": args.port, "errno": exc.errno, "cleanup_owned_process_exited": True, "no_emulator_guest_was_launched": True}, indent=2) + "\n")
+        signal.alarm(0)
+        return 1
     avd_name = "dcompany_diag_" + uuid.uuid4().hex[:12]
     avdmanager = sdk / "cmdline-tools/latest/bin/avdmanager"
     subprocess.run([str(avdmanager), "create", "avd", "-n", avd_name, "-k", "system-images;android-35;default;x86_64", "-d", "pixel_c"], input="no\n", text=True, env=env, check=True, timeout=90)
@@ -238,11 +249,11 @@ def main() -> int:
     (output / "emulator-version.txt").write_bytes(version_output[:65536])
     if version_exit != 0:
         # No -avd command has been issued; subprocess.run reaps its version probe.
-        preflight = {"status": "SDK_VERSION_PREFLIGHT_FAILED_NO_GUEST_STARTED", "source": COMMIT, "version": args.version, "build": build, "archive_sha256": checksum, "version_exit": version_exit, "version_error_type": version_error, "version_output_truncated": len(version_output) > 65536, "cleanup_owned_process_exited": True, "no_emulator_guest_was_launched": True, "pair_manifest_sha256": PINNED_PAIR_MANIFEST_SHA256}
+        preflight = {"status": "SDK_VERSION_PREFLIGHT_FAILED_NO_GUEST_STARTED", "source": COMMIT, "version": args.version, "build": build, "archive_sha256": checksum, "console_port": args.port, "version_exit": version_exit, "version_error_type": version_error, "version_output_truncated": len(version_output) > 65536, "cleanup_owned_process_exited": True, "no_emulator_guest_was_launched": True, "pair_manifest_sha256": PINNED_PAIR_MANIFEST_SHA256}
         (output / "RESULT.json").write_text(json.dumps(preflight, indent=2) + "\n")
         signal.alarm(0)
         return 1
-    result = {"source": COMMIT, "version": args.version, "build": build, "archive_sha256": checksum, "archive_bytes": size, "primary_archive_url": url, "status": "RUNNING", "rounds": [], "limitations": ["Rebuilt debug bytes, not retained bytes from failed release run", "Raw AndroidJUnitRunner; release uses UTP", "Untraced host process; no physical-device or performance admission"]}
+    result = {"source": COMMIT, "version": args.version, "build": build, "archive_sha256": checksum, "archive_bytes": size, "primary_archive_url": url, "status": "RUNNING", "console_port": args.port, "rounds": [], "limitations": ["Rebuilt debug bytes, not retained bytes from failed release run", "Raw AndroidJUnitRunner; release uses UTP", "Untraced host process; no physical-device or performance admission"]}
     process = None
     logcat = None
     drains = {}
@@ -309,7 +320,7 @@ def main() -> int:
         assert image_files and any(item["path"] == "system.img" for item in image_files)
         result["system_image_manifest_sha256"] = hashlib.sha256(json.dumps(image_files, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         (output / "system-image-files.json").write_text(json.dumps(image_files, indent=2) + "\n")
-        process = subprocess.Popen([str(binary), "-avd", avd_name, "-port", "5564", "-no-window", "-gpu", "swiftshader", "-feature", "-Vulkan", "-no-snapshot", "-noaudio", "-no-boot-anim", "-cores", "2"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+        process = subprocess.Popen([str(binary), "-avd", avd_name, "-port", str(args.port), "-no-window", "-gpu", "swiftshader", "-feature", "-Vulkan", "-no-snapshot", "-noaudio", "-no-boot-anim", "-cores", "2"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
         lifecycle.append({"event": "owned_launcher_started", "monotonic": time.monotonic(), "epoch": time.time(), "identity": process_identity(process.pid)})
         drains["emulator"] = BoundedDrain(process.stdout, output / "emulator.log", 32 * 1024 * 1024)
         drains["emulator"].thread.start()

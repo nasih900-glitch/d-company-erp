@@ -14,9 +14,14 @@ Each SDK executes the same full34-test GamingBoard class once. Both retain the
 same assertions, physical tablet
 display, CPU count, navigation mode and requested graphics options. The parent
 owns and waits for its emulator process, records periodic resource observations,
-and never attaches a tracer or uploads cores, environment, AVD data or keys.
+and never attaches a tracer or uploads cores, environment, AVD data or private key files. Emulator startup logs can contain
+ephemeral ADB public keys.
 
 The backend experiment runs unchanged tests with an external observer. It does
 not change any timeout, request, assertion, transaction or production source.
 Function/line-only task observations and read-only database wait observations
 are diagnostic evidence; they are not proof of the hosted failure's cause.
+
+Each sequential emulator uses a separate, availability-checked console/ADB port
+pair. A failed reservation retains socket-state evidence without claiming
+TIME_WAIT or terminating an unknown listener.

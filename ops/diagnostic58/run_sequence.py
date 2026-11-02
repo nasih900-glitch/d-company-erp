@@ -17,8 +17,8 @@ def main() -> int:
     root.mkdir(mode=0o700, exist_ok=False)
     order = ("36.5.10", "37.2.13") if args.sequence == "old-new" else ("37.2.13", "36.5.10")
     reports = {}
-    for version in order:
-        completed = subprocess.run([sys.executable, str(Path(__file__).with_name("emulator_compare.py")), "--source", args.source, "--pair", args.pair, "--version", version, "--output", str(root / version)], check=False)
+    for offset, version in enumerate(order):
+        completed = subprocess.run([sys.executable, str(Path(__file__).with_name("emulator_compare.py")), "--source", args.source, "--pair", args.pair, "--version", version, "--port", str(5564+offset*10), "--output", str(root / version)], check=False)
         receipt = root / version / "RESULT.json"
         reports[version] = {"harness_exit": completed.returncode, "result": json.loads(receipt.read_text()) if receipt.is_file() else {"status": "NO_COMPLETED_RECEIPT"}}
         if not reports[version]["result"].get("cleanup_owned_process_exited"):
@@ -27,9 +27,10 @@ def main() -> int:
             break
     left, right = (reports[version]["result"] for version in ("36.5.10", "37.2.13"))
     controls = {key: left.get(key) is not None and left.get(key) == right.get(key) for key in ("host", "system_image_manifest_sha256", "guest_build_fingerprint", "source")}
-    summary = {"status": "DIAGNOSTIC_ONLY_NOT_RELEASE_ACCEPTANCE", "order": list(order), "same_host_pair_controls": controls, "versions": reports, "limitations": ["Order is balanced across two hosts; only each within-host pair is a direct SDK comparison", "Rebuilt loopback debug pair; raw AndroidJUnitRunner differs from tagged UTP", "Version dependence does not establish the named upstream graphics defect"]}
+    distinct_ports = [reports[version]["result"].get("console_port") for version in order] == [5564, 5574]
+    summary = {"distinct_console_ports_verified": distinct_ports, "status": "DIAGNOSTIC_ONLY_NOT_RELEASE_ACCEPTANCE", "order": list(order), "same_host_pair_controls": controls, "versions": reports, "limitations": ["Order is balanced across two hosts; only each within-host pair is a direct SDK comparison", "Rebuilt loopback debug pair; raw AndroidJUnitRunner differs from tagged UTP", "Version dependence does not establish the named upstream graphics defect"]}
     (root / "SEQUENCE.json").write_text(json.dumps(summary, indent=2) + "\n")
-    return 0 if all(controls.values()) and all(item["harness_exit"] == 0 for item in reports.values()) else 1
+    return 0 if distinct_ports and all(controls.values()) and all(item["harness_exit"] == 0 for item in reports.values()) else 1
 
 
 if __name__ == "__main__":
