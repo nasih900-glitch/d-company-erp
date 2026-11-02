@@ -12,6 +12,7 @@ import android.graphics.Color
 import android.net.Uri
 import java.io.RandomAccessFile
 import android.os.Build
+import android.os.Bundle
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -83,6 +84,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.async
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
@@ -318,45 +321,111 @@ class WorkspaceBackgroundUiTest {
     fun productionStoreSerializesRetryUntilCancellationIgnoringProviderTerminates() = runBlocking {
         assertRequestedDisplay()
         val store = WorkspaceBackgroundStore(context)
-        val delayed = WorkspaceBackgroundFixtures.create(WorkspaceBackgroundFixtureRecipe.DELAYED_VALID_JPEG)
         val retry = WorkspaceBackgroundFixtures.create(WorkspaceBackgroundFixtureRecipe.RETRY_VALID_JPEG)
-        coroutineScope {
-            val arbiter = WorkspaceBackgroundCommitArbiter()
-            val first = async { store.import(WorkspaceBackgroundSlot.HOME, delayed, arbiter) }
-            delay(100L)
-            assertTrue(arbiter.cancel())
-            first.cancel()
-            val second = async { store.import(WorkspaceBackgroundSlot.WORKSPACE, retry) }
-            delay(150L)
-            assertFalse("retry must wait for the sole provider/store worker", second.isCompleted)
-            runCatching { first.await() }
-            val committed = withTimeout(5_000L) { second.await() }.image
-            assertEquals(WorkspaceBackgroundSlot.WORKSPACE, committed.slot)
-            assertEquals(WorkspaceBackgroundSource.IMPORTED, committed.source)
-        }
+        val committed = retryAfterHeldProvider(store, WorkspaceBackgroundSlot.HOME) {
+            store.import(WorkspaceBackgroundSlot.WORKSPACE, retry)
+        }.image
+        assertEquals(WorkspaceBackgroundSlot.WORKSPACE, committed.slot)
+        assertEquals(WorkspaceBackgroundSource.IMPORTED, committed.source)
 
-        val delayedPresetBlocker = WorkspaceBackgroundFixtures.create(
-            WorkspaceBackgroundFixtureRecipe.DELAYED_VALID_JPEG,
+        val selected = retryAfterHeldProvider(store, WorkspaceBackgroundSlot.WORKSPACE) {
+            WorkspaceBackgroundStore(context).selectPreset("call_of_duty")
+        }
+        assertEquals("call_of_duty", selected.selection.presetId)
+        assertEquals(WorkspaceBackgroundSource.BUNDLED, selected.image.source)
+    }
+
+    private suspend fun retryAfterHeldProvider(
+        store: WorkspaceBackgroundStore,
+        slot: WorkspaceBackgroundSlot,
+        retry: suspend () -> WorkspaceBackgroundMutation,
+    ): WorkspaceBackgroundMutation = coroutineScope {
+        val controlled = WorkspaceBackgroundFixtures.create(
+            WorkspaceBackgroundFixtureRecipe.CONTROLLED_VALID_JPEG,
         )
-        coroutineScope {
-            val arbiter = WorkspaceBackgroundCommitArbiter()
-            val first = async { store.import(WorkspaceBackgroundSlot.WORKSPACE, delayedPresetBlocker, arbiter) }
-            delay(100L)
+        val arbiter = WorkspaceBackgroundCommitArbiter()
+        val first = async { store.import(slot, controlled, arbiter) }
+        var second: Deferred<WorkspaceBackgroundMutation>? = null
+        var operationFailure: Throwable? = null
+        try {
+            WorkspaceBackgroundFixtures.awaitProviderEntry(controlled)
+            assertProviderHeld(controlled)
+            assertThrows(FileNotFoundException::class.java) {
+                base.contentResolver.openAssetFileDescriptor(controlled, "r")?.use { }
+            }
+            assertThrows(IllegalStateException::class.java) {
+                WorkspaceBackgroundFixtures.disposeControlled(controlled)
+            }
+            assertProviderHeld(controlled)
             assertTrue(arbiter.cancel())
             first.cancel()
-            val queuedPreset = async {
-                WorkspaceBackgroundStore(context).selectPreset("call_of_duty")
+            val retryStarted = CompletableDeferred<Unit>()
+            val attempt = async(Dispatchers.IO) {
+                retryStarted.complete(Unit)
+                retry()
             }
+            second = attempt
+            withTimeout(5_000L) { retryStarted.await() }
+            // Give the admitted retry CPU time; the provider remains held until explicit release.
             delay(150L)
-            assertFalse(
-                "a second store instance must queue preset selection behind the sole provider worker",
-                queuedPreset.isCompleted,
-            )
-            runCatching { first.await() }
-            val selected = withTimeout(5_000L) { queuedPreset.await() }
-            assertEquals("call_of_duty", selected.selection.presetId)
-            assertEquals(WorkspaceBackgroundSource.BUNDLED, selected.image.source)
+            assertProviderHeld(controlled)
+            val observed = if (attempt.isCompleted) {
+                runCatching { "completed with ${attempt.await().image.source}" }
+                    .getOrElse { "failed with ${it.javaClass.simpleName}" }
+            } else {
+                "pending"
+            }
+            assertFalse("retry must wait for the sole provider/store worker: $observed", attempt.isCompleted)
+            WorkspaceBackgroundFixtures.releaseProvider(controlled)
+            withTimeout(5_000L) {
+                first.join()
+                val result = attempt.await()
+                assertTrue(WorkspaceBackgroundFixtures.controlledState(controlled).exited)
+                result
+            }
+        } catch (failure: Throwable) {
+            operationFailure = failure
+            throw failure
+        } finally {
+            // Release inside this scope, before structured concurrency waits for the blocked child.
+            val cleanupFailures = mutableListOf<Throwable>()
+            fun cleanup(action: () -> Unit) {
+                runCatching(action).exceptionOrNull()?.let(cleanupFailures::add)
+            }
+            cleanup { WorkspaceBackgroundFixtures.releaseProvider(controlled) }
+            cleanup { first.cancel() }
+            cleanup { second?.cancel() }
+            runCatching {
+                withContext(NonCancellable) {
+                    withTimeout(5_000L) {
+                        first.join()
+                        second?.join()
+                    }
+                }
+            }.exceptionOrNull()?.let(cleanupFailures::add)
+            cleanup {
+                assertFalse(WorkspaceBackgroundFixtures.controlledState(controlled).failed)
+            }
+            cleanup { WorkspaceBackgroundFixtures.disposeControlled(controlled) }
+            cleanup {
+                assertThrows(IllegalArgumentException::class.java) {
+                    WorkspaceBackgroundFixtures.controlledState(controlled)
+                }
+            }
+            if (cleanupFailures.isNotEmpty()) {
+                val primary = operationFailure ?: cleanupFailures.removeAt(0)
+                cleanupFailures.filter { it !== primary }.forEach(primary::addSuppressed)
+                if (operationFailure == null) throw primary
+            }
         }
+    }
+
+    private fun assertProviderHeld(uri: Uri) {
+        val state = WorkspaceBackgroundFixtures.controlledState(uri)
+        assertTrue("the first provider must have entered", state.entered)
+        assertFalse("the test must still own the provider release", state.released)
+        assertFalse("the first provider must still occupy the worker", state.exited)
+        assertFalse("the provider fail-safe must not supply an implicit release", state.failed)
     }
 
     @Test
@@ -378,6 +447,40 @@ class WorkspaceBackgroundUiTest {
         }
         assertThrows(FileNotFoundException::class.java) {
             base.contentResolver.openAssetFileDescriptor(uri, "r")
+        }
+        val controlled = WorkspaceBackgroundFixtures.create(
+            WorkspaceBackgroundFixtureRecipe.CONTROLLED_VALID_JPEG,
+        )
+        try {
+            for (method in listOf(
+                "controlled-fixture-state",
+                "release-controlled-fixture",
+                "dispose-controlled-fixture",
+            )) {
+                assertThrows(IllegalArgumentException::class.java) {
+                    base.contentResolver.call(WorkspaceBackgroundFixtures.Authority, method, "invalid", null)
+                }
+                assertThrows(IllegalArgumentException::class.java) {
+                    base.contentResolver.call(
+                        WorkspaceBackgroundFixtures.Authority, method, uri.lastPathSegment, null,
+                    )
+                }
+                assertThrows(IllegalArgumentException::class.java) {
+                    base.contentResolver.call(
+                        WorkspaceBackgroundFixtures.Authority, method, controlled.lastPathSegment,
+                        Bundle().apply { putBoolean("unexpected", true) },
+                    )
+                }
+            }
+            val initial = WorkspaceBackgroundFixtures.controlledState(controlled)
+            assertFalse(initial.entered || initial.released || initial.exited || initial.failed)
+            WorkspaceBackgroundFixtures.releaseProvider(controlled)
+            assertTrue(WorkspaceBackgroundFixtures.controlledState(controlled).released)
+        } finally {
+            WorkspaceBackgroundFixtures.disposeControlled(controlled)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            WorkspaceBackgroundFixtures.controlledState(controlled)
         }
         assertProviderRejected("CRUD") {
             base.contentResolver.insert(

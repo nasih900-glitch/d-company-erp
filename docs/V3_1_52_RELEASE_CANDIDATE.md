@@ -30,6 +30,15 @@ helper. Both CI image-store lanes also inspect the actual built frontend image
 metadata before deployment overrides. The earlier 70-case daemon oracle remains
 synthetic Compose-merging evidence, not a real private Build 54 environment fixture.
 
+Wallpaper cancellation verification now observes actual test-provider entry
+and holds the provider until an explicit release. It checks both an import
+retry and preset selection from another store instance, with bounded cleanup,
+caller verification and single-use fixture tokens. This replaces unobserved
+timing assumptions without changing production locking or timeouts. Repeated
+real-provider tests and deliberately broken shared-lock controls verify that
+the assertions remain sensitive to overlapping work; fresh hosted acceptance
+is still required.
+
 Preserve every historical freeze-map assignment, adding a separate Build 59 overlay
 above immutable Build 58 at `6eb61bf097afb7d6e306f3878a64f266adf451a1`. Require current
 full source/backend/web/native tests, both real image stores, reproducibility,

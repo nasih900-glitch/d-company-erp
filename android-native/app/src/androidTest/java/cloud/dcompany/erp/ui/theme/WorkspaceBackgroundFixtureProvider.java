@@ -31,6 +31,9 @@ import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.zip.CRC32;
 
 /**
@@ -50,6 +53,7 @@ public final class WorkspaceBackgroundFixtureProvider extends ContentProvider {
     private static final long FIXTURE_TTL_MILLIS = 120_000L;
     private static final Object LOCK = new Object();
     private static final Map<String, Record> RECORDS = new HashMap<>();
+    private static final Map<String, Record> CONTROLLED = new HashMap<>();
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final char[] HEX = "0123456789abcdef".toCharArray();
 
@@ -68,6 +72,11 @@ public final class WorkspaceBackgroundFixtureProvider extends ContentProvider {
             }
         }
         synchronized (LOCK) {
+            for (Record record : CONTROLLED.values()) {
+                record.gate.failed.set(true);
+                record.gate.release.countDown();
+            }
+            CONTROLLED.clear();
             RECORDS.clear();
         }
         return true;
@@ -76,20 +85,56 @@ public final class WorkspaceBackgroundFixtureProvider extends ContentProvider {
     @Override
     public Bundle call(String method, String arg, Bundle extras) {
         enforceCaller();
-        if (!CREATE_METHOD.equals(method) || (extras != null && !extras.isEmpty())) {
+        if (extras != null && !extras.isEmpty()) {
             throw new IllegalArgumentException(UNSUPPORTED);
         }
+        if ("controlled-fixture-state".equals(method)
+                || "release-controlled-fixture".equals(method)
+                || "dispose-controlled-fixture".equals(method)) {
+            return controlledFixture(method, arg);
+        }
+        if (!CREATE_METHOD.equals(method)) throw new IllegalArgumentException(UNSUPPORTED);
         synchronized (LOCK) {
             removeExpiredLocked();
-            if (RECORDS.size() >= MAXIMUM_FIXTURES) {
+            int count = RECORDS.size();
+            for (String token : CONTROLLED.keySet()) if (!RECORDS.containsKey(token)) count++;
+            if (count >= MAXIMUM_FIXTURES) {
                 throw new IllegalStateException("Fixture capacity is exhausted");
             }
             String token = newTokenLocked();
             File file = new File(fixtureDirectory, token + ".fixture");
             Record record = createRecipe(arg, file);
             RECORDS.put(token, record);
+            if (record.gate != null) CONTROLLED.put(token, record);
             Bundle result = new Bundle();
             result.putString(RESULT_URI_KEY, "content://" + AUTHORITY + "/fixture/" + token);
+            return result;
+        }
+    }
+
+    private Bundle controlledFixture(String method, String token) {
+        if (token == null || !token.matches("[0-9a-f]{32}")) {
+            throw new IllegalArgumentException(UNAVAILABLE);
+        }
+        synchronized (LOCK) {
+            removeExpiredLocked();
+            Record record = CONTROLLED.get(token);
+            if (record == null) throw new IllegalArgumentException(UNAVAILABLE);
+            Gate gate = record.gate;
+            if ("release-controlled-fixture".equals(method)) gate.release.countDown();
+            if ("dispose-controlled-fixture".equals(method)) {
+                if (gate.entered.getCount() == 0L && gate.exited.getCount() != 0L) {
+                    throw new IllegalStateException("Cannot dispose an active fixture provider");
+                }
+                CONTROLLED.remove(token);
+                RECORDS.remove(token);
+                record.file.delete();
+            }
+            Bundle result = new Bundle();
+            result.putBoolean("entered", gate.entered.getCount() == 0L);
+            result.putBoolean("released", gate.release.getCount() == 0L);
+            result.putBoolean("exited", gate.exited.getCount() == 0L);
+            result.putBoolean("failed", gate.failed.get());
             return result;
         }
     }
@@ -206,20 +251,33 @@ public final class WorkspaceBackgroundFixtureProvider extends ContentProvider {
         enforceCaller();
         if (!"r".equals(mode)) throw new FileNotFoundException(UNAVAILABLE);
         Record record = requireRecord(uri, true);
-        if (record.delayMillis > 0L) {
-            try {
-                Thread.sleep(record.delayMillis);
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-                record.file.delete();
-                throw new FileNotFoundException(UNAVAILABLE);
+        try {
+            if (record.gate != null) {
+                record.gate.entered.countDown();
+                // The cancellation signal is deliberately ignored. Only the test releases this
+                // provider; the fail-safe is reported as a failure rather than an implicit release.
+                if (!record.gate.release.await(15L, TimeUnit.SECONDS)) {
+                    record.gate.failed.set(true);
+                    record.file.delete();
+                    throw new FileNotFoundException("Controlled fixture release timed out");
+                }
             }
+            if (record.delayMillis > 0L) {
+                Thread.sleep(record.delayMillis);
+            }
+            ParcelFileDescriptor descriptor =
+                    ParcelFileDescriptor.open(record.file, ParcelFileDescriptor.MODE_READ_ONLY);
+            long length = record.file.length();
+            record.file.delete();
+            return new AssetFileDescriptor(descriptor, 0L, length);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            if (record.gate != null) record.gate.failed.set(true);
+            record.file.delete();
+            throw new FileNotFoundException(UNAVAILABLE);
+        } finally {
+            if (record.gate != null) record.gate.exited.countDown();
         }
-        ParcelFileDescriptor descriptor =
-                ParcelFileDescriptor.open(record.file, ParcelFileDescriptor.MODE_READ_ONLY);
-        long length = record.file.length();
-        record.file.delete();
-        return new AssetFileDescriptor(descriptor, 0L, length);
     }
 
     private Record requireRecord(Uri uri, boolean consume) throws FileNotFoundException {
@@ -242,6 +300,7 @@ public final class WorkspaceBackgroundFixtureProvider extends ContentProvider {
                 if (consume) record.file.delete();
                 throw new FileNotFoundException(UNAVAILABLE);
             }
+            if (consume && record.gate != null) record.gate.entered.countDown();
             return record;
         }
     }
@@ -291,6 +350,7 @@ public final class WorkspaceBackgroundFixtureProvider extends ContentProvider {
             case "TOO_SMALL_JPEG": spec = new Spec(2048, 1024, Bitmap.CompressFormat.JPEG, 0xFF245480); break;
             case "EXIF_ROTATED_JPEG": spec = new Spec(1080, 2560, Bitmap.CompressFormat.JPEG, 0xFF245480, 0, false, ExifInterface.ORIENTATION_ROTATE_90, 0L); break;
             case "DELAYED_VALID_JPEG": spec = new Spec(2560, 1080, Bitmap.CompressFormat.JPEG, 0xFF245480, 0, false, ExifInterface.ORIENTATION_NORMAL, 700L); break;
+            case "CONTROLLED_VALID_JPEG": spec = new Spec(2560, 1080, Bitmap.CompressFormat.JPEG, 0xFF245480); break;
             case "RETRY_VALID_JPEG": spec = new Spec(2560, 1080, Bitmap.CompressFormat.JPEG, 0xFF70512A); break;
             case "PERSISTENCE_HOME_JPEG": spec = new Spec(2560, 1080, Bitmap.CompressFormat.JPEG, 0xFF315B7A); break;
             case "PERSISTENCE_WORKSPACE_PNG": spec = new Spec(2560, 1080, Bitmap.CompressFormat.PNG, 0xFF7A4A31); break;
@@ -298,12 +358,13 @@ public final class WorkspaceBackgroundFixtureProvider extends ContentProvider {
             case "EDGE_4097_JPEG": spec = new Spec(4097, 1080, Bitmap.CompressFormat.JPEG, 0xFF7A4A31); break;
             case "BROKEN_PNG":
                 writeBytes(file, new byte[] {(byte) 0x89, 0x50, 0x4e, 0x47});
-                return new Record(file, "image/png", 0L, SystemClock.elapsedRealtime());
+                return new Record(file, "image/png", 0L, SystemClock.elapsedRealtime(), null);
             default: throw new IllegalArgumentException(UNSUPPORTED);
         }
         writeBitmap(file, spec);
         String mime = spec.format == Bitmap.CompressFormat.PNG ? "image/png" : "image/jpeg";
-        return new Record(file, mime, spec.delayMillis, SystemClock.elapsedRealtime());
+        return new Record(file, mime, spec.delayMillis, SystemClock.elapsedRealtime(),
+                "CONTROLLED_VALID_JPEG".equals(recipe) ? new Gate() : null);
     }
 
     private void writeBitmap(File file, Spec spec) {
@@ -385,6 +446,16 @@ public final class WorkspaceBackgroundFixtureProvider extends ContentProvider {
             }
         }
         for (String token : expired) RECORDS.remove(token);
+        expired.clear();
+        for (Map.Entry<String, Record> entry : CONTROLLED.entrySet()) {
+            if (now - entry.getValue().createdAtMillis > FIXTURE_TTL_MILLIS) {
+                entry.getValue().gate.failed.set(true);
+                entry.getValue().gate.release.countDown();
+                entry.getValue().file.delete();
+                expired.add(entry.getKey());
+            }
+        }
+        for (String token : expired) CONTROLLED.remove(token);
     }
 
     private String newTokenLocked() {
@@ -398,7 +469,7 @@ public final class WorkspaceBackgroundFixtureProvider extends ContentProvider {
                 token[i * 2 + 1] = HEX[value & 0x0f];
             }
             String value = new String(token);
-            if (!RECORDS.containsKey(value)) return value;
+            if (!RECORDS.containsKey(value) && !CONTROLLED.containsKey(value)) return value;
         }
     }
 
@@ -407,13 +478,22 @@ public final class WorkspaceBackgroundFixtureProvider extends ContentProvider {
         final String mimeType;
         final long delayMillis;
         final long createdAtMillis;
+        final Gate gate;
 
-        Record(File file, String mimeType, long delayMillis, long createdAtMillis) {
+        Record(File file, String mimeType, long delayMillis, long createdAtMillis, Gate gate) {
             this.file = file;
             this.mimeType = mimeType;
             this.delayMillis = delayMillis;
             this.createdAtMillis = createdAtMillis;
+            this.gate = gate;
         }
+    }
+
+    private static final class Gate {
+        final CountDownLatch entered = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+        final CountDownLatch exited = new CountDownLatch(1);
+        final AtomicBoolean failed = new AtomicBoolean(false);
     }
 
     private static final class Spec {
