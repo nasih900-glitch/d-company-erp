@@ -221,11 +221,12 @@ def main() -> int:
     values = {"hw.cpu.ncore": "2", "hw.keyboard": "no"}
     config.write_text("\n".join([line for line in rows if line.split("=", 1)[0].strip() not in values] + [f"{key}={value}" for key, value in values.items()]) + "\n")
     (output / "avd-config.ini").write_bytes(config.read_bytes())
-    try:
-        linkage = subprocess.run(["ldd", str(binary)], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=15, check=False)
-        (output / "emulator-linkage.txt").write_bytes(linkage.stdout[:65536])
-    except (OSError, subprocess.SubprocessError) as exc:
-        (output / "emulator-linkage.txt").write_text("Linkage observation unavailable: " + type(exc).__name__)
+    for label, executable in (("launcher", binary), ("qemu", binary.parent / "qemu/linux-x86_64/qemu-system-x86_64")):
+        try:
+            linkage = subprocess.run(["ldd", str(executable)], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=15, check=False)
+            (output / f"emulator-{label}-linkage.txt").write_bytes(linkage.stdout[:65536])
+        except (OSError, subprocess.SubprocessError) as exc:
+            (output / f"emulator-{label}-linkage.txt").write_text("Linkage observation unavailable: " + type(exc).__name__)
     try:
         version_probe = subprocess.run([str(binary), "-version"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=15, check=False)
         version_output, version_exit = version_probe.stdout, version_probe.returncode

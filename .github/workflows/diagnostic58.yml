@@ -40,6 +40,11 @@ jobs:
           github-token: ${{ github.token }}
           merge-multiple: true
           path: ${{ runner.temp }}/debug-pair
+      - name: Install demonstrated emulator runtime prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libpulse0
+          dpkg-query --show --showformat='${Package} ${Version}\n' libpulse0
       - name: Verify KVM access
         run: |
           test -c /dev/kvm
