@@ -23,7 +23,7 @@ from uuid import UUID
 PRIOR_REVISION = "5ad146ae076f5178acc2c8e4cb840ecbb0d0343a"
 PRIOR_VERSION = "3.1.46"
 PRIOR_DATABASE_HEAD = "0091"
-CANDIDATE_VERSION = "3.1.51"
+CANDIDATE_VERSION = "3.1.52"
 CANDIDATE_DATABASE_HEAD = "0093"
 PRIOR_SOURCE_ARCHIVE_SHA256 = (
     "7ded1fbc0afb2fb0dc93421bd6fc9b9e9ecef677e69b28ec1a4830d8252f6db5"
@@ -90,8 +90,8 @@ BACKEND_UVICORN_ENTRYPOINT = [
 # Independent review fills these final closure values; the helper cannot hash
 # its own enclosing archive. Historical release maps remain immutable.
 CANDIDATE_RELEASE_FROZEN = True
-CANDIDATE_BACKEND_MANIFEST_SHA256: str | None = "cf078fd98226d1b9266e3a94c82345ce463235286d6cb2494cac0d9a25fe5e28"
-CANDIDATE_PROTECTED_SOURCE_SHA256: str | None = "f87a8f737307ba5462d12d974f6e674796ede983aa8add20a26116c364f0776a"
+CANDIDATE_BACKEND_MANIFEST_SHA256: str | None = "bba1e5cd23501b0e6d22d190c978fa8f432ca97463fdd0e61b4f3604d91be125"
+CANDIDATE_PROTECTED_SOURCE_SHA256: str | None = "d561a281ff8b6ec5b1fb90ae2aead7cfb9af3e57ee7c95ad9d0b5182b86a2500"
 EXPECTED_POLICY_SCHEMA_ROWS: tuple[str, ...] = (
     "column|android_update_policy|1|id|integer|NO||||32|2|0||||||||||pg_catalog|int4|NO||||||NO|NEVER||YES",
     "column|android_update_policy|2|mode|character varying|NO||20|80|||||||||||||pg_catalog|varchar|NO||||||NO|NEVER||YES",
@@ -948,6 +948,8 @@ PRIOR_PYTHON_VERSION = "3.14.8"
 PRIOR_PYTHON_SHA256 = "c2215904f02b175596dc49351585104f4bc20341e1c47378b26a2c274360ce73"
 CANDIDATE_PYTHON_VERSION = "3.14.10"
 CANDIDATE_PYTHON_SHA256 = "de414a57119abef52784d8993e341d53aed635fc2b05c2607d9f98a2c5b72032"
+PRIOR_FRONTEND_NGINX_VERSION = "1.31.5"
+CANDIDATE_FRONTEND_NGINX_VERSION = "1.31.8"
 
 
 def candidate_backend_environment(before: dict[str, str], revision: str) -> dict[str, str]:
@@ -972,6 +974,25 @@ def candidate_backend_environment(before: dict[str, str], revision: str) -> dict
     }
 
 
+def candidate_service_environment(service: str, before: dict[str, str], revision: str) -> dict[str, str]:
+    """Preserve deployment settings while admitting exact reviewed image patches."""
+    if service not in SERVICES or not re.fullmatch(r"[a-f0-9]{40}", str(revision)):
+        raise CompatibilityError("candidate service or revision is invalid")
+    if service == "backend":
+        return candidate_backend_environment(before, revision)
+    if service == "frontend":
+        if before.get("NGINX_VERSION") != PRIOR_FRONTEND_NGINX_VERSION:
+            raise CompatibilityError("reviewed prior frontend Nginx metadata changed")
+        return {**before, "NGINX_VERSION": CANDIDATE_FRONTEND_NGINX_VERSION}
+    return dict(before)
+
+
+def verify_frontend_image_metadata(values: object) -> None:
+    """Check the actual image pin independently of Compose's overrides."""
+    if environment(values).get("NGINX_VERSION") != CANDIDATE_FRONTEND_NGINX_VERSION:
+        raise CompatibilityError("candidate frontend Nginx image metadata changed")
+
+
 def candidate_image_environment(image_values: object, overrides: object, *, service: str) -> dict[str, str]:
     effective = environment(image_values)
     if not isinstance(overrides, dict) or not all(
@@ -980,6 +1001,8 @@ def candidate_image_environment(image_values: object, overrides: object, *, serv
         raise CompatibilityError("candidate effective environment is malformed")
     if service == "backend" and {"PATH", "PYTHON_VERSION", "PYTHON_SHA256", "LANG"} & overrides.keys():
         raise CompatibilityError("candidate Compose masks Python image metadata")
+    if service == "frontend" and "NGINX_VERSION" in overrides:
+        raise CompatibilityError("candidate Compose masks Nginx image metadata")
     effective.update(overrides)
     return effective
 
@@ -1160,14 +1183,18 @@ def verify_candidate_runtime(journal: dict, image_records: dict, compose: dict, 
             )
         if service == "backend" and "env_file" in config:
             raise CompatibilityError("candidate Compose masks Python image metadata")
+        if service == "frontend":
+            if "env_file" in config:
+                raise CompatibilityError("candidate Compose masks Nginx image metadata")
+            verify_frontend_image_metadata(image["Config"].get("Env"))
         effective = candidate_image_environment(
             image.get("Config", {}).get("Env"), config.get("environment", {}), service=service,
         )
         before = environment(runtime[service]["Config"]["Env"])
-        expected = candidate_backend_environment(before, revision) if service == "backend" else before
+        expected = candidate_service_environment(service, before, revision)
         if effective != expected:
             raise CompatibilityError(
-                "effective runtime environment changed beyond reviewed identity and Python patch"
+                f"effective runtime environment changed beyond reviewed identity and image patches ({service})"
             )
         executable = candidate_executable(image["Config"], config)
         prior_config = runtime[service]["Config"]
@@ -1353,10 +1380,10 @@ def verify_running_runtime(
         if not command_matches:
             raise CompatibilityError("actual running executable/user changed")
         expected = environment(before[service]["Config"]["Env"])
-        if not prior and service == "backend":
-            expected = candidate_backend_environment(expected, revision)
+        if not prior:
+            expected = candidate_service_environment(service, expected, revision)
         if environment(config.get("Env")) != expected:
-            raise CompatibilityError("actual effective runtime environment changed")
+            raise CompatibilityError(f"actual effective runtime environment changed ({service})")
     return {
         "status": "prior_runtime_verified" if prior else "candidate_runtime_verified",
         "service_count": len(SERVICES),

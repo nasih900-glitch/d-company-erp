@@ -112,6 +112,10 @@ def pre_binding_documents(verifier, runtime, monkeypatch):
         name = row['Config']['Labels']['com.docker.compose.service']
         before = verifier.environment(row['Config']['Env'])
         env = verifier.candidate_backend_environment(before, revision) if name == 'backend' else before
+        if name == 'frontend':
+            # Independent literal observed in the pinned frontend image; do not
+            # derive fixture input from the transition function being tested.
+            env = {**before, 'NGINX_VERSION': '1.31.8'}
         config = {'Env': [key+'='+value for key, value in env.items()],
                   'Entrypoint': deepcopy(row['Config']['Entrypoint']), 'Cmd': deepcopy(row['Config']['Cmd']) or None,
                   'Labels': {'org.opencontainers.image.revision': revision,
@@ -608,6 +612,8 @@ def runtime(verifier, monkeypatch, request):
                 "CLIENT_COMPATIBILITY_POLICY_REVISION=4",
                 "CLIENT_UPDATE_MESSAGE=Build54 $inert",
             ]
+        elif service == "frontend":
+            env.append("NGINX_VERSION=1.31.5")
         config = {
             "Env": env,
             "Entrypoint": verifier.BACKEND_UVICORN_ENTRYPOINT
@@ -696,10 +702,12 @@ def test_candidate_and_restored_actual_runtime_include_effective_env_and_command
     )
     for name, row in actual.items():
         row["Image"] = identity["candidate_images"][name]
+        env = verifier.environment(row["Config"]["Env"])
         if name == "backend":
-            env = verifier.environment(row["Config"]["Env"])
             env = verifier.candidate_backend_environment(env, "b" * 40)
-            row["Config"]["Env"] = [key + "=" + value for key, value in env.items()]
+        elif name == "frontend":
+            env['NGINX_VERSION'] = '1.31.8'
+        row["Config"]["Env"] = [key + "=" + value for key, value in env.items()]
     assert (
         verifier.verify_running_runtime(runtime, actual, identity)[
             "effective_environment_verified"
@@ -861,7 +869,7 @@ def test_live_production_expanded_query_pin_is_distinct_from_old54_query(verifie
 
 def test_main_installer_orders_preservation_before_any_writer_and_never_reopens_credentials():
     source = (ROOT / "infra/scripts/install-on-vm.sh").read_text()
-    assert "grep -qx 'APP_VERSION=3.1.51'" in source
+    assert "grep -qx 'APP_VERSION=3.1.52'" in source
     assert "APP_VERSION=3.1.47" not in source
     profile = source.index(
         'if [ "$BUILD55_EXACT_TRANSITION" = true ]; then\n    BUILD55_PRE_TRANSITION='
@@ -882,7 +890,7 @@ def test_main_installer_orders_preservation_before_any_writer_and_never_reopens_
     assert 'sha256sum "$BUILD55_ACCEPTANCE_CREDENTIAL_FILE"' not in source
 
 
-@pytest.mark.parametrize("version", ["3.1.46", "3.1.47", "3.1.48", "3.1.49", "3.1.50", "3.1.52"])
+@pytest.mark.parametrize("version", ["3.1.46", "3.1.47", "3.1.48", "3.1.49", "3.1.50", "3.1.51", "3.1.53"])
 def test_current_profile_rejects_withheld_or_other_release_identity(verifier, monkeypatch, version):
     from types import SimpleNamespace
 
@@ -1238,7 +1246,7 @@ def test_candidate_backend_admits_only_exact_reviewed_python_patch(verifier):
     candidate = verifier.candidate_backend_environment(before, "b" * 40)
     assert before == original
     assert candidate == {
-        **before, "APP_VERSION": "3.1.51", "APP_REVISION": "b" * 40,
+        **before, "APP_VERSION": "3.1.52", "APP_REVISION": "b" * 40,
         "PYTHON_VERSION": "3.14.10",
         "PYTHON_SHA256": "de414a57119abef52784d8993e341d53aed635fc2b05c2607d9f98a2c5b72032",
         "LANG": "C.UTF-8",
@@ -1258,6 +1266,214 @@ def test_candidate_backend_admits_only_exact_reviewed_python_patch(verifier):
 def test_candidate_compose_cannot_mask_python_image_metadata(verifier, key):
     with pytest.raises(verifier.CompatibilityError, match="masks Python"):
         verifier.candidate_image_environment(["KEEP=1"], {key: "spoofed"}, service="backend")
+
+
+def frontend_metadata_contract():
+    return json.loads(
+        (ROOT / "tests/fixtures/build59-nginx-metadata-transition.json").read_bytes()
+    )
+
+
+def candidate_runtime_records(verifier, documents):
+    actual = {}
+    for old in documents["journal"]["containers"]:
+        name = old["Config"]["Labels"]["com.docker.compose.service"]
+        row = deepcopy(old)
+        row["Image"] = documents["identity"]["candidate_images"][name]
+        env = verifier.environment(documents["images"][name]["Config"]["Env"])
+        env.update(documents["compose"]["services"][name]["environment"])
+        row["Config"]["Env"] = [key + "=" + value for key, value in env.items()]
+        actual[name] = row
+    return actual
+
+
+def test_exact_frontend_metadata_transition_accepts_early_and_running(
+    verifier, pre_binding_documents
+):
+    args, docs = pre_binding_documents
+    contract = frontend_metadata_contract()
+    assert contract["prior_nginx_version"] == "1.31.5"
+    assert contract["candidate_nginx_version"] == "1.31.8"
+    old = next(
+        row
+        for row in docs["journal"]["containers"]
+        if row["Config"]["Labels"]["com.docker.compose.service"] == "frontend"
+    )
+    before = verifier.environment(old["Config"]["Env"])
+    original = deepcopy(before)
+    assert verifier.candidate_service_environment("frontend", before, "b" * 40) == {
+        **before,
+        "NGINX_VERSION": contract["candidate_nginx_version"],
+    }
+    assert before == original
+    verifier.verify_pre_bindings(args)
+    actual = candidate_runtime_records(verifier, docs)
+    assert verifier.verify_running_runtime(docs["journal"], actual, docs["identity"])[
+        "effective_environment_verified"
+    ]
+
+
+def test_frozen58_rejects_the_independent_real_frontend_transition(
+    verifier, pre_binding_documents
+):
+    _, docs = pre_binding_documents
+    source = subprocess.check_output(
+        [
+            "git",
+            "show",
+            "6eb61bf097afb7d6e306f3878a64f266adf451a1:infra/scripts/verify-build55-pending-compatibility.py",
+        ],
+        cwd=ROOT,
+    )
+    legacy = SimpleNamespace()
+    exec(compile(source, "immutable58_runtime_guard", "exec"), legacy.__dict__)
+    legacy.PRIOR_ENVIRONMENT_SHA256 = dict(verifier.PRIOR_ENVIRONMENT_SHA256)
+    legacy.PRIOR_COMMAND_SHA256 = dict(verifier.PRIOR_COMMAND_SHA256)
+    images = deepcopy(docs["images"])
+    for name, image in images.items():
+        image["Config"]["Labels"]["org.opencontainers.image.version"] = (
+            legacy.CANDIDATE_VERSION
+        )
+        if name == "backend":
+            env = verifier.environment(image["Config"]["Env"])
+            env["APP_VERSION"] = legacy.CANDIDATE_VERSION
+            image["Config"]["Env"] = [key + "=" + value for key, value in env.items()]
+    with pytest.raises(
+        legacy.CompatibilityError, match="effective runtime environment changed"
+    ):
+        legacy.verify_candidate_runtime(
+            docs["journal"],
+            images,
+            docs["compose"],
+            "b" * 40,
+            docs["identity"]["candidate_images"],
+        )
+    actual = candidate_runtime_records(verifier, docs)
+    env = verifier.environment(actual["backend"]["Config"]["Env"])
+    env["APP_VERSION"] = legacy.CANDIDATE_VERSION
+    actual["backend"]["Config"]["Env"] = [
+        key + "=" + value for key, value in env.items()
+    ]
+    with pytest.raises(
+        legacy.CompatibilityError, match="effective runtime environment changed"
+    ):
+        legacy.verify_running_runtime(docs["journal"], actual, docs["identity"])
+
+
+@pytest.mark.parametrize("version", [None, "1.31.4", "1.31.8", "1.31.9"])
+def test_frontend_transition_requires_exact_prior_metadata(verifier, version):
+    before = {"KEEP": "unaltered"}
+    if version is not None:
+        before["NGINX_VERSION"] = version
+    with pytest.raises(verifier.CompatibilityError, match="prior frontend"):
+        verifier.candidate_service_environment("frontend", before, "b" * 40)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "old_version",
+        "future_version",
+        "missing_version",
+        "extra",
+        "delete",
+        "business_value",
+    ],
+)
+@pytest.mark.parametrize("phase", ["early", "running"])
+def test_frontend_patch_never_admits_unrelated_environment_drift(
+    verifier, pre_binding_documents, phase, change
+):
+    _, docs = pre_binding_documents
+    target = docs["images"]["frontend"]["Config"]["Env"]
+    env = verifier.environment(target)
+    if change == "old_version":
+        env["NGINX_VERSION"] = "1.31.5"
+    elif change == "future_version":
+        env["NGINX_VERSION"] = "1.31.9"
+    elif change == "missing_version":
+        env.pop("NGINX_VERSION")
+    elif change == "extra":
+        env["UNREVIEWED"] = "not admitted"
+    elif change == "delete":
+        env.pop("IMAGE_LITERAL")
+    else:
+        env["IMAGE_LITERAL"] = "changed business setting"
+    docs["images"]["frontend"]["Config"]["Env"] = [
+        key + "=" + value for key, value in env.items()
+    ]
+    with pytest.raises(verifier.CompatibilityError):
+        if phase == "early":
+            verifier.verify_candidate_runtime(
+                docs["journal"],
+                docs["images"],
+                docs["compose"],
+                "b" * 40,
+                docs["identity"]["candidate_images"],
+            )
+        else:
+            verifier.verify_running_runtime(
+                docs["journal"],
+                candidate_runtime_records(verifier, docs),
+                docs["identity"],
+            )
+
+
+@pytest.mark.parametrize("mask", ["environment", "env_file"])
+def test_frontend_compose_cannot_mask_even_the_correct_metadata(
+    verifier, pre_binding_documents, mask
+):
+    _, docs = pre_binding_documents
+    config = docs["compose"]["services"]["frontend"]
+    if mask == "environment":
+        config["environment"]["NGINX_VERSION"] = "1.31.8"
+    else:
+        config["env_file"] = ["unreviewed.env"]
+    with pytest.raises(verifier.CompatibilityError, match="masks Nginx"):
+        verifier.verify_candidate_runtime(
+            docs["journal"],
+            docs["images"],
+            docs["compose"],
+            "b" * 40,
+            docs["identity"]["candidate_images"],
+        )
+
+
+def test_frontend_image_metadata_rejects_duplicate_keys(verifier):
+    with pytest.raises(verifier.CompatibilityError, match="duplicate"):
+        verifier.verify_frontend_image_metadata(
+            ["NGINX_VERSION=1.31.8", "NGINX_VERSION=1.31.8"]
+        )
+
+
+@pytest.mark.parametrize("service", ["backend", "caddy", "postgres", "redis"])
+def test_nginx_patch_cannot_change_another_services_environment(
+    verifier, pre_binding_documents, service
+):
+    _, docs = pre_binding_documents
+    docs["images"][service]["Config"]["Env"].append("NGINX_VERSION=1.31.8")
+    with pytest.raises(verifier.CompatibilityError, match="environment changed"):
+        verifier.verify_candidate_runtime(
+            docs["journal"],
+            docs["images"],
+            docs["compose"],
+            "b" * 40,
+            docs["identity"]["candidate_images"],
+        )
+
+
+def test_prior_runtime_still_requires_unchanged_frontend_metadata(verifier, runtime):
+    actual = {
+        row["Config"]["Labels"]["com.docker.compose.service"]: deepcopy(row)
+        for row in runtime["containers"]
+    }
+    env = verifier.environment(actual["frontend"]["Config"]["Env"])
+    env["NGINX_VERSION"] = "1.31.8"
+    actual["frontend"]["Config"]["Env"] = [
+        key + "=" + value for key, value in env.items()
+    ]
+    with pytest.raises(verifier.CompatibilityError, match="environment changed"):
+        verifier.verify_running_runtime(runtime, actual, {}, prior=True)
 
 
 @pytest.mark.parametrize("version,checksum", [
