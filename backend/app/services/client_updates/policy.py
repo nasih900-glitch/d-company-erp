@@ -17,6 +17,7 @@ from sqlalchemy import select
 
 from app.core.db import AsyncSessionLocal
 from app.core.errors import ServiceUnavailableError
+from app.core.logging import get_logger
 from app.models import AndroidRelease, AndroidUpdatePolicy
 from app.services.client_updates.runtime_parity import verify_runtime_parity_for_public_offer
 
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
 DIRECT_RELEASE_LOCK_KEY = 7_310_042_021
 POLICY_INTEGER_MAX = 2_147_483_647
 POLICY_LOOKUP_BUDGET_SECONDS = 0.8
+_logger = get_logger(__name__)
 
 
 def release_fingerprint(release: AndroidRelease) -> str:
@@ -126,6 +128,7 @@ async def _load(settings: Settings) -> AndroidPolicySnapshot:
 async def resolve_android_update_policy(settings: Settings) -> AndroidPolicySnapshot:
     """Bound callers, not DB cleanup; one stalled lookup cannot fan out more work."""
     loop = asyncio.get_running_loop()
+    started = loop.time()
     settings = settings.model_copy()
     key = (
         settings.android_min_supported_version_code,
@@ -140,12 +143,14 @@ async def resolve_android_update_policy(settings: Settings) -> AndroidPolicySnap
                 lambda task: None if task.cancelled() else task.exception()
             )
         task = state.task
+    phase = "snapshot_lookup"
     try:
         async with asyncio.timeout(POLICY_LOOKUP_BUDGET_SECONDS):
             snapshot = await asyncio.shield(task)
         if snapshot.release is not None:
             # Reuse the bounded, success-cached live-identity probe. A DB row
             # survives deployment rollback and is not current runtime evidence.
+            phase = "runtime_parity"
             await verify_runtime_parity_for_public_offer(
                 version_name=snapshot.release["version_name"],
                 source_git_sha=snapshot.source_git_sha,
@@ -155,6 +160,20 @@ async def resolve_android_update_policy(settings: Settings) -> AndroidPolicySnap
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        # Keep failure classes and timing observable without recording exception
+        # messages, SQL parameters, credentials, release URLs or token material.
+        # A logging sink failure must not replace the original fail-closed 503.
+        try:
+            _logger.warning(
+                "android_update_policy_unavailable",
+                phase=phase,
+                failure_type=type(exc).__name__,
+                elapsed_ms=round((loop.time() - started) * 1_000, 3),
+                lookup_done=task.done(),
+                lookup_cancelled=task.cancelled(),
+            )
+        except Exception:
+            pass
         raise ServiceUnavailableError(
             "Android update policy is temporarily unavailable. Saved work is unchanged. Retry shortly."
         ) from exc

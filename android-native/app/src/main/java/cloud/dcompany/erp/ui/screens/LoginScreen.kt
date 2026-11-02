@@ -476,26 +476,32 @@ internal fun LoginWorkspace(
                         Column(
                             Modifier.fillMaxWidth()
                                 .height((geometry.panelHeight - geometry.formTop).dp)
-                                .align(Alignment.BottomCenter)
-                                .verticalScroll(rememberScrollState())
-                                .padding(bottom = 44.dp),
+                                .align(Alignment.BottomCenter),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            Box(Modifier.width(geometry.controlWidth.dp)) {
-                                LoginFormContainer(wide = true, content = form)
+                            // Reserve the measured footer outside the scroll viewport. Content
+                            // padding can scroll away when the IME brings a field into view.
+                            Column(
+                                Modifier.fillMaxWidth().weight(1f)
+                                    .verticalScroll(rememberScrollState())
+                                    .padding(bottom = 16.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                Box(Modifier.width(geometry.controlWidth.dp)) {
+                                    LoginFormContainer(wide = true, content = form)
+                                }
+                                Spacer(Modifier.height(24.dp))
                             }
-                            Spacer(Modifier.height(24.dp))
+                            Text(
+                                text = "v${BuildConfig.VERSION_NAME}",
+                                modifier = Modifier.width(geometry.controlWidth.dp)
+                                    .padding(top = 8.dp, bottom = 10.dp)
+                                    .testTag("login-version"),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White.copy(alpha = 0.70f),
+                                textAlign = TextAlign.Center,
+                            )
                         }
-                        Text(
-                            text = "v${BuildConfig.VERSION_NAME}",
-                            modifier = Modifier.width(geometry.controlWidth.dp)
-                                .align(Alignment.BottomCenter)
-                                .padding(bottom = 10.dp)
-                                .testTag("login-version"),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.White.copy(alpha = 0.70f),
-                            textAlign = TextAlign.Center,
-                        )
                     }
                     Box(
                         Modifier.fillMaxHeight().width(geometry.artworkZoneWidth.dp)

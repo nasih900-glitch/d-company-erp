@@ -1334,11 +1334,13 @@ async def test_active_consent_session_and_command_end_on_tablet_user_handoff(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+@pytest.mark.parametrize("request_start_delay", [0.0, 3.0])
 async def test_slow_frame_upload_releases_database_lock_and_revoke_prevents_store(
     client,
     session,
     seed_owner,
     monkeypatch,
+    request_start_delay: float,
 ) -> None:
     installation = await _installation(session, seed_owner)
     grant, support = await _active_support_session(session, seed_owner, installation)
@@ -1380,11 +1382,18 @@ async def test_slow_frame_upload_releases_database_lock_and_revoke_prevents_stor
     monkeypatch.setattr(remote_router, "authenticate_device_request", authenticate)
     monkeypatch.setattr(remote_router, "_require_exact_active_device_key", allow_exact_key)
     monkeypatch.setattr(remote_router, "_read_bounded_body", slow_body)
-    monkeypatch.setattr(remote_router.to_thread, "run_sync", decode_off_loop)
+    # The router imports AnyIO's shared module. Replacing its run_sync attribute
+    # would also change Starlette/FastAPI internals in this process.
+    from anyio import to_thread as shared_to_thread
+    original_run_sync = shared_to_thread.run_sync
+    monkeypatch.setattr(remote_router, "to_thread", SimpleNamespace(run_sync=decode_off_loop))
+    assert shared_to_thread.run_sync is original_run_sync
     monkeypatch.setattr(remote_router, "store_latest_frame", forbidden_store)
 
-    upload_task = asyncio.create_task(
-        client.put(
+    async def upload_request():
+        if request_start_delay:
+            await asyncio.sleep(request_start_delay)
+        return await client.put(
             f"/api/v1/remote-assistance/device/sessions/{support.id}/frame",
             headers={
                 **device_headers,
@@ -1398,31 +1407,20 @@ async def test_slow_frame_upload_releases_database_lock_and_revoke_prevents_stor
             },
             content=b"bounded-jpeg-body",
         )
-    )
+
+    upload_task = asyncio.create_task(upload_request(), name="slow-frame-upload-proof")
+    body_waiter = asyncio.create_task(body_read_started.wait())
     try:
-        try:
-            await asyncio.wait_for(body_read_started.wait(), timeout=2)
-        except TimeoutError as exc:
-            # A pre-body rejection and a blocked request are different failures.
-            # Retain that distinction without exposing response bodies or credentials.
-            if upload_task.cancelled():
-                diagnostic = "request was cancelled"
-            elif upload_task.done():
-                failure = upload_task.exception()
-                diagnostic = (
-                    f"request raised {type(failure).__name__}"
-                    if failure is not None
-                    else f"request completed with HTTP {upload_task.result().status_code}"
-                )
-            else:
-                diagnostic = "request is still pending at " + ", ".join(
-                    f"{frame.f_code.co_name}:{frame.f_lineno}"
-                    for frame in upload_task.get_stack()
-                )
-            raise AssertionError(
-                "Upload did not reach body reading within the existing 2-second budget; "
-                + diagnostic
-            ) from exc
+        # Authentication and connection setup precede the security proof. The
+        # delayed-start case ensures they do not consume its unchanged 2s budget.
+        done, _ = await asyncio.wait(
+            {body_waiter, upload_task}, timeout=10, return_when=asyncio.FIRST_COMPLETED,
+        )
+        if upload_task in done:
+            response = upload_task.result()
+            pytest.fail(f"Upload returned HTTP {response.status_code} before body readiness")
+        assert body_waiter in done, "Upload startup readiness exceeded 10s"
+        assert body_waiter.result() and not release_body.is_set() and not upload_task.done()
         try:
             revoked = await asyncio.wait_for(
                 client.post(
@@ -1444,9 +1442,12 @@ async def test_slow_frame_upload_releases_database_lock_and_revoke_prevents_stor
         release_body.set()
         if not upload_task.done():
             upload_task.cancel()
+        if not body_waiter.done():
+            body_waiter.cancel()
         completed, _ = await asyncio.wait({upload_task}, timeout=2)
         assert upload_task in completed, "Upload task did not finish bounded cleanup"
-        await asyncio.gather(upload_task, return_exceptions=True)
+        await asyncio.gather(upload_task, body_waiter, return_exceptions=True)
+        assert shared_to_thread.run_sync is original_run_sync
 
 
 

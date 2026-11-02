@@ -1,6 +1,7 @@
 package cloud.dcompany.erp.ui.screens
 
 import android.graphics.Bitmap
+import android.graphics.Rect as AndroidRect
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
@@ -12,6 +13,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.SemanticsMatcher
@@ -27,6 +29,7 @@ import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -41,6 +44,8 @@ import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import cloud.dcompany.erp.ui.theme.AppearancePreference
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import cloud.dcompany.erp.ui.theme.LocalWorkspaceGlassScene
@@ -158,6 +163,83 @@ class LoginWorkspaceUiTest {
         compose.onNodeWithTag("login-password").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("login-notice").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("login-submit").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun wideKeyboardKeepsVersionOutsideVisibleControlsAndSubmitFullyReachable() {
+        val submitted = mutableListOf<Pair<String, String>>()
+        compose.setContent {
+            LoginTestTheme(AppearancePreference.Night) {
+                LoginWorkspace(false, null, { email, password -> submitted += email to password },
+                    AppearancePreference.Night, {}, onRecover = {})
+            }
+        }
+        compose.onNodeWithTag("login-layout-wide").assertIsDisplayed()
+        compose.onNodeWithTag("login-email").performTextReplacement("synthetic@example.test")
+        compose.onNodeWithTag("login-password").performTextReplacement("local-test-password")
+        for (field in listOf("login-email", "login-password")) {
+            compose.onNodeWithTag(field).performScrollTo().performClick()
+            compose.waitUntil(5_000) {
+                var visible = false
+                compose.runOnIdle {
+                    visible = ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+                        ?.isVisible(WindowInsetsCompat.Type.ime()) == true
+                }
+                visible
+            }
+            // Check the field's automatic bring-into-view position before scrolling
+            // to the bottom, where old content padding could hide the overlap.
+            assertVersionDoesNotCoverVisibleControls()
+        }
+        val submit = compose.onNodeWithTag("login-submit").performScrollTo()
+        submit.assertIsDisplayed().assertIsEnabled()
+        assertVersionDoesNotCoverVisibleControls()
+        val visible = submit.fetchSemanticsNode().boundsInRoot
+        val unclipped = submit.getUnclippedBoundsInRoot()
+        val unclippedHeight = unclipped.bottom - unclipped.top
+        val screenNodes = listOf("login-submit", "login-version").map { tag ->
+            tag to compose.onNodeWithTag(tag).fetchSemanticsNode()
+        }
+        compose.runOnIdle {
+            val density = compose.activity.resources.displayMetrics.density
+            assertTrue("Submit must retain its complete touch target above the footer",
+                unclippedHeight.value >= 48f &&
+                    kotlin.math.abs(visible.height - unclippedHeight.value * density) <= 1f)
+            val safeScreen = AndroidRect()
+            compose.activity.window.decorView.getWindowVisibleDisplayFrame(safeScreen)
+            assertTrue("The keyboard must still be open while checking screen containment",
+                ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+                    ?.isVisible(WindowInsetsCompat.Type.ime()) == true)
+            for ((tag, node) in screenNodes) {
+                val topLeft = node.layoutInfo.coordinates.localToScreen(Offset.Zero)
+                val bottom = topLeft.y + node.layoutInfo.coordinates.size.height
+                assertTrue("$tag must be fully inside the usable screen above the keyboard",
+                    topLeft.y >= safeScreen.top && bottom <= safeScreen.bottom)
+            }
+        }
+        submit.performTouchInput { click() }
+        compose.runOnIdle {
+            assertEquals(listOf("synthetic@example.test" to "local-test-password"), submitted)
+        }
+        closeSoftKeyboard()
+        compose.onNodeWithTag("login-email").assertTextEquals("synthetic@example.test")
+        compose.onNodeWithTag("login-submit").performScrollTo().assertIsDisplayed()
+        assertVersionDoesNotCoverVisibleControls()
+        compose.onNodeWithTag("login-submit").performTouchInput { click() }
+        compose.runOnIdle {
+            assertEquals(List(2) { "synthetic@example.test" to "local-test-password" }, submitted)
+        }
+    }
+
+    private fun assertVersionDoesNotCoverVisibleControls() {
+        val footer = compose.onNodeWithTag("login-version").assertIsDisplayed()
+            .fetchSemanticsNode().boundsInRoot
+        for (tag in listOf("login-email", "login-password", "login-recover", "login-submit")) {
+            val control = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
+            if (control.width > 0f && control.height > 0f) {
+                assertTrue("Version footer must not cover visible $tag", !footer.overlaps(control))
+            }
+        }
     }
 
     @Test

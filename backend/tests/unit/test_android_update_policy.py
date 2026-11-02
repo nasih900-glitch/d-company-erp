@@ -198,6 +198,10 @@ async def test_policy_lookup_timeout_singleflight_does_not_cancel_cleanup(monkey
 
     entered, release = asyncio.Event(), asyncio.Event()
     calls = 0
+    warnings = []
+    monkeypatch.setattr(policy, "_logger", SimpleNamespace(
+        warning=lambda event, **fields: warnings.append((event, fields)),
+    ))
 
     async def hanging(_settings):
         nonlocal calls
@@ -212,6 +216,14 @@ async def test_policy_lookup_timeout_singleflight_does_not_cancel_cleanup(monkey
         with pytest.raises(ServiceUnavailableError):
             await policy.resolve_android_update_policy(settings())
     assert calls == 1
+    assert len(warnings) == 2
+    for event, fields in warnings:
+        assert event == "android_update_policy_unavailable"
+        assert fields["phase"] == "snapshot_lookup"
+        assert fields["failure_type"] == "TimeoutError"
+        assert fields["elapsed_ms"] >= 0
+        assert fields["lookup_done"] is False
+        assert fields["lookup_cancelled"] is False
     release.set()
     await asyncio.sleep(0)
 
@@ -228,7 +240,45 @@ async def test_required_runtime_parity_failure_is_not_a_supported_decision(monke
     async def mismatch(**_kwargs):
         raise RuntimeParityError("frontend_release_mismatch")
 
+    warnings = []
+    monkeypatch.setattr(policy, "_logger", SimpleNamespace(
+        warning=lambda event, **fields: warnings.append((event, fields)),
+    ))
+
     monkeypatch.setattr(policy, "_load", loaded)
     monkeypatch.setattr(policy, "verify_runtime_parity_for_public_offer", mismatch)
     with pytest.raises(ServiceUnavailableError):
         await policy.resolve_android_update_policy(settings())
+    assert warnings[0][1]["phase"] == "runtime_parity"
+    assert warnings[0][1]["failure_type"] == "RuntimeParityError"
+    assert warnings[0][1]["lookup_done"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("broken_logging_sink", [False, True])
+async def test_policy_failure_keeps_private_cause_out_of_logs_and_still_fails_closed(
+    monkeypatch, broken_logging_sink,
+):
+    private_message = "password=synthetic-private-value&token=never-log-this"
+    failure = RuntimeError(private_message)
+    warnings = []
+
+    async def broken(_settings):
+        raise failure
+
+    def warn(event, **fields):
+        warnings.append((event, fields))
+        if broken_logging_sink:
+            raise OSError("synthetic logging sink unavailable")
+
+    monkeypatch.setattr(policy, "_load", broken)
+    monkeypatch.setattr(policy, "_logger", SimpleNamespace(warning=warn))
+    with pytest.raises(ServiceUnavailableError) as caught:
+        await policy.resolve_android_update_policy(settings())
+    assert caught.value.__cause__ is failure
+    assert "synthetic-private-value" not in str(warnings)
+    assert "never-log-this" not in str(warnings)
+    assert warnings[0][1]["failure_type"] == "RuntimeError"
+    assert set(warnings[0][1]) == {
+        "phase", "failure_type", "elapsed_ms", "lookup_done", "lookup_cancelled",
+    }
