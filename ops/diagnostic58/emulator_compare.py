@@ -20,6 +20,7 @@ import uuid
 import zipfile
 
 COMMIT = "6eb61bf097afb7d6e306f3878a64f266adf451a1"
+PINNED_PAIR_MANIFEST_SHA256 = "7f789501e39a15116c9384782e1920083e523f933e3ed065835e7d113de87fd6"
 CLASS = "cloud.dcompany.erp.ui.screens.gaming.GamingBoardUiTest"
 RUNNER = "cloud.dcompany.erp.test/androidx.test.runner.AndroidJUnitRunner"
 PINS = {
@@ -176,6 +177,7 @@ def main() -> int:
     source, pair = args.source.resolve(), args.pair.resolve()
     assert subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip() == COMMIT
     assert subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=normal"], cwd=source, text=True).strip() == ""
+    assert digest(pair / "PAIR.json") == PINNED_PAIR_MANIFEST_SHA256
     receipt = json.loads((pair / "PAIR.json").read_text())
     assert receipt["source"] == COMMIT and set(receipt["files"]) == {"app.apk", "test.apk"}
     assert receipt["debug_api_base_url_override"] == "http://127.0.0.1:9/api/v1/"
@@ -219,7 +221,26 @@ def main() -> int:
     values = {"hw.cpu.ncore": "2", "hw.keyboard": "no"}
     config.write_text("\n".join([line for line in rows if line.split("=", 1)[0].strip() not in values] + [f"{key}={value}" for key, value in values.items()]) + "\n")
     (output / "avd-config.ini").write_bytes(config.read_bytes())
-    (output / "emulator-version.txt").write_bytes(subprocess.check_output([str(binary), "-version"], env=env, stderr=subprocess.STDOUT, timeout=15))
+    try:
+        linkage = subprocess.run(["ldd", str(binary)], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=15, check=False)
+        (output / "emulator-linkage.txt").write_bytes(linkage.stdout[:65536])
+    except (OSError, subprocess.SubprocessError) as exc:
+        (output / "emulator-linkage.txt").write_text("Linkage observation unavailable: " + type(exc).__name__)
+    try:
+        version_probe = subprocess.run([str(binary), "-version"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=15, check=False)
+        version_output, version_exit = version_probe.stdout, version_probe.returncode
+        version_error = None
+    except (OSError, subprocess.SubprocessError) as exc:
+        version_output = getattr(exc, "output", None) or b""
+        version_exit = None
+        version_error = type(exc).__name__
+    (output / "emulator-version.txt").write_bytes(version_output[:65536])
+    if version_exit != 0:
+        # No -avd command has been issued; subprocess.run reaps its version probe.
+        preflight = {"status": "SDK_VERSION_PREFLIGHT_FAILED_NO_GUEST_STARTED", "source": COMMIT, "version": args.version, "build": build, "archive_sha256": checksum, "version_exit": version_exit, "version_error_type": version_error, "version_output_truncated": len(version_output) > 65536, "cleanup_owned_process_exited": True, "no_emulator_guest_was_launched": True, "pair_manifest_sha256": PINNED_PAIR_MANIFEST_SHA256}
+        (output / "RESULT.json").write_text(json.dumps(preflight, indent=2) + "\n")
+        signal.alarm(0)
+        return 1
     result = {"source": COMMIT, "version": args.version, "build": build, "archive_sha256": checksum, "archive_bytes": size, "primary_archive_url": url, "status": "RUNNING", "rounds": [], "limitations": ["Rebuilt debug bytes, not retained bytes from failed release run", "Raw AndroidJUnitRunner; release uses UTP", "Untraced host process; no physical-device or performance admission"]}
     process = None
     logcat = None
