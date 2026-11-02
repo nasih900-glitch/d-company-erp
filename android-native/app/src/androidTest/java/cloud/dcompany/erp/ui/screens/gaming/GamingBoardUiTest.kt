@@ -1410,16 +1410,16 @@ class GamingBoardUiTest {
         }
 
         val board = compose.onNodeWithTag("gaming-station-board").assertIsDisplayed()
-        board.performScrollToNode(hasTestTag("gaming-station-ps5-1"))
+        scrollGamingBoardToKey("station-row-ps5-1")
         compose.onNodeWithTag("gaming-station-ps5-1").assertIsDisplayed()
-        board.performScrollToNode(hasTestTag("gaming-station-ps5-3"))
+        scrollGamingBoardToKey("station-row-ps5-3")
         compose.onNodeWithTag("gaming-station-ps5-3").assertIsDisplayed()
-        board.performScrollToNode(hasTestTag("gaming-station-streaming-1"))
+        scrollGamingBoardToKey("station-row-streaming-1")
         compose.onNodeWithTag("gaming-station-streaming-1").assertIsDisplayed()
 
-        board.performScrollToNode(hasTestTag("gaming-station-ps5-2"))
+        scrollGamingBoardToKey("station-row-ps5-2")
         compose.onNodeWithTag("gaming-station-ps5-2").assertIsDisplayed().performClick()
-        board.performScrollToNode(hasTestTag("gaming-inline-expansion-ps5-2"))
+        scrollGamingBoardToKey("station-controls-ps5-2")
         compose.onNodeWithTag("gaming-control-pane").assertIsDisplayed()
         val draftRingBounds = compose.onNodeWithTag("gaming-control-ring")
             .assertIsDisplayed().getUnclippedBoundsInRoot()
@@ -1476,9 +1476,9 @@ class GamingBoardUiTest {
                 .assertIsDisplayed().getUnclippedBoundsInRoot(),
         )
 
-        board.performScrollToNode(hasTestTag("gaming-station-racing-1"))
+        scrollGamingBoardToKey("station-row-racing-1")
         compose.onNodeWithTag("gaming-station-racing-1").assertIsDisplayed().performClick()
-        board.performScrollToNode(hasTestTag("gaming-inline-expansion-racing-1"))
+        scrollGamingBoardToKey("station-controls-racing-1")
         val racingStart = compose.onNodeWithText("Start 15 min · 70.00").performScrollTo()
         captureDetailTargetBeforeAssert(
             "gaming-r7-4-board-racing-start-before-assert", "gaming-fixture-root",
@@ -1489,9 +1489,9 @@ class GamingBoardUiTest {
 
         // An unsent choice belongs to its station. Returning must retain the
         // exact Dual tariff and added player without changing another station.
-        board.performScrollToNode(hasTestTag("gaming-station-ps5-2"))
+        scrollGamingBoardToKey("station-row-ps5-2")
         compose.onNodeWithTag("gaming-station-ps5-2").performClick()
-        board.performScrollToNode(hasTestTag("gaming-inline-expansion-ps5-2"))
+        scrollGamingBoardToKey("station-controls-ps5-2")
         val retainedStart = compose.onNodeWithText("Start 30 min · 130.00").performScrollTo()
         captureDetailTargetBeforeAssert(
             "gaming-r7-4-board-retained-start-before-assert", "gaming-fixture-root",
@@ -1512,7 +1512,7 @@ class GamingBoardUiTest {
             visibleStations.value = expandedStations
             state.value = state.value.copy(stations = expandedStations)
         }
-        board.performScrollToNode(hasTestTag("gaming-station-ps5-6"))
+        scrollGamingBoardToKey("station-row-ps5-6")
         compose.onNodeWithTag("gaming-station-ps5-6").assertIsDisplayed()
         compose.runOnIdle {
             visibleStations.value = stations
@@ -1526,7 +1526,7 @@ class GamingBoardUiTest {
                 ratePerHourMinor = 12_000,
             )))
         }
-        board.performScrollToNode(hasTestTag("gaming-inline-expansion-ps5-1"))
+        scrollGamingBoardToKey("station-controls-ps5-1")
         capture("gaming-same-screen-1280x800-active.png")
         // Hourly/open-ended sessions still retain their truthful live timer;
         // only the package-duration face uses the permanent published dial.
@@ -3389,6 +3389,19 @@ class GamingBoardUiTest {
                 inner.left >= outer.left - 1f && inner.top >= outer.top - 1f &&
                 inner.right <= outer.right + 1f && inner.bottom <= outer.bottom + 1f,
         )
+    }
+
+    /** Avoid ui-test 1.7.5's off-main recursive diagnostic print on a live lazy board. */
+    private fun scrollGamingBoardToKey(key: String) {
+        val boards = compose.onAllNodesWithTag("gaming-station-board").fetchSemanticsNodes()
+        assertEquals("Exactly one live station board must own scrolling", 1, boards.size)
+        compose.runOnIdle {
+            val board = boards.single()
+            val index = board.config[SemanticsProperties.IndexForKey].invoke(key)
+            assertTrue("The station board must publish the requested item key: $key", index >= 0)
+            assertEquals(true, board.config[SemanticsActions.ScrollToIndex].action?.invoke(index))
+        }
+        compose.waitForIdle()
     }
 
     private fun capture(filename: String, rootTag: String = "gaming-fixture-root") {

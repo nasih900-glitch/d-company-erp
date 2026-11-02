@@ -2150,7 +2150,7 @@ REVIEWED_CODE30_4_BUILD59_SHA256 = {
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/LoginZeroViewportFocusUiTest.kt": "4e2921fdd72c08807a6eaa9653682d89f682d963a9d06c493178cca0cdecc161",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosEmptyCatalogueUiTest.kt": "e26ec825d56c05f2c0ac8acf2a0d75a9d47fc49494350e895d123aebd6444619",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosGlassUiTest.kt": "121634069bf61376b4ad7435bafd03522878b4ed60df5a5b52371ed2359d0b6c",
-    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingBoardUiTest.kt": "d4d87f2c08f36b60f211937a3b5c7b1d87d0dd808b8f3669163898c00cc08c3f",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingBoardUiTest.kt": "c97d96f53e4f8d4538f4ed9b75fc2fae3e7c93bfe0695c0e13509fd1c2e84c46",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt": "f7bc846135345194f936a94deaef05fde78590961f5861a5a9611199f0af055e",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDraftRecreationUiTest.kt": "56746cf1952ba2f05b3f39b4e6b1bc7a0cee4c0ce1a341771b95d140c0aa6ac0",
     "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingInlineShiftWorkspaceUiTest.kt": "a595b6dea736b4c619a9bb567bef2a1e6e1dacfa667b5274214b282ea63155fb",
