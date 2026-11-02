@@ -29,6 +29,14 @@ from app.services.client_updates.runtime_parity import (
 )
 from scripts import register_android_release as registration
 
+
+@pytest.fixture(autouse=True)
+def inherit_policy_for_optional_offer_tests(monkeypatch):
+    from app.services.client_updates.policy import policy_snapshot
+    async def inherited(settings):
+        return policy_snapshot(settings, None)
+    monkeypatch.setattr(public_router, "resolve_android_update_policy", inherited)
+
 IDENTITY = {"version_name": "3.1.25", "source_git_sha": "ab" * 20}
 BODY = json.dumps(IDENTITY).encode()
 HEADERS = {
@@ -979,7 +987,12 @@ async def test_registration_failure_cannot_open_database_or_insert(monkeypatch) 
 async def test_already_active_success_reverifies_without_duplicate_audit(monkeypatch) -> None:
     release = _release("active")
     session = AsyncMock()
-    session.execute.return_value = SimpleNamespace(scalar_one_or_none=lambda: release)
+    session.execute.side_effect = [
+        SimpleNamespace(scalar_one_or_none=lambda: release),
+        None,  # advisory lock
+        SimpleNamespace(scalar_one_or_none=lambda: release),
+        SimpleNamespace(scalar_one_or_none=lambda: None),  # no configured policy
+    ]
     apk, parity, attest = AsyncMock(), AsyncMock(), AsyncMock()
     monkeypatch.setattr(release_router, "get_settings", _settings)
     monkeypatch.setattr(release_router, "verify_public_apk", apk)

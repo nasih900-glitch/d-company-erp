@@ -329,7 +329,8 @@ type ProfileAudience =
   | 'system'
   | 'membership'
   | 'refund'
-  | 'productManagement';
+  | 'productManagement'
+  | 'staffTime';
 
 export interface ProfileNavigationItem {
   id: string;
@@ -354,6 +355,7 @@ export interface ProfileAccessContext {
   hasMembershipAccess: boolean;
   hasRefundAccess: boolean;
   hasProductManagementAccess: boolean;
+  hasStaffTimeAccess?: boolean;
   accessibleModules?: readonly string[] | null;
 }
 
@@ -394,6 +396,7 @@ export const PROFILE_NAVIGATION_GROUPS: readonly ProfileNavigationGroup[] = [
       { id: 'customers', label: 'Customers', icon: 'customers', feature: 'customers', to: '/customers', module: 'pos' },
       { id: 'refunds', label: 'Refunds', icon: 'refunds', feature: 'refundsWorkspace', to: '/refunds', audience: 'refund' },
       { id: 'stock', label: 'Stock', icon: 'stock', feature: 'stock', to: '/inventory', module: 'inventory' },
+      { id: 'staff-time', label: 'Time & attendance', icon: 'staff', feature: 'staffAdmin', to: '/staff/time', audience: 'staffTime' },
       { id: 'help', label: 'Help', icon: 'help', feature: 'help', action: 'help' },
     ],
   },
@@ -439,6 +442,7 @@ const ROUTE_FEATURE: Readonly<Record<string, WebFeature>> = Object.freeze({
   '/finance': 'finance',
   '/reports': 'reports',
   '/staff': 'staffAdmin',
+  '/staff/time': 'staffAdmin',
   '/settings': 'settings',
   '/audit': 'audit',
   '/bug-reports': 'supportInbox',
@@ -483,6 +487,7 @@ function hasAudienceAccess(item: ProfileNavigationItem, access: ProfileAccessCon
     case 'membership': return access.hasMembershipAccess;
     case 'refund': return access.hasRefundAccess;
     case 'productManagement': return access.hasProductManagementAccess;
+    case 'staffTime': return access.hasStaffTimeAccess === true;
   }
 }
 

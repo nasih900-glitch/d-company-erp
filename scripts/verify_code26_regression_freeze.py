@@ -24,9 +24,12 @@ documentation. Code30.4 adds reviewed PS5 friend participation and 60-to-30
 package amendment at Alembic 0083-0085 and Room 53, paid non-PS5 extensions,
 local app-health capture and a bounded Gaming refresh. Build 42 adds the
 reviewed Android control-deck polish and coordinated release identity.
-The immutable Code30.2 through Code30.4 build-41 bytes are read from their
-release commits; the current working tree is checked against a separate
-build-42 map. No release layer
+The immutable Code30.2 through Code30.4 build-57 bytes are read from their
+release commits. The current build-58 overlay pins only scroll-helper regression
+coverage, bounded test diagnostics/cleanup and coordinated identity; it preserves
+the earlier application, policy and guarded preservation maps.
+Source admission does not assert signing, deployment or tablet acceptance.
+No release layer
 may delete, disable, reorder, or rewrite an existing test
 outside the exact fixture-only normalization or exact reviewed-test hashes below.
 The sole reviewed audit-reader locator migration below preserves every
@@ -211,6 +214,13 @@ CODE30_4_BUILD51_BASE = "a44397d53d94fb4c83b3fc9ffe696dbf4dce3168"
 CODE30_4_BUILD52_BASE = "f78d567b2093671992be289133af22637e6d7b0d"
 # Signed Build53 deployment refused before migration; immutable predecessor source.
 CODE30_4_BUILD53_BASE = "8506c7abdf15c92029226849f42b1b71fd6878d6"
+# Signed/deployed v3.1.46 / build54; immutable predecessor for build55.
+CODE30_4_BUILD54_BASE = "5ad146ae076f5178acc2c8e4cb840ecbb0d0343a"
+# Signed but unoffered build55; its failed-deployment source remains immutable.
+CODE30_4_BUILD55_BASE = "f1be9f9ed62e535cf845eb9bbf678ddfe61b0e56"
+CODE30_4_BUILD56_BASE = "b5a61d774f0eb232db8765322450fb3987fd7e56"
+CODE30_4_BUILD57_BASE = "dae7dc09911e6d0c724b235f0e6fcb5419c244c7"
+CODE30_4_BUILD58_BASE = "6eb61bf097afb7d6e306f3878a64f266adf451a1"
 CODE30_2_FREEZE_CONTROL_PATHS = frozenset({
     "scripts/verify_code26_regression_freeze.py",
     "tests/test_code26_regression_freeze.py",
@@ -1696,6 +1706,624 @@ REVIEWED_CODE30_4_BUILD54_SHA256 = {
  'tests/test_code26_physical_audit_lane.py': '65998d03ee6f60e6744f2d1ec719cfe951864a0c2a32cd86c99b06fc40ef5665',
 }
 
+# Build55 is a separate reviewed candidate overlay. This does not admit a
+# deployment or replace any historical map/signing/physical-tablet evidence.
+REVIEWED_CODE30_4_BUILD55_SHA256 = {
+    ".env.production.example": "f4a716d5f496fedbf73214fce73572ea69cc6248e3b59988299f61b2c87cdae4",
+    ".github/actions/scan-production-images/action.yml": "8677c8a4a1d5b7bce9b1a45ee8203b08ab3250be03e3b689c4d81ddb93d71d5e",
+    ".github/workflows/ci.yml": "676e61b5517244c213f4f2a417a836ec407914caffc84bc075e6eb7ef7db369e",
+    ".github/workflows/release.yml": "99a47201d5cde2a54336576f749ff802844ad7c3b9bdd0890beb49d26fe2845c",
+    "PROJECT_STATE.md": "db534e40a5ee8a37167276de58be318a238ac9a536307705d6dee5b344b6b187",
+    "README.md": "117706e935cf3b14659b6752afd0938d13c6289cc8343e5c64f416823e3334ea",
+    "android-native/app/build.gradle.kts": "52f95621fc5468fda4fbcee437985874ba8e8f3989f6950528a5976658f3aeea",
+    "android-native/app/gradle.lockfile": "bf4beeeb542ad8891382a13ea9c2b9d536549fdbfe3a96c6965487ef04a86748",
+    "android-native/app/schemas/cloud.dcompany.erp.core.db.ErpDatabase/57.json": "c83214f809c28b4cf8283519e7c7b0fd39c4b172ec4f6ed70a8a5b0c142af4a7",
+    "android-native/app/schemas/cloud.dcompany.erp.core.db.ErpDatabase/58.json": "16644028f4002e37960c32ddfbb383e99cf7a494f27004fe5d37930b698cbba8",
+    "android-native/app/src/androidTest/AndroidManifest.xml": "d85e51ca070f153a67a7ec8205990cb7ff11abdc4135e8d9bb4b5c550e0908f3",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/core/db/GamingSessionAddonDaoTest.kt": "f31f845f8f8136da4efc50fdae0aecbc06380eb687b7ec66f3243dded2b785ec",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/core/db/HomeReportSnapshotDaoTest.kt": "cb8e680949536780021628ae0f7ad74c65acb2db8297e835936fd94efffce621",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/core/db/MigrationTest.kt": "ed90bccc4b03a78c8278af0cec45c98c2394b38f6c3f297ca1636784d2d86d0c",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/core/db/ShiftCloseSafetyDaoTest.kt": "3817213d1be5f1b070049ed040f10db6477b5661a669009a48d20a4f1a0335c1",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/core/net/ClientPolicyPersistenceTest.kt": "72943cb3f42f9b70ffcc15281e16bfd0c584820a7ab38bfb5e09cec9315c314a",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/core/sync/RealtimeAuthRecoveryTest.kt": "f1a956fa871f566814f1fefd321927dfdf1eadd69769678b82b9b8a0c46ac13e",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/GamingCentreNavigationUiTest.kt": "8bc092dd3200e51c459fd00aac62aaed8c038f99a7ce2803559d923f364dea27",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/OptionalUpdateBannerUiTest.kt": "9152e694860c9b887c65fee69a7e25fef7acc85f56fced40d0c8dee64602eae2",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/WorkspaceScaffoldUiTest.kt": "f1fc663043969387299cdec35235b21854c48d15ec8f1027f435526b4f0199c4",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/components/LiquidSharedComponentsUiTest.kt": "e555a20c921ff83df3dc5c9f6d3fa817f66523f02ec271ad36bfd72cc5c1c2fe",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/ControlDeckFullShellScreenshotsUiTest.kt": "c9686809be74083884d2a9fbfe6fba61033cca02aa703fe3a1a38bbfcecd5be4",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/ExecutiveEntryPresentationUiTest.kt": "965bacfe33a565590ac75d1e7d42e11167a5fa1a6b0a8dfe318106e4968b1e8e",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/LoginNativeResponsivenessUiTest.kt": "8678f44cfb28782fc2c348dfff77d0ec9ed47784638ac8f7d7fa4fb51d436e1d",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/LoginWorkspaceUiTest.kt": "e963b10a89b23108a13437c35cf964fa0c09069ce671e8f3337200dcd8e22736",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosEmptyCatalogueUiTest.kt": "92d12606f9d2e18f4a4ba2335ecbbabf66ea2276131db0bcc772ffd8d5b67550",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosGlassUiTest.kt": "f0a65d58333e4dc5b4b5aa031c0f17569cea4e22399fcd0b4470c079e5f06574",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/TerminalSelectionUiTest.kt": "fbdf91c65034865d21e1a51d71b51a5785f42ff48c9c8883c45bed57edef7736",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingBoardUiTest.kt": "327466b3822f0994bba96f4e93365bac91e491308df4356ddabc32a35aa1144f",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt": "0adfd4cc01bbbec0933871896f5546465df757ca4492f18481e3213a7418bf60",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDraftRecreationUiTest.kt": "365cd259c10874022a8b5a083f5f15ee6854646b2d554454b713099fc05af135",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingGlassUiTest.kt": "7815d3327bc8efc056b0fd5723bd5ee5f28b78ae4fec5d391daa355dbd509f4f",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingInlineShiftWorkspaceUiTest.kt": "875dd7dc566fea0a1590105ab2e15148c41478a504332dac2c0cff95f991eeba",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingRejectedSessionAttentionUiTest.kt": "d5ada9ee7af16b5b0f805e8189d0c6de60f64bf046dc7fe65139a115b618878d",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingVoidImeUiTest.kt": "11352b51d5cc485b2896365d99cb2600b7b7b4d562c7aa0bc5a744d1c5542247",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/home/ExecutiveHomePresentationUiTest.kt": "8080e0553bacc75ca17cdf122fe50b85ec5e391a3c53c811896bb442ff8e029a",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewExportUiTest.kt": "a5578e8119153ed7cd13deeaa670aa6dcc2a0af7931b09c722985eb87d7a9730",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewUiTest.kt": "d91e93adc8757facf80cc230bc9a9b8a34510a33536939afc945e58a761b15fa",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/settings/SettingsAccountScrollUiTest.kt": "17502762c7e35bee163d09b53c399ee10d55a4cb26b74bf0e9e4dfc2fdb5556c",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/shift/ShiftOverviewUiTest.kt": "f7537b87185f6aae42a7a9356ab01fbcc20608a812b5b3029babb49edd33ae19",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundFixtureProvider.java": "381bc667d379023f3df80f2b5bd10dcaa1e074d1755df271cbc7df4dec0c8fad",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundFixtureProvider.kt": "00df3d93ecbbfc96eaa61f8c31a012057ca580c72f6bacafc0c4b0297de5b69e",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundPersistenceUiTest.kt": "958b9072a2b1d426ce1250dce7d066c0734ebcfea246a39960e4a81682e7a715",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundUiTest.kt": "368443e49e142856ae388b964a0735a0c27f24838af02a02611cfa57ed8dd874",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceGlassUiTest.kt": "20fa42bbe5110854ae7b908ea3d3cb48944bea57d9331fef92b08af46be56880",
+    "android-native/app/src/executiveReview/AndroidManifest.xml": "bca75ab0123193a75c3941b643631e4e90813f4cbebe0507814b44c4de39a5a6",
+    "android-native/app/src/executiveReview/java/cloud/dcompany/erp/review/ExecutiveReviewActivity.kt": "bbfdcfaa3fd2cac30c909e923c35932d12f679accbb48c904ac628c31064762a",
+    "android-native/app/src/executiveReview/java/cloud/dcompany/erp/review/ExecutiveReviewApplication.kt": "35c356c67eaefc5bd799c86b89c31dc94c0847eafbe27cec978e85478f1badd8",
+    "android-native/app/src/main/java/cloud/dcompany/erp/DCompanyApp.kt": "cf983855629ef350fd595a8eb43be7b8c6cecef94ab3f0caaa416936eac0a238",
+    "android-native/app/src/main/java/cloud/dcompany/erp/MainActivity.kt": "6ab5ae0b7d1344fc9edf1df5ec36124cb31359022b1614af51065094d8720ae1",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/auth/CacheScope.kt": "7311f86f24dd56f7cc7b15c4f237bba4401dcf1cd0d8415a9c80a92d834988a8",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/auth/EffectivePermissions.kt": "584d8ade8c614b72af95077776295d44f8bbccf63862648b8bec004ab53c12e5",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/Dao.kt": "af71d22d237f23efc7571cd3224d92e07fa137cad99f73eabd8534d68fbd7e4c",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/GamingDao.kt": "f466ab3ccffe9c30fd5d2c695e0c84bcccf943f1db674983876d90936a3f26b7",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/GamingEntities.kt": "3f7ba21840a7bac05cf1e86783f4118109ccea8cf2cd7f7b44653b922fa36372",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/HeldOrderDao.kt": "5529fd1e01f4d7354fdc447ccb001a3af958eb9625d05fedda9636086ca251ab",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/Migrations.kt": "825b5bd176edf366afb91652b27797bde09d956d4a966cb920b5b7728c9aca5b",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/ReportSnapshots.kt": "d585d0323a2d07725e8764b5dea72f1574c9dd71e54d5eb76801c5ec5111ed83",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/ShiftCloseSafetyDao.kt": "fcc97e2daef5249c2406765ce4128a1543933ea54687c24c0ed0fa5b5d4e5e87",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/net/ApiClient.kt": "99f9b83a5fb2f011db282fa890e522c3bf194ce567bdf960da969f1f911dc7c7",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/net/ClientCompatibility.kt": "4be5aece9d7c4871be27b38cb6479147f30ff390e93e095f0b8feb2fce8727ac",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/net/ClientUpdateRequirementStore.kt": "bac6e8db48564d844ced608074578aec7ee937fd8cff31be29dcd1704eefa5a6",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/net/Dtos.kt": "7a464d2baf20453e137abcc3e931f5312d53b7ebbced3b94c1b7a4f118663bb0",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/net/ForegroundCompatibilityPoller.kt": "89ce867d330ff7aa64f5b31f588590c88276d8f473180c37d47f2e6449383ffa",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/net/ManualBackendRequestAdmission.kt": "7e46a56024fb6addec0cd23ea138fc5d09e6ce20d0ab6c446b023d36cc197d75",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/net/Models.kt": "7f20f16f753ee807cf6f56029a6d8ef91800804e4994db9f324f69c2edd112cd",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/sync/RealtimeClient.kt": "e933aa75d51c47ee5283d029770ede11b574b49ec834687ad0fcf8d5ea76c816",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/sync/SyncEngine.kt": "300ee9281debed9a15275bd7cbdcb1be1756b788e233593d762f2f21f8e37a69",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/sync/SyncResourceAccess.kt": "4c46e3526d0ab8f57336c0e3da7fcd1ca8a062e24256c43ff88fdff927f9a5c9",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/ExecutiveRailScrub.kt": "0147f62c30763c9f975c90c316d28cb1fa6c4c313817e1f67ad94605f0cb261d",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/ExecutiveRailVisibility.kt": "57b0ebca8e058e8c7b406fbcd1058cbd82f5ed4476b77008f7e86abe8d58eecc",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/FreshLoginHandoff.kt": "1e7399a85e2bfc350e78908516088d053fef95aee9eb85190feeab022406f066",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/Nav.kt": "4efd9373aedf540bb6750671bcc57d5cf9ec9d9d622ea503e53455352e356c53",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/NavigationAccess.kt": "68c8994184a3c07f4a176107f749b72671a406b91aef32fbb625736bd5f7e2f6",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/SessionAuthorityRefresh.kt": "1ac53a27dca6fe64954223f36fa1fd50ddd1405d22b440f7befbb3ae2b4adc04",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/SessionViewModel.kt": "5c01ed7f421f11cc501844643e588d35a311f453c9aa8bb86ad525734abac159",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/WorkspaceRouteAuthority.kt": "6f737a74a8571a71d4d90167054b23189687f86231a58b4b3d056783fae4173a",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/AppearanceControl.kt": "744b6869a82947b825feb9bdc565afa2351213d5f99704f378d3fda37e333f0e",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/LiquidDialogs.kt": "120a5682abbbc822751a10447e9b50b80057239245f0b5d94283dd404ae15f47",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/LiquidDropdownMenu.kt": "7d25985015389743249909521bd2f83dc168e02df7b500e8ab241d846133ecdf",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/LiquidSurfaces.kt": "9a11226406806a9ebff7e5ce3460787d2270c9c7ea65716b9e9235b10dd5f394",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/OperationalComponents.kt": "6bcfe0b34606c355c7d1d29acbeae7675250924a6c6279b6ca24969721399946",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/PremiumComponents.kt": "9d832b9b72930e932c827cf76b954c2f8378812e32e1a9a680f20ffe2ac2c9ba",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/PricingUnlockDialog.kt": "741ba34da3ef40d57997788149eb8a21bd2e01b7f3dfb91f56ed7a8640e9a597",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/Primitives.kt": "9d37dfa47853c48e63d62541e8f982bb91923a7feb56c98c217a294c454c8aa6",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/VoidReasonInput.kt": "2a0725084004131b32d08bbffbb94eef97473920b077ba8a8326de64de79d374",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/remote/RemoteAssistanceUi.kt": "715727a9c3330339be8dfc9c30f8356c4d3093323b70c28ea68f4f2d7735dfa8",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/CanonicalReceiptHistoryDialog.kt": "98a1b50d68ad5b9fbb2ade656743a5e8d929cee03d17251cf8eec5352ba4ca5c",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/ExecutiveEntryPresentation.kt": "385142686490a2f4530a9241935367075881cdcbb86e7f73be057de8251d662f",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/LoginScreen.kt": "8e3b5fadd55cece4767808285fa437370e6cf30a7e6f3f486febabf158d5d97b",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PasswordRecoveryDialog.kt": "ed297d746b2b328b41ce9ea375b55cad2cf693dde09cd7698d9affe7435da3e9",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosScreen.kt": "0bae2a5511ab6e87b5ca9656336bd55d447fe13fe23043ae608add16e0b0831d",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/ReceiptFilterControls.kt": "944db7ddd45ab4d1b5ddea5a0ad7a7a847a2c3ad6f13ef5b5eb1d24b79619eda",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/TerminalSelectionScreen.kt": "9919aca9f2af314190af57292150287c9122d5176d22896b8ad6ec8ddd50f872",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/accesscontrol/AccessControlScreen.kt": "d8ed4f0ca04cf85b2b17c7d2aadc2de27ad25e2db3ba0c26a2f9580c8579d596",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/analytics/AnalyticsScreen.kt": "06064684f719c495da92cada5971d75e769d5d74edeedadb7cbfadb631a46401",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/analytics/AnalyticsViewModel.kt": "c5c47b791a30730ddc7c6f35a7c673ed0dbc565dedf659d464aa403273c79c43",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/audit/AuditLogPresentation.kt": "0b0610cdbeabc42c1f00f135e5d079b34ac483c1ba96e11eb00ea7f85df9e353",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/audit/AuditLogScreen.kt": "9785d205b57e49457cc6c22e8ae272ead29031497c86a8d7c31812690b8a0ae1",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/customers/CustomersScreen.kt": "66d826dfb4dc07ad2fc3703d6a98ebc5b44ec47f4752b75c9d1e520ed245f5f6",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/events/EventsScreen.kt": "aad8fe6996f74098c51053f71d232330915d281019f60392b9d6d79101afd05b",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/FinanceScreen.kt": "8cebcdbb171eb511367d590f8760546ef9e25509bde4600e8ba00e64724009d5",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingAlarmPermissionCard.kt": "de591895301f034c3536778b20ba08d0e2bc8c2198308e6ac34651e7e82f8f05",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingApi.kt": "a7fbb38183d928c97ca13120067ffa2677cc91d71967e3d04db0aadf3f8d7dd2",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingDurationDial.kt": "6c46e9fa71d17d9875e663ca86b6faaf4e33613bb70e54f9e367495205f40ec8",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingPausePolicy.kt": "098d44a46ecfe50c4d24f556729e1ac7fc6f40413846ec20ce14f4b061f97fa4",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt": "c626b41b4d162d5269a5bea3642d3d952b7044ff867c0f3c34a18843947a09d9",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt": "f5e342c8f1e0ac6c4b64592d42dbf21cd6944d18b077e2d262718ac898f493d1",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/PauseSessionDialog.kt": "8b7009a22baa2fa00fa8e4f345a59b420c3aa726332e3093f46915add416b36e",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/home/ExecutiveHomeFinish.kt": "7d83cb1b4854a31d82598b61d437ee19bb005b80239f85d75889ca3c368154d7",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/home/ExecutiveHomeScreen.kt": "78d091dc0a802dc5410f48b34f0ea9047cdd702cbd48319c9cd0754a885a47a3",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/home/HomeApi.kt": "b3b8bac9c560b350e680a15243ec94b063252f5a668639763150108fbda4dbba",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/home/HomeRepository.kt": "33f283ad40e58fa17954271b5c22a131ef3ec45541e4a9862e80ea5ef451160f",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/home/HomeViewModel.kt": "2daef8418b2e94920b2e90965971f20ac8d90c7b71b9f1b937a01d7f123820d4",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/inventory/InventoryScreen.kt": "355548f33b376c80875d63601496d9e8180a63a4823a014d91cd6fa6a13e2a74",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/kitchen/KitchenScreen.kt": "d487b148fd2906e0e73795ef37022f480ad4750fd9775427eab56e75c757075d",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/memberships/MembershipsScreen.kt": "48da5ef646da03a753e55d9837697472a44804bf0dc3bf4d8d3ac9f44e5e9e24",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/menu/MenuScreen.kt": "d86cc4957fa38e8289503a9f5eafe89e75016af9aa6c558e902d87307fe7492c",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/refunds/RefundsScreen.kt": "a6a6d9299bead9cd89cf701e6cd4bc103466ffc7c1e547a9e7623686feb4a06c",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsApi.kt": "552b2ca96c7f6b22339e6a88ad46fcf8ddaf78e304382dd997334a173f288070",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsCsvDocumentPicker.kt": "49a36e411f2b513e6b53a072b553d3a9de040cc1e26affe5c8eb5d8f98c041ec",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsInventoryModels.kt": "63822f9fa995807defb4f361f469384f0e64b0a5b9b0ddf4019f3fae97229945",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsLoadExecutor.kt": "e3fb9ef65f90913cf6d22e738fbf3524386f62f92a0933b1a416ca5c0c3704db",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsOperationalContent.kt": "c1e45595117695cd0696b66cca111f770c73b0d6b2913ccd79a78b45b00fc80d",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsOperationalTabs.kt": "1e10227b24dc846967c94c41057571ca611872e26a92a3ba148343597b58edcb",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewContent.kt": "5edd1faf13fa11aff8d2235220886b8d974d761b93ca42fb4b9af386e7052b73",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewExport.kt": "30f51d53d80ef9bce01377e44e46bc10378ee5c8e2cf005355fd5e70435f90ca",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewModels.kt": "bc96d45015ac60004b7e4db2fe30e97c85d783d6423c5a09872169d93b190f88",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsRepository.kt": "5e33581dd89a10297d6202a19f024ee7dbbe8fad39faafcf8d0652dfe6a852f0",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsScreen.kt": "787c69b21b6f971154a6b3b2c7d8c4c5bb9aea51509ff592ba4107729d5df195",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsViewModel.kt": "3a581445d84a43cd62db169cb7e00623c14e82be660b42a6a63284e6aa169f0b",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reservations/ReservationsScreen.kt": "a8280bfa166f30417a55079803ae266a4f58f4d6246ae65595aa83ef67f27c67",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/AndroidUpdatePolicy.kt": "d2bf5a4fc449146579272791b87170445d642b757f2db4c8a3db86d921339ab2",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/BugReportDialog.kt": "e4f144735fae954b5235528cc80f7f4fb99c3f680c6042ad78a53b9de4a8943f",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/DeviceHealthPanel.kt": "8efb513d8de5e18ff404b59e370d0c8583d25065040e669e27f08a37fc574130",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/HelpScreen.kt": "091835cc42f8a40dc87feafbaa83c4cdd1381090b04c47a4319bf0328db4e867",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/SettingsScreen.kt": "b8eafec5ec5fa41fdb1278cb613de6b32551f6163a0d9d16eddf773588aded48",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/SettingsViewModel.kt": "ecf88a98cfc5e7feafe5ef72a9b00a60e1a593fde5cc49a8fcc0003cbec55e87",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/SupportInboxScreen.kt": "7106cf743d0a746107934e880cd2da8635b98c8283461d222092cdbc202c69b3",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/WorkspaceBackgroundPresetPreview.kt": "68e4a930c1f5bbbef2d904aee82d1cce513fc2227ed5b1f5e225bab20f2f5497",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/WorkspaceBackgroundSettingsCard.kt": "190708827851455d0203970c77db636f5529af26dda3caf3abdfc1bb2d0f9c04",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/InlineShiftOpeningWorkspace.kt": "6d5e324d5173f3a64371bbefa392be23e3e5f80d775d7d93f71b4fa834a67472",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftCloseReviewPresentation.kt": "aa9eb9353b4094c63e38ef1cb9640b75cac0ae330ff7823fdbe567f4dabedd25",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftScreen.kt": "5caace45f75cc5c11a0df7e5d90ee4f927098e491f534c3018c7258c6489cd01",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftViewModel.kt": "f4548849e626b493bb0658485d465a2fb689b4b9e2ef6ae3ec60cd7864a26a5d",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/StaffScreen.kt": "e375c5a66e728869c4af99c521ffe6e76708bcd0916cf4f4055651acb854b4da",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/tables/TablesScreen.kt": "66050a2a8aa5b67dae89ec69f9012aa923b2f863b915b70e9aa6a7cebdbc4017",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/AppearanceStore.kt": "32addad3f7355292f18cf5b75a5eca4a61fc2675a9e6a4e193b8fb4715409c18",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/Theme.kt": "9cfc1f4d6e4301bbfbd6da75c95f42ca1cfa2e6d094ad22ffb40fcd3af69f1c1",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/WorkspaceBackground.kt": "58ae8212ead1169c465815cc8cce857e70ebb268caa9a6fdb4727da528cd3eb2",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundPresets.kt": "185e51e3afe035653e435e7a4a71f8537d79c5d282315b6279278c98af6f7ac2",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundRenderer.kt": "d320caa03094530c4004d8c7dec0e7dac2dd77fee3632af8a37e1e17d7eaee19",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/WorkspaceGlass.kt": "b4b639b29bb01a46644368b13a83050bb8fab59256dd6bef940b4936aab8422b",
+    "android-native/app/src/main/res/drawable-nodpi/authorized_lounge_original.png": "3a87906eca80feba8a22f051e383d3aa582dd6e34586e32d5cb7e2320c56a572",
+    "android-native/app/src/main/res/drawable-nodpi/gaming_lounge_hd_r1.png": "c58000ae2596a31fb2e4b230d08e3dd67e4305dcef26ae1680198f385f269d8e",
+    "android-native/app/src/main/res/drawable-nodpi/home_lounge_hd_r1.png": "b1dfa002e84fe40756636921ad0e10f353b74037e749dbe8082b8865fc965f38",
+    "android-native/app/src/main/res/drawable-nodpi/login_reference_original.png": "679707186d15f553b719ec0313a906f3ce2ce49303ea3ddf2b9a19a59930d49a",
+    "android-native/app/src/main/res/drawable-nodpi/login_scene_hd_r1.png": "13aa59b3860110f143b0b0a0bba6e84a6847667bacc2e01ae0b3b5990cef2844",
+    "android-native/app/src/main/res/drawable-nodpi/splash_lounge_hd_r1.png": "1a27f92dd5d921b290c9c430e8a1a100cc0a49a5fe4e7cd9bd56d62da0177684",
+    "android-native/app/src/main/res/drawable-nodpi/workspace_home_default.jpg": "ce0f12e8b46011eaa69161c031d23d10e545f9b89f2f49a6effb11f34640dcfe",
+    "android-native/app/src/main/res/drawable-nodpi/workspace_preset_assassins_creed.jpg": "96564ae5a3b0add567a06e9f319c13e4754e02613fdc1ad8846453f67dd50790",
+    "android-native/app/src/main/res/drawable-nodpi/workspace_preset_call_of_duty.jpg": "9ae6c50c9097a0e48c1c7850a029cddad1bedaa1f42b97851d0cb92508315ef3",
+    "android-native/app/src/main/res/drawable-nodpi/workspace_preset_fc27.jpg": "ab51cde3444c1081e615a84a4305cdb56104d7cbd7d0422389f5bd363036cdd1",
+    "android-native/app/src/main/res/drawable-nodpi/workspace_preset_ghost_of_tsushima.png": "6ae5b41dfdd4ab381f9a4bd69f5fc121116819552c5561bbfe48d43ea3751bc7",
+    "android-native/app/src/main/res/drawable-nodpi/workspace_preset_wukong.jpg": "464620be4c5f5a50a69ef9261666d2c1e1ae274c50863da76a7caddbc539455e",
+    "android-native/app/src/main/res/drawable-nodpi/workspace_shared_default.jpg": "1cb71c65397fb9337887a052ae3b8ca513878d67157bf911941f586ab8288b60",
+    "android-native/app/src/main/res/drawable/login_logo_d.xml": "94adb2de76f0b76ba72684718bf88d87890f79ef9f7ce6e14900525ee4bc4148",
+    "android-native/app/src/main/res/values-night/colors.xml": "6a4b32e78987397b8ec48948a6ee8552e5d142f3633ffb0d1e339c327a7b6c78",
+    "android-native/app/src/main/res/values-v31/launch_themes.xml": "d79de1778c7c0872d360a4287b231ff14954e12e2839846225e1c48974373127",
+    "android-native/app/src/main/res/values/colors.xml": "69b8d2499e49710410e33ee358cf07ae5a30c94f31a22972a087d80dc9c9fc2b",
+    "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt": "0a4b14467ee9371814bdc67c061b8e6cb6c46a34505b8282caebb67ac8a190c1",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/auth/BackgroundCacheAdoptionContractTest.kt": "fa6290de602a5435c1330760c6054642a1eef4734b199906b232e6170e309cb0",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/auth/CacheScopeTest.kt": "c3d493dbeedfadfb2657c00df73ac4c3cdd9be68583cdb48592ce6821ceec6f8",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/auth/GamingCashierAccessTest.kt": "b85e01395bda215f56b0f3175460f32455cc06b90416ac7188df1476017002fc",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/auth/OperationalAccessTest.kt": "142d0ac4426f6f5c14cdba4f4b2e2f7e17e50df5316e5dfefff0a136627b69fe",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/net/ClientCompatibilityTest.kt": "a7197144e4c0fddc500b195ae8c657b4eb9b32b60d6f0eef654f6a19d290ab20",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/net/ClientPolicyMonotonicTest.kt": "d820f1ad1d362c9a6e75fff1070d590e490ee8b6fa84d4b8030f9cebcf4c1033",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/net/ForegroundCompatibilityPollerTest.kt": "a47f7e9aec7cb7309fa85959527e3f7913d787136a05cfe23fb62b65c84dbf66",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/net/ManualBackendRequestAdmissionTest.kt": "88d5510fff40337d5e1c7f9be38a5b6bdc3fab3169117346958d2ad4cac32e26",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteAssistanceSecurityContractTest.kt": "4a2c91b62915b7204bc76939bd3c159e9ac3fffc1cf0ca62fa0dba2e14ae037b",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/sync/GamingSessionAddonReplayPolicyTest.kt": "7518b1f9c53dbaf73593c1b231864dc4470b36493792007706e024efc6ec6f8e",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/AndroidPerformanceOwnershipContractTest.kt": "c07e0a4d33394059fca4b02465f10a9b7a130e5f47509074dc778d9180572954",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/ExecutiveRailScrubTest.kt": "96e4e82b9f50bb0eaa03e1995801eb16233d6f1000afca5c062d1e09729986ba",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/ExecutiveRailVisibilityTest.kt": "5990ac4f60fb42eb16b487e5f36124e222a380ca049a56d1a5914227c71acf27",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/FreshLoginHandoffTest.kt": "64e3da40ef5267e24499e116e9b58f06a84d0a329f82ec1e8022590f8ff62db8",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/GamingCentreFeatureProfileTest.kt": "a2785fad3b125525d0b9f6b9df2e03e661013a076bd7bb3321fd3b503d3e9648",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/OptionalUpdateInteractionContractTest.kt": "e4b0e5ff19a86b5602ae81163fd28b33d37928b5110e8f697e650be610544fe8",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/PremiumFoundationContractTest.kt": "9441e8d68bb7b7414b9be3084d5668305fada2e2fab68e0959ec7e04c7484751",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/SessionAuthorityRefreshTest.kt": "58c2720510a2a163823ae8355ff5363b7482b78deb7cf3bf999c2bfe13c68ed2",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/WorkspaceLeaseFeedbackContractTest.kt": "d8dcd7bc9597b8b99a8f17ddb1f03b13c1f9c5b7714f33c78076ad43b482af4e",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/WorkspaceRouteAuthorityTest.kt": "699277e644a594cba66eebe850af41eb0623e6b4aa3263a45f1729f609dd96f3",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/WorkspaceShellPolicyTest.kt": "4219999b7ad581003e1c9fd9a3fc6990e6b7b1ed0c76bdb4e603138b38892423",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/ExecutiveEntryPresentationTest.kt": "664be5b31d038e40aebe87476d4e28454e377daf70d560fa852a03f86f6f69a0",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/PosReceiptPrintTest.kt": "e331836b2effdf4e151240d34d0c18e115bdb72aa7189672bc27b427fe503056",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/PosViewportPolicyTest.kt": "54f853712f03e7a9da25a7a82e804652bf69c2c8fd3d692c923823232bc58a4f",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/analytics/AnalyticsPresentationPolicyTest.kt": "6dc8ddee2532759bad87d8f7a723eafa6620e51d84edec174ce953961af52d0f",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/audit/SemanticAuditPresentationTest.kt": "35ff2d4af1853af9f870bbafb23cda5fdcdd58144f6d7a9d76c58f325f2062da",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingApiContractTest.kt": "a50004187b3cd31ea23669f4a2d75e43dd93d5c6613dc6c00142b7116cfb5a74",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingDurationDialHitTest.kt": "814398f6e1dd49e878359ba94c1f1327b5481a7b54dfe59c088433440391862d",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingParticipantAmendmentPolicyTest.kt": "05516bae8d1c686d3876a3b3c58f052701ab437c8950122938bdc7c31864d14d",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingPausePolicyTest.kt": "52761a33729b9d201a2541fad71fc44499174c3243a5ddc7419b27adaafbd59b",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingRejectedSessionAttentionTest.kt": "466a92c620d4063c029fa95f92a210b935c31199decbf024514149219bf93739",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingStationPresentationTest.kt": "23e8f6b3533edb03f7685c022c2da41dfb7e6fa2434eef2fa26696b4107805d5",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModelRecoveryTest.kt": "7e13b6c700b4e40d5ab618c9cf6720257ac243b0594797cb69b85a0a9f21fd76",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingVoidV2ContractTest.kt": "14c5b81d3be40a099d223d27471f5b4b047d7e09c57c14d103911a3880807091",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/LegacyRecoveryDialogGeometryTest.kt": "19c50da7bebf8ada1c161f0be86110ee895c6a2206601473d83f018042c1adc0",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/home/ExecutiveHomePresentationTest.kt": "451c29d66091a4d65eb7d8f48c86d7dd0969b17f550b4fa13414e6d0b1c74693",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/home/HomeRepositoryTest.kt": "18ea35327e83571103415ce67e947e51210bdfd10171e9581f7c11cc424b26ca",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/reports/ReportsOperationalTabsTest.kt": "882ef90c312f9d9bb91d38c2541120d9ed662d9691607dd1ef1cf42c195a2ebd",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewContractTest.kt": "68faed549957b15f7f779581701c88bb06710f2f813de35e2ddb40d83f2f8068",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewExportTest.kt": "d91c681670c05fc1e689a9f848c92b000bb401213739f227666778775cfde0c6",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/settings/AndroidUpdatePolicyViewModelTest.kt": "a6ab543eb40183b47a90e9f556687dd9b2084c635a632757346edc62132196e1",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/settings/SettingsPresentationPolicyTest.kt": "ae0a58199da2f0711bddc2745e47f310be51ab0a957caf8a03268f5942abd5c2",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/shift/ShiftCloseReviewPresentationTest.kt": "a62bbda88daa9f7f39352fe45e23f3e2f3513c3bc485267c7230e17fe42af9dc",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/theme/AppearancePreferenceTest.kt": "7697cab7a3e555deded182d2bd306ed9c261770fd2bf16095ec72018d5b6bffd",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/theme/LaunchAppearanceTest.kt": "f2afaa43ce823c448dff9b2552d66cc83c49d1e178d5f9da733153538820234a",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/theme/ThemeContrastTest.kt": "91081058ce50418dbbcdf1b1ef244a6f67706e27b4fdb2b00375fc79073b34a8",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundPolicyTest.kt": "c52afc8a09c23f20444bc6b4644487f50de96f4f382af643bdb4bb692d10d561",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/theme/WorkspaceGlassPolicyTest.kt": "ab9d0fdf78fe9e7b6307f3b01f48f20c9082a4ad12f0efc19b2cb8b8111790f0",
+    "backend/alembic/versions/0092_android_update_policy.py": "788375ba2354f1f4ad5c9cacfe696022e7ffb7e2e7b7ca9e31cd41e48e7ae477",
+    "backend/alembic/versions/0093_gaming_void_retained_addons.py": "cfc55577f34e57973f6fe47c82869a5752ca4330d96dcee9c8c6f5ecc334955a",
+    "backend/app/__init__.py": "1ceb956d9c4de03b8ec6ea332c3123dacf5e77596c214a9402674aa9f9fd7f6a",
+    "backend/app/api/v1/analytics/router.py": "bcfdf507a724a1772294e1c794a345cc0a0c1a5cb2862b4aa041cb98351f2f53",
+    "backend/app/api/v1/client_updates/router.py": "ef875b833be5af3a7a8726518a4fb78cac15bcad4dd46a9a53168ec7189ac721",
+    "backend/app/api/v1/gaming/router.py": "7d9400b8166dafcccf34b7e08879d8f7d0d40ca574768e6b33d1370c7970b7d2",
+    "backend/app/api/v1/pos/router.py": "f1f7032d57e711cdb5eeade0909a45615004b535f30b0e9441c1f7d386fa496c",
+    "backend/app/api/v1/public/router.py": "af2331e48f7ab202140579d71921519d72e72f6a3734467f3863a90b6916cbd8",
+    "backend/app/api/v1/reports/router.py": "e302269357a51972eeadea0c44333eff636f6b3bc65326b9890a712c98a11230",
+    "backend/app/core/middleware.py": "945ba916e341be6f6bfe4814c48ae0d816191e9070c4f3d60d9b66629bf9255e",
+    "backend/app/core/permissions.py": "d6dcaf86c8427411901456d9ce87dafb8ff79e4fea1ff284804a9042615058d5",
+    "backend/app/core/roles.py": "d4b2d0ebc193f946dbf5e696bec5de038fc99f5101162665a9d212d3aeead49c",
+    "backend/app/main.py": "9f72611cf14ffe149de53493f61f1140d58ed0b4a9db427d327df70fa91f9fa2",
+    "backend/app/models/__init__.py": "8e6df2a9bd03083bef5787abc77d7d64f95b81631e145ef99d32d152daee1da1",
+    "backend/app/models/client_update.py": "30e4dc949f33261b3d097834db7a6a0fc6cc13d1e8d015a1d5175ce936082c0a",
+    "backend/app/models/gaming.py": "281e1b8ed1d3a219fd719c08e435b4f595f7e74511fbbbfd9abcc6ac21eaac70",
+    "backend/app/services/analytics/home_read_model.py": "b541a4b251ac1eb22c5ea916faa88263f8720e3c426c8d39120f23656e30e069",
+    "backend/app/services/audit/catalogue.py": "47d6685342ace7f64f5eba1d72702593daac2bea8ae9a2a9c792ad01af9f0e3d",
+    "backend/app/services/client_updates/policy.py": "0862e7f44a6c04f70af5078093ce8e85a05a62e7f18dfe835cce86f51cf4fdb2",
+    "backend/app/services/gaming/void.py": "47732d5b847647d1defeee3ce11074185ea012c702c3cf8a8e28d1ffef3ec86d",
+    "backend/app/services/pos/pricing.py": "d0c725b61121426e32213deed5c7eeabfc3111d74ca18af150de6eea935de4ca",
+    "backend/app/services/reports/overview.py": "b5174fe60bb57562052301b89577cc8e64176c67531fccf1287bb037712bfb76",
+    "backend/app/services/reports/overview_csv.py": "9200e259c6650358d7e0cce803bb2090274794985e170a8d56839b52beade2cc",
+    "backend/pyproject.toml": "64413b202733c8e2efa2329ab98cc66b92d35e6e95b2151d124ff6e01dab5a0d",
+    "backend/requirements-ci.in": "c9196bc6f6f1d7c4ca3503237a64aa056687302d75e9c1bdeaad69e8656c6344",
+    "backend/requirements-ci.lock": "1e68ec022c3964049c0da8762c9d5ece92bd5f07e79cf06f90278f89bc6469ca",
+    "backend/requirements.lock": "795f13e253df5673170f51c633afa2d4c4c01b3a2a4016f9b432bdb91fc851e0",
+    "backend/requirements.txt": "63cbe880344f5fca993c195cdb62035ed1f32c5e172c61c4e1055f51fc8d62a5",
+    "backend/scripts/ensure_roles.py": "dc2c9ff87fbca68107eacdb7deefdf677854d788e40ce8aa1e5a78717ea67d9e",
+    "backend/scripts/seed.py": "e33dc10f1961b079df12b6055fab7358272ecd73267dbf23fff6ff4225010b75",
+    "backend/tests/conftest.py": "2119595f2c9db051b6c5cf93f180eed949e0567d0bd3baf03c7543fd7ba2bac4",
+    "backend/tests/integration/test_analytics_dashboard_permissions.py": "afc7598a9f61f917bad420cd83b0dc92608c92acbfc77b8e8e247ecbc96c1ac9",
+    "backend/tests/integration/test_android_update_policy.py": "fe4cc44ddad198ebfacbb848b8d230f0f209ffe8417291bcebb707043065e3e2",
+    "backend/tests/integration/test_android_update_policy_migration.py": "127429bbfd0138246024d8bcd06f75662d906e7d4b533ce757a8ececd75d039c",
+    "backend/tests/integration/test_audit_business_events.py": "5724ada0510314695d0c844e81ee7748118487f1a696154c3a968fc5ebc23a09",
+    "backend/tests/integration/test_auth_otp.py": "ed4e04aa323e78860572c5b31e7c2d119fa4ff4bd3fcf125d807b0520dc63071",
+    "backend/tests/integration/test_build51_history_bridge.py": "97c504d3eae07ee7e457b68eccc5bf309b9c5cbe5b672ce66e133d2b3d9e7b73",
+    "backend/tests/integration/test_build52_transition_state_query.py": "8ed39e673fb07bde740fc579b33c5bc8a60682e0d6a0f08d1b1cf2cd76ec5c6b",
+    "backend/tests/integration/test_build55_transition_state_query.py": "3be69a6449efd44f6234e8f8d5a26623b7168af9c42ef1673230f968e2bbaf59",
+    "backend/tests/integration/test_gaming_cashier_provisioning.py": "74afeb98a25a56b93289bf7578ef2e90b161510b16dc459b1d63b6ea081b29f3",
+    "backend/tests/integration/test_gaming_package_amendments.py": "ff7fa250e16269098cd4dea13bafd95434eeee0c3f94a6bc98a41ea35a1363a0",
+    "backend/tests/integration/test_gaming_participant_void.py": "d21e9960bbcaa7ca6779d5ebfaff199d406d3a99ecedac7e3de2134f6eee2e0a",
+    "backend/tests/integration/test_gaming_pause_lifecycle.py": "5ded7c5bfb1167d604ea59c19f5378dae23fa17e6a01d3ef9d14e90d799b2ada",
+    "backend/tests/integration/test_gaming_phase2_contracts.py": "99e8a21c6dc5152b68993c90b53d8c0986e6c05b0a48562878169a724901ea3b",
+    "backend/tests/integration/test_gaming_session_addons.py": "4b16ebdf617e37affa4a9b4fffd48411ecef3e63bafa318c108922b2dd4ab324",
+    "backend/tests/integration/test_gaming_session_participants.py": "a97e8f4f9c5f71f13f656c8df75bb00444542346110d4ad841e930bf900f70c9",
+    "backend/tests/integration/test_gaming_void_retention_migration.py": "7c8ba45cd2f91dc506992c249b05942def3ee99d06ab5ca1edd47eaf642275e9",
+    "backend/tests/integration/test_home_analytics.py": "652867c560d8a2e94871917206eb06b5ceb8a15f50a269514937463add0a5de7",
+    "backend/tests/integration/test_image_encoder_upgrade_replay.py": "9c2859c203e498631f8c1d5bea3cb341fd5704a02b93bfe0182987fadb15bf71",
+    "backend/tests/integration/test_remote_assistance.py": "f1330deb387a4aef042c6a5dfaabe387041848e27591603da7a76a8cc9729838",
+    "backend/tests/integration/test_reports_overview.py": "898286178be6cb746796965240055e869c1786ab314887da88dd33784c8409e6",
+    "backend/tests/integration/test_tender_correction_migration.py": "3568620720787d92e71455daef2ac22879c6f51600b6fa8e88b8f06124aeb3ee",
+    "backend/tests/unit/test_android_update_policy.py": "0d9c0ca03789e6e1efc333c31f3e755d0721e154419bfa6f57bebef46f171fc0",
+    "backend/tests/unit/test_audit_business_catalogue.py": "9b93d156415ad44f1a49aba0a900ff4f3e1f95f73d5e2d3483e3ad0276021a94",
+    "backend/tests/unit/test_client_compatibility.py": "9710b9136c58bf962814a9b2f7b03b53ab596bb888104844eff686379eeca70c",
+    "backend/tests/unit/test_gaming_cashier_access.py": "93bdb5bfbec7041edc295720320bfb4b1121ddbe4f66700487f84a843e53722a",
+    "backend/tests/unit/test_gaming_reconciliation.py": "8c9689204dddcc36118a3d021fd5bba171ad0258b8c0f85876beb3c19b6b6d03",
+    "backend/tests/unit/test_gaming_void_policy.py": "7bfd02627ec7a7ca515d21c27e69026e1187cdba5de8b4b158b38ca7fc95786c",
+    "backend/tests/unit/test_gaming_void_retention.py": "822bfa3d692824bf155e2eac6d878f4b3f4dcdd97f7e8ab58d83e784c8493fe6",
+    "backend/tests/unit/test_home_analytics_policy.py": "168fbc48f21c23c4002d95d683dbe4b19dbf4e9f3b5b32af3f4261612b099a4e",
+    "backend/tests/unit/test_operational_route_integrity.py": "1b2e2a18a2f899bf283990736204c0c78b10fc9d322ab0e7caa65a4f169e26bc",
+    "backend/tests/unit/test_release_contracts.py": "cbf16a64ed815c40ba5bc8731464a43e73511e889d8e4f71f363e3f47456de13",
+    "backend/tests/unit/test_remote_assistance_contract.py": "99ef8628a1c1496d8322f3293de6878a63af9c686acf91d8aa866d7a17f4c7dc",
+    "backend/tests/unit/test_runtime_release_parity.py": "dce44ab147f28bd95da7fe2ba8380abef9214c3340a07190acbc2dbaaf866e28",
+    "docker-compose.prod.yml": "54d8ac6fee14d7b4c74b8009522f1a7c88ada59d32c2b6b4e478cfb4bd15659f",
+    "docs/BUILD55_ACCEPTANCE.md": "7f67b167c32bbb60c6ffc71ef79756c09a97befd383cf11a340249d308e3525e",
+    "docs/BUILD55_GUARDED_DEPLOYMENT.md": "dac3857d695e39689966d9fc458faccd7fa2fbc28596a49f921bbd1c3af5e08d",
+    "docs/SERVER_DRIVEN_ANDROID_UPDATES.md": "fdb3e3c577d2e687a9f72bc1a9b306a529937b21e5c6bea8e089a596a777fa17",
+    "docs/V3_1_47_RELEASE_CANDIDATE.md": "d616a15e70d11a202d5c2bc68820f53bf4f016875491a936beee4831520a6248",
+    "docs/V3_1_48_RELEASE_CANDIDATE.md": "76412192087746d4dbbea1f3ed584e2dc5b2cdc9611257aae16bf12aaf7cf487",
+    "frontend/.env.example": "fcab37dfd26f9ee11c7e2d6e62db226b8b129a4c461716247db698a1f1c4e0e4",
+    "frontend/ios/App/App/DCompanyNativeApp.swift": "1ff860f07a89a29d144a9dc31a5e40bb3bb1277858a445c42d507447ebd95bae",
+    "frontend/package-lock.json": "82c5fa6633648b4c298a57f1102b2629da6d139a6b09d326712f36583ae855ff",
+    "frontend/package.json": "3d9a84f1381984f73ace5ec0d36f4d70beb36209df61a2f8beb7ae94f9ae13ba",
+    "frontend/pnpm-lock.yaml": "86b358b24ec59cab658312690edc280a85e571a44aa4f2edf5d95bacaf69660c",
+    "frontend/src/lib/erp-api-gaming.test.ts": "e2a872ffa7362c054145c4e07b4b9bfc2ac96f31d7fb3c2494ad4c3a63c69749",
+    "frontend/src/lib/erp-api.ts": "517de5bafc4edb2bfff7f7ce56e6dcc853b9f9220482255b22fadac70ee7a6c8",
+    "frontend/src/lib/ios-financial-admission-contract.test.ts": "cf37db1be2628bba2d1c7e1dd51ad019d57b6bd19fb75a2210ed7abcb5877a5f",
+    "frontend/src/lib/roles.test.ts": "cb5baa397b2162135ab144a7e569df291bf8e5fff5646fb356794095dadd323e",
+    "frontend/src/lib/roles.ts": "0e3e1bac3add03e0acdb0995f58711070fbc6863162c1a816c1bb5c9aee42ba9",
+    "frontend/src/modules/analytics/AnalyticsScreen.test.tsx": "3a2b8104bdf045a6a449aef684a6b7af9067dc763c8a7f57c5aaed2edef89c08",
+    "frontend/src/modules/analytics/AnalyticsScreen.tsx": "2bff86a5b12d0035a967a677c3c0ab0993cd1bc51187782f87b126a5fd173fff",
+    "frontend/src/modules/audit/audit-presentation.test.ts": "4066609b294c7535b63e6e76e335ad5f7b8b317c4618b86fe8c8506c7c9133de",
+    "frontend/src/modules/audit/audit-presentation.ts": "a77f388154268f1e863aa1e94b3fdbcf9b897ca78ff4a0fae64e13886fb75918",
+    "frontend/src/modules/gaming/GamingCancellation.test.ts": "c21fbb4836d6a27d68c94c86893d552ad37570363960c0a7204f014196d9b5bd",
+    "frontend/src/modules/gaming/GamingCancellation.ts": "76aa33118a5b5a4b60ff0446a6860d52b3d17154afd4a72be63b58ad54f9a3bc",
+    "frontend/src/modules/gaming/GamingInlineShift.test.tsx": "21a5febd46209e70a2a16ba60a171592b78e57d326e64e50f7c841e401a0cd6c",
+    "frontend/src/modules/gaming/GamingScreen.tsx": "e41ee4a9bdcf832100994b5eecceb0b4c6b4fff6f654e5cd6132d121854e0841",
+    "frontend/src/modules/settings/tabs/AndroidUpdatePolicyPanel.test.tsx": "4e030444b5bd4e9db67a0b57216a6b6a6dfc83fa29c160ac8e6138b9e7fed20f",
+    "frontend/src/modules/settings/tabs/AndroidUpdatePolicyPanel.tsx": "f8270db937469511028c3e3de05eca5dbb45a7416b38f770baa65a8ed49882bc",
+    "frontend/src/modules/settings/tabs/DevicesUpdatesTab.tsx": "3219df29ac30de2ae5fdf18fe1b073d20b3e2ad4a25e271ba8190c0dbbd3f547",
+    "frontend/src/modules/staff/StaffScreen.tsx": "693b8b8f27374fb015366294303fb42ebad45630bdb9e6e7c7144ea8d6c7c345",
+    "frontend/src/modules/staff/staff-edit-policy.test.ts": "483517575b79a732daf445394806e37ed8d6ae03c7e59a3cb01f9f9c0cf9bfd5",
+    "infra/docker/backend.Dockerfile": "af9d733cee2845755427b9922238f74c219b1496a501db142c00cc16cbaec5e4",
+    "infra/docker/caddy-build/go.mod": "d778f1fefe2c1064f272e7eb9ec10c18bdf23d1fe3b802283e9e7effe1e3dcdf",
+    "infra/docker/caddy-build/go.sum": "e9250556e367ef6323b8b4af354aad558d358bf6537c6eb8423b0f40f9ec9e0b",
+    "infra/docker/caddy-build/verify-system-ca/main.go": "1c95c147abc496e15ac6b64820e14272f2e4a6d4eedb6f9b6071bec67a59025a",
+    "infra/docker/caddy-build/verify-system-ca/main_test.go": "6bceeb70512ce5c5604463d438c0ab447e64861a04e59937b3c2f459e5d5f9a1",
+    "infra/docker/caddy.Dockerfile": "3c7c485bb564c1e70e017e655c77e7f7fe74c5d00e4d35cd91e6a5fffb933f7b",
+    "infra/docker/frontend.Dockerfile": "b9041a5ca722ebd21ba9046f3607534ff536e5c735b4258896097856d7f4d18b",
+    "infra/docker/zlib/build-patched-zlib.sh": "351149e34f3a202e3ac9bbc1c8abae50cf596f42d6599b6ae1b5e046388a66cf",
+    "infra/scripts/bootstrap-verified-pip.py": "f38c2113bb2d7c35eea49d55585d60f01b43f2662dc28a6a22fbce2037984dc2",
+    "infra/scripts/capture-build55-runtime.py": "0dd1b4474229b5a57ab640a8399f9231bc0ff90f03cb6780823e61016e07a00a",
+    "infra/scripts/install-on-vm.sh": "edf75a002c0846797b77371f014d8b1c49c1396e68ba681611c3417ade05f6d0",
+    "infra/scripts/install-operations-monitor.sh": "278c106ee30f34cfabf7209d20827b893a309fb251b0d6dded8c4afc6d50281c",
+    "infra/scripts/run-hardened-image-scanners.sh": "b2333526501fe5987ec839f193ce8c6bc56c6ef6935fe40343e19c8480096e3c",
+    "infra/scripts/select-ci-postgres16-client.sh": "df7ac8dfe2fbb70e2936587b610b75bcbc1debc16b81a9e6ee6f4fa6b14d02cd",
+    "infra/scripts/verify-build55-authenticated-acceptance.py": "f4d59c7f967b6cc7cc4176bf3f6729fbd70f321007185697dd9fcea84401b417",
+    "infra/scripts/verify-build55-pending-compatibility.py": "1027469d8b7ac505e9b6d393fe6a962bb227c409a56860419dbda0e4a1649131",
+    "infra/scripts/verify-build55-transition-state.sql": "7658c7f07cd64994530b892a2902b83e243236a7eb0a89ff63ac7a4c5a6fc844",
+    "infra/scripts/verify-production-runtime-images.sh": "11febaf10f77c05677d61ac773ca68d9b3de7ec7f18b68d335fcc0a98004e144",
+    "infra/scripts/verify-zlib-vex.py": "a1f06247ad91cc0744c5a4a4a470e49b2fb2460b437f425c3afb835c6b20f41f",
+    "ops/stage_android_release.py": "46c3988f28bf66cd8291202ea4f48de2ac9753a1b60be9370bf93e0a933e1938",
+    "scripts/android_instrumentation_provenance.py": "18e39e9635ad073c543776fa672ce485610cbfa40676e59daf1c8c63b8f0892d",
+    "scripts/configure_ci_android_avd.py": "7522cff72722b6c50cfb237fa8a5aeb4927be2bd999b4af3ec217061126beb85",
+    "scripts/run_android_instrumentation_ci.sh": "f99fc33cbc5d8f5948d2037628a60ac47d74fa73feb594c301caeba5029ba6cb",
+    "scripts/verify_android_instrumentation_shards.py": "18222ddf59ea929c7efd2db5f323e3226768685b7a0dd2814d5d9911dee9fd9f",
+    "tests/test_android_instrumentation_provenance.py": "cd2f217862729f1fa55b3287d4fdd773aa8d58afb6f82aad31f3971784abd43b",
+    "tests/test_android_instrumentation_shards.py": "25254c7a8520691fb6445e0c89031748088c4cf463a18a69a20968c888a7a53b",
+    "tests/test_android_release_pipeline.py": "3bd31d872696efb891b0cd617b25d0288ed34650d2548b8a737ea062009ff516",
+    "tests/test_android_release_staging.py": "27fe32342178c02084d0a692db69307309d272411d47e9ea938f322ed84593b7",
+    "tests/test_build53_pending_compatibility.py": "68301cf1e8eafe8b3c3258f956c41022a53edf00296f169d98c5383d438e182f",
+    "tests/test_build54_pending_compatibility.py": "7e80fa9dc3d27f9975af59856b33bfce944f88720fb2e9661384cdf6ba45cab2",
+    "tests/test_build55_authenticated_acceptance.py": "8d8e8239ac42d019e9b2c9b919dfae20ebb77e14c89a4952fa4134837f824923",
+    "tests/test_build55_pending_compatibility.py": "64bdbeef60510a3eec593c2d6d6131aa9a25562aca190b97ba98da02b36b5306",
+    "tests/test_caddy_dependency_security.py": "42419a9f82d17342fb9996aa29a24c4ed278001915bcf2eb2a4ee5163ca0e898",
+    "tests/test_ci_docker_connection.py": "413146841877d130bafebde5bce31102a9cf92bf269e9e24f1a576c7a9705929",
+    "tests/test_ci_postgres16_client.py": "88f11dd7e3252381f220b3aa93512cbbe0b20448f13823e21a304b581fe86378",
+    "tests/test_code26_physical_audit_lane.py": "d810f3c0df97e33ce32c93f4bc42552fd0d8d23b0e9ff1b61164e6285b647329",
+    "tests/test_docker_context_safety.py": "0c5c7fb5e5e7e4ff9ad69a1f6c7eb8ce2f9a41ba35730a436a2717b9a596a05c",
+    "tests/test_hardened_scanner_runtime.py": "8b5621586135358f4d9e9f8ddd975c0643bad4d849f2a0e18ef8ab0926fb288f",
+    "tests/test_verified_pip_bootstrap.py": "d2f7cd4755f9a40fd16a828f22fa04dcde85882164176d87239fc6ea5ec57ced",
+    "tests/test_zlib_security_remediation.py": "02ae9d5fe1126918a94547c808765e3328807fa2db7bd2ced218cd478991dab1"
+}
+
+# Successor overlay only; historical signed maps above must never be rewritten.
+REVIEWED_CODE30_4_BUILD56_SHA256 = {
+    ".env.production.example": "e679e92d4ab668480adef9bc03bf7744bd0989dae702fb9ca6f3f0bd6815d863",
+    "README.md": "294c5cdfb799b64f8299521b28d4e0be3ad0133aab793a90a6156019aa8c1b86",
+    "android-native/app/build.gradle.kts": "22e602f20d841350ec11ed8a4069858f803575f3a28e990a4b2f1956b2b8adae",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/components/LiquidSharedComponentsUiTest.kt": "1148d214436d6df34d9c6d75ccd57abfa633a313d6a45c29b9118fe238e699f0",
+    "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt": "1dfa7eedbccc49b2d4b40ea989001a18692c3d27d9c607d261cd8fa7a7d88d67",
+    "backend/app/__init__.py": "177a13493124885cf3ff5b25b88e0e68e893a5faa69141501aaef7cf63102947",
+    "backend/pyproject.toml": "a9a24126537d809bc88aafdf734806e80367ec9586d053c0759e62be72cea8b5",
+    "backend/tests/integration/test_build55_transition_state_query.py": "c335981f073254fb7c3c73f6e342bb077763fe9dd72da09aef519f94a0cfc3a2",
+    "backend/tests/unit/test_release_contracts.py": "a50b0e1e63811631d4a0115b5b991bd3479458f32f59800307b4b6b43a39b075",
+    "backend/tests/unit/test_remote_assistance_contract.py": "e6ceb12b4144153737ad870acfec96a3195f9cb7def617b8c6906b72425039e8",
+    "docker-compose.prod.yml": "fc962514155b11b84acfc7d81f0b8a1f92618e3884c88f06a4b2746a40b105a4",
+    "docs/BUILD56_GUARDED_DEPLOYMENT.md": "757f1e97c411f46d54ea0e55e8f568be8731f34a355cfa1c1e8c68da197eb426",
+    "docs/V3_1_49_RELEASE_CANDIDATE.md": "696eabdf8eb7151b4da0b3869c75465e39cecfdf5d7ec9bded777433b94b70e4",
+    "frontend/.env.example": "1e083eda3e904f51af8d4d1fb680ac1dac02245e2a00fd32f91df4a3db0000d5",
+    "frontend/package-lock.json": "822ed772e128a325e08f5a436399b661642134734e4a0f2e6b6e5b667b5ad83a",
+    "frontend/package.json": "4dce90b088fb33dc0dfc2da94942ac14b69f353779c438e30a35d1e5859eee88",
+    "infra/scripts/install-on-vm.sh": "df21bf0e602b55dfef3af0e46f77ae30ddd7960693210a925624223cf4dc2b5b",
+    "infra/scripts/verify-build55-pending-compatibility.py": "818ad5d8243a309efa36383f29c77e7eda08f3058f275d3b85e8f3907cd48bc3",
+    "infra/scripts/verify-build55-transition-state.sql": "ad748be879ab2814c7f7326679f74b1aefe1d0ad72446e612894ba6c59231ac6",
+    "infra/scripts/verify-production-runtime-images.sh": "814ff6f4d2c866faad45d4eb1fc25eb76f4a4452a80a3d0763bec340e2864241",
+    "tests/test_android_release_staging.py": "fe0c2162ceb0cddbb6187e5f1ff6a0fcf7b9e23978e6be9448bb260592ed47bd",
+    "tests/test_build55_pending_compatibility.py": "ca791c1939cbde2a438203a8538dc8d5c7f336fabd25552a82b1f0169fa0c82e",
+    "tests/test_code26_physical_audit_lane.py": "7f108a6e4083e2b25fbb416622282dd0145e87688ac75b8cacfd8b960433252b",
+    "tests/test_verified_pip_bootstrap.py": "367fee9da14cbc8ba5bac99a778d3823440be6dd7c38716387ee2832bc641dd1",
+}
+
+REVIEWED_CODE30_4_BUILD57_SHA256 = {
+    ".env.production.example": "b06155c1969cf687492b1e05d2a20c630465347a5d8675de98a00d7b17317ef2",
+    "README.md": "a9de3403538e198c80470265370458f749e6b8099773c8e2a9bf40c4e26d02a9",
+    "android-native/app/build.gradle.kts": "0d323fc104b0094f9b2753c976b8f2e683aa504dfe0565abc3d98c610411df2a",
+    "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt": "39ab9053e0968951e7b630f034dcdb6050e99ac9e56304aebaa728ad5511f2c2",
+    "backend/app/__init__.py": "929ecc7e1bf65f96947410d9f3c05536753fdb553ddf99346df84b30e361ebba",
+    "backend/pyproject.toml": "1d5551429d60f626bbd285fb56afdd792419e1eabd38e5a1373d0a24fc68ef68",
+    "backend/tests/unit/test_release_contracts.py": "0e22b79462965ed7ae721bd010db1b9990522e0e669b74598554348ad887aa5c",
+    "backend/tests/unit/test_remote_assistance_contract.py": "77126fc1b6ad7accc61e6deae1b899c545a7f63b201c5b25619745829a4eda29",
+    "docker-compose.prod.yml": "1f8a62c37af8054ff76c654239424fd6f15eb5e2b6913c88c0b00dfd16bec4e7",
+    "docs/BUILD57_GUARDED_DEPLOYMENT.md": "890676760b98246a8f8e9d92cda20a36a8e2c7dabd5401a00ac1953da08229c5",
+    "docs/V3_1_50_RELEASE_CANDIDATE.md": "15d677fd45ed5fc70de64b8439bdcb971ba9dd4b8437f205d5848a6cab218b6a",
+    "frontend/.env.example": "4d532a350ba3fcaae00b0bbc13418aae523d5912d16dabb31fe7c347a88119d4",
+    "frontend/package-lock.json": "a03f077642dc47d2bbab94fc1e28b7fda2f5c309b43f17866134ea45ca09c608",
+    "frontend/package.json": "431a59f83aeb4aa9ca06ca43d428538fe6be46b3415b0383db49e4c15a24c01c",
+    "infra/scripts/install-on-vm.sh": "0b3a711321c277daa7cbabd33ebb26e3d42442bd5fca8ebae591df0858683b0e",
+    "infra/scripts/verify-build55-pending-compatibility.py": "8ef16103b1d963f973ed16f15eb39a5f7b73105b3ca40191df1bf1d343188739",
+    "infra/scripts/verify-production-runtime-images.sh": "ac7e9f5e81c335e1f930883dd1863b178c42bc4297daf01fcd7ed4342e74dd95",
+    "tests/fixtures/build57-compose-daemon-oracle.json": "fa1632f334bc3c7625289da0c71fefcf2129e392029bdaab29c8497ff8c4c1bd",
+    "tests/test_build55_pending_compatibility.py": "cab2213c6bd1bb6102bf4001abdeafaaa22e3de9b284e06b6f4bcf8c4a017fe8",
+    "tests/test_code26_physical_audit_lane.py": "34976e31992d5738dc18e38e75a7e965e9c1155246a5336a5d80277f9057e7cb",
+    "tests/test_verified_pip_bootstrap.py": "960bfe4739913d2bc7d233169e8b8fa4a3cf4f6585156e3f93923d7f7dcc1dc9",
+}
+
+REVIEWED_CODE30_4_BUILD58_SHA256 = {
+    ".env.production.example": "2ba9585c39e27c2bda81c76b24894ec0af4388b9dc15b5a9c96df14ef4692251",
+    "README.md": "8d419d268b55abc615d28f302ab396427a48ced8c1bcfdbdacd6a5275f66ff64",
+    "android-native/app/build.gradle.kts": "8327d7f3b76b49ad92c52100b06568e5feb8369354951554a4a2e1cda90dcdd1",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingInlineShiftWorkspaceUiTest.kt": "478717d983159132a7f2527dea60fe5c1cfeed8a2c6059c51181ada2990888ab",
+    "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt": "f5b8d13035e38bd4969ba04d719ca109a513304755ae7a2088a0c527af5ed184",
+    "backend/app/__init__.py": "a4e09c9bf09d826c3f6c46b184216b973975a94dc116befdf49ea237fb679924",
+    "backend/pyproject.toml": "fd02645af81eee1e44b61b2e3ad7901b06abb001e8c8918a439a948fd56ef748",
+    "backend/tests/integration/test_remote_assistance.py": "6064ac3c1b0452e5eaa2fb0fc36e621d50deb8e4e3ddb0db2d8da5a01932aad3",
+    "backend/tests/unit/test_release_contracts.py": "3619b049c63a00a45782a389d8644252cd7ad14c3f573f5411b515c5b45265f8",
+    "backend/tests/unit/test_remote_assistance_contract.py": "760c4c521f7bd601acf33140bbd975ae8e6407df9dcf6fb96adef9c4e9e7549b",
+    "docker-compose.prod.yml": "4ca0abcf1b22fe35d7569b4b4cc1553ba1b3620c0bcd6b2a586da9d4897f7c5f",
+    "docs/BUILD58_GUARDED_DEPLOYMENT.md": "0b511f02e347a519cf6221f749a39873afd67f656777a8f3809382caea47711d",
+    "docs/V3_1_51_RELEASE_CANDIDATE.md": "705f2990bf448ee17e4345136557e07f5ccfbb1928d1ecaf06db735051b033ce",
+    "frontend/.env.example": "30495317e42cebc2e526b14c376e00c410d67ad170bb79c73443613349ce0856",
+    "frontend/package-lock.json": "59f2b43e2301571922be32b5323ccfdfc684476767c7d0426efa52df23ec3b37",
+    "frontend/package.json": "e275f51d02a04ab9a38701f4154a5f7f1eabc6ebdb416e5ced3eb9d9355c4851",
+    "infra/scripts/install-on-vm.sh": "5383cc3f948cd1c502270cf18659901d0db6afe865a04b7795d7a24043992943",
+    "infra/scripts/verify-build55-pending-compatibility.py": "99e752d4f1e8edf4be81b4732dd6878ff48874c5d8e6613c2c67d86f5dfdb34f",
+    "infra/scripts/verify-production-runtime-images.sh": "f5aa615f0d5e120329861aeb28f899858e7acf61075f5ce9283bcb1f7673687a",
+    "tests/test_build55_pending_compatibility.py": "7625446959c00226c595e4494288e2f2aa112f4393685088758595571f1fd5d6",
+    "tests/test_code26_physical_audit_lane.py": "a7d3264f68ccb6cf539d21f522693495ec4b26902c4b66f0f9acf503327c77c5",
+    "tests/test_verified_pip_bootstrap.py": "cfd3f795a326741af78267c26a9f4f890e6539b7e04601b5896c6c79db3176c7",
+}
+
+REVIEWED_CODE30_4_BUILD59_SHA256 = {
+    ".env.production.example": "29545376d7fac111145bf232e8c5bbfbc11b4392af405e6faf510edc30a467a5",
+    "README.md": "853cf05a030fc66d551e010e862eadba0310ed696b04085e9fc026c221cf2314",
+    "android-native/app/build.gradle.kts": "eeaaa64fd3618a31f9c85c57667774ededa196561725d81fe0a59b85c7a8b832",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/WorkspaceScaffoldUiTest.kt": "8d0e97a84740f0c05a04d28305130d94797155ebe5a9bb086ab005406656ebaf",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/ExecutiveEntryPresentationUiTest.kt": "3d9cff76ed6ba838c3f09bdd1e2d6f396082435e2eae7c6add0f855556fe2f5a",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/LoginWorkspaceUiTest.kt": "21274943121a6a4b7e66ff85af01a3954e72254dd561bc9f498b0c7bdef96928",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/LoginZeroViewportFocusUiTest.kt": "4e2921fdd72c08807a6eaa9653682d89f682d963a9d06c493178cca0cdecc161",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosEmptyCatalogueUiTest.kt": "e26ec825d56c05f2c0ac8acf2a0d75a9d47fc49494350e895d123aebd6444619",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosGlassUiTest.kt": "121634069bf61376b4ad7435bafd03522878b4ed60df5a5b52371ed2359d0b6c",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingBoardUiTest.kt": "c97d96f53e4f8d4538f4ed9b75fc2fae3e7c93bfe0695c0e13509fd1c2e84c46",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt": "f7bc846135345194f936a94deaef05fde78590961f5861a5a9611199f0af055e",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDraftRecreationUiTest.kt": "56746cf1952ba2f05b3f39b4e6b1bc7a0cee4c0ce1a341771b95d140c0aa6ac0",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingInlineShiftWorkspaceUiTest.kt": "a595b6dea736b4c619a9bb567bef2a1e6e1dacfa667b5274214b282ea63155fb",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingNextActionUiTest.kt": "d6fb6edfc77672bde0836f49b0134e72a018937d74b71409c804104173a3b7bd",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/home/ExecutiveHomePresentationUiTest.kt": "cfcbfab5ecad2b06f051e6a3170122433f05ea5956acdff73bf8aebf5e89ee6c",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/inventory/InventoryLoadedWorkspaceUiTest.kt": "6029620681c945fc3d20d54b67560c836aa898f188a2a441a2f21fad08c6801f",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewUiTest.kt": "f5d303849abb95a7d2204aa813775d297d364b94897805f28e84bb0292d9a8ef",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/shift/InlineShiftOpeningUiTest.kt": "e018894a753ccff1f7ef43ec95a6ace526ac0b7646b44b2cdc13abbfef1fbb2d",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/shift/ShiftCompactUiTest.kt": "284fe5be36101f799b1245ffcc6c106dcc48dfad0050e82fb1bae840c4974d67",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/shift/ShiftOverviewUiTest.kt": "e105f3e8f103de39af708788e1837974e5a0c6b3828ee9212e1e9b7ccf9d4927",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimePendingStoreUiTest.kt": "2adcb3029b6753a8a7a4d866bd4cc2e7cbddfe10a0f6408f8e84e0e408833f8e",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeScreenUiTest.kt": "7e9a57bb2ae0d80438ebf0b3fce2b0a426b233773e1f7ad19c534fb95bff8af7",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundFixtureProvider.java": "9b2e6e62106928ee26dee007208797001737359e7aa369b4789fee86f20d376c",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundFixtureProvider.kt": "52eef493e0d1c020a4cc87347ba0d098a885752de8a410e92252b714a08ffb4d",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundUiTest.kt": "5384f58ff8c832bda83f6310225882b695025bda39d02ed4929cb779e4f197a0",
+    "android-native/app/src/main/java/cloud/dcompany/erp/MainActivity.kt": "847c88122681af5dbb2a5b56b2037db59c9e0d8d6064dfc5d02e15ef306e6091",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/auth/EffectivePermissions.kt": "51168531dbca3a140f6fe68e9dd9ff61efd9c0741da3dcb32f239918e1215eaa",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/checkout/SplitPaymentPlan.kt": "9ec1490e6f9cbb65ef1097742f5e5e0b4087db970b7af7b13ad7acc5fd3c7529",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/net/ApiClient.kt": "da4cf2a5a71b0652bcf934af84b1a8e73e48fc67562f790dd0ceac60c9e81625",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/net/Models.kt": "dccb275b5d538fcba5730ea3f39adb32c1dd3c7bc224a6d0bd2ca2b99d8ebb3e",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/Nav.kt": "92ff625378b84fb84d01fc8189fc4e8e0a4fc9ae52bcddd29994fac5ae4ac435",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/NavigationAccess.kt": "48f2415595e4ea0c39c90a405ea7e13316320aa2f72d53d6c274012391f7ac0e",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/LoginScreen.kt": "05d996fd4661896aa443eb179706afd5318c1f1b8d5e0678894e945257f6ccb1",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosScreen.kt": "551bc9c62d064199d912dedac90de8bf8f7242e0f94986c4f8d628834173a232",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosViewModel.kt": "86abc0162c3880beb3be12957510eb2ca196b084ef0b6fe2edbdc699775d6d7c",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/ReceiptFilterControls.kt": "b1e7584049297c6dea3966e075621bcaac01c134a0e50a76dbc1af46c7d7c403",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/events/EventsScreen.kt": "87654526304fb698e0fd80ec32c2786ca0a8c6a74472869c33c92f1e8c0a94a0",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/FinanceScreen.kt": "4949e5c7a4ed270abacebd62203fce15d236712a018d4a1ce7f7490e88625eb4",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/FinanceViewModel.kt": "69c55ff756d5447e495d2ce9278719179e73f7dcb3a39e93ad6906e17692170e",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt": "0101e0d2dbb475968f9f669b62964dc83acc78ca274043570488043b16328457",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt": "83f417c21294476d5355579e12249def15b370c1a5a1d04075ced3c9b429b1a5",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/home/ExecutiveHomeScreen.kt": "3e4a1f76167607caac9243cff99c8b66b5155dc5b542e5b994f080a9afaa7f33",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/inventory/InventoryScreen.kt": "248e4e6092cfbe11ac3f819b50fd3576068838e15489df15b81c03272e213386",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/menu/MenuScreen.kt": "5c09123d237c0b950d40cf183efcf612377f210ceb3d087bb9f2c17bdfc3a7bc",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/refunds/RefundsScreen.kt": "07051f6c776776b63f3c8cafdf3552b5aba219631aa3ecc94b4ce2c60d2960e1",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/refunds/RefundsViewModel.kt": "1e69d2c98b723ea47acc191bb1106ef07f7f1b9b1f211461762d28522d548f21",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewContent.kt": "8c3ec88ec92ff91c535c6cc79af11e6675c77796eafdd502be3234c214e393d4",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsScreen.kt": "3c68e38fe53cdf543bb27e19ea77af17c6d2f0f9c6954259079023d3e5d91351",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reservations/ReservationsScreen.kt": "82379677af9df1e0018f9049daaae35dd7f5d0d6ade1c404631ee79190df899a",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/SettingsScreen.kt": "0de92e8569010a11733ae0a3b65e404da347d1bb9ab874b146e25b561e46c2d8",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/SettingsViewModel.kt": "d3aad2b852c2eb48295ffb6ea27674e03bf079bf9dc4f169e7298661e081e510",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftScreen.kt": "63e05d28c3e8974362b7a78a1d0e9d081990625ecc198ef14d21c7a608ceb9b8",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/StaffScreen.kt": "b27150a37c753e17fda4cb9d1655a1304c46bf93a2b14297826ee3dbbce609cc",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeApi.kt": "004e7de2f476b7509f2fb7d10dc957796b578572df603009263f63b4b6caa5a3",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeController.kt": "62674568a6c7beaa2b9b09250cd8a6f454ab67fec9797e070b20751e3d9acea4",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimePendingStore.kt": "c1b93d19afa2a1681420f1092ad348234269450b2a5ede843086bcd32896ed76",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimePolicy.kt": "a67f38f6b91254b0b3751b0829a442cf47674ae44ea0d6a0864c5d55345a3d72",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeScreen.kt": "c205c786441a1569d84f055679544d96d668e828561573873858860c0b00d991",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeViewModel.kt": "692334dc520b4919a942fe2e5b45e1bec313ab41c2f25f3d1735fad29b99b3f6",
+    "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt": "bbc80ede8a6c33c8ed5c30220d9f887365c692c7f699a737d8614b6a616de9a5",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/checkout/SplitPaymentPlanTest.kt": "687628c7606b1fd7d607c1f015331b67d32355e3b0ec8eef2d21f0f86c1f3b46",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/money/MoneyDisplayTest.kt": "bc1fa52c335152721f1a940601f70048bc87ee562ffc87e4cdc133a380399fcf",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteAssistanceSecurityContractTest.kt": "f92e8e67ea90680e0dfdec35fa54cbcfd1d0f4bd2f24cb9213de434a79ef9b20",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/OptionalUpdateInteractionContractTest.kt": "dc50d2eea3074b6de9b4ec1b040eb5535152ca0674c901d404a656cb7cac8840",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/ExecutiveEntryPresentationTest.kt": "324eaad5edfa13820ed8faad83ca7b4fc8af7fb986e972ffb495a80c1ae7e810",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/HeldPaymentFeedbackTest.kt": "cbc4721d78821c08d18bec5d26d164900dfd07bb0588f45e6a097159933f16c0",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/LoyaltyProgramContractTest.kt": "1a81937f4ec7113f6bf73eec9fe829ae2194f4299c9ab470c6e237917cec31ec",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/PosDirectSaleFeedbackTest.kt": "96cadb154a93d9fb9547e220cc6a4ec5657de61d483cb71b4bd8ac66a6d1c07e",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/PosReceiptPrintTest.kt": "38d2a4891673fa994de4d4b7534e9675116baa3a6354bdb3e201049b98284df8",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/audit/AuditLogPresentationTest.kt": "a54d8527edbfe8fcf79ed728a1d8c42a26e2253b4df81ac51d7058d6f1616b4f",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/audit/SemanticAuditPresentationTest.kt": "1b2340f7616fbe235e64b8048351fff208bd39c2be9aa2ed916dcbc03d4bc86f",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/finance/FinancePresentationPolicyTest.kt": "461dec29c196971a8afcf8d9ecb8a8853c76110c4e4c470c4a306a0bb531f62a",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingStationPresentationTest.kt": "661b825da9b62311d7e32abca5d819f9a62be1594789c4715e654f909a1b5812",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/home/ExecutiveHomePresentationTest.kt": "745b4c5123ec8a806a4370b2bf7748e4518b3ae6ece26831d7e20be976077eac",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewContractTest.kt": "4ad96efec1dcfc5e800246860917cfa874971dfa1a89a8f85997576a55f8ff82",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/shift/ShiftClosePresentationTest.kt": "0d92172173e6891714afa6584ae8a7928f71a0f18b75df67a76f828acd51145b",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/shift/ShiftResultContextTest.kt": "f9b0df81f4a7912ffc4b70a5d44a2bce54a9761a85c10fee65c0db2120158bbc",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeControllerTest.kt": "77bc1362b524b702efd06b6ee5ddc36dd717e1241d8f85503100d1c4fbe6004c",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeNavigationTest.kt": "c125152e4f813b34571ba7e47f2759ea805648cc8dc80d6b4c2c439f694e940a",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimePolicyTest.kt": "39281ff6fdbf79e126761c4262262f624bf1fc91e1341888d00b458ad0766bf7",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeWireFenceTest.kt": "9c092c26b6bc197e5cb254e7ac160ce2d1181b503a028ff4dde20f0a3202e057",
+    "backend/alembic/versions/0094_staff_work_policy.py": "a3de0175e70f3924ff39c6a9f26b4e581e4c6f17bb364404e1aa3de80765c55a",
+    "backend/app/__init__.py": "9ab646a6a4ecda2668b7b67feb325cd71f553751ca4764edaf9ea92f2c624908",
+    "backend/app/api/v1/finance/router.py": "9b5b4bf25d654ecc3da216f42478cabbb1789a9476b4a2a89c33c156f29c3b5f",
+    "backend/app/api/v1/pos/router.py": "efe21a02cb34da692b88c24f3159e73bc6c38a97739d3ec9e722a90ca885920b",
+    "backend/app/api/v1/reports/router.py": "790ef6e4e0e97acaff316f3dce6a8b4647fe5a040a6d6e40461ad631265f11de",
+    "backend/app/api/v1/router.py": "ebb07d7d529c663e02c9655c67936cd8d178d720ff9f934f2dc48a43a4428703",
+    "backend/app/api/v1/settings/google_sheets.py": "962b7cebab11af3b6250f4be12882d946fc65a4d5aefa0d9235da8c5aaaa62d7",
+    "backend/app/api/v1/staff/router.py": "550502f0f5dce86b7d65babfc76636e538c66e66d22bbe63565590d3231b176a",
+    "backend/app/api/v1/staff/work_time.py": "e83187eb7ef27a245567301f814acf53ce40f5ce037ce28395bcefa95fc106ba",
+    "backend/app/core/db.py": "f1aab1f800e4c617d11d1b96beeab16ef011137420ece2efb057f18ad7237531",
+    "backend/app/models/__init__.py": "2e9fc366ccf221bfadcbf93a4be212426742b9266c212043f043053f23527a3c",
+    "backend/app/models/staff_work.py": "ec531b2fc6be03ab574f0e3254f83c1ca4f8691795ad7459dcb3bfb52557fdec",
+    "backend/app/services/alerts/business.py": "b6eaf59eba9da3ce18ce1527d28c74913110536be3887a7ea4e71071979db7f1",
+    "backend/app/services/audit/catalogue.py": "fc7b152d456d6360c74dd210e7832931df2c6ff4da5b8256bcf251fdefb7013f",
+    "backend/app/services/audit/recorder.py": "f1c534436cf14a5dc1cb4a496c0803a2ddc54f5fa58ff328eefd09dd77fc6844",
+    "backend/app/services/client_updates/policy.py": "84e2393c2f390dee483a890c3c71aa511378763ee710157c6de14b3c33a564f3",
+    "backend/app/services/email/mailer.py": "803b99e95dbb2913d90b4560f77e330bcc93f4e8ac2c79f203b07bd8efc7101c",
+    "backend/app/services/integrations/google_sheets_mirror.py": "a14a263a0e9f39a359788f06e26b25326317089c8e3fec2da1ac25e9e622d778",
+    "backend/app/services/integrations/google_sheets_staff.py": "0752bd58eaede5b1ba1345eb1744b28328a53d15f5e8bf90af4a2e7a2561f4e5",
+    "backend/app/services/pos/points.py": "b276c915bb9a48b0a37a04f8aa86357a5dfcf5661fdbf8a8a0d715d583974eb7",
+    "backend/app/services/staff_time.py": "64bae035799a240d6793b3f0518f887c7ee15839bfcd4bfe5a9583cd250a0ebc",
+    "backend/pyproject.toml": "5e9c1abe47d6accd8dc2b3b8842c4333050884304b987a201b8da55b7928b1aa",
+    "backend/tests/integration/test_build55_transition_state_query.py": "63e986bd01b6fbbed54144836f313030ca435fd790276e440edd5160014c556c",
+    "backend/tests/integration/test_google_sheets_staff.py": "98b8ba225603f7d74026e37d03aefb3f7516b49cce0b4962d01247a0d998e030",
+    "backend/tests/integration/test_remote_assistance.py": "3f1522efd8665df9f6fcdf4428ee607a2bac94a44371af2f8204d5344d665d98",
+    "backend/tests/integration/test_staff_work_policy_migration.py": "a78d76729a6afb1bc6bf153688d77018ed877d11fc7e9924d2793620d9bcc4ff",
+    "backend/tests/integration/test_staff_work_time_api.py": "78cb8525adccf2cd6763ce79f28f718d3f5114ca4c8e7bcc44fe5d1a45a80d9c",
+    "backend/tests/unit/test_android_update_policy.py": "cc35097a007ce43bd25a97b718d5fb922adaaf8899c4e5a1d09970e795a37a95",
+    "backend/tests/unit/test_attendance.py": "b5b38940fc8d6e35636729e07c57072ed15da8612e91807fabdf902d47f2552c",
+    "backend/tests/unit/test_google_sheets_staff.py": "384dbe26cdd975d0c45b86894b4e0408f3dde1bcc83a25fc7e39ee317131c12f",
+    "backend/tests/unit/test_release_contracts.py": "773c6e6b6772781b777a2b958f85e7e8c4b3dbfcb2e2561673dba0f871d66c3b",
+    "backend/tests/unit/test_remote_assistance_contract.py": "48fb5a2307afd82c107120227098f4aab223e951a7e88d4c452caaba0430dca1",
+    "backend/tests/unit/test_staff_time.py": "ef37aef0339c75c9c97a689f57e0817dcce158a043c565694d06c68958292765",
+    "docker-compose.prod.yml": "cde41d3d45e1f6480d14beee8a9f7175398966d3b329ffadde6032fac85f7875",
+    "docs/BUILD59_GUARDED_DEPLOYMENT.md": "8febc660ed4d47e4fb3b25d88287bd14603e10ad0d07035d7e597c54674b79f7",
+    "docs/GOOGLE_SHEETS.md": "3099d89cfa1068d1bbc6591192178231fc3e93b1569bc652e2b6b2241d0d0139",
+    "docs/STAFF_HOURS_SHEETS.md": "d56c92392863cf8e9717edef440418053133175378e12102c69b062507408504",
+    "docs/V3_1_52_RELEASE_CANDIDATE.md": "2fe2ff825badae8134498997a8f9a9bf45a7d3384b687fdd0678203d72cfbf34",
+    "frontend/.env.example": "6879a952ba1f25992c7217f89c94e58829bef18a1dbf64074c2c91e5c3619ed1",
+    "frontend/package-lock.json": "0287b883666ac731f0784d3917b05866ea6360860b7d6978b71c81253d64dcee",
+    "frontend/package.json": "dbed7030cba26bc48f5bc4ef92708330541fd008bbca0fd82a8a932813ee6d6e",
+    "frontend/src/app/App.tsx": "799320fcc8b7185aa017e38d2c0b33a50cd76c00e75f638280d6c221003a2963",
+    "frontend/src/app/staff-time-route.test.tsx": "a6164b20d2d9c0f75f445f14ec38d867cb4f2ad45b19948b664a0e90815325f0",
+    "frontend/src/components/layout/AppShell.tsx": "bc9ab88984d7c0547029950c7e44c1213125c134dbbbe88898f298d261d76a09",
+    "frontend/src/lib/demo-data.ts": "6bdd5aac3639877eb38e1863e6b7fe888056cd5ab8faa0911223e4e2e41086d3",
+    "frontend/src/lib/google-sheets-daily-receiver.test.ts": "af65b3e4eaad74084400a945d04648e83f4864a9a42b0c3e58ad7819799de375",
+    "frontend/src/lib/inr.test.ts": "a54acc2be5773e1bca1f3d9422a3570ae5036077aea464cca15c51aadee47275",
+    "frontend/src/lib/inr.ts": "f863e75ce3a543d110318b489146b5ef3166ff4a3e6aaf96632ef6ff96ee24ab",
+    "frontend/src/lib/product-profile.ts": "419e6650f10ba501280e20553d8afd8b88502817bad8c524c9c8ec4ba73fd331",
+    "frontend/src/lib/staff-time-api.test.ts": "8bc0ee2cf73084f8c2e059a419e18a9d819e73e15ed35d209ade8fb10174cb14",
+    "frontend/src/lib/staff-time-api.ts": "2aed802ddf6c192624d148a515065bb900a84f7d3906aedc7224c4d41e37d133",
+    "frontend/src/modules/analytics/AnalyticsScreen.tsx": "fd0a570cfe321a2381a5d0ce0320905648ba30c215578c71492a4f62d255a4f9",
+    "frontend/src/modules/audit/AuditScreen.test.tsx": "f7ae9e86e08c8fd43312ce7c119438d36260a0ab7f254d03cbfa4e864db2c675",
+    "frontend/src/modules/audit/audit-presentation.test.ts": "cfee5f2525dd6b5ef4febaf34696c726c7b202bbca783e13910a6b3e8b9b0c51",
+    "frontend/src/modules/customers/customer-points-program.test.ts": "b57c06489683ee30c30bedaf8a084150cc6d3ed5439c9cde1506c91da86c3591",
+    "frontend/src/modules/events/EventsScreen.tsx": "d5cfdd0a98b1cef7c4e529e9ab5ccb90fe2aa74a7fa4d77724e58a81e2c02c2b",
+    "frontend/src/modules/finance/AssetsTab.tsx": "925d3e63c8090fa4be905ef1f423e47e197514a0740aa32f225c756822fd4652",
+    "frontend/src/modules/finance/FinanceScreen.tsx": "c925a3fc6963fd6594c179cce729af81c2e606d1cd4d75896047eec1eeb465e5",
+    "frontend/src/modules/finance/ManualCollectionsTab.tsx": "9891eb5ffa7be15c6f74153b236b5f8af2dc741b2aefc083e92891e32f9025b1",
+    "frontend/src/modules/finance/TenderCorrections.test.tsx": "7cee6fd321bfb11aa3a5e59a6b4995ce068847f1df6d385ab446029a499934a9",
+    "frontend/src/modules/finance/TenderCorrections.tsx": "6ce333ce518b4b6da06f5e69d8d01d49fa37e59f77d38254bf645b1ace83e701",
+    "frontend/src/modules/finance/TipPayoutsTab.tsx": "6b059aacf720781b5b277b847ee18bfb520bd23aec7cc272ce6351a5d295478d",
+    "frontend/src/modules/gaming/GamingAddonControls.test.tsx": "da3db2f396b8b4b7919bc0b78310c837cba0d548bcd73f5fa5d541ca2bd2e6ed",
+    "frontend/src/modules/gaming/GamingCleanupRecoveryPanel.test.ts": "2126e50a6931d6a424c24ca9bdc3c51e09a1f1274876588a60dead9e861b334c",
+    "frontend/src/modules/gaming/GamingInlineShift.test.tsx": "bf026f1fe9a04584e772b43d8d2f70a07f247a022a5edbd0c821da5776a6eb67",
+    "frontend/src/modules/gaming/GamingScreen.tsx": "97eb91ee73c72393e87826a4dc404823ccbabea40e47acd35d829f6c22123de6",
+    "frontend/src/modules/gaming/GamingStopConfirmation.test.tsx": "e219b257b5b87f645c952d7c5984dcfcfb293eda6dd37ed0b8c5221390f55a97",
+    "frontend/src/modules/insights/InsightsScreen.tsx": "0cf0b058a62bb92547e5e6549c1853bff72c5930d90a22b97622c10f27fc3633",
+    "frontend/src/modules/inventory/InventoryScreen.tsx": "534971088f559797d0f24b4a49b590fb450a6f5edc886f82b4430ef5e062f2db",
+    "frontend/src/modules/menu/MenuScreen.tsx": "eaa816cf38f9496175d64aeac7b612c6f51519eea0d02dc97782a32410269f99",
+    "frontend/src/modules/pos/CloseShiftWorkspace.test.tsx": "f54817402b59487be04a4a9b838ae6c9e9103dac15f2cc0cf111ea1ea4f77538",
+    "frontend/src/modules/pos/LivePOSScreen.tsx": "75ff26bfa258a76f23f03c73b76b40bd6e33b6d5f0a82b0883c82f1dce713cf9",
+    "frontend/src/modules/pos/LiveReceipt.test.tsx": "e238e60aa58143ec1aa2cad9f35507ab9ad64a30202e42b8c1facfed226fb460",
+    "frontend/src/modules/pos/OrdersAndShiftsScreen.test.tsx": "34d436aeabcd3f108fe8b0621e91153b3ca1b474ac0156f8b6ff1820f9d13e12",
+    "frontend/src/modules/pos/OrdersAndShiftsScreen.tsx": "df9cdcff3eff6aa73915e06ddca03bbc1ae13285c0172fbd2cbaa7a6c44f490a",
+    "frontend/src/modules/pos/ShiftAmbiguity.test.tsx": "f20e51b079830d194fb0ae726cb63d97f1a9a80547fffc261b8191577137fe4c",
+    "frontend/src/modules/pos/ShiftRecoveryCandidates.test.tsx": "e669f5dca66e6c497485be4a4710c5bb21609770ff350b5035fbab1d337d09a4",
+    "frontend/src/modules/refunds/RefundsScreen.tsx": "5c68b504031e6cd24b19bbab39fd2d7945289672ba4356e15b6349caca687180",
+    "frontend/src/modules/reservations/ReservationsScreen.tsx": "bd3f680d1021bc333671d61e012e35977bc615047b31d98ad492af1393ef92c1",
+    "frontend/src/modules/settings/apps-script.txt": "66696e81a71d714621023e4ed614ad8ead73fcba0c9999011664a8b060800130",
+    "frontend/src/modules/settings/tabs/LoyaltyProgramTab.test.ts": "ea89249403b80c47c4140c180c411c0074f11668533d6e8c89a5f7a59fffa1fe",
+    "frontend/src/modules/settings/tabs/LoyaltyProgramTab.tsx": "a631bf9916e5f796b36f8009baceece9c66d6b937b3f0c823d2424eb5a0a0408",
+    "frontend/src/modules/settings/tabs/MembershipsTab.tsx": "5a2e15d2b92fc252fc82d9ada98fab839296dee7b9a64a56301bba5264fef5ae",
+    "frontend/src/modules/settings/tabs/SheetsTab.test.tsx": "067ecb31ce9eaa121ce29689dc0f22c798e45a3aba75f5c4b036fdb2444290d1",
+    "frontend/src/modules/settings/tabs/SheetsTab.tsx": "8d6e0ea53912fe6ffb8d1f689a0413ad7ee9818c49fe4500d9e60b1c31916fa5",
+    "frontend/src/modules/settings/tabs/build51-evidence.test.tsx": "f1e0839ce4fd7c343d4116363288de61a6f2d43d229b88a4cb2e628bcd5e1ba5",
+    "frontend/src/modules/staff/StaffScreen.tsx": "b8a511efac8ce5472c83489cf96eca20e9350350d26d54efe8b56671ec734771",
+    "frontend/src/modules/staff/StaffTimeScreen.test.tsx": "5c65c6ddd809db28af5dd8f2daf6c334eca73d06f96877488c0964d56da47c3b",
+    "frontend/src/modules/staff/StaffTimeScreen.tsx": "4c95e5911ffb79c351ba3e645963b6d87037f5a4c47a9dc8ac331cb61040287b",
+    "frontend/src/modules/staff/staff-time-policy.test.ts": "cea7403e73f1a02e4f30fc3588ea0a57ca02e9d6be07ff5ff84f7d1341bb9061",
+    "frontend/src/modules/staff/staff-time-policy.ts": "545cd2b24e08f99bf72b0f38c8657f6ec6be7b61f385891c6ba0ccc018609f57",
+    "frontend/src/modules/staff/staff-time.css": "a4f56b026f7c1f9f278ee3c7044f1fdbc3c53a47027e5df6e01759060220ff1d",
+    "infra/scripts/install-on-vm.sh": "5358fe8a9b97818712ddaf42f730671713b43529f5b0fccaf82a15f6c0e64f64",
+    "infra/scripts/verify-build55-pending-compatibility.py": "fb563655ab2348c1754b6e68c9e655f61c3128051306f8911734634a32602684",
+    "infra/scripts/verify-production-runtime-images.sh": "bc3d7f0fef1d356e5822520035f86018bc2698aba8357a98ef1f0e7e5f1789fa",
+    "integrations/google-sheets/Code.gs": "66696e81a71d714621023e4ed614ad8ead73fcba0c9999011664a8b060800130",
+    "tests/fixtures/build59-nginx-metadata-transition.json": "dc120b9abe8ada390c2a7f1f14bb1c14676eb5744a2dec3a44032a1f8778ffcc",
+    "tests/test_build55_pending_compatibility.py": "5d028bfb9660fb916a5c802d3234835752b58bc9cf534b461c659bde9f04307c",
+    "tests/test_code26_physical_audit_lane.py": "fef48da96b69c7ecc5206c8b50c19118a1ce2151a54ec93fb40af706260a4ee4",
+    "tests/test_verified_pip_bootstrap.py": "45f425f81317a05f105d7ea9d5bbaefbde2e14ad527e87240ac0aebc73ce109b"
+}
+
 REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
     path
     for path in (
@@ -1715,13 +2343,18 @@ REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
         | REVIEWED_CODE30_4_BUILD52_SHA256
         | REVIEWED_CODE30_4_BUILD53_SHA256
         | REVIEWED_CODE30_4_BUILD54_SHA256
+        | REVIEWED_CODE30_4_BUILD55_SHA256
+        | REVIEWED_CODE30_4_BUILD56_SHA256
+        | REVIEWED_CODE30_4_BUILD57_SHA256
+        | REVIEWED_CODE30_4_BUILD58_SHA256
+        | REVIEWED_CODE30_4_BUILD59_SHA256
     )
     if path.startswith(("backend/app/", "frontend/src/", "android-native/app/src/main/"))
 )
 
 
 def _current_code30_4_sha256(path: str, fallback: str | None = None) -> str | None:
-    return REVIEWED_CODE30_4_BUILD54_SHA256.get(path) or REVIEWED_CODE30_4_BUILD53_SHA256.get(path) or REVIEWED_CODE30_4_BUILD52_SHA256.get(path) or REVIEWED_CODE30_4_BUILD51_SHA256.get(path) or REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
+    return REVIEWED_CODE30_4_BUILD59_SHA256.get(path) or REVIEWED_CODE30_4_BUILD58_SHA256.get(path) or REVIEWED_CODE30_4_BUILD57_SHA256.get(path) or REVIEWED_CODE30_4_BUILD56_SHA256.get(path) or REVIEWED_CODE30_4_BUILD55_SHA256.get(path) or REVIEWED_CODE30_4_BUILD54_SHA256.get(path) or REVIEWED_CODE30_4_BUILD53_SHA256.get(path) or REVIEWED_CODE30_4_BUILD52_SHA256.get(path) or REVIEWED_CODE30_4_BUILD51_SHA256.get(path) or REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
         path,
         REVIEWED_CODE30_4_BUILD41_SHA256.get(
             path,
@@ -1936,6 +2569,12 @@ def _normalise_release_identity(path: str, text: str) -> str:
         return text
     normalised = text
     for current, baseline in (
+        ("3.1.52", "3.1.14"),
+        ("3.1.51", "3.1.14"),
+        ("3.1.50", "3.1.14"),
+        ("3.1.49", "3.1.14"),
+        ("3.1.48", "3.1.14"),
+        ("3.1.47", "3.1.14"),
         ("3.1.46", "3.1.14"),
         ("3.1.45", "3.1.14"),
         ("3.1.44", "3.1.14"),
@@ -2026,10 +2665,10 @@ def _normalise_release_identity(path: str, text: str) -> str:
     ):
         normalised = normalised.replace(current, baseline)
     normalised = re.sub(
-        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54)\b", "version_code=25", normalised
+        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59)\b", "version_code=25", normalised
     )
     normalised = re.sub(
-        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54),\s*BuildConfig\.VERSION_CODE\)",
+        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59),\s*BuildConfig\.VERSION_CODE\)",
         "assertEquals(25, BuildConfig.VERSION_CODE)",
         normalised,
     )
@@ -2216,7 +2855,27 @@ def _code30_4_build53_delta_paths(root: Path) -> set[str]:
 
 
 def _code30_4_build54_delta_paths(root: Path) -> set[str]:
-    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD53_BASE).splitlines())
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD53_BASE, CODE30_4_BUILD54_BASE).splitlines())
+
+
+def _code30_4_build55_delta_paths(root: Path) -> set[str]:
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD54_BASE, CODE30_4_BUILD55_BASE).splitlines())
+
+
+def _code30_4_build56_delta_paths(root: Path) -> set[str]:
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD55_BASE, CODE30_4_BUILD56_BASE).splitlines())
+
+
+def _code30_4_build57_delta_paths(root: Path) -> set[str]:
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD56_BASE, CODE30_4_BUILD57_BASE).splitlines())
+
+
+def _code30_4_build58_delta_paths(root: Path) -> set[str]:
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD57_BASE, CODE30_4_BUILD58_BASE).splitlines())
+
+
+def _code30_4_build59_delta_paths(root: Path) -> set[str]:
+    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD58_BASE).splitlines())
     changed.update(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
     return {path for path in changed if path}
 
@@ -2529,6 +3188,51 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
             errors.append(f"Code30.4 build-53 file differs from reviewed bytes: {path}")
 
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD54_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD54_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-54 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-54 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD55_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD55_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-55 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-55 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD56_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD56_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-56 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-56 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD57_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD57_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-57 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-57 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD58_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD58_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-58 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-58 file differs from reviewed bytes: {path}")
+
     expected_build42_paths = set(REVIEWED_CODE30_4_BUILD42_SHA256) | set(
         CODE30_4_FREEZE_CONTROL_PATHS
     )
@@ -2622,6 +3326,41 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
     for path in sorted(current_build54_paths - expected_build54_paths):
         errors.append(f"unreviewed path entered the Code30.4 build-54 delta: {path}")
 
+    expected_build55_paths = set(REVIEWED_CODE30_4_BUILD55_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build55_paths = _code30_4_build55_delta_paths(root)
+    for path in sorted(expected_build55_paths - current_build55_paths):
+        errors.append(f"reviewed Code30.4 build-55 delta path disappeared: {path}")
+    for path in sorted(current_build55_paths - expected_build55_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-55 delta: {path}")
+
+    expected_build56_paths = set(REVIEWED_CODE30_4_BUILD56_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build56_paths = _code30_4_build56_delta_paths(root)
+    for path in sorted(expected_build56_paths - current_build56_paths):
+        errors.append(f"reviewed Code30.4 build-56 delta path disappeared: {path}")
+    for path in sorted(current_build56_paths - expected_build56_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-56 delta: {path}")
+
+    expected_build57_paths = set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build57_paths = _code30_4_build57_delta_paths(root)
+    for path in sorted(expected_build57_paths - current_build57_paths):
+        errors.append(f"reviewed Code30.4 build-57 delta path disappeared: {path}")
+    for path in sorted(current_build57_paths - expected_build57_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-57 delta: {path}")
+
+    expected_build58_paths = set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build58_paths = _code30_4_build58_delta_paths(root)
+    for path in sorted(expected_build58_paths - current_build58_paths):
+        errors.append(f"reviewed Code30.4 build-58 delta path disappeared: {path}")
+    for path in sorted(current_build58_paths - expected_build58_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-58 delta: {path}")
+
+    expected_build59_paths = set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build59_paths = _code30_4_build59_delta_paths(root)
+    for path in sorted(expected_build59_paths - current_build59_paths):
+        errors.append(f"reviewed Code30.4 build-59 delta path disappeared: {path}")
+    for path in sorted(current_build59_paths - expected_build59_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-59 delta: {path}")
+
     # Post-release Code30.3 maintenance tools are pinned by their own map.
     expected_paths = set(REVIEWED_CODE30_4_SHA256) | set(
         CODE30_4_FREEZE_CONTROL_PATHS
@@ -2631,7 +3370,7 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         REVIEWED_CODE30_4_BUILD41_SHA256
     ) | set(
         REVIEWED_CODE30_4_BUILD42_SHA256
-    ) | set(REVIEWED_CODE30_4_BUILD43_SHA256) | set(REVIEWED_CODE30_4_BUILD44_SHA256) | set(REVIEWED_CODE30_4_BUILD45_SHA256) | set(REVIEWED_CODE30_4_BUILD46_SHA256) | set(REVIEWED_CODE30_4_BUILD47_SHA256) | set(REVIEWED_CODE30_4_BUILD48_SHA256) | set(REVIEWED_CODE30_4_BUILD49_SHA256) | set(REVIEWED_CODE30_4_BUILD50_SHA256) | set(REVIEWED_CODE30_4_BUILD51_SHA256) | set(REVIEWED_CODE30_4_BUILD52_SHA256) | set(REVIEWED_CODE30_4_BUILD53_SHA256) | set(REVIEWED_CODE30_4_BUILD54_SHA256)
+    ) | set(REVIEWED_CODE30_4_BUILD43_SHA256) | set(REVIEWED_CODE30_4_BUILD44_SHA256) | set(REVIEWED_CODE30_4_BUILD45_SHA256) | set(REVIEWED_CODE30_4_BUILD46_SHA256) | set(REVIEWED_CODE30_4_BUILD47_SHA256) | set(REVIEWED_CODE30_4_BUILD48_SHA256) | set(REVIEWED_CODE30_4_BUILD49_SHA256) | set(REVIEWED_CODE30_4_BUILD50_SHA256) | set(REVIEWED_CODE30_4_BUILD51_SHA256) | set(REVIEWED_CODE30_4_BUILD52_SHA256) | set(REVIEWED_CODE30_4_BUILD53_SHA256) | set(REVIEWED_CODE30_4_BUILD54_SHA256) | set(REVIEWED_CODE30_4_BUILD55_SHA256) | set(REVIEWED_CODE30_4_BUILD56_SHA256) | set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256)
     current_paths = _code30_4_delta_paths(root)
     for path in sorted(expected_paths - current_paths):
         errors.append(f"reviewed Code30.4 delta path disappeared: {path}")
@@ -2655,6 +3394,11 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         | REVIEWED_CODE30_4_BUILD52_SHA256
         | REVIEWED_CODE30_4_BUILD53_SHA256
         | REVIEWED_CODE30_4_BUILD54_SHA256
+        | REVIEWED_CODE30_4_BUILD55_SHA256
+        | REVIEWED_CODE30_4_BUILD56_SHA256
+        | REVIEWED_CODE30_4_BUILD57_SHA256
+        | REVIEWED_CODE30_4_BUILD58_SHA256
+        | REVIEWED_CODE30_4_BUILD59_SHA256
     )
     for path, expected_sha256 in current_hashes.items():
         # These files define the freeze itself and cannot carry a current-tree
@@ -2721,6 +3465,11 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD51_BASE}^{{commit}}")
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD52_BASE}^{{commit}}")
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD53_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD54_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD55_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD56_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD57_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD58_BASE}^{{commit}}")
     _verify_code30_2_exact_delta(root, errors)
     _verify_code30_3_exact_delta(root, errors)
     _verify_code30_4_exact_delta(root, errors)
@@ -2745,7 +3494,12 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
             path, candidate_normalised
         )
         reviewed_test_sha256 = (
-            REVIEWED_CODE30_4_BUILD54_SHA256.get(path)
+            REVIEWED_CODE30_4_BUILD59_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD58_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD57_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD56_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD55_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD54_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD53_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD52_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD51_SHA256.get(path)

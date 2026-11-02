@@ -13,6 +13,7 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from app.core.db import AsyncSessionLocal
+from app.core.roles import role_name
 from app.models import Company, Role
 from scripts.seed import DEFAULT_ROLES
 
@@ -37,7 +38,7 @@ async def ensure_roles() -> None:
                         id=uuid4(),
                         company_id=company_id,
                         code=code,
-                        name=code.title().replace("_", " "),
+                        name=role_name(code),
                         description=desc,
                         permissions=[],
                     )

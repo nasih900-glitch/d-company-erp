@@ -11,10 +11,11 @@ always-open Attendance row).
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
 from app.api.v1.staff.router import ClockInRequest, clock_in, clock_out, list_on_shift
 from app.core.errors import BusinessRuleError
@@ -40,6 +41,10 @@ class _Result:
     def scalar_one_or_none(self):
         return self.scalar
 
+    def scalar_one(self):
+        assert self.scalar is not None
+        return self.scalar
+
 
 class _Session:
     """Queued-result fake session — matches the order the endpoint issues
@@ -53,12 +58,14 @@ class _Session:
         self.added: list = []
         self.flushes = 0
         self.statements: list = []
+        self.refreshed: list[UUID] = []
 
     def queue(self, result: _Result) -> None:
         self.results.append(result)
 
     async def get(self, model, key):
-        assert model is Branch and key == self.branch.id
+        assert model is Branch
+        assert key == self.branch.id
         return self.branch
 
     async def execute(self, statement):
@@ -71,6 +78,17 @@ class _Session:
 
     async def flush(self) -> None:
         self.flushes += 1
+        for entity in self.added:
+            if isinstance(entity, Attendance):
+                if entity.break_minutes is None:
+                    entity.break_minutes = 0
+                if entity.updated_at is None:
+                    entity.updated_at = datetime.now(UTC)
+
+    async def refresh(self, entity: Attendance) -> None:
+        assert isinstance(entity, Attendance)
+        assert entity.updated_at is not None
+        self.refreshed.append(entity.id)
 
 
 def _tenant() -> TenantContext:
@@ -107,10 +125,11 @@ async def test_clock_in_out_lifecycle_and_repeat_clock_out_is_a_clean_400() -> N
     tenant = _tenant()
 
     # --- clock in --- (no open row yet, so the duplicate-clock-in guard passes)
-    # First queued result is for the user-row FOR UPDATE lock, second is the
+    # First queued result is for the user-row FOR NO KEY UPDATE lock, second is the
     # already-open check.
     session.queue(_Result())
     session.queue(_Result(scalar=None))
+    session.queue(_Result(scalar=None))  # optional Sheets capability is not enabled
     clock_in_result = await clock_in(
         ClockInRequest(branch_id=BRANCH_ID, notes="opening shift"),
         session,
@@ -146,10 +165,14 @@ async def test_clock_in_out_lifecycle_and_repeat_clock_out_is_a_clean_400() -> N
     # --- clock out ---
     session.queue(_Result())  # user-row lock
     session.queue(_Result(scalar=attendance))
+    session.queue(_Result(scalar=datetime.now(UTC)))  # persisted version uses the DB clock
+    session.queue(_Result(scalar=None))  # no optional Sheets destination
     clock_out_result = await clock_out(session, tenant)
     assert clock_out_result["id"] == str(attendance.id)
     assert attendance.clock_out_at is not None
-    assert session.flushes == 1
+    assert session.flushes == 2
+    assert session.refreshed == [attendance.id, attendance.id]
+    assert sum("clock_timestamp()" in str(stmt) for stmt in session.statements) == 1
 
     # --- disappears from the on-shift list ---
     session.queue(_Result(rows=[]))
@@ -162,7 +185,7 @@ async def test_clock_in_out_lifecycle_and_repeat_clock_out_is_a_clean_400() -> N
     with pytest.raises(BusinessRuleError):
         await clock_out(session, tenant)
     # No further mutation attempted once there is nothing open to close.
-    assert session.flushes == 1
+    assert session.flushes == 2
 
 
 @pytest.mark.asyncio
@@ -180,19 +203,26 @@ async def test_clock_out_locks_the_user_row_before_reading_open_attendance() -> 
         company_id=COMPANY_ID,
         user_id=USER_ID,
         branch_id=BRANCH_ID,
-        clock_in_at=datetime.now(timezone.utc),
+        clock_in_at=datetime.now(UTC),
+        break_minutes=0,
+        updated_at=datetime.now(UTC),
     )
     session.queue(_Result())
     session.queue(_Result(scalar=attendance))
+    session.queue(_Result(scalar=datetime.now(UTC)))  # persisted version uses the DB clock
+    session.queue(_Result(scalar=None))  # no optional Sheets destination
 
     await clock_out(session, tenant)
 
-    assert len(session.statements) == 2
-    user_lock_stmt, open_attendance_stmt = session.statements
-    assert "FOR UPDATE" in str(user_lock_stmt).upper()
+    assert len(session.statements) == 4
+    user_lock_stmt, open_attendance_stmt, clock_stmt, optional_sink_stmt = session.statements
+    assert "FOR NO KEY UPDATE" in str(user_lock_stmt.compile(dialect=postgresql.dialect())).upper()
     assert "users" in str(user_lock_stmt).lower()
     assert USER_ID in list(user_lock_stmt.compile().params.values())
     assert "FOR UPDATE" not in str(open_attendance_stmt).upper()
+    assert str(clock_stmt) == "SELECT clock_timestamp() AS clock_timestamp_1"
+    assert "FOR SHARE" in str(optional_sink_stmt.compile(dialect=postgresql.dialect())).upper()
+    assert COMPANY_ID in list(optional_sink_stmt.compile().params.values())
 
 
 @pytest.mark.asyncio
@@ -202,7 +232,7 @@ async def test_clock_in_locks_the_user_row_before_the_already_open_check() -> No
     than both racing past the already-open check (which, with no open row
     yet, has nothing for FOR UPDATE to lock by itself — see the comment in
     clock_in()). This asserts the actual query shape: the first statement
-    clock_in() issues is a `SELECT ... FOR UPDATE` on the user row, ahead of
+    clock_in() issues is a `SELECT ... FOR NO KEY UPDATE` on the user row, ahead of
     the already-open Attendance check.
     """
     branch = Branch(
@@ -216,18 +246,19 @@ async def test_clock_in_locks_the_user_row_before_the_already_open_check() -> No
 
     session.queue(_Result())  # user-row lock
     session.queue(_Result(scalar=None))  # already-open check
+    session.queue(_Result(scalar=None))  # optional Sheets capability is not enabled
     await clock_in(
         ClockInRequest(branch_id=BRANCH_ID),
         session,
         tenant,
     )
 
-    assert len(session.statements) == 2
+    assert len(session.statements) == 3
     user_lock_stmt = session.statements[0]
     already_open_stmt = session.statements[1]
 
-    sql = str(user_lock_stmt)
-    assert "FOR UPDATE" in sql.upper()
+    sql = str(user_lock_stmt.compile(dialect=postgresql.dialect()))
+    assert "FOR NO KEY UPDATE" in sql.upper()
     assert "users" in sql.lower()
     assert USER_ID in list(user_lock_stmt.compile().params.values())
 

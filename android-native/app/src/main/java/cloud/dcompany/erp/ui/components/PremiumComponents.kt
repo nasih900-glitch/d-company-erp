@@ -48,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -60,6 +61,12 @@ import androidx.compose.ui.unit.dp
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.LocalWorkspaceGlassScene
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
+import cloud.dcompany.erp.ui.theme.WorkspacePanelShape
+import cloud.dcompany.erp.ui.theme.WorkspacePresentationGold
+import cloud.dcompany.erp.ui.theme.WorkspacePresentationOnGold
+import cloud.dcompany.erp.ui.theme.workspacePresentationAccent
 
 /**
  * Shared high-density application components.
@@ -147,8 +154,7 @@ fun ActionBar(
 ) {
     BoxWithConstraints(
         modifier = modifier.fillMaxWidth().clip(Radius.shapeLg)
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg)
+            .liquidWorkspaceSurface(Radius.shapeLg, WorkspaceGlassRole.CONTROL)
             .padding(horizontal = Spacing.md, vertical = Spacing.sm),
     ) {
         if (trailing != null && maxWidth < 640.dp) {
@@ -207,6 +213,8 @@ fun AdaptiveStatGrid(
     }
 }
 
+enum class SectionCardSurfaceMode { Standard, Transparent }
+
 @Composable
 fun SectionCard(
     modifier: Modifier = Modifier,
@@ -218,48 +226,69 @@ fun SectionCard(
     elevated: Boolean = false,
     contentPadding: androidx.compose.foundation.layout.PaddingValues =
         androidx.compose.foundation.layout.PaddingValues(Spacing.lg),
+    headerPadding: androidx.compose.foundation.layout.PaddingValues =
+        androidx.compose.foundation.layout.PaddingValues(
+            horizontal = Spacing.lg,
+            vertical = Spacing.md,
+        ),
     contentFillsAvailableHeight: Boolean = false,
+    surfaceMode: SectionCardSurfaceMode = SectionCardSurfaceMode.Standard,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val glassAvailable = LocalWorkspaceGlassScene.current != null
     val accent = when (tone) {
         UiTone.Brand -> MaterialTheme.colorScheme.primary
         UiTone.Success -> MaterialTheme.colorScheme.operationalGood
         UiTone.Warning -> MaterialTheme.colorScheme.operationalWarning
         UiTone.Danger -> MaterialTheme.colorScheme.operationalDanger
         UiTone.Information -> MaterialTheme.colorScheme.operationalInformation
-        UiTone.Neutral -> MaterialTheme.colorScheme.onSurfaceVariant
+        UiTone.Neutral -> if (glassAvailable) workspacePresentationAccent() else MaterialTheme.colorScheme.onSurfaceVariant
     }
     Column(
-        modifier = modifier.fillMaxWidth().clip(Radius.shapeLg)
-            .background(if (elevated) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface)
-            .border(
-                1.dp,
-                if (elevated) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.outlineVariant,
-                Radius.shapeLg,
-            ),
+        modifier = modifier.fillMaxWidth().clip(WorkspacePanelShape).then(
+            if (surfaceMode == SectionCardSurfaceMode.Standard) {
+                Modifier.liquidWorkspaceSurface(WorkspacePanelShape)
+            } else {
+                Modifier
+            },
+        ),
     ) {
         if (title != null || subtitle != null || icon != null || action != null) {
             Row(
-                Modifier.fillMaxWidth()
-                    .background(
-                        if (elevated) MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.56f)
-                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f),
-                    )
-                    .padding(horizontal = Spacing.lg, vertical = Spacing.md),
+                Modifier.fillMaxWidth().then(
+                    if (surfaceMode == SectionCardSurfaceMode.Standard && !glassAvailable) {
+                        Modifier.background(
+                            if (elevated) MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.56f)
+                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f),
+                        )
+                    } else {
+                        Modifier
+                    },
+                )
+                    .padding(headerPadding),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.md),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 icon?.let {
-                    Box(
-                        Modifier.size(38.dp).clip(Radius.shapeMd).background(accent.copy(alpha = 0.12f)),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(it, contentDescription = null, tint = accent, modifier = Modifier.size(20.dp))
+                    if (glassAvailable && tone == UiTone.Neutral) {
+                        Icon(it, contentDescription = null, tint = accent, modifier = Modifier.size(24.dp))
+                    } else {
+                        Box(
+                            Modifier.size(38.dp).clip(Radius.shapeMd).background(accent.copy(alpha = 0.12f)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(it, contentDescription = null, tint = accent, modifier = Modifier.size(20.dp))
+                        }
                     }
                 }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     title?.let {
-                        Text(it, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            it,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Medium,
+                        )
                     }
                     subtitle?.let {
                         Text(
@@ -279,7 +308,6 @@ fun SectionCard(
                     )
                 }
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         }
         Column(
             modifier = Modifier.fillMaxWidth()
@@ -309,9 +337,8 @@ fun CompactStatCard(
         UiTone.Neutral -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     Row(
-        modifier = modifier.heightIn(min = 82.dp).clip(Radius.shapeLg)
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg)
+        modifier = modifier.heightIn(min = 82.dp).clip(WorkspacePanelShape)
+            .liquidWorkspaceSurface(WorkspacePanelShape)
             .padding(Spacing.md),
         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         verticalAlignment = Alignment.CenterVertically,
@@ -348,18 +375,20 @@ fun SearchInput(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
 ) {
+    val glassAvailable = LocalWorkspaceGlassScene.current != null
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
-        modifier = modifier.heightIn(min = 48.dp),
+        modifier = modifier.heightIn(min = 48.dp).clip(Radius.shapeMd)
+            .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.CONTROL),
         enabled = enabled,
         singleLine = true,
         shape = Radius.shapeMd,
         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
         placeholder = { Text(placeholder, color = MaterialTheme.colorScheme.onSurfaceVariant) },
         colors = TextFieldDefaults.colors(
-            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+            focusedContainerColor = if (glassAvailable) Color.Transparent else MaterialTheme.colorScheme.surfaceVariant,
+            unfocusedContainerColor = if (glassAvailable) Color.Transparent else MaterialTheme.colorScheme.surfaceVariant,
             disabledContainerColor = MaterialTheme.colorScheme.surface,
             focusedIndicatorColor = MaterialTheme.colorScheme.primary,
             unfocusedIndicatorColor = MaterialTheme.colorScheme.outline,
@@ -380,46 +409,82 @@ fun PremiumTabBar(
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val glassAvailable = LocalWorkspaceGlassScene.current != null
     Row(
         modifier = modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-            .clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
-            .padding(Spacing.xs),
+            .clip(Radius.shapeMd)
+            .then(
+                if (glassAvailable) Modifier
+                else Modifier.liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.UTILITY),
+            )
+            .padding(horizontal = Spacing.xs, vertical = if (glassAvailable) 0.dp else Spacing.xs),
         horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
     ) {
         options.forEach { option ->
             val selected = option.id == selectedId
+            val selectedContainer = if (glassAvailable) {
+                WorkspacePresentationGold
+            } else {
+                MaterialTheme.colorScheme.secondaryContainer
+            }
+            val selectedContent = if (glassAvailable) {
+                WorkspacePresentationOnGold
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            }
             Row(
                 Modifier.heightIn(min = 48.dp).clip(Radius.shapeSm)
-                    .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
-                    .border(
-                        1.dp,
-                        if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
-                        Radius.shapeSm,
+                    .then(
+                        when {
+                            selected -> Modifier.background(selectedContainer, Radius.shapeSm)
+                            glassAvailable -> Modifier.liquidWorkspaceSurface(
+                                Radius.shapeSm,
+                                WorkspaceGlassRole.CONTROL,
+                            )
+                            else -> Modifier.background(Color.Transparent)
+                        },
+                    )
+                    .then(
+                        if (selected) Modifier.border(
+                            1.dp,
+                            if (glassAvailable) WorkspacePresentationGold else MaterialTheme.colorScheme.primary,
+                            Radius.shapeSm,
+                        ) else Modifier,
                     )
                     .selectable(
                         selected = selected,
                         role = Role.Tab,
                         onClick = { onSelect(option.id) },
                     )
+                    .testTag("premium-tab-${option.id}")
                     .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
                     option.label,
-                    color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (selected) selectedContent else MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.testTag("premium-tab-label-${option.id}"),
                 )
                 option.count?.let {
                     Box(
                         Modifier.clip(CircleShape)
-                            .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surfaceVariant)
+                            .background(
+                                when {
+                                    selected && glassAvailable -> selectedContent.copy(alpha = 0.18f)
+                                    selected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+                                    glassAvailable -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+                                    else -> MaterialTheme.colorScheme.surfaceVariant
+                                },
+                            )
                             .padding(horizontal = 7.dp, vertical = 2.dp),
                     ) {
                         Text(
                             it.toString(),
-                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (selected) {
+                                if (glassAvailable) selectedContent else MaterialTheme.colorScheme.primary
+                            } else MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
@@ -542,8 +607,12 @@ fun DataTableHeader(
     columns: List<Pair<String, Float>>,
     modifier: Modifier = Modifier,
 ) {
+    val glassAvailable = LocalWorkspaceGlassScene.current != null
     Row(
-        modifier = modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)
+        modifier = modifier.fillMaxWidth().background(
+            if (glassAvailable) MaterialTheme.colorScheme.onSurface.copy(alpha = .035f)
+            else MaterialTheme.colorScheme.surfaceVariant,
+        )
             .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         verticalAlignment = Alignment.CenterVertically,

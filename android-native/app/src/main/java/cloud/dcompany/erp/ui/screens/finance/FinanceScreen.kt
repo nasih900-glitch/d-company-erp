@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.screens.finance
 
+import cloud.dcompany.erp.ui.components.LiquidDatePickerDialog as DatePickerDialog
 import cloud.dcompany.erp.ui.theme.operationalDanger
 import cloud.dcompany.erp.ui.theme.operationalDangerContainer
 import cloud.dcompany.erp.ui.theme.operationalGood
@@ -42,7 +43,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -108,6 +109,9 @@ import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
+import cloud.dcompany.erp.ui.components.workspaceContentCanvas
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -154,7 +158,7 @@ private fun FinanceContent(
     val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    Column(Modifier.fillMaxSize().workspaceContentCanvas()) {
         if (!imeVisible) Header(state, onRefresh = vm::load)
         else Row(Modifier.fillMaxWidth().padding(horizontal=Spacing.lg), verticalAlignment=Alignment.CenterVertically) {
             Text("Finance · ${tabs[tab]}",style=MaterialTheme.typography.titleSmall,modifier=Modifier.weight(1f))
@@ -1592,8 +1596,7 @@ private fun StatCard(stat: StatSpec, surface: Color, modifier: Modifier = Modifi
     Column(
         modifier = modifier
             .clip(Radius.shapeLg)
-            .background(surface)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg)
+            .liquidWorkspaceSurface(Radius.shapeLg, WorkspaceGlassRole.PANEL)
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
@@ -1664,8 +1667,8 @@ private fun Panel(
         modifier = modifier
             .fillMaxWidth()
             .clip(Radius.shapeLg)
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, border ?: MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg)
+            .liquidWorkspaceSurface(Radius.shapeLg, WorkspaceGlassRole.PANEL)
+            .then(border?.let { Modifier.border(1.dp, it, Radius.shapeLg) } ?: Modifier)
             .padding(14.dp),
         content = content,
     )
@@ -1715,7 +1718,7 @@ private fun ErrorBanner(message: String, onRetry: () -> Unit) {
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
             .clip(Radius.shapeMd)
-            .background(MaterialTheme.colorScheme.surface)
+            .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.PANEL)
             .border(1.dp, MaterialTheme.colorScheme.operationalDanger, Radius.shapeMd)
             .padding(12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1780,7 +1783,7 @@ private fun PendingFinanceChangesPanel(
 ) {
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeMd)
-            .background(MaterialTheme.colorScheme.surface).padding(12.dp),
+            .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.PANEL).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text("Pending finance changes", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
@@ -1906,7 +1909,7 @@ private fun FinancePendingRow(
     Column(
         Modifier.fillMaxWidth()
             .clip(Radius.shapeSm)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.UTILITY)
             .padding(8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1993,7 +1996,7 @@ private fun NoticeBanner(message: String, onDismiss: () -> Unit) {
     Row(
         Modifier.fillMaxWidth()
             .clip(Radius.shapeSm)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.UTILITY)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -2109,7 +2112,7 @@ private fun ManualCollectionCreateDialog(
             val amountMinor = parseRupeesToMinor(amountRupees)
             when {
                 amountMinor == null || amountMinor <= 0 ->
-                    localError = "Enter an amount greater than ₹0 with no more than 2 decimal places."
+                    localError = "Enter an amount greater than 0 with no more than 2 decimal places."
                 sourceRef.trim().isEmpty() ->
                     localError = "Enter a reference that can be matched to payment evidence."
                 else -> {
@@ -2168,7 +2171,7 @@ private fun ManualCollectionCreateDialog(
             ) { shiftId = it }
             Note("This cash is added to the selected open shift drawer when the server records it.")
         }
-        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)", enabled = formEnabled)
+        DecimalField(amountRupees, { amountRupees = it }, "Amount", enabled = formEnabled)
         OutlinedTextField(
             value = sourceRef,
             onValueChange = { sourceRef = it.take(160) },
@@ -2228,7 +2231,7 @@ private fun TipPayoutCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
             val parsedAmount = parseRupeesToMinor(amountRupees)
             when {
                 parsedAmount == null || parsedAmount <= 0 ->
-                    localError = "Enter an amount greater than ₹0 with no more than 2 decimal places."
+                    localError = "Enter an amount greater than 0 with no more than 2 decimal places."
                 owed == null ->
                     localError = "Refresh the live Tips Payable balance before paying staff."
                 parsedAmount > owed ->
@@ -2286,7 +2289,7 @@ private fun TipPayoutCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
             ) { shiftId = it }
             Note("This cash is deducted from the selected open shift drawer as one recorded action.")
         }
-        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)", enabled = formEnabled)
+        DecimalField(amountRupees, { amountRupees = it }, "Amount", enabled = formEnabled)
         if (exceedsOwed) {
             Text(
                 "This is more than the ${owed?.asRupees()} currently owed to staff.",
@@ -2520,7 +2523,7 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
                 return@confirmExpense
             }
             if (amountMinor <= 0) {
-                localError = "Enter an amount greater than ₹0."
+                localError = "Enter an amount greater than 0."
                 return@confirmExpense
             }
             if (branchId.isBlank() || categoryId.isBlank()) {
@@ -2559,7 +2562,7 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
             state.categoryNames.entries.map { it.key to it.value },
             enabled = formEnabled,
         ) { categoryId = it }
-        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)", enabled = formEnabled)
+        DecimalField(amountRupees, { amountRupees = it }, "Amount", enabled = formEnabled)
         PickerField(
             "Paid via",
             paidViaLabel(paidVia),
@@ -2594,7 +2597,8 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
             selectedCashShift?.let { shift ->
                 Column(
                     Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                        .background(MaterialTheme.colorScheme.surfaceVariant).padding(Spacing.sm),
+                        .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.UTILITY)
+                        .padding(Spacing.sm),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     Text(
@@ -2692,7 +2696,8 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
         receipt?.let { selected ->
             Row(
                 Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                    .background(MaterialTheme.colorScheme.surfaceVariant).padding(Spacing.sm),
+                    .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.CONTROL)
+                    .padding(Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
@@ -2780,7 +2785,7 @@ private fun AssetCreateDialog(
                 branchId.isBlank() -> localError = "Pick a branch."
                 purchaseMinor == null ->
                     localError = "Purchase cost must be rupees with no more than 2 decimal places."
-                purchaseMinor <= 0 -> localError = "Enter a purchase cost greater than ₹0."
+                purchaseMinor <= 0 -> localError = "Enter a purchase cost greater than 0."
                 salvageMinor == null ->
                     localError = "Salvage value must be rupees with no more than 2 decimal places."
                 lifeMonths <= 0 -> localError = "Useful life must be a whole number of months greater than 0."
@@ -2824,7 +2829,7 @@ private fun AssetCreateDialog(
         DecimalField(
             purchaseRupees,
             { purchaseRupees = it },
-            "Purchase cost (₹)",
+            "Purchase cost",
             enabled = formEnabled,
         )
         OutlinedTextField(
@@ -2839,7 +2844,7 @@ private fun AssetCreateDialog(
         DecimalField(
             salvageRupees,
             { salvageRupees = it },
-            "Salvage value (₹)",
+            "Salvage value",
             enabled = formEnabled,
         )
         OutlinedTextField(
@@ -2871,7 +2876,7 @@ private fun CapitalEntryCreateDialog(partner: Partner, state: FinanceUiState, vm
             when {
                 amountMinor == null ->
                     localError = "Amount must be rupees with no more than 2 decimal places."
-                amountMinor <= 0 -> localError = "Enter an amount greater than ₹0."
+                amountMinor <= 0 -> localError = "Enter an amount greater than 0."
                 trimmedRef.isBlank() ->
                     localError = "Enter the unique bank, UPI, or cash-voucher reference that proves this movement."
                 else -> {
@@ -2890,7 +2895,7 @@ private fun CapitalEntryCreateDialog(partner: Partner, state: FinanceUiState, vm
             listOf("invest" to "Investment", "withdraw" to "Capital repayment"),
             enabled = formEnabled,
         ) { type = it }
-        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)", enabled = formEnabled)
+        DecimalField(amountRupees, { amountRupees = it }, "Amount", enabled = formEnabled)
         PickerField(
             "Settlement account", paidViaLabel(settlementAccount).let { if (it == "Bank transfer") "Bank" else it },
             listOf("cash" to "Cash", "bank" to "Bank", "upi" to "UPI"),

@@ -57,11 +57,11 @@ describe('points program owner review', () => {
 
     const summary = summarizeLoyaltyProgramChanges(before, after).join('\n');
 
-    expect(summary).toContain('Gaming earn: 2 per ₹10 → 3 per ₹10');
-    expect(summary).toContain('100-point value: ₹10.00 → ₹11.00');
+    expect(summary).toContain('Gaming earn: 2 per 10 → 3 per 10');
+    expect(summary).toContain('100-point value: 10.00 → 11.00');
     expect(summary).toContain('threshold 200 → 250');
     expect(summary).toContain('bonus 50 → 75');
-    expect(summary).toContain('credit ₹30.00 → ₹30.50');
+    expect(summary).toContain('credit 30.00 → 30.50');
     expect(summary).toContain('minimum rank rookie → player');
     expect(summary).toContain('disabled');
   });

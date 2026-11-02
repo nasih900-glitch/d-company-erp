@@ -3724,11 +3724,17 @@ class SyncEngine private constructor(
      */
     private suspend fun pullGamingData() {
         val lease = cacheIsolation.currentLease() ?: return
+        val includePosLinkedReviewable = posLinkedGamingReviewPullAllowed(
+            profile = DCompanyApp.instance.shiftCache.profile.value,
+            lease = lease,
+        )
         acknowledgeCleanupRetirements(lease)
         val (stations, packages, sessions) = coroutineScope {
             val stationRequest = async { gamingApi.stations() }
             val packageRequest = async { gamingApi.packages() }
-            val sessionRequest = async { gamingApi.sessions() }
+            val sessionRequest = async {
+                gamingApi.sessions(includePosLinkedReviewable = includePosLinkedReviewable)
+            }
             Triple(stationRequest.await(), packageRequest.await(), sessionRequest.await())
         }
         // An owner can cancel a session from web, or another client can finish

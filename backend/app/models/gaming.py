@@ -87,6 +87,12 @@ class GamingSession(Base, TimestampMixin, TenantMixin):
             "AND effective_package_pricing_tier_snapshot = 'standard')",
             name="ck_gaming_sessions_billing_amendment_projection",
         ),
+        Index(
+            "uq_gaming_sessions_retained_addon_order",
+            "retained_addon_order_id",
+            unique=True,
+            postgresql_where=text("retained_addon_order_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[UUID] = _uuid_pk()
@@ -98,6 +104,14 @@ class GamingSession(Base, TimestampMixin, TenantMixin):
     )
     order_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("orders.id", ondelete="SET NULL")
+    )
+    # Add-on revenue retained after the Gaming charge is voided.  For a
+    # reviewed post-POS Void this is the original held order; for an unlinked
+    # session it is a newly-created add-on-only bill on the reviewed POS shift.
+    # The projection is one-way and is backed by migration 0093 constraints.
+    retained_addon_order_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("orders.id", ondelete="RESTRICT"),
     )
     # Stable booking contact captured at Start. Phone/name remain immutable
     # receipt snapshots; customer edits must not move historical playtime.
@@ -224,6 +238,11 @@ def _guard_gaming_session_actor_attribution(_mapper, _connection, row) -> None:
         history = state.attrs[field].history
         if history.has_changes() and any(value is not None for value in history.deleted):
             raise ValueError(f"gaming session {field} attribution is immutable")
+    retained_history = state.attrs.retained_addon_order_id.history
+    if retained_history.has_changes() and any(
+        value is not None for value in retained_history.deleted
+    ):
+        raise ValueError("gaming session retained add-on order is immutable")
     if (row.sent_to_pos_by is None) != (row.sent_to_pos_at is None):
         raise ValueError(
             "gaming session POS handoff actor and timestamp must be recorded together"
@@ -879,6 +898,190 @@ def _guard_gaming_session_addon_update(_mapper, _connection, row) -> None:
 @event.listens_for(GamingSessionAddon, "before_delete")
 def _guard_gaming_session_addon_delete(_mapper, _connection, _row) -> None:
     raise ValueError("gaming session add-ons are immutable; void the add-on instead")
+
+
+class GamingVoidReceipt(Base, TenantMixin):
+    """Immutable financial authority for a Void that retains consumed add-ons."""
+
+    __tablename__ = "gaming_void_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "gaming_session_id",
+            name="uq_gaming_void_receipt_session",
+        ),
+        UniqueConstraint(
+            "company_id",
+            "idempotency_key",
+            name="uq_gaming_void_receipt_company_key",
+        ),
+        CheckConstraint(
+            "mode IN ('unlinked_addons','linked_pos')",
+            name="ck_gaming_void_receipt_mode",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) BETWEEN 1 AND 500 "
+            "AND length(trim(idempotency_key)) > 0 "
+            "AND request_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_gaming_void_receipt_identity",
+        ),
+        CheckConstraint(
+            "original_amount_minor >= 0 AND retained_total_minor >= 0 "
+            "AND addon_count >= 0 AND session_billing_revision >= 0 "
+            "AND session_participant_revision >= 0",
+            name="ck_gaming_void_receipt_amounts",
+        ),
+        CheckConstraint(
+            "(source_order_id IS NULL AND source_order_status IS NULL "
+            "AND source_checkout_version IS NULL AND source_total_minor IS NULL "
+            "AND gaming_charge_line_id IS NULL "
+            "AND charge_unit_price_minor IS NULL AND charge_line_total_minor IS NULL "
+            "AND charge_discount_minor IS NULL AND charge_taxable_value_minor IS NULL "
+            "AND charge_cgst_minor IS NULL AND charge_sgst_minor IS NULL "
+            "AND charge_igst_minor IS NULL AND charge_cess_minor IS NULL) OR "
+            "(source_order_id IS NOT NULL AND source_order_status = 'held' "
+            "AND source_checkout_version > 0 AND source_total_minor >= 0 "
+            "AND gaming_charge_line_id IS NOT NULL "
+            "AND charge_unit_price_minor >= 0 AND charge_line_total_minor >= 0 "
+            "AND charge_discount_minor >= 0 AND charge_taxable_value_minor >= 0 "
+            "AND charge_cgst_minor >= 0 AND charge_sgst_minor >= 0 "
+            "AND charge_igst_minor >= 0 AND charge_cess_minor >= 0 "
+            "AND charge_unit_price_minor = charge_line_total_minor "
+            "AND charge_discount_minor <= original_amount_minor "
+            "AND charge_line_total_minor >= original_amount_minor - charge_discount_minor "
+            "AND charge_line_total_minor = charge_taxable_value_minor "
+            "+ charge_cgst_minor + charge_sgst_minor + charge_igst_minor "
+            "+ charge_cess_minor)",
+            name="ck_gaming_void_receipt_source_review",
+        ),
+        CheckConstraint(
+            "(addon_count = 0 AND retained_order_id IS NULL "
+            "AND retained_total_minor = 0) OR "
+            "(addon_count > 0 AND retained_order_id IS NOT NULL)",
+            name="ck_gaming_void_receipt_retained_bill",
+        ),
+        CheckConstraint(
+            "(mode = 'unlinked_addons' AND source_order_id IS NULL "
+            "AND addon_count > 0 AND retained_order_id IS NOT NULL) OR "
+            "(mode = 'linked_pos' AND source_order_id IS NOT NULL)",
+            name="ck_gaming_void_receipt_mode_scope",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(request_payload) = 'object' "
+            "AND jsonb_typeof(response_payload) = 'object'",
+            name="ck_gaming_void_receipt_payloads",
+        ),
+        Index(
+            "uq_gaming_void_receipt_source_order",
+            "source_order_id",
+            unique=True,
+            postgresql_where=text("source_order_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_gaming_void_receipt_retained_order",
+            "retained_order_id",
+            unique=True,
+            postgresql_where=text("retained_order_id IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    gaming_session_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("gaming_sessions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    source_order_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("orders.id", ondelete="RESTRICT")
+    )
+    retained_order_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("orders.id", ondelete="RESTRICT")
+    )
+    gaming_charge_line_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("order_lines.id", ondelete="RESTRICT")
+    )
+    charge_unit_price_minor: Mapped[int | None] = mapped_column(BigInteger)
+    charge_line_total_minor: Mapped[int | None] = mapped_column(BigInteger)
+    charge_discount_minor: Mapped[int | None] = mapped_column(BigInteger)
+    charge_taxable_value_minor: Mapped[int | None] = mapped_column(BigInteger)
+    charge_cgst_minor: Mapped[int | None] = mapped_column(BigInteger)
+    charge_sgst_minor: Mapped[int | None] = mapped_column(BigInteger)
+    charge_igst_minor: Mapped[int | None] = mapped_column(BigInteger)
+    charge_cess_minor: Mapped[int | None] = mapped_column(BigInteger)
+    actor_user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    terminal_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("terminals.id", ondelete="RESTRICT"), nullable=False
+    )
+    mode: Mapped[str] = mapped_column(String(24), nullable=False)
+    original_session_status: Mapped[str] = mapped_column(String(20), nullable=False)
+    original_amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    session_billing_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    session_participant_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_order_status: Mapped[str | None] = mapped_column(String(20))
+    source_checkout_version: Mapped[int | None] = mapped_column(Integer)
+    source_total_minor: Mapped[int | None] = mapped_column(BigInteger)
+    retained_total_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    addon_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(String(500), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    response_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    voided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class GamingVoidAddonLine(Base):
+    """Immutable one-to-one add-on and retained POS line evidence."""
+
+    __tablename__ = "gaming_void_addon_lines"
+    __table_args__ = (
+        UniqueConstraint("addon_id", name="uq_gaming_void_addon_line_addon"),
+        UniqueConstraint("order_line_id", name="uq_gaming_void_addon_line_order_line"),
+        CheckConstraint(
+            "source_order_id IS NULL OR source_order_id = retained_order_id",
+            name="ck_gaming_void_addon_line_same_linked_order",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    receipt_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("gaming_void_receipts.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    addon_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("gaming_session_addons.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    order_line_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("order_lines.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    source_order_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("orders.id", ondelete="RESTRICT")
+    )
+    retained_order_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("orders.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+
+
+def _guard_gaming_void_evidence_update(_mapper, _connection, _row) -> None:
+    raise ValueError("gaming Void financial evidence is immutable")
+
+
+def _guard_gaming_void_evidence_delete(_mapper, _connection, _row) -> None:
+    raise ValueError("gaming Void financial evidence cannot be deleted")
+
+
+for _immutable_model in (GamingVoidReceipt, GamingVoidAddonLine):
+    event.listen(_immutable_model, "before_update", _guard_gaming_void_evidence_update)
+    event.listen(_immutable_model, "before_delete", _guard_gaming_void_evidence_delete)
 
 
 class GamingPackage(Base, TimestampMixin, SoftDeleteMixin, TenantMixin):

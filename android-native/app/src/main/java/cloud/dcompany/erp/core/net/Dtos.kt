@@ -70,6 +70,7 @@ data class MeResponse(
     // field from an authoritative response that intentionally grants no modules.
     @SerialName("accessible_modules") val accessibleModules: List<String>? = null,
     @SerialName("effective_permissions") val effectivePermissions: List<String>? = null,
+    @SerialName("release_control_access") val releaseControlAccess: Boolean = false,
 )
 
 @Serializable

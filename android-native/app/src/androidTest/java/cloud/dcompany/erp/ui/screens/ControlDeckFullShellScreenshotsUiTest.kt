@@ -83,7 +83,7 @@ class ControlDeckFullShellScreenshotsUiTest {
                     WorkspaceScaffold(
                         destinations = listOf(
                             Destination.Gaming, Destination.Pos, Destination.Shift,
-                            Destination.Customers, Destination.Reports, Destination.Settings,
+                            Destination.Customers, Destination.Reports, Destination.Settings, Destination.Help,
                         ),
                         currentDestination = current.value,
                         employeeName = "Fixture Staff",
@@ -109,14 +109,14 @@ class ControlDeckFullShellScreenshotsUiTest {
         compose.onNodeWithText("Current order").assertIsDisplayed()
         compose.onNodeWithText("D COMPANY").assertIsDisplayed()
         compose.onNodeWithTag("pos-take-payment").assertIsDisplayed()
-        compose.onNodeWithContentDescription("More modules").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-more-modules").assertIsDisplayed()
         capture("control-deck-pos-full-1280x800.png")
 
         compose.runOnIdle { current.value = Destination.Shift }
         compose.onNodeWithText("Daily collections").assertIsDisplayed()
         compose.onNodeWithText("D COMPANY").assertIsDisplayed()
         compose.onNodeWithText("Review & close shift").assertIsDisplayed()
-        compose.onNodeWithContentDescription("More modules").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-more-modules").assertIsDisplayed()
         capture("control-deck-shift-full-1280x800.png")
 
         compose.runOnIdle { current.value = Destination.Customers }
@@ -125,7 +125,7 @@ class ControlDeckFullShellScreenshotsUiTest {
         compose.onNodeWithContentDescription("Rank 1 by completed playtime").assertIsDisplayed()
         compose.onNodeWithText("••••••3210").assertIsDisplayed()
         compose.onNodeWithText("9876543210").assertDoesNotExist()
-        compose.onNodeWithContentDescription("More modules").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-more-modules").assertIsDisplayed()
         capture("control-deck-customers-full-1280x800.png")
     }
 

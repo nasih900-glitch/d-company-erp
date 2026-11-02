@@ -36,7 +36,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.ViewModule
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -71,8 +71,12 @@ import cloud.dcompany.erp.ui.components.OperationalStatusBadge
 import cloud.dcompany.erp.ui.components.PanelDivider
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.UiTone
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
+import cloud.dcompany.erp.ui.components.workspaceContentCanvas
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
 
 private val ROLE_COLUMN_WIDTH = 220.dp
 private val MODULE_COLUMN_WIDTH = 200.dp
@@ -92,7 +96,7 @@ fun AccessControlScreen(vm: AccessControlViewModel = viewModel()) {
     val customOverrideCount = remember(state.cells) { state.cells.count { it.override != null } }
 
     Column(
-        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+        Modifier.fillMaxSize().workspaceContentCanvas()
             .padding(horizontal = Spacing.lgPlus, vertical = Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
@@ -332,7 +336,9 @@ private fun AccessGrid(
 
     Column(modifier.fillMaxSize().horizontalScroll(rememberScrollState())) {
         Row(
-            modifier = Modifier.background(MaterialTheme.colorScheme.surfaceVariant).heightIn(min = 54.dp),
+            modifier = Modifier
+                .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.UTILITY)
+                .heightIn(min = 54.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(Modifier.width(ROLE_COLUMN_WIDTH).padding(horizontal = Spacing.lg)) {

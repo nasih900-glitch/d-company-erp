@@ -376,7 +376,7 @@ function ManualCollectionForm({
     event.preventDefault();
     const amountMinor = rupeesToMinor(form.amount_rupees);
     if (amountMinor === null) {
-      setErr('Enter an amount greater than ₹0 with no more than two decimal places.');
+      setErr('Enter an amount greater than 0 with no more than two decimal places.');
       return;
     }
     if (!form.source_ref.trim()) {
@@ -459,7 +459,7 @@ function ManualCollectionForm({
               ))}
             </select>
           </Field>
-          <Field label="Amount (₹)">
+          <Field label="Amount">
             <input type="number" required min="0.01" step="0.01" inputMode="decimal" autoFocus
               className="input font-mono text-right text-xl" value={form.amount_rupees}
               onChange={(event) => setForm((current) => ({ ...current, amount_rupees: event.target.value }))}/>

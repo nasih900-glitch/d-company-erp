@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Login-only standalone D copied from /Users/mohammednasih/Downloads/D-COMPANY_logo_primary.svg. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="72dp"
+    android:height="72dp"
+    android:viewportWidth="128"
+    android:viewportHeight="120">
+    <path
+        android:fillColor="#C8A15B"
+        android:fillType="evenOdd"
+        android:pathData="M24,20 L60,20 C88,20 104,38 104,60 C104,82 88,100 60,100 L24,100 Z M46,42 L59,42 C74,42 80,50 80,60 C80,70 74,78 59,78 L46,78 Z" />
+</vector>

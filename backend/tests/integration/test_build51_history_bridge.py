@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
+import pytest_asyncio
 from psycopg.types.json import Jsonb
 
 from tests.integration.test_cafe_workflow_migration import _disposable_database, _run_alembic
@@ -423,7 +424,19 @@ def test_guard_owner_and_schema_are_bound_independently_of_function_body(bridge_
     dsn, _, _ = bridge_db
     with psycopg.connect(dsn) as c:
         role = "bridge_guard_" + uuid4().hex[:12]
+        current_user = c.execute("SELECT current_user").fetchone()[0]
         c.execute(psycopg.sql.SQL("CREATE ROLE {}").format(psycopg.sql.Identifier(role)))
+        c.execute(
+            psycopg.sql.SQL("GRANT {} TO {} WITH SET TRUE").format(
+                psycopg.sql.Identifier(role),
+                psycopg.sql.Identifier(current_user),
+            )
+        )
+        c.execute(
+            psycopg.sql.SQL("GRANT CREATE ON SCHEMA public TO {}").format(
+                psycopg.sql.Identifier(role)
+            )
+        )
         c.execute(
             psycopg.sql.SQL("ALTER FUNCTION dcompany_collection_lock(uuid) OWNER TO {}").format(
                 psycopg.sql.Identifier(role)
@@ -439,13 +452,42 @@ def test_guard_owner_and_schema_are_bound_independently_of_function_body(bridge_
         c.rollback()
 
 
+@pytest_asyncio.fixture
+async def tender_history_0091(monkeypatch):
+    """The frozen51 reader is exercised against its actual0091 schema."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.api.v1.public import router as public
+    from app.core import db
+
+    with _disposable_database("erp_build51_nonempty_tender") as url:
+        migration = _run_alembic(url, "upgrade", "0091")
+        assert migration.returncode == 0, migration.stderr
+        engine = create_async_engine(
+            url.replace("postgresql+psycopg://", "postgresql+asyncpg://", 1)
+        )
+        factory = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+        monkeypatch.setattr(db, "AsyncSessionLocal", factory)
+        monkeypatch.setattr(public, "AsyncSessionLocal", factory)
+        try:
+            yield factory, url.replace("postgresql+psycopg://", "postgresql://", 1)
+        finally:
+            await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def session(tender_history_0091):
+    factory, _dsn = tender_history_0091
+    async with factory() as connection:
+        yield connection
+        await connection.rollback()
+
+
 @pytest.mark.asyncio
 async def test_current_legacy_history_preserves_real_nonempty_tender_ledgers(
-    client, session, seed_owner
+    client, session, seed_owner, tender_history_0091
 ):
     """Valid public commands populate both ledgers with every guard enabled."""
-    import os
-
     from tests.integration.test_tender_corrections import case, unlock
 
     headers, day, order, payment, _ = await case(session, seed_owner)
@@ -487,7 +529,7 @@ async def test_current_legacy_history_preserves_real_nonempty_tender_ledgers(
     )
     assert actuals.status_code == 201, actuals.text
     assert actuals.json()["financial_effect"] is False
-    dsn = os.environ["DATABASE_URL"].replace("postgresql+psycopg://", "postgresql://", 1)
+    _factory, dsn = tender_history_0091
     module = verifier()
     with psycopg.connect(dsn) as c:
         c.execute("SET LOCAL dcompany.build51_fresh_lineage='true'")

@@ -1,0 +1,1537 @@
+{
+  "cases": [
+    {
+      "actual_daemon": {
+        "backend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/backend-entry"
+            ],
+            [
+              "backend-image-cmd",
+              "oci$literal$$pair$$$$quad"
+            ],
+            "65532:65532"
+          ]
+        },
+        "caddy": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/empty-command-entry"
+            ],
+            [],
+            ""
+          ]
+        },
+        "frontend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/front-entry"
+            ],
+            [
+              "front-image-cmd"
+            ],
+            ""
+          ]
+        },
+        "postgres": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/postgres-entry"
+            ],
+            [
+              "postgres-image-cmd",
+              "$$OCI_PAIR"
+            ],
+            "65533:65533"
+          ]
+        },
+        "redis": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/redis-entry"
+            ],
+            [
+              "redis-image-cmd",
+              "$$$$OCI_QUAD"
+            ],
+            ""
+          ]
+        }
+      },
+      "compose_export_json": "{\n  \"name\": \"dcguard523b79521e3b8719159154f5\",\n  \"services\": {\n    \"backend\": {\n      \"command\": [],\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:backend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"command_empty_list\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"caddy\": {\n      \"command\": [],\n      \"entrypoint\": [\n        \"/oracle/empty-command-entry\"\n      ],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:caddy\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"command_empty_list\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"frontend\": {\n      \"command\": [],\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:frontend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"command_empty_list\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"postgres\": {\n      \"command\": [],\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:postgres\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"command_empty_list\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"redis\": {\n      \"command\": [],\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:redis\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"command_empty_list\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    }\n  }\n}",
+      "compose_export_sha256": "4889df2d0be69c7f0ed864a83b4700edd7c6314a6f76c99024a855db73035948",
+      "name": "command_empty_list"
+    },
+    {
+      "actual_daemon": {
+        "backend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/backend-entry"
+            ],
+            [
+              "backend-image-cmd",
+              "oci$literal$$pair$$$$quad"
+            ],
+            "65532:65532"
+          ]
+        },
+        "caddy": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/empty-command-entry"
+            ],
+            [],
+            ""
+          ]
+        },
+        "frontend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/front-entry"
+            ],
+            [
+              "front-image-cmd"
+            ],
+            ""
+          ]
+        },
+        "postgres": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/postgres-entry"
+            ],
+            [
+              "postgres-image-cmd",
+              "$$OCI_PAIR"
+            ],
+            "65533:65533"
+          ]
+        },
+        "redis": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/redis-entry"
+            ],
+            [
+              "redis-image-cmd",
+              "$$$$OCI_QUAD"
+            ],
+            ""
+          ]
+        }
+      },
+      "compose_export_json": "{\n  \"name\": \"dcguard523b79521e3b8719159154f5\",\n  \"services\": {\n    \"backend\": {\n      \"command\": [],\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:backend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"command_empty_string\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"caddy\": {\n      \"command\": [],\n      \"entrypoint\": [\n        \"/oracle/empty-command-entry\"\n      ],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:caddy\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"command_empty_string\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"frontend\": {\n      \"command\": [],\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:frontend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"command_empty_string\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"postgres\": {\n      \"command\": [],\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:postgres\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"command_empty_string\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"redis\": {\n      \"command\": [],\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:redis\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"command_empty_string\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    }\n  }\n}",
+      "compose_export_sha256": "14808e306e3fa45f4ec9a06b8540521d811c4e5be85dce36c944d4593fec7cab",
+      "name": "command_empty_string"
+    },
+    {
+      "actual_daemon": {
+        "backend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/backend-entry"
+            ],
+            [
+              "synthetic-command",
+              "$",
+              "$$",
+              "$$$$",
+              "$ORACLE_UNSET",
+              "${ORACLE_UNSET}",
+              "$1",
+              "$?"
+            ],
+            "65532:65532"
+          ]
+        },
+        "caddy": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [],
+            [
+              "synthetic-command",
+              "$",
+              "$$",
+              "$$$$",
+              "$ORACLE_UNSET",
+              "${ORACLE_UNSET}",
+              "$1",
+              "$?"
+            ],
+            ""
+          ]
+        },
+        "frontend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/front-entry"
+            ],
+            [
+              "synthetic-command",
+              "$",
+              "$$",
+              "$$$$",
+              "$ORACLE_UNSET",
+              "${ORACLE_UNSET}",
+              "$1",
+              "$?"
+            ],
+            ""
+          ]
+        },
+        "postgres": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/postgres-entry"
+            ],
+            [
+              "synthetic-command",
+              "$",
+              "$$",
+              "$$$$",
+              "$ORACLE_UNSET",
+              "${ORACLE_UNSET}",
+              "$1",
+              "$?"
+            ],
+            "65533:65533"
+          ]
+        },
+        "redis": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/redis-entry"
+            ],
+            [
+              "synthetic-command",
+              "$",
+              "$$",
+              "$$$$",
+              "$ORACLE_UNSET",
+              "${ORACLE_UNSET}",
+              "$1",
+              "$?"
+            ],
+            ""
+          ]
+        }
+      },
+      "compose_export_json": "{\n  \"name\": \"dcguard523b79521e3b8719159154f5\",\n  \"services\": {\n    \"backend\": {\n      \"command\": [\n        \"synthetic-command\",\n        \"$$\",\n        \"$$$$\",\n        \"$$$$$$$$\",\n        \"$$ORACLE_UNSET\",\n        \"$${ORACLE_UNSET}\",\n        \"$$1\",\n        \"$$?\"\n      ],\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:backend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"dollar_layers\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"caddy\": {\n      \"command\": [\n        \"synthetic-command\",\n        \"$$\",\n        \"$$$$\",\n        \"$$$$$$$$\",\n        \"$$ORACLE_UNSET\",\n        \"$${ORACLE_UNSET}\",\n        \"$$1\",\n        \"$$?\"\n      ],\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:caddy\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"dollar_layers\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"frontend\": {\n      \"command\": [\n        \"synthetic-command\",\n        \"$$\",\n        \"$$$$\",\n        \"$$$$$$$$\",\n        \"$$ORACLE_UNSET\",\n        \"$${ORACLE_UNSET}\",\n        \"$$1\",\n        \"$$?\"\n      ],\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:frontend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"dollar_layers\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"postgres\": {\n      \"command\": [\n        \"synthetic-command\",\n        \"$$\",\n        \"$$$$\",\n        \"$$$$$$$$\",\n        \"$$ORACLE_UNSET\",\n        \"$${ORACLE_UNSET}\",\n        \"$$1\",\n        \"$$?\"\n      ],\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:postgres\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"dollar_layers\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"redis\": {\n      \"command\": [\n        \"synthetic-command\",\n        \"$$\",\n        \"$$$$\",\n        \"$$$$$$$$\",\n        \"$$ORACLE_UNSET\",\n        \"$${ORACLE_UNSET}\",\n        \"$$1\",\n        \"$$?\"\n      ],\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:redis\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"dollar_layers\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    }\n  }\n}",
+      "compose_export_sha256": "0bdf4537203694b32ca3fdb9f741d7ace3cda385bc35d36112449a7f99c6009e",
+      "name": "dollar_layers"
+    },
+    {
+      "actual_daemon": {
+        "backend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [],
+            [
+              "synthetic-command",
+              "$ONE"
+            ],
+            "65532:65532"
+          ]
+        },
+        "caddy": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [],
+            [
+              "synthetic-command",
+              "$ONE"
+            ],
+            ""
+          ]
+        },
+        "frontend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [],
+            [
+              "synthetic-command",
+              "$ONE"
+            ],
+            ""
+          ]
+        },
+        "postgres": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [],
+            [
+              "synthetic-command",
+              "$ONE"
+            ],
+            "65533:65533"
+          ]
+        },
+        "redis": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [],
+            [
+              "synthetic-command",
+              "$ONE"
+            ],
+            ""
+          ]
+        }
+      },
+      "compose_export_json": "{\n  \"name\": \"dcguard523b79521e3b8719159154f5\",\n  \"services\": {\n    \"backend\": {\n      \"command\": [\n        \"synthetic-command\",\n        \"$$ONE\"\n      ],\n      \"entrypoint\": [],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:backend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"entrypoint_empty_list\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"caddy\": {\n      \"command\": [\n        \"synthetic-command\",\n        \"$$ONE\"\n      ],\n      \"entrypoint\": [],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:caddy\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"entrypoint_empty_list\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"frontend\": {\n      \"command\": [\n        \"synthetic-command\",\n        \"$$ONE\"\n      ],\n      \"entrypoint\": [],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:frontend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"entrypoint_empty_list\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"postgres\": {\n      \"command\": [\n        \"synthetic-command\",\n        \"$$ONE\"\n      ],\n      \"entrypoint\": [],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:postgres\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"entrypoint_empty_list\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"redis\": {\n      \"command\": [\n        \"synthetic-command\",\n        \"$$ONE\"\n      ],\n      \"entrypoint\": [],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:redis\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"entrypoint_empty_list\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    }\n  }\n}",
+      "compose_export_sha256": "7f3df86d36afc31420fcc2b2b3feb2bad041375bf1e178a344abb265bbb9a514",
+      "name": "entrypoint_empty_list"
+    },
+    {
+      "actual_daemon": {
+        "backend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [],
+            [
+              "synthetic-command",
+              "$$TWO"
+            ],
+            "65532:65532"
+          ]
+        },
+        "caddy": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [],
+            [
+              "synthetic-command",
+              "$$TWO"
+            ],
+            ""
+          ]
+        },
+        "frontend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [],
+            [
+              "synthetic-command",
+              "$$TWO"
+            ],
+            ""
+          ]
+        },
+        "postgres": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [],
+            [
+              "synthetic-command",
+              "$$TWO"
+            ],
+            "65533:65533"
+          ]
+        },
+        "redis": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [],
+            [
+              "synthetic-command",
+              "$$TWO"
+            ],
+            ""
+          ]
+        }
+      },
+      "compose_export_json": "{\n  \"name\": \"dcguard523b79521e3b8719159154f5\",\n  \"services\": {\n    \"backend\": {\n      \"command\": [\n        \"synthetic-command\",\n        \"$$$$TWO\"\n      ],\n      \"entrypoint\": [],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:backend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"entrypoint_empty_string\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"caddy\": {\n      \"command\": [\n        \"synthetic-command\",\n        \"$$$$TWO\"\n      ],\n      \"entrypoint\": [],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:caddy\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"entrypoint_empty_string\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"frontend\": {\n      \"command\": [\n        \"synthetic-command\",\n        \"$$$$TWO\"\n      ],\n      \"entrypoint\": [],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:frontend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"entrypoint_empty_string\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"postgres\": {\n      \"command\": [\n        \"synthetic-command\",\n        \"$$$$TWO\"\n      ],\n      \"entrypoint\": [],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:postgres\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"entrypoint_empty_string\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"redis\": {\n      \"command\": [\n        \"synthetic-command\",\n        \"$$$$TWO\"\n      ],\n      \"entrypoint\": [],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:redis\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"entrypoint_empty_string\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    }\n  }\n}",
+      "compose_export_sha256": "9f5861bb612c443ceeb444b5594090b1f782599a2970ced9dba92ddb2fa574b2",
+      "name": "entrypoint_empty_string"
+    },
+    {
+      "actual_daemon": {
+        "backend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/backend-entry"
+            ],
+            [
+              "backend-image-cmd",
+              "oci$literal$$pair$$$$quad"
+            ],
+            "65532:65532"
+          ]
+        },
+        "caddy": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [],
+            [
+              "caddy-image-cmd",
+              "$OCI_LITERAL"
+            ],
+            ""
+          ]
+        },
+        "frontend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/front-entry"
+            ],
+            [
+              "front-image-cmd"
+            ],
+            ""
+          ]
+        },
+        "postgres": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/postgres-entry"
+            ],
+            [
+              "postgres-image-cmd",
+              "$$OCI_PAIR"
+            ],
+            "65533:65533"
+          ]
+        },
+        "redis": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/redis-entry"
+            ],
+            [
+              "redis-image-cmd",
+              "$$$$OCI_QUAD"
+            ],
+            ""
+          ]
+        }
+      },
+      "compose_export_json": "{\n  \"name\": \"dcguard523b79521e3b8719159154f5\",\n  \"services\": {\n    \"backend\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:backend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"explicit_null_inherit\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"caddy\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:caddy\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"explicit_null_inherit\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"frontend\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:frontend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"explicit_null_inherit\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"postgres\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:postgres\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"explicit_null_inherit\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"redis\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:redis\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"explicit_null_inherit\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    }\n  }\n}",
+      "compose_export_sha256": "aa859d3600a960ac5a0e6121c229f0788caa9e13d9008c5549efa70702cf55c1",
+      "name": "explicit_null_inherit"
+    },
+    {
+      "actual_daemon": {
+        "backend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/explicit-entry",
+              "ep$arg"
+            ],
+            [
+              "synthetic-command",
+              "arg$$two"
+            ],
+            "12345:12345"
+          ]
+        },
+        "caddy": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/explicit-entry",
+              "ep$arg"
+            ],
+            [
+              "synthetic-command",
+              "arg$$two"
+            ],
+            "12345:12345"
+          ]
+        },
+        "frontend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/explicit-entry",
+              "ep$arg"
+            ],
+            [
+              "synthetic-command",
+              "arg$$two"
+            ],
+            "12345:12345"
+          ]
+        },
+        "postgres": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/explicit-entry",
+              "ep$arg"
+            ],
+            [
+              "synthetic-command",
+              "arg$$two"
+            ],
+            "12345:12345"
+          ]
+        },
+        "redis": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/explicit-entry",
+              "ep$arg"
+            ],
+            [
+              "synthetic-command",
+              "arg$$two"
+            ],
+            "12345:12345"
+          ]
+        }
+      },
+      "compose_export_json": "{\n  \"name\": \"dcguard523b79521e3b8719159154f5\",\n  \"services\": {\n    \"backend\": {\n      \"command\": [\n        \"synthetic-command\",\n        \"arg$$$$two\"\n      ],\n      \"entrypoint\": [\n        \"/oracle/explicit-entry\",\n        \"ep$$arg\"\n      ],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:backend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"explicit_vectors_user\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\",\n      \"user\": \"12345:12345\"\n    },\n    \"caddy\": {\n      \"command\": [\n        \"synthetic-command\",\n        \"arg$$$$two\"\n      ],\n      \"entrypoint\": [\n        \"/oracle/explicit-entry\",\n        \"ep$$arg\"\n      ],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:caddy\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"explicit_vectors_user\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\",\n      \"user\": \"12345:12345\"\n    },\n    \"frontend\": {\n      \"command\": [\n        \"synthetic-command\",\n        \"arg$$$$two\"\n      ],\n      \"entrypoint\": [\n        \"/oracle/explicit-entry\",\n        \"ep$$arg\"\n      ],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:frontend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"explicit_vectors_user\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\",\n      \"user\": \"12345:12345\"\n    },\n    \"postgres\": {\n      \"command\": [\n        \"synthetic-command\",\n        \"arg$$$$two\"\n      ],\n      \"entrypoint\": [\n        \"/oracle/explicit-entry\",\n        \"ep$$arg\"\n      ],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:postgres\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"explicit_vectors_user\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\",\n      \"user\": \"12345:12345\"\n    },\n    \"redis\": {\n      \"command\": [\n        \"synthetic-command\",\n        \"arg$$$$two\"\n      ],\n      \"entrypoint\": [\n        \"/oracle/explicit-entry\",\n        \"ep$$arg\"\n      ],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:redis\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"explicit_vectors_user\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\",\n      \"user\": \"12345:12345\"\n    }\n  }\n}",
+      "compose_export_sha256": "b810cb9297940c9f0501c82d615be2fb7f3eca38a442216e1d967a43ee895f15",
+      "name": "explicit_vectors_user"
+    },
+    {
+      "actual_daemon": {
+        "backend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/backend-entry"
+            ],
+            [
+              "genuinely-different-command"
+            ],
+            "65532:65532"
+          ]
+        },
+        "caddy": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [],
+            [
+              "genuinely-different-command"
+            ],
+            ""
+          ]
+        },
+        "frontend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/front-entry"
+            ],
+            [
+              "genuinely-different-command"
+            ],
+            ""
+          ]
+        },
+        "postgres": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/postgres-entry"
+            ],
+            [
+              "genuinely-different-command"
+            ],
+            "65533:65533"
+          ]
+        },
+        "redis": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/redis-entry"
+            ],
+            [
+              "genuinely-different-command"
+            ],
+            ""
+          ]
+        }
+      },
+      "compose_export_json": "{\n  \"name\": \"dcguard523b79521e3b8719159154f5\",\n  \"services\": {\n    \"backend\": {\n      \"command\": [\n        \"genuinely-different-command\"\n      ],\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:backend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"genuine_wrong_command\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"caddy\": {\n      \"command\": [\n        \"genuinely-different-command\"\n      ],\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:caddy\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"genuine_wrong_command\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"frontend\": {\n      \"command\": [\n        \"genuinely-different-command\"\n      ],\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:frontend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"genuine_wrong_command\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"postgres\": {\n      \"command\": [\n        \"genuinely-different-command\"\n      ],\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:postgres\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"genuine_wrong_command\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"redis\": {\n      \"command\": [\n        \"genuinely-different-command\"\n      ],\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:redis\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"genuine_wrong_command\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    }\n  }\n}",
+      "compose_export_sha256": "b55ce4d3a95c21228b3af3cab438ad505830a0267950ea97271565c142c7ed70",
+      "name": "genuine_wrong_command"
+    },
+    {
+      "actual_daemon": {
+        "backend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/genuinely-different-entrypoint"
+            ],
+            [],
+            "65532:65532"
+          ]
+        },
+        "caddy": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/genuinely-different-entrypoint"
+            ],
+            [],
+            ""
+          ]
+        },
+        "frontend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/genuinely-different-entrypoint"
+            ],
+            [],
+            ""
+          ]
+        },
+        "postgres": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/genuinely-different-entrypoint"
+            ],
+            [],
+            "65533:65533"
+          ]
+        },
+        "redis": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/genuinely-different-entrypoint"
+            ],
+            [],
+            ""
+          ]
+        }
+      },
+      "compose_export_json": "{\n  \"name\": \"dcguard523b79521e3b8719159154f5\",\n  \"services\": {\n    \"backend\": {\n      \"command\": null,\n      \"entrypoint\": [\n        \"/oracle/genuinely-different-entrypoint\"\n      ],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:backend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"genuine_wrong_entrypoint\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"caddy\": {\n      \"command\": null,\n      \"entrypoint\": [\n        \"/oracle/genuinely-different-entrypoint\"\n      ],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:caddy\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"genuine_wrong_entrypoint\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"frontend\": {\n      \"command\": null,\n      \"entrypoint\": [\n        \"/oracle/genuinely-different-entrypoint\"\n      ],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:frontend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"genuine_wrong_entrypoint\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"postgres\": {\n      \"command\": null,\n      \"entrypoint\": [\n        \"/oracle/genuinely-different-entrypoint\"\n      ],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:postgres\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"genuine_wrong_entrypoint\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"redis\": {\n      \"command\": null,\n      \"entrypoint\": [\n        \"/oracle/genuinely-different-entrypoint\"\n      ],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:redis\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"genuine_wrong_entrypoint\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    }\n  }\n}",
+      "compose_export_sha256": "84af1611fb962cd67f6ad3ff58ecaa9c8dfb6ccdfb008f9acbbbe8a0eff0579a",
+      "name": "genuine_wrong_entrypoint"
+    },
+    {
+      "actual_daemon": {
+        "backend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "GENUINELY_CHANGED",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/backend-entry"
+            ],
+            [
+              "backend-image-cmd",
+              "oci$literal$$pair$$$$quad"
+            ],
+            "65532:65532"
+          ]
+        },
+        "caddy": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "GENUINELY_CHANGED",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [],
+            [
+              "caddy-image-cmd",
+              "$OCI_LITERAL"
+            ],
+            ""
+          ]
+        },
+        "frontend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "GENUINELY_CHANGED",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/front-entry"
+            ],
+            [
+              "front-image-cmd"
+            ],
+            ""
+          ]
+        },
+        "postgres": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "GENUINELY_CHANGED",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/postgres-entry"
+            ],
+            [
+              "postgres-image-cmd",
+              "$$OCI_PAIR"
+            ],
+            "65533:65533"
+          ]
+        },
+        "redis": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "GENUINELY_CHANGED",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/redis-entry"
+            ],
+            [
+              "redis-image-cmd",
+              "$$$$OCI_QUAD"
+            ],
+            ""
+          ]
+        }
+      },
+      "compose_export_json": "{\n  \"name\": \"dcguard523b79521e3b8719159154f5\",\n  \"services\": {\n    \"backend\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"GENUINELY_CHANGED\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:backend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"genuine_wrong_environment\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"caddy\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"GENUINELY_CHANGED\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:caddy\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"genuine_wrong_environment\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"frontend\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"GENUINELY_CHANGED\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:frontend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"genuine_wrong_environment\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"postgres\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"GENUINELY_CHANGED\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:postgres\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"genuine_wrong_environment\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"redis\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"GENUINELY_CHANGED\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:redis\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"genuine_wrong_environment\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    }\n  }\n}",
+      "compose_export_sha256": "9d51be856d277adb2ae2c36d1973b91f5ddd4c3a460f168fa93631b237ebee7c",
+      "name": "genuine_wrong_environment"
+    },
+    {
+      "actual_daemon": {
+        "backend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/backend-entry"
+            ],
+            [
+              "backend-image-cmd",
+              "oci$literal$$pair$$$$quad"
+            ],
+            "12346:12346"
+          ]
+        },
+        "caddy": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [],
+            [
+              "caddy-image-cmd",
+              "$OCI_LITERAL"
+            ],
+            "12346:12346"
+          ]
+        },
+        "frontend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/front-entry"
+            ],
+            [
+              "front-image-cmd"
+            ],
+            "12346:12346"
+          ]
+        },
+        "postgres": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/postgres-entry"
+            ],
+            [
+              "postgres-image-cmd",
+              "$$OCI_PAIR"
+            ],
+            "12346:12346"
+          ]
+        },
+        "redis": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/redis-entry"
+            ],
+            [
+              "redis-image-cmd",
+              "$$$$OCI_QUAD"
+            ],
+            "12346:12346"
+          ]
+        }
+      },
+      "compose_export_json": "{\n  \"name\": \"dcguard523b79521e3b8719159154f5\",\n  \"services\": {\n    \"backend\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:backend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"genuine_wrong_user\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\",\n      \"user\": \"12346:12346\"\n    },\n    \"caddy\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:caddy\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"genuine_wrong_user\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\",\n      \"user\": \"12346:12346\"\n    },\n    \"frontend\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:frontend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"genuine_wrong_user\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\",\n      \"user\": \"12346:12346\"\n    },\n    \"postgres\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:postgres\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"genuine_wrong_user\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\",\n      \"user\": \"12346:12346\"\n    },\n    \"redis\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:redis\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"genuine_wrong_user\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\",\n      \"user\": \"12346:12346\"\n    }\n  }\n}",
+      "compose_export_sha256": "23eed6ad84e90b11528caa4a42c84e1183cf6c008231145018724ad3d1facc7f",
+      "name": "genuine_wrong_user"
+    },
+    {
+      "actual_daemon": {
+        "backend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/explicit-entry"
+            ],
+            [],
+            "65532:65532"
+          ]
+        },
+        "caddy": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/explicit-entry"
+            ],
+            [],
+            ""
+          ]
+        },
+        "frontend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/explicit-entry"
+            ],
+            [],
+            ""
+          ]
+        },
+        "postgres": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/explicit-entry"
+            ],
+            [],
+            "65533:65533"
+          ]
+        },
+        "redis": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/explicit-entry"
+            ],
+            [],
+            ""
+          ]
+        }
+      },
+      "compose_export_json": "{\n  \"name\": \"dcguard523b79521e3b8719159154f5\",\n  \"services\": {\n    \"backend\": {\n      \"command\": null,\n      \"entrypoint\": [\n        \"/oracle/explicit-entry\"\n      ],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:backend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"nonnull_entrypoint_null_command\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"caddy\": {\n      \"command\": null,\n      \"entrypoint\": [\n        \"/oracle/explicit-entry\"\n      ],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:caddy\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"nonnull_entrypoint_null_command\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"frontend\": {\n      \"command\": null,\n      \"entrypoint\": [\n        \"/oracle/explicit-entry\"\n      ],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:frontend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"nonnull_entrypoint_null_command\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"postgres\": {\n      \"command\": null,\n      \"entrypoint\": [\n        \"/oracle/explicit-entry\"\n      ],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:postgres\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"nonnull_entrypoint_null_command\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"redis\": {\n      \"command\": null,\n      \"entrypoint\": [\n        \"/oracle/explicit-entry\"\n      ],\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:redis\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"nonnull_entrypoint_null_command\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    }\n  }\n}",
+      "compose_export_sha256": "45ec82abfd662669fd365f7e923a0445bd87fbe0f503f79e3ac7ce60885d2e3c",
+      "name": "nonnull_entrypoint_null_command"
+    },
+    {
+      "actual_daemon": {
+        "backend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/backend-entry"
+            ],
+            [
+              "backend-image-cmd",
+              "oci$literal$$pair$$$$quad"
+            ],
+            "65532:65532"
+          ]
+        },
+        "caddy": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [],
+            [
+              "caddy-image-cmd",
+              "$OCI_LITERAL"
+            ],
+            ""
+          ]
+        },
+        "frontend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/front-entry"
+            ],
+            [
+              "front-image-cmd"
+            ],
+            ""
+          ]
+        },
+        "postgres": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/postgres-entry"
+            ],
+            [
+              "postgres-image-cmd",
+              "$$OCI_PAIR"
+            ],
+            "65533:65533"
+          ]
+        },
+        "redis": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/redis-entry"
+            ],
+            [
+              "redis-image-cmd",
+              "$$$$OCI_QUAD"
+            ],
+            ""
+          ]
+        }
+      },
+      "compose_export_json": "{\n  \"name\": \"dcguard523b79521e3b8719159154f5\",\n  \"services\": {\n    \"backend\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:backend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"omitted_defaults\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"caddy\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:caddy\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"omitted_defaults\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"frontend\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:frontend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"omitted_defaults\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"postgres\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:postgres\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"omitted_defaults\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"redis\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:redis\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"omitted_defaults\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    }\n  }\n}",
+      "compose_export_sha256": "b0bed64a102f1606847cb8ab2dabcc4331973da2e46cd4a131cb853fa35f7180",
+      "name": "omitted_defaults"
+    },
+    {
+      "actual_daemon": {
+        "backend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/backend-entry"
+            ],
+            [
+              "backend-image-cmd",
+              "oci$literal$$pair$$$$quad"
+            ],
+            "65532:65532"
+          ]
+        },
+        "caddy": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [],
+            [
+              "caddy-image-cmd",
+              "$OCI_LITERAL"
+            ],
+            ""
+          ]
+        },
+        "frontend": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/front-entry"
+            ],
+            [
+              "front-image-cmd"
+            ],
+            ""
+          ]
+        },
+        "postgres": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/postgres-entry"
+            ],
+            [
+              "postgres-image-cmd",
+              "$$OCI_PAIR"
+            ],
+            "65533:65533"
+          ]
+        },
+        "redis": {
+          "environment": {
+            "HOME": "/nonexistent",
+            "ORACLE_EMPTY": "",
+            "ORACLE_IMAGE": "oci$one$$two$$$$four",
+            "ORACLE_KEEP": "KEEP",
+            "ORACLE_OVERRIDE": "literal-$-pair-$$-quad-$$$$-$ORACLE_UNSET-${ORACLE_UNSET}-$1-$?",
+            "PATH": "/oracle/bin"
+          },
+          "executable": [
+            [
+              "/oracle/redis-entry"
+            ],
+            [
+              "redis-image-cmd",
+              "$$$$OCI_QUAD"
+            ],
+            ""
+          ]
+        }
+      },
+      "compose_export_json": "{\n  \"name\": \"dcguard523b79521e3b8719159154f5\",\n  \"services\": {\n    \"backend\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:backend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"user_empty_string\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"caddy\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:caddy\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"user_empty_string\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"frontend\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:frontend\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"user_empty_string\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"postgres\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:postgres\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"user_empty_string\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    },\n    \"redis\": {\n      \"command\": null,\n      \"entrypoint\": null,\n      \"environment\": {\n        \"ORACLE_EMPTY\": \"\",\n        \"ORACLE_KEEP\": \"KEEP\",\n        \"ORACLE_OVERRIDE\": \"literal-$$-pair-$$$$-quad-$$$$$$$$-$$ORACLE_UNSET-$${ORACLE_UNSET}-$$1-$$?\"\n      },\n      \"image\": \"dcompany-guard-oracle-523b79521e3b8719159154f5:redis\",\n      \"labels\": {\n        \"online.retrocafe.guard-oracle.case\": \"user_empty_string\",\n        \"online.retrocafe.guard-oracle.scope\": \"523b79521e3b8719159154f5\"\n      },\n      \"network_mode\": \"none\",\n      \"pull_policy\": \"never\",\n      \"read_only\": true,\n      \"restart\": \"no\"\n    }\n  }\n}",
+      "compose_export_sha256": "c432f278aeb954c751ff1b678e5426430cf797730b5998e0bb5e4e625121dd29",
+      "name": "user_empty_string"
+    }
+  ],
+  "compose_version": "5.2.0",
+  "docker_version": "29.6.1",
+  "images": {
+    "backend": {
+      "Cmd": [
+        "backend-image-cmd",
+        "oci$literal$$pair$$$$quad"
+      ],
+      "Entrypoint": [
+        "/oracle/backend-entry"
+      ],
+      "Env": [
+        "PATH=/oracle/bin",
+        "HOME=/nonexistent",
+        "ORACLE_KEEP=KEEP",
+        "ORACLE_IMAGE=oci$one$$two$$$$four"
+      ],
+      "User": "65532:65532"
+    },
+    "caddy": {
+      "Cmd": [
+        "caddy-image-cmd",
+        "$OCI_LITERAL"
+      ],
+      "Env": [
+        "PATH=/oracle/bin",
+        "HOME=/nonexistent",
+        "ORACLE_KEEP=KEEP",
+        "ORACLE_IMAGE=oci$one$$two$$$$four"
+      ]
+    },
+    "frontend": {
+      "Cmd": [
+        "front-image-cmd"
+      ],
+      "Entrypoint": [
+        "/oracle/front-entry"
+      ],
+      "Env": [
+        "PATH=/oracle/bin",
+        "HOME=/nonexistent",
+        "ORACLE_KEEP=KEEP",
+        "ORACLE_IMAGE=oci$one$$two$$$$four"
+      ],
+      "User": ""
+    },
+    "postgres": {
+      "Cmd": [
+        "postgres-image-cmd",
+        "$$OCI_PAIR"
+      ],
+      "Entrypoint": [
+        "/oracle/postgres-entry"
+      ],
+      "Env": [
+        "PATH=/oracle/bin",
+        "HOME=/nonexistent",
+        "ORACLE_KEEP=KEEP",
+        "ORACLE_IMAGE=oci$one$$two$$$$four"
+      ],
+      "User": "65533:65533"
+    },
+    "redis": {
+      "Cmd": [
+        "redis-image-cmd",
+        "$$$$OCI_QUAD"
+      ],
+      "Entrypoint": [
+        "/oracle/redis-entry"
+      ],
+      "Env": [
+        "PATH=/oracle/bin",
+        "HOME=/nonexistent",
+        "ORACLE_KEEP=KEEP",
+        "ORACLE_IMAGE=oci$one$$two$$$$four"
+      ]
+    }
+  },
+  "measured_verifier_sha256": "78d30b178c3397078d7aa9479658b3cc940bde063b5104cbf7632c96830f2c1a",
+  "oracle_script_sha256": "1de0f384ff8ce589ad0e8195f36252c390eae99f5da4a5e09b86d9de274b6393",
+  "schema_version": 1,
+  "synthetic_only": true
+}

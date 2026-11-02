@@ -35,7 +35,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -84,9 +84,12 @@ import cloud.dcompany.erp.ui.components.PremiumTabBar
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.TabOption
 import cloud.dcompany.erp.ui.components.UiTone
+import cloud.dcompany.erp.ui.components.workspaceContentCanvas
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import cloud.dcompany.erp.ui.components.resolvedVoidReason
 import cloud.dcompany.erp.ui.orderOptionLabels
@@ -116,7 +119,7 @@ fun TablesScreen(access: TablesAccess = TablesAccess(), vm: TablesViewModel = vi
     SideEffect { vm.updateAccess(access) }
 
     Column(
-        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(Spacing.lg),
+        Modifier.fillMaxSize().workspaceContentCanvas().padding(Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
         OperationalBanner(
@@ -855,8 +858,7 @@ private fun OrderMenuPanel(
                 items(state.menu, key = { it.id }) { item ->
                     Column(
                         Modifier.fillMaxWidth().heightIn(min = 72.dp).clip(Radius.shapeSm)
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeSm)
+                            .liquidWorkspaceSurface(Radius.shapeSm)
                             .clickable(enabled = canWrite) { onAdd(item) }
                             .padding(Spacing.sm),
                         verticalArrangement = Arrangement.spacedBy(Spacing.xs),
@@ -901,8 +903,7 @@ private fun OrderCartPanel(
             items(state.cart, key = { it.clientLineId }) { line ->
                 Column(
                     Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeSm)
+                        .liquidWorkspaceSurface(Radius.shapeSm)
                         .padding(Spacing.sm),
                     verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                 ) {
@@ -1223,7 +1224,8 @@ private fun Double.toQtyLabel(): String =
 private fun Qty(label: String, enabled: Boolean, onClick: () -> Unit) {
     Box(
         Modifier.size(48.dp).clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant).clickable(enabled = enabled, onClick = onClick),
+            .liquidWorkspaceSurface(RoundedCornerShape(12.dp), WorkspaceGlassRole.CONTROL)
+            .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { Text(label, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold) }
 }

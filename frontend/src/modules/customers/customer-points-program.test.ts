@@ -9,7 +9,7 @@ describe('customer points program summary', () => {
       loyalty_point_value_minor: 11,
       loyalty_program_revision: 4,
     })).toEqual({
-      valueLabel: '500 points are currently worth ₹55.00',
+      valueLabel: '500 points are currently worth 55.00',
       revisionLabel: 'Program revision 4 · the server verifies the value when points are applied',
     });
   });

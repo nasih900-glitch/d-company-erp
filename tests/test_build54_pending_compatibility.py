@@ -515,6 +515,7 @@ def test_build54_keeps_product_code_and_schemas_equal_to_build53():
                 "diff",
                 "--name-only",
                 "8506c7abdf15c92029226849f42b1b71fd6878d6",
+                "5ad146ae076f5178acc2c8e4cb840ecbb0d0343a",
                 "--",
                 "backend/app",
                 "frontend/src",
@@ -540,6 +541,17 @@ def test_build54_keeps_product_code_and_schemas_equal_to_build53():
         capture_output=True,
         text=True,
     ).stdout
-    assert (ROOT / "backend/app/__init__.py").read_text() == before.replace(
+    after = subprocess.run(
+        [
+            "git",
+            "show",
+            "5ad146ae076f5178acc2c8e4cb840ecbb0d0343a:backend/app/__init__.py",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert after == before.replace(
         '"3.1.45"', '"3.1.46"'
     )

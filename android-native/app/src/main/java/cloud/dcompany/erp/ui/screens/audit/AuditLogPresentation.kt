@@ -120,6 +120,17 @@ internal fun formatAuditTimestamp(
 
 
 internal fun auditBusinessLabel(value: String): String = when (value) {
+    "update_mode_before" -> "Update mode before"
+    "update_mode_after" -> "Update mode after"
+    "policy_revision" -> "Policy revision"
+    "minimum_supported_build" -> "Minimum supported build"
+    "environment_safety_floor" -> "Deployment safety floor"
+    "global_installations" -> "Applies to all direct Android installations"
+    "voided_amount_minor" -> "Original charge voided"
+    "amount_after_void_minor" -> "Amount after void"
+    "original_billable_minutes" -> "Original recorded billable minutes"
+    "added_player_interval_count" -> "Added-player attendance records"
+    "attendance_retained" -> "Attendance and settlement evidence retained"
     "qty_delta" -> "Quantity change"
     "qty" -> "Quantity"
     "base_unit" -> "Stock unit"
@@ -189,6 +200,19 @@ internal fun auditBusinessFacts(entry: AuditEntry): List<Pair<String,JsonElement
 internal fun auditBusinessSummary(entry: AuditEntry): String {
     val facts=entry.businessDetails.orEmpty()
     val pieces=mutableListOf<String>()
+    if (entry.action == "android_update_policy_changed") {
+        val mode=(facts["update_mode_after"] as? JsonPrimitive)?.content
+        if(mode in setOf("optional","required")) pieces += "${mode?.replaceFirstChar(Char::uppercase)} updates"
+        (facts["minimum_supported_build"] as? JsonPrimitive)?.intOrNull?.let { pieces += "Minimum supported build $it" }
+        if((facts["global_installations"] as? JsonPrimitive)?.booleanOrNull == true) pieces += "All direct Android installations"
+        if(pieces.isNotEmpty()) return pieces.joinToString(" · ")
+    }
+    if (entry.action == "gaming_session_voided") {
+        (facts["voided_amount_minor"] as? JsonPrimitive)?.longOrNull?.let { pieces += "Voided ${it.asRupees()}" }
+        (facts["amount_after_void_minor"] as? JsonPrimitive)?.longOrNull?.let { pieces += "Amount after void ${it.asRupees()}" }
+        if ((facts["attendance_retained"] as? JsonPrimitive)?.content == "true") pieces += "Attendance retained"
+        if (pieces.isNotEmpty()) return pieces.joinToString(" · ")
+    }
     if(entry.actionCode == "SHF-OPN") (facts["opening_float_minor"] as? JsonPrimitive)?.longOrNull?.let { pieces += "Opening float ${it.asRupees()}" }
     if(entry.actionCode in setOf("SHF-CLS", "SHF-REC")) listOf(
         "counted_minor" to "Counted",

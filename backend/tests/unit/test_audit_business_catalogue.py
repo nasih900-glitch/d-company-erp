@@ -27,8 +27,8 @@ from app.services.audit.query import (
 from app.services.audit.recorder import _enrich_manual_audit_row, json_safe
 
 
-def test_catalogue_contains_27_unique_real_operations_with_valid_states():
-    assert len(BY_CODE) == len(CATALOGUE) == 27
+def test_catalogue_contains_28_unique_real_operations_with_valid_states():
+    assert len(BY_CODE) == len(CATALOGUE) == 28
     assert "STK-XFR" not in BY_CODE
     assert "PIK" not in BY_CODE
     for action, expected in EXPLICIT.items():
@@ -345,3 +345,26 @@ def test_value_capture_is_distinct_from_final_refund_receipt(entity, proof):
         "pending",
     )
     assert classify_values("create", entity, None, {}) == ("POS-RFD", "recorded", "unknown")
+
+
+def test_update_policy_event_has_business_vocabulary_and_retained_reason():
+    row = AuditLog(
+        action="android_update_policy_changed",
+        entity_type="AndroidUpdatePolicy",
+        entity_id="1",
+        company_id=uuid4(),
+        actor_user_id=uuid4(),
+        before={"mode": "required"},
+        after={"mode": "optional"},
+        business_details={
+            "update_mode_before": "required",
+            "update_mode_after": "optional",
+            "policy_revision": 6,
+            "minimum_supported_build": 54,
+            "reason": "Owner reviewed supported builds",
+        },
+    )
+    _enrich_manual_audit_row(row)
+    assert (row.action_code, row.stage, row.outcome) == ("UPD-POL", "committed", "completed")
+    assert row.business_details["reason"] == "Owner reviewed supported builds"
+    assert row.business_details["minimum_supported_build"] == 54

@@ -384,7 +384,7 @@ function InventoryTab() {
                 <th className="text-left p-3">Item</th>
                 <th className="text-right p-3">Sale price</th>
                 <th className="text-right p-3">Cost</th>
-                <th className="text-right p-3">Margin (₹)</th>
+                <th className="text-right p-3">Margin</th>
                 <th className="text-right p-3">Margin %</th>
               </tr>
             </thead>

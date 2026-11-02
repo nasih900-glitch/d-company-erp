@@ -46,7 +46,7 @@ AsyncSessionLocal = async_sessionmaker(
 _CONSISTENT_REPORT_MODULES = frozenset(
     f"app.api.v1.{module}.router"
     for module in ("reports", "finance", "accounting", "analytics", "insights")
-)
+) | {"app.api.v1.staff.work_time"}
 
 
 def _uses_report_snapshot(request: Request) -> bool:

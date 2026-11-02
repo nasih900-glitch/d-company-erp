@@ -19,7 +19,7 @@ BUILD43_RELEASE_BASE = "8418e349eac0707ef62629f6cd3b7dc434690436"
 BUILD45_RUNTIME_BASE = "5b8ef38597871599fde4a42a5b895cd9a05c4d11"
 OLD_BINARY_SHA256 = "73c0169f0b72b465e2ae20bdb67a3e017044b2ab3d267816398b9d6ece243fb0"
 PATCHED_BINARY_SHA256 = "951a0136950bb9edf60ff5cec6ca2df0a041b27ded9e610f0aab49b168739dac"
-CURRENT_BINARY_SHA256 = "1b95bdb9ca9ffaec90a9e3a9592e8cedc2212abd64c709219149b8b4285d07d7"
+CURRENT_BINARY_SHA256 = "f2fcd13d0aeb36b7622b041fb6a607bd9cd0bef846291f0751a2e20ee4ab827b"
 OLD_GOSU_SHA256 = "cdcdfbe2a74dc15d62f6f73da877a372641b80104ff04ca5bee7bc36ee9936ab"
 CURRENT_GOSU_SHA256 = "ffd70d9dcf141b9f13ae293ec5a6c48cf8d04f56bddc80cf244c62398b24f2ea"
 OLD_GO_BUILDER = (
@@ -93,6 +93,13 @@ def test_caddy_graph_applies_only_the_reviewed_go_security_closure() -> None:
             f"{module} {old} // indirect",
             f"{module} {new} // indirect",
         )
+    for module, old, new in (
+        ("github.com/go-jose/go-jose/v3", "v3.0.5", "v3.0.6-0.20261030183946-0e502b87c7aa"),
+        ("github.com/go-jose/go-jose/v4", "v4.1.4", "v4.1.7"),
+    ):
+        expected_go_mod = _replace_once(
+            expected_go_mod, f"{module} {old} // indirect", f"{module} {new} // indirect"
+        )
     assert GO_MOD.read_text(encoding="utf-8") == expected_go_mod
 
     signed_go_sum = _replace_once(
@@ -158,8 +165,21 @@ def test_caddy_graph_applies_only_the_reviewed_go_security_closure() -> None:
         expected_go_sum = _replace_once(
             expected_go_sum, anchor, f"{anchor}\n{added}"
         )
+    for anchor, added in (
+        (
+            "github.com/go-jose/go-jose/v3 v3.0.5/go.mod h1:5b+7YgP7ZICgJDBdfjZaIt+H/9L9T/YQrVfLAMboGkQ=",
+            "github.com/go-jose/go-jose/v3 v3.0.6-0.20261030183946-0e502b87c7aa h1:AHZcbOqCCO38+3UfsccMAi5D+c0D+JnVGopumm3zLfg=\n"
+            "github.com/go-jose/go-jose/v3 v3.0.6-0.20261030183946-0e502b87c7aa/go.mod h1:5b+7YgP7ZICgJDBdfjZaIt+H/9L9T/YQrVfLAMboGkQ=",
+        ),
+        (
+            "github.com/go-jose/go-jose/v4 v4.1.4/go.mod h1:x4oUasVrzR7071A4TnHLGSPpNOm2a21K9Kf04k1rs08=",
+            "github.com/go-jose/go-jose/v4 v4.1.7 h1:Nac/98uT5LPkfbiFuYa8ktf62a2VxwQ4xbq1GK8pV5E=\n"
+            "github.com/go-jose/go-jose/v4 v4.1.7/go.mod h1:x4oUasVrzR7071A4TnHLGSPpNOm2a21K9Kf04k1rs08=",
+        ),
+    ):
+        expected_go_sum = _replace_once(expected_go_sum, anchor, f"{anchor}\n{added}")
     assert GO_SUM.read_text(encoding="utf-8") == expected_go_sum
-    assert len(expected_go_sum.splitlines()) == len(signed_go_sum.splitlines()) + 16
+    assert len(expected_go_sum.splitlines()) == len(signed_go_sum.splitlines()) + 20
 
 
 def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> None:
@@ -298,6 +318,103 @@ def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> No
         "    go version -m /out/caddy | grep -F 'go1.26.8'; \\\n",
         "    go version -m /out/caddy | grep -F 'go1.26.9'; \\\n",
     )
+    # Build55 advances only the signed Alpine c-ares security package. Keep
+    # the complete inherited graph/pins and full-file equality assertion.
+    expected = _replace_once(
+        expected, "'c-ares=1.34.8-r0'", "'c-ares=1.34.9-r0'"
+    )
+    expected = _replace_once(
+        expected, "'c-ares-1.34.8-r0'", "'c-ares-1.34.9-r0'"
+    )
+    # Build55 removes unused vulnerable curl/libcurl. Retain the exact
+    # Caddy/base/other-package contract and full-file equality; no scan exception.
+    expected = _replace_once(
+        expected,
+        "      'curl=8.22.0-r0' \\\n"
+        "      'libcurl=8.22.0-r0' \\\n",
+        '',
+    )
+    expected = _replace_once(
+        expected,
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'curl-8.22.0-r0\'; \\\n'
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'libcurl-8.22.0-r0\'; \\\n',
+        '',
+    )
+    expected = _replace_once(
+        expected,
+        '    installed_packages="$(apk info -v)"; \\\n',
+        '    retained_apk_constraints="$(awk -F: \'$1 == "P" { name = $2 } $1 == "V" && name != "curl" && name != "libcurl" { print name "=" $2 }\' /lib/apk/db/installed | LC_ALL=C sort)"; \\\n'
+        '    test -n "$retained_apk_constraints"; \\\n'
+        '    apk add --no-network --repositories-file /dev/null $retained_apk_constraints; \\\n'
+        '    apk del --no-network --repositories-file /dev/null curl libcurl; \\\n'
+        '    remaining_apk_constraints="$(awk -F: \'$1 == "P" { name = $2 } $1 == "V" { print name "=" $2 }\' /lib/apk/db/installed | LC_ALL=C sort)"; \\\n'
+        '    test "$remaining_apk_constraints" = "$retained_apk_constraints"; \\\n'
+        '    if command -v curl >/dev/null 2>&1 || command -v wcurl >/dev/null 2>&1; then exit 1; fi; \\\n'
+        '    test ! -e /usr/lib/libcurl.so.4; \\\n'
+        '    test ! -e /usr/lib/libcurl.so.4.8.0; \\\n'
+        '    installed_packages="$(apk info -v)"; \\\n',
+    )
+    # Build55 restores both signed CA packages and checks the effective Go pool.
+    # Preserve complete inherited file equality and all unrelated pins/guards.
+    expected = _replace_once(
+        expected,
+        'FROM caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648 AS zlib-builder',
+        'COPY infra/docker/caddy-build/verify-system-ca/ /tmp/dcompany-verify-system-ca/\n'
+        'RUN set -eux; \\\n'
+        '    export CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" GOMAXPROCS=1 GOMEMLIMIT=256MiB; \\\n'
+        '    go test -p=1 -mod=readonly -count=1 -v \\\n'
+        '      /tmp/dcompany-verify-system-ca/main.go /tmp/dcompany-verify-system-ca/main_test.go; \\\n'
+        "    go build -p=1 -mod=readonly -buildvcs=false -trimpath -ldflags='-s -w -buildid=' \\\n"
+        '      -o /out/verify-caddy-system-ca /tmp/dcompany-verify-system-ca/main.go\n'
+        '\n'
+        'FROM caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648 AS zlib-builder',
+    )
+    expected = _replace_once(
+        expected,
+        'RUN set -eux; \\\n'
+        '    apk add --no-cache --upgrade \\\n',
+        'COPY --from=caddy-builder /out/verify-caddy-system-ca /tmp/verify-caddy-system-ca\n'
+        '\n'
+        'RUN set -eux; \\\n'
+        '    apk add --no-cache --upgrade \\\n'
+        "      'ca-certificates=20261020-r0' \\\n"
+        "      'ca-certificates-bundle=20261020-r0' \\\n",
+    )
+    expected = _replace_once(
+        expected,
+        "      'zlib=1.3.2-r1'; \\\n",
+        "      'zlib=1.3.2-r1'; \\\n"
+        '    update-ca-certificates --fresh; \\\n'
+        '    /tmp/verify-caddy-system-ca; \\\n'
+        '    rm -f /tmp/verify-caddy-system-ca; \\\n',
+    )
+    expected = _replace_once(
+        expected,
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'c-ares-1.34.9-r0\'; \\\n',
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'ca-certificates-20261020-r0\'; \\\n'
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'ca-certificates-bundle-20261020-r0\'; \\\n'
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'c-ares-1.34.9-r0\'; \\\n',
+    )
+    # Preserve the full historical reconstruction, then admit only these
+    # checksum-verified official JOSE and Brotli security corrections.
+    module_anchor = '    test "$(go list -mod=readonly -m -f \'{{.Version}}\' github.com/caddyserver/caddy/v2)" = "v2.11.4"; \\\n'
+    expected = _replace_once(
+        expected, module_anchor,
+        module_anchor
+        + '    test "$(go list -mod=readonly -m -f \'{{.Version}}\' github.com/go-jose/go-jose/v3)" = "v3.0.6-0.20261030183946-0e502b87c7aa"; \\\n'
+        + '    test "$(go list -mod=readonly -m -f \'{{.Version}}\' github.com/go-jose/go-jose/v4)" = "v4.1.7"; \\\n',
+    )
+    assert expected.count("v2.11.4-dcompany.1") == 2
+    expected = expected.replace("v2.11.4-dcompany.1", "v2.11.4-dcompany.2")
+    expected = _replace_once(
+        expected, "      'libssl3=3.5.9-r0' \\\n",
+        "      'libssl3=3.5.9-r0' \\\n      'brotli-libs=1.2.1-r0' \\\n",
+    )
+    package_anchor = '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'libssl3-3.5.9-r0\'; \\\n'
+    expected = _replace_once(
+        expected, package_anchor,
+        package_anchor + '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'brotli-libs-1.2.1-r0\'; \\\n',
+    )
     assert CADDY_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
@@ -387,6 +504,44 @@ def test_backend_image_changes_only_reviewed_openssl_runtime_controls() -> None:
         + " \\\n"
         + "    && test \"$(python --version)\" = 'Python 3.14.8' \\\n",
     )
+    # Build55 adds only the reviewed Python/system-CA trust correction. Keep
+    # every historical transform above and full-file equality below intact.
+    helper_copy = "COPY infra/scripts/bootstrap-verified-pip.py /tmp/bootstrap-verified-pip.py\n"
+    helper_install = "RUN python -I -B /tmp/bootstrap-verified-pip.py && rm /tmp/bootstrap-verified-pip.py\n"
+    for environment in (
+        "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1\n",
+        "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1\n",
+    ):
+        expected = _replace_once(expected, environment, environment + helper_copy)
+    ca_install = _replace_once(
+        package_install,
+        "      'libuuid=2.42.3-r1' \\\n",
+        "      'libuuid=2.42.3-r1' \\\n      'ca-certificates=20261020-r0' \\\n      'ca-certificates-bundle=20261020-r0' \\\n",
+    )
+    ca_install = _replace_once(
+        ca_install,
+        '    && printf \'%s\\n\' "$installed_packages" | grep -Fx \'libuuid-2.42.3-r1\' \\\n',
+        '    && printf \'%s\\n\' "$installed_packages" | grep -Fx \'libuuid-2.42.3-r1\' \\\n    && printf \'%s\\n\' "$installed_packages" | grep -Fx \'ca-certificates-20261020-r0\' \\\n    && printf \'%s\\n\' "$installed_packages" | grep -Fx \'ca-certificates-bundle-20261020-r0\' \\\n    && update-ca-certificates \\\n    && python -I -B /tmp/bootstrap-verified-pip.py --verify-system-ca \\\n',
+    )
+    assert expected.count(package_install) == 2
+    expected = expected.replace(package_install, ca_install)
+    expected = _replace_once(expected, "COPY backend/requirements.lock .\n", "COPY backend/requirements.lock .\n" + helper_install)
+    expected = _replace_once(expected, "WORKDIR /app\nCOPY --from=builder /install", helper_install + "WORKDIR /app\nCOPY --from=builder /install")
+    # Build55's later CPython trust-store fix is an exact additive transform.
+    # Keep the historical 3.14.7 -> 3.14.8 reconstruction above unchanged.
+    assert expected.count("python:3.14.8-alpine3.24@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72") == 3
+    expected = expected.replace(
+        "python:3.14.8-alpine3.24@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72",
+        "python:3.14.10-alpine3.24@sha256:eb2c62658b8d51bff0acc408504b76521d02030de56a8a3c1e830083e89b89d2",
+    )
+    expected = _replace_once(expected, 'com.dcompany.python.version="3.14.8"', 'com.dcompany.python.version="3.14.10"')
+    expected = _replace_once(expected, "'Python 3.14.8'", "'Python 3.14.10'")
+    expected = _replace_once(
+        expected,
+        "    && sh /tmp/verify-patched-zlib.sh \\\n",
+        "    && sh /tmp/verify-patched-zlib.sh \\\n"
+        + "    && printf '%s\\n' \"$installed_packages\" | grep -Fx 'zlib-1.3.2-r1' \\\n",
+    )
     assert BACKEND_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
@@ -394,8 +549,8 @@ def test_backend_python_patch_version_is_exact_in_ci_and_release() -> None:
     ci = CI_WORKFLOW.read_text(encoding="utf-8")
     release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
 
-    assert ci.count("python-version: '3.14.8'") == 1
-    assert release.count("python-version: '3.14.8'") == 1
+    assert ci.count("python-version: '3.14.10'") == 1
+    assert release.count("python-version: '3.14.10'") == 1
     assert "python-version: '3.14.7'" not in ci
     assert "python-version: '3.14.7'" not in release
 
@@ -474,6 +629,37 @@ def test_frontend_image_changes_only_reviewed_security_controls() -> None:
         "    && find /usr/share/nginx/html -type d -exec chmod 0755 {} + \\\n"
         "    && find /usr/share/nginx/html -type f -exec chmod 0644 {} +\n",
     )
+    # Build55 upgrades only the signed nginx APK; retain the pinned base,
+    # r0 zlib overlay and full inherited-file equality. No scan exception.
+    expected = _replace_once(
+        expected,
+        'FROM nginx:alpine-slim@sha256:3b171d7224b669faa3cc2137fea0a65301791df1ec1f271ebd2a2b7461f7fade\n'
+        'ARG APP_VERSION=dev\n',
+        'FROM nginx:alpine-slim@sha256:3b171d7224b669faa3cc2137fea0a65301791df1ec1f271ebd2a2b7461f7fade\n'
+        'ENV NGINX_VERSION=1.31.8\n'
+        'ARG APP_VERSION=dev\n',
+    )
+    expected = _replace_once(
+        expected,
+        "      'pcre2=10.49-r0'; \\\n"
+        '    installed_packages="$(apk info -v)"; \\\n',
+        "      'pcre2=10.49-r0'; \\\n"
+        '    test "$(apk --print-arch)" = \'x86_64\'; \\\n'
+        "    printf '%s\\n' 'e09fa32f0a0eab2b879ccbbc4d0e4fb9751486eedda75e35fac65802cc9faa266425edf83e261137a2f4d16281ce2c1a5f4502930fe75154723da014214f0655  /etc/apk/keys/nginx_signing.rsa.pub' | sha512sum -c -; \\\n"
+        "    wget -T 30 -qO /tmp/dcompany-nginx-1.31.8-r1.apk 'https://nginx.org/packages/mainline/alpine/v3.24/main/x86_64/nginx-1.31.8-r1.apk'; \\\n"
+        "    printf '%s\\n' '51bb8ca7072b422c9355656e45a1aafec24eb1606adb3a84c562f80731d3f848  /tmp/dcompany-nginx-1.31.8-r1.apk' | sha256sum -c -; \\\n"
+        '    apk add --no-cache --no-network --upgrade --repositories-file /dev/null /tmp/dcompany-nginx-1.31.8-r1.apk; \\\n'
+        '    rm /tmp/dcompany-nginx-1.31.8-r1.apk; \\\n'
+        '    installed_packages="$(apk info -v)"; \\\n',
+    )
+    expected = _replace_once(
+        expected,
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'pcre2-10.49-r0\'; \\\n',
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'pcre2-10.49-r0\'; \\\n'
+        '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'nginx-1.31.8-r1\'; \\\n'
+        '    test "$NGINX_VERSION" = \'1.31.8\'; \\\n'
+        "    nginx -v 2>&1 | grep -Fx 'nginx version: nginx/1.31.8'; \\\n",
+    )
     assert FRONTEND_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
@@ -538,4 +724,4 @@ def test_caddy_binary_hash_is_coordinated_across_ci_and_release() -> None:
     assert "github.com/caddyserver/caddy/v2 v2.11.4" in GO_MOD.read_text(
         encoding="utf-8"
     )
-    assert "v2.11.4-dcompany.1" in CADDY_DOCKERFILE.read_text(encoding="utf-8")
+    assert "v2.11.4-dcompany.2" in CADDY_DOCKERFILE.read_text(encoding="utf-8")

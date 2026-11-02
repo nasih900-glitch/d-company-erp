@@ -23,6 +23,8 @@ RUN set -eux; \
     go mod download; \
     go mod verify; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' github.com/caddyserver/caddy/v2)" = "v2.11.4"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' github.com/go-jose/go-jose/v3)" = "v3.0.6-0.20261030183946-0e502b87c7aa"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' github.com/go-jose/go-jose/v4)" = "v4.1.7"; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/crypto)" = "v0.57.0"; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/mod)" = "v0.41.0"; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/net)" = "v0.60.0"; \
@@ -42,12 +44,20 @@ RUN set -eux; \
       go build -p=1 -mod=readonly -buildvcs=false \
         -tags='nobadger,nomysql,nopgx' \
         -trimpath \
-        -ldflags='-s -w -buildid= -X github.com/caddyserver/caddy/v2.CustomVersion=v2.11.4-dcompany.1' \
+        -ldflags='-s -w -buildid= -X github.com/caddyserver/caddy/v2.CustomVersion=v2.11.4-dcompany.2' \
         -o /out/caddy .; \
-    echo '1b95bdb9ca9ffaec90a9e3a9592e8cedc2212abd64c709219149b8b4285d07d7  /out/caddy' | sha256sum -c -; \
+    echo 'f2fcd13d0aeb36b7622b041fb6a607bd9cd0bef846291f0751a2e20ee4ab827b  /out/caddy' | sha256sum -c -; \
     go version -m /out/caddy | grep -F 'go1.26.9'; \
     go version -m /out/caddy | grep -F 'github.com/caddyserver/caddy/v2'; \
     go version -m /out/caddy | grep -F 'v2.11.4'
+
+COPY infra/docker/caddy-build/verify-system-ca/ /tmp/dcompany-verify-system-ca/
+RUN set -eux; \
+    export CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" GOMAXPROCS=1 GOMEMLIMIT=256MiB; \
+    go test -p=1 -mod=readonly -count=1 -v \
+      /tmp/dcompany-verify-system-ca/main.go /tmp/dcompany-verify-system-ca/main_test.go; \
+    go build -p=1 -mod=readonly -buildvcs=false -trimpath -ldflags='-s -w -buildid=' \
+      -o /out/verify-caddy-system-ca /tmp/dcompany-verify-system-ca/main.go
 
 FROM caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648 AS zlib-builder
 WORKDIR /tmp/dcompany-zlib
@@ -79,20 +89,36 @@ LABEL org.opencontainers.image.title="D Company ERP Caddy" \
       com.dcompany.zlib.followup.commit="7235b0a581227c56a79a43ff828f8ef6794194c8" \
       com.dcompany.zlib.followup.sha256="96040ee84d0d187905283912dbd3f7b66ac2033976a2ceefe9b8cca63143d9c2"
 
+COPY --from=caddy-builder /out/verify-caddy-system-ca /tmp/verify-caddy-system-ca
+
 RUN set -eux; \
     apk add --no-cache --upgrade \
-      'c-ares=1.34.8-r0' \
-      'curl=8.22.0-r0' \
-      'libcurl=8.22.0-r0' \
+      'ca-certificates=20261020-r0' \
+      'ca-certificates-bundle=20261020-r0' \
+      'c-ares=1.34.9-r0' \
       'libcrypto3=3.5.9-r0' \
       'libssl3=3.5.9-r0' \
+      'brotli-libs=1.2.1-r0' \
       'zlib=1.3.2-r1'; \
+    update-ca-certificates --fresh; \
+    /tmp/verify-caddy-system-ca; \
+    rm -f /tmp/verify-caddy-system-ca; \
+    retained_apk_constraints="$(awk -F: '$1 == "P" { name = $2 } $1 == "V" && name != "curl" && name != "libcurl" { print name "=" $2 }' /lib/apk/db/installed | LC_ALL=C sort)"; \
+    test -n "$retained_apk_constraints"; \
+    apk add --no-network --repositories-file /dev/null $retained_apk_constraints; \
+    apk del --no-network --repositories-file /dev/null curl libcurl; \
+    remaining_apk_constraints="$(awk -F: '$1 == "P" { name = $2 } $1 == "V" { print name "=" $2 }' /lib/apk/db/installed | LC_ALL=C sort)"; \
+    test "$remaining_apk_constraints" = "$retained_apk_constraints"; \
+    if command -v curl >/dev/null 2>&1 || command -v wcurl >/dev/null 2>&1; then exit 1; fi; \
+    test ! -e /usr/lib/libcurl.so.4; \
+    test ! -e /usr/lib/libcurl.so.4.8.0; \
     installed_packages="$(apk info -v)"; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'c-ares-1.34.8-r0'; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'curl-8.22.0-r0'; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'libcurl-8.22.0-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'ca-certificates-20261020-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'ca-certificates-bundle-20261020-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'c-ares-1.34.9-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'brotli-libs-1.2.1-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'zlib-1.3.2-r1'
 
 COPY --from=zlib-builder /out/usr/lib/libz.so.1.3.2 /usr/lib/libz.so.1.3.2
@@ -109,4 +135,4 @@ COPY --from=caddy-builder /out/caddy /usr/bin/caddy
 RUN set -eux; \
     chmod 0755 /usr/bin/caddy; \
     setcap cap_net_bind_service=+ep /usr/bin/caddy; \
-    caddy version | grep -F 'v2.11.4-dcompany.1'
+    caddy version | grep -F 'v2.11.4-dcompany.2'

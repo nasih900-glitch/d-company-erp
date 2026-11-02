@@ -13,7 +13,12 @@ from app.models.bug_report import (
 )
 from app.models.client_diagnostic import ClientDiagnosticEvent
 from app.models.client_gaming_cleanup_reconciliation import ClientGamingCleanupReconciliation
-from app.models.client_update import AndroidRelease, ClientInstallation, ClientUpdateEvent
+from app.models.client_update import (
+    AndroidRelease,
+    AndroidUpdatePolicy,
+    ClientInstallation,
+    ClientUpdateEvent,
+)
 from app.models.customer import (
     Customer,
     CustomerDirectoryState,
@@ -51,6 +56,8 @@ from app.models.gaming import (
     GamingSessionExtension,
     GamingSessionPackageAmendment,
     GamingSessionParticipant,
+    GamingVoidAddonLine,
+    GamingVoidReceipt,
     Station,
     Tournament,
 )
@@ -130,15 +137,17 @@ from app.models.remote_assistance import (
 )
 from app.models.tables import Floor, Reservation, Table
 from app.models.tenant import Branch, Company, Terminal
-from app.models.user import Attendance, PayrollEntry, Role, User, UserRole
-
 from app.models.tender_correction import DailyTenderReconciliation, PaymentTenderCorrection
+from app.models.staff_work import StaffWorkPolicy
+from app.models.user import Attendance, PayrollEntry, Role, User, UserRole
 
 __all__ = [
     "Account",
     "AndroidRelease",
+    "AndroidUpdatePolicy",
     "Asset",
     "Attendance",
+    "StaffWorkPolicy",
     "AuditLog",
     "AuthOtpChallenge",
     "AuthRefreshSession",
@@ -176,6 +185,8 @@ __all__ = [
     "GamingSessionExtension",
     "GamingSessionPackageAmendment",
     "GamingSessionParticipant",
+    "GamingVoidAddonLine",
+    "GamingVoidReceipt",
     "GamingParticipantSettlement",
     "GamingParticipantSettlementLine",
     "GoogleSheetsDelivery",

@@ -125,7 +125,7 @@ class HeldPaymentFeedbackTest {
         val message = heldPaymentOutcomeNotice(row)!!
 
         assertTrue(message.contains("confirmed by the server"))
-        assertTrue(message.contains("₹125.00"))
+        assertTrue(message.contains("125.00"))
         assertTrue(message.contains("No further collection"))
         assertTrue(duplicateHeldPaymentNotice(row).contains("already confirmed by the server"))
     }
@@ -165,7 +165,7 @@ class HeldPaymentFeedbackTest {
             ),
         )
 
-        assertEquals("Split · Cash ₹50 + UPI ₹75", stored.paymentMethodLabel())
+        assertEquals("Split · Cash 50 + UPI 75", stored.paymentMethodLabel())
         assertEquals("Split payment", "split:v99|private-corrupt-data".paymentMethodLabel())
         val rejected = payment(HeldOrderPaymentState.REJECTED, "Network receipt mismatch")
             .copy(method = stored)

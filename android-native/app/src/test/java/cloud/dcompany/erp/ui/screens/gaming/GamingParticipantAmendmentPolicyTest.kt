@@ -33,6 +33,21 @@ class GamingParticipantAmendmentPolicyTest {
     }
 
     @Test
+    fun `stopped clock describes played and booked time without inventing remaining time`() {
+        val active = GameSession(id = "timing", stationId = "station", shiftId = "shift",
+            status = "active", startAt = "2026-09-27T10:00:00Z", timerMinutes = 30)
+        assertEquals("00:10:00 remaining", gamingSessionTimingDetail(active, 20 * 60_000L))
+        assertFalse(gamingSessionHasStopped(active))
+        for (status in listOf("ended", "stopped", "completed")) {
+            val stopped = active.copy(status = status)
+            assertTrue(gamingSessionHasStopped(stopped))
+            assertEquals("Booked 00:30:00", gamingSessionTimingDetail(stopped, 20 * 60_000L))
+            assertEquals("Booked 00:30:00", gamingSessionTimingDetail(stopped, 65 * 60_000L))
+        }
+        assertEquals("Open-ended session", gamingSessionTimingDetail(active.copy(timerMinutes = null), 0))
+    }
+
+    @Test
     fun `remaining trace is bounded without changing booked duration`() {
         assertEquals(1f, requireNotNull(gamingDurationRemainingFraction(3_600_000L, 0L)), 0.001f)
         assertEquals(0.5f, requireNotNull(gamingDurationRemainingFraction(3_600_000L, 1_800_000L)), 0.001f)

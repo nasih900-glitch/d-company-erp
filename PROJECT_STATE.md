@@ -1,6 +1,25 @@
 # D Company ERP — current project state
 
-## Current quality candidate (updated 2026-10-11)
+## Current local candidate (updated 2026-10-30)
+
+The owner approved the corrected local emulator workflows and appearance.
+The coordinated candidate is **v3.1.47 / Android build 55**, documented in
+[`docs/V3_1_47_RELEASE_CANDIDATE.md`](docs/V3_1_47_RELEASE_CANDIDATE.md).
+Room is `58` and Alembic head is `0093`. The transition adds the protected update-policy
+and immutable Gaming Void/served-addon evidence while preserving legacy financial
+history and tablet queues. Android follows the approved transparent liquid-glass
+workspace, one shared selectable 4K workspace background and the original Web logo.
+Login/Splash retain their approved 1672 × 941 artwork. Gaming Void permits a blank
+reason below 30 minutes, requires one at or above 30 minutes and retains served add-ons
+as payable evidence; POS-linked void operations remain Owner-only.
+The deployment controller's global
+Optional/Required control is in the existing Devices & Updates workspace.
+Final release identity/CI, guarded compatibility, signing, signed upgrade and
+download checks, deployment and update offer remain separate gates. This local
+checkpoint is not a live-server or physical-tablet status claim. Read current
+source and release evidence before acting; do not reuse older freeze receipts.
+
+## Historical quality candidate (updated 2026-10-11)
 
 ### Latest completion checkpoint
 

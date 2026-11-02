@@ -28,7 +28,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -83,12 +83,15 @@ import cloud.dcompany.erp.ui.components.LoadingSkeleton
 import cloud.dcompany.erp.ui.components.OperationalStatusBadge
 import cloud.dcompany.erp.ui.components.PickerField
 import cloud.dcompany.erp.ui.components.SearchInput
+import cloud.dcompany.erp.ui.components.workspaceContentCanvas
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.UiTone
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
 
 /**
  * Memberships — greenfield screen. Tier browsing is read-only (create/edit
@@ -111,7 +114,7 @@ private fun MembershipsContent(
 ) {
     val canManage = access.canManageMoney
     Column(
-        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(Spacing.lg),
+        Modifier.fillMaxSize().workspaceContentCanvas().padding(Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
         if (!canManage) {
@@ -324,7 +327,7 @@ private fun CustomerSearchPanel(state: MembershipsUiState, vm: MembershipsViewMo
 private fun CustomerResultRow(customer: CustomerCacheEntity, vm: MembershipsViewModel) {
     Row(
         Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(Radius.shapeSm)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .liquidWorkspaceSurface(Radius.shapeSm)
             .clickable { vm.selectCustomer(customer) }
             .padding(horizontal = 12.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -535,7 +538,8 @@ private fun SelectedCustomerPanel(
                 Spacer(Modifier.height(6.dp))
                 Column(
                     Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                        .background(MaterialTheme.colorScheme.surfaceVariant).padding(8.dp),
+                        .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.UTILITY)
+                        .padding(8.dp),
                 ) {
                     Text(
                         "${history.tierName} · ${history.amountPaidMinor.asRupees()}",
@@ -1621,7 +1625,9 @@ private fun MembershipPaymentTaskCard(
     vm: MembershipsViewModel,
 ) {
     Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeSm).background(MaterialTheme.colorScheme.surfaceVariant).padding(10.dp),
+        Modifier.fillMaxWidth().clip(Radius.shapeSm)
+            .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.UTILITY)
+            .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Text(

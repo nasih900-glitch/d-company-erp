@@ -29,7 +29,7 @@ import {
   loadDraftSnapshot,
   saveDraftIfUnchanged,
 } from '@/lib/draft-storage';
-import { inr } from '@/lib/inr';
+import { inr, currencyFreeLabel } from '@/lib/inr';
 import {
   POS_CART_CLEARED_FEEDBACK,
   POS_PREPARED_BILL_CANCELLED_FEEDBACK,
@@ -3802,11 +3802,11 @@ export default function LivePOSScreen() {
                   className="btn btn-ghost !justify-between !py-1.5 text-xs disabled:opacity-40"
                   disabled={checkoutAdjustmentBusy || localWorkNeedsReconciliation || paying || !r.affordable || !loyaltyProgram || loyaltyProgram.revision !== r.program_revision}
                   onClick={() => reviewReward(r)}
-                  title={r.description}
+                  title={currencyFreeLabel(r.description)}
                 >
                   <span className="text-left">
-                    <span className="block font-semibold">{r.name}</span>
-                    <span className="block text-fg-muted">{r.description}</span>
+                    <span className="block font-semibold">{currencyFreeLabel(r.name)}</span>
+                    <span className="block text-fg-muted">{currencyFreeLabel(r.description)}</span>
                   </span>
                   <span className="shrink-0 font-mono font-bold text-accent-gold">
                     {redeemingReward === r.key
@@ -4000,7 +4000,7 @@ export default function LivePOSScreen() {
               min="0"
               step="1"
               inputMode="decimal"
-              placeholder="₹ off"
+              placeholder=" off"
               value={discountInput}
               onChange={(e) => setDiscountInput(e.target.value)}
               disabled={checkoutAdjustmentBusy || localWorkNeedsReconciliation || paying}
@@ -4208,7 +4208,7 @@ export default function LivePOSScreen() {
                 min="0"
                 step="1"
                 inputMode="decimal"
-                placeholder="₹ off"
+                placeholder=" off"
                 value={discountInput}
                 onChange={(e) => setDiscountInput(e.target.value)}
                 disabled={checkoutAdjustmentBusy || localWorkNeedsReconciliation || paying}
@@ -4380,7 +4380,7 @@ export default function LivePOSScreen() {
                         min="0"
                         step="1"
                         inputMode="decimal"
-                        placeholder="₹ off"
+                        placeholder=" off"
                         value={discountInput}
                         onChange={(e) => setDiscountInput(e.target.value)}
                         disabled={checkoutAdjustmentBusy || paying}
@@ -4411,7 +4411,7 @@ export default function LivePOSScreen() {
                         min="0"
                         step="1"
                         inputMode="decimal"
-                        placeholder="₹ tip"
+                        placeholder=" tip"
                         value={tipInput}
                         onChange={(e) => setTipInput(e.target.value)}
                         disabled={paying || checkoutAdjustmentBusy}
@@ -4494,7 +4494,7 @@ export default function LivePOSScreen() {
                               min="0"
                               step="0.01"
                               inputMode="decimal"
-                              placeholder="₹ amount"
+                              placeholder=" amount"
                               value={amountInput}
                               disabled={paying || checkoutAdjustmentBusy}
                               onChange={(event) => {
@@ -4568,7 +4568,7 @@ export default function LivePOSScreen() {
                                 min="0"
                                 step="0.01"
                                 inputMode="decimal"
-                                placeholder="₹ cash received"
+                                placeholder=" cash received"
                                 value={splitCashTenderedInput}
                                 disabled={paying || checkoutAdjustmentBusy}
                                 onChange={(event) => {
@@ -4707,7 +4707,7 @@ export default function LivePOSScreen() {
                         min="0"
                         step="0.01"
                         inputMode="decimal"
-                        placeholder="₹ received from customer"
+                        placeholder=" received from customer"
                         value={cashTenderedInput}
                         onChange={(e) => setCashTenderedInput(e.target.value)}
                         disabled={paying || checkoutAdjustmentBusy}
@@ -4895,8 +4895,8 @@ export default function LivePOSScreen() {
           title="Review points reward"
           message={(
             <div className="space-y-2 text-sm">
-              <p className="font-semibold">{rewardReview.reward.name}</p>
-              <p className="text-fg-muted">{rewardReview.reward.description}</p>
+              <p className="font-semibold">{currencyFreeLabel(rewardReview.reward.name)}</p>
+              <p className="text-fg-muted">{currencyFreeLabel(rewardReview.reward.description)}</p>
               <div className="rounded-lg border border-bg-border p-3 font-mono">
                 {rewardReview.reward.points_cost.toLocaleString('en-IN')} points → {inr(rewardReview.reward.value_minor)} bill credit
               </div>

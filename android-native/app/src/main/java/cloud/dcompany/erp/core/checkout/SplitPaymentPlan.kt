@@ -128,8 +128,5 @@ object SplitPaymentPolicy {
     }
 }
 
-private fun Long.asCompactRupees(): String {
-    val whole = this / 100L
-    val fraction = kotlin.math.abs(this % 100L)
-    return if (fraction == 0L) "₹$whole" else "₹$whole.${fraction.toString().padStart(2, '0')}"
-}
+private fun Long.asCompactRupees(): String =
+    cloud.dcompany.erp.core.money.minorToRupeesInput(this)

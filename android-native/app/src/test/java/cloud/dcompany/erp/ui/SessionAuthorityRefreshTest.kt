@@ -6,6 +6,7 @@ import cloud.dcompany.erp.core.sync.RealtimeEvent
 import java.util.Base64
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -110,6 +111,73 @@ class SessionAuthorityRefreshTest {
         withTimeout(1_000) { secondCompleted.await() }
 
         assertEquals(2, calls.get())
+        coordinator.cancel()
+    }
+
+    @Test
+    fun `new auth lineage cancels in flight and queued refresh but worker accepts later event`() = runBlocking {
+        val calls = AtomicInteger()
+        val firstStarted = CompletableDeferred<Unit>()
+        val firstCancelled = CompletableDeferred<Unit>()
+        val secondCompleted = CompletableDeferred<Unit>()
+        val coordinator = SessionAuthorityRefreshCoordinator(
+            scope = this,
+            debounceMillis = 0,
+        ) {
+            when (calls.incrementAndGet()) {
+                1 -> {
+                    firstStarted.complete(Unit)
+                    try {
+                        CompletableDeferred<Unit>().await()
+                    } catch (cancelled: CancellationException) {
+                        firstCancelled.complete(Unit)
+                        throw cancelled
+                    }
+                }
+                2 -> secondCompleted.complete(Unit)
+            }
+        }
+
+        coordinator.request()
+        withTimeout(1_000) { firstStarted.await() }
+        coordinator.request()
+        coordinator.cancelPending()
+        withTimeout(1_000) { firstCancelled.await() }
+        delay(25)
+        assertEquals("Queued old-lineage refresh must be drained", 1, calls.get())
+
+        coordinator.request()
+        withTimeout(1_000) { secondCompleted.await() }
+        assertEquals(2, calls.get())
+        coordinator.cancel()
+    }
+
+    @Test
+    fun `event arriving during explicit login is fenced and replayed only after signed in`() = runBlocking {
+        val calls = AtomicInteger()
+        val completed = CompletableDeferred<Unit>()
+        val coordinator = SessionAuthorityRefreshCoordinator(
+            scope = this,
+            debounceMillis = 0,
+        ) {
+            calls.incrementAndGet()
+            completed.complete(Unit)
+        }
+
+        coordinator.pauseForLogin()
+        coordinator.request()
+        delay(50)
+        assertEquals("No authority refresh may start inside login lineage mutation", 0, calls.get())
+
+        coordinator.resumeAfterLogin(refreshDeferred = false)
+        delay(25)
+        assertEquals("Failed login must discard the deferred event", 0, calls.get())
+
+        coordinator.pauseForLogin()
+        coordinator.request()
+        coordinator.resumeAfterLogin(refreshDeferred = true)
+        withTimeout(1_000) { completed.await() }
+        assertEquals(1, calls.get())
         coordinator.cancel()
     }
 

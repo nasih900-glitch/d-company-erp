@@ -222,13 +222,13 @@ function AssetForm({
     event.preventDefault();
     const purchaseMinor = rupeesToMinor(form.purchase_rupees);
     if (purchaseMinor === null) {
-      setErr('Enter a purchase cost greater than ₹0 with no more than two decimal places.');
+      setErr('Enter a purchase cost greater than 0 with no more than two decimal places.');
       return;
     }
     const salvageTrimmed = form.salvage_rupees.trim() || '0';
     const salvageMinor = salvageTrimmed === '0' ? 0 : rupeesToMinor(salvageTrimmed);
     if (salvageMinor === null) {
-      setErr('Salvage value must be ₹0 or a valid amount with no more than two decimal places.');
+      setErr('Salvage value must be 0 or a valid amount with no more than two decimal places.');
       return;
     }
     if (salvageMinor > purchaseMinor) {
@@ -285,7 +285,7 @@ function AssetForm({
           </Field>
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Purchase cost (₹)">
+          <Field label="Purchase cost">
             <input type="number" min="0.01" step="0.01" required inputMode="decimal"
               className="input font-mono text-right" value={form.purchase_rupees}
               onChange={(e) => setForm({ ...form, purchase_rupees: e.target.value })}/>
@@ -303,7 +303,7 @@ function AssetForm({
               onChange={(e) => setForm({ ...form, useful_life_months: e.target.value })}/>
             <span className="mt-1 block text-[10px] text-fg-muted">Default 60 months (5 years)</span>
           </Field>
-          <Field label="Salvage value (₹)">
+          <Field label="Salvage value">
             <input type="number" min="0" step="0.01" inputMode="decimal"
               className="input font-mono text-right" value={form.salvage_rupees}
               onChange={(e) => setForm({ ...form, salvage_rupees: e.target.value })}/>

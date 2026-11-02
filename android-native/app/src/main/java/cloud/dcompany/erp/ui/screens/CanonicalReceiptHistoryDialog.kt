@@ -65,6 +65,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -80,9 +82,12 @@ import cloud.dcompany.erp.core.net.CanonicalReceiptRefund
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.ActionIntent
 import cloud.dcompany.erp.ui.components.ErpButton
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.LocalWorkspaceGlassScene
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
 import java.math.BigDecimal
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -125,13 +130,14 @@ internal fun CanonicalReceiptHistoryDialog(
             ?: displayedReceipts.firstOrNull { it.orderId == id }
             ?: receipts.firstOrNull { it.orderId == id }
     }
+    val hasWorkspaceGlassScene = LocalWorkspaceGlassScene.current != null
 
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         Surface(
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            color = if (hasWorkspaceGlassScene) Color.Transparent else MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = Radius.shapeXl,
             tonalElevation = 0.dp,
             modifier = Modifier
@@ -139,7 +145,14 @@ internal fun CanonicalReceiptHistoryDialog(
                 .fillMaxHeight(0.9f)
                 .widthIn(max = 980.dp)
                 .heightIn(min = 240.dp, max = 760.dp).imePadding()
-                .border(1.dp, MaterialTheme.colorScheme.outline, Radius.shapeXl),
+                .clip(Radius.shapeXl)
+                .then(
+                    if (hasWorkspaceGlassScene) Modifier.liquidWorkspaceSurface(
+                        Radius.shapeXl,
+                        WorkspaceGlassRole.MODAL,
+                        allowWindowProjection = true,
+                    ) else Modifier.border(1.dp, MaterialTheme.colorScheme.outline, Radius.shapeXl),
+                ),
         ) {
             if (selected == null) {
                 ReceiptHistoryList(

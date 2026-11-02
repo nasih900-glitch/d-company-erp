@@ -45,7 +45,7 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -91,9 +91,12 @@ import cloud.dcompany.erp.ui.components.PremiumTabBar
 import cloud.dcompany.erp.ui.components.TabOption
 import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
+import cloud.dcompany.erp.ui.components.workspaceContentCanvas
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
@@ -153,7 +156,7 @@ fun KitchenScreen(
         }
     }
 
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    Column(Modifier.fillMaxSize().workspaceContentCanvas()) {
         KitchenHeader(
             state,
             wallClock = wallClock,
@@ -273,8 +276,8 @@ private fun KitchenAlertStack(
 
     Column(
         Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.xs)
-            .clip(Radius.shapeLg).background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg)
+            .clip(Radius.shapeLg)
+            .liquidWorkspaceSurface(Radius.shapeLg, WorkspaceGlassRole.PANEL)
             .heightIn(max = 320.dp)
             .verticalScroll(rememberScrollState())
             .padding(Spacing.xs),
@@ -470,8 +473,7 @@ private fun KitchenHistoryLoadingBoard(modifier: Modifier = Modifier) {
         modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md)
             .fillMaxWidth()
             .clip(Radius.shapeLg)
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg),
+            .liquidWorkspaceSurface(Radius.shapeLg, WorkspaceGlassRole.PANEL),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
@@ -526,7 +528,8 @@ private fun KitchenHeader(
     onExit: () -> Unit,
 ) {
     BoxWithConstraints(
-        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)
+        Modifier.fillMaxWidth().clip(Radius.shapeMd)
+            .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.CONTROL)
             .padding(horizontal = Spacing.lg, vertical = Spacing.md),
     ) {
         val wide = maxWidth >= 760.dp
@@ -788,7 +791,7 @@ private fun KitchenAdvanceRecoveryDialog(
                             Modifier
                                 .fillMaxWidth()
                                 .clip(Radius.shapeMd)
-                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.UTILITY)
                                 .padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
@@ -842,7 +845,7 @@ private fun KitchenCancellationRecoveryDialog(
                 items(rows, key = { it.localId }) { row ->
                     Column(
                         Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                            .background(MaterialTheme.colorScheme.surfaceVariant).padding(12.dp),
+                            .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.UTILITY).padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         Text(
@@ -878,8 +881,7 @@ private fun KitchenEmptyBoard(
         modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md)
             .fillMaxWidth()
             .clip(Radius.shapeLg)
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg),
+            .liquidWorkspaceSurface(Radius.shapeLg, WorkspaceGlassRole.PANEL),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
@@ -912,8 +914,7 @@ private fun KitchenBoardShell(
         modifier.padding(horizontal = Spacing.lg, vertical = Spacing.md)
             .fillMaxWidth()
             .clip(Radius.shapeLg)
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg),
+            .liquidWorkspaceSurface(Radius.shapeLg, WorkspaceGlassRole.PANEL),
     ) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.md),
@@ -1059,8 +1060,7 @@ private fun Board(
                     item(key = "lane:${section.title}") {
                         Row(
                             Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                                .background(MaterialTheme.colorScheme.surface)
-                                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
+                                .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.UTILITY)
                                 .padding(horizontal = Spacing.md, vertical = Spacing.sm),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
@@ -1080,8 +1080,8 @@ private fun Board(
                         item(key = "empty:${section.title}") {
                             Box(
                                 Modifier.fillMaxWidth().heightIn(min = 64.dp)
-                                    .clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surface)
-                                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd),
+                                    .clip(Radius.shapeMd)
+                                    .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.UTILITY),
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Text(
@@ -1159,8 +1159,8 @@ private fun Lane(
     modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier.fillMaxSize().clip(Radius.shapeLg).background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg).padding(Spacing.md),
+        modifier.fillMaxSize().clip(Radius.shapeLg)
+            .liquidWorkspaceSurface(Radius.shapeLg, WorkspaceGlassRole.PANEL).padding(Spacing.md),
     ) {
         Row(
             Modifier.fillMaxWidth().padding(bottom = Spacing.sm),

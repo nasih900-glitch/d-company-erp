@@ -21,6 +21,24 @@ FULL_ACCESS_ROLES = {PROTECTED_OWNER_ROLE, CO_OWNER_ROLE}
 OWNER_ROLE_CODES = FULL_ACCESS_ROLES | {PUBLIC_OWNER_ROLE}
 
 
+def role_name(code: str) -> str:
+    if code == "gaming_cashier":
+        return "Gaming & POS staff"
+    return code.title().replace("_", " ")
+
+
+def has_owner_role(roles: Iterable[str]) -> bool:
+    """Whether the public tenant identity carries any owner role.
+
+    TenantContext publishes both internal owner tiers as ``owner``.  Accepting
+    the complete set here also keeps this helper safe for internal callers
+    that still hold the unredacted role codes.  This is deliberately separate
+    from protected/audit access: routine, accountable owner operations must
+    not require the super-owner recovery privilege.
+    """
+    return bool(OWNER_ROLE_CODES & set(roles))
+
+
 def has_protected_owner_access(roles: Iterable[str]) -> bool:
     return PROTECTED_OWNER_ROLE in set(roles)
 

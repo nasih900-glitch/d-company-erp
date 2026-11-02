@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.screens.reservations
 
+import cloud.dcompany.erp.ui.components.LiquidDatePickerDialog as DatePickerDialog
 import cloud.dcompany.erp.ui.theme.operationalDanger
 import cloud.dcompany.erp.ui.theme.operationalDangerContainer
 import cloud.dcompany.erp.ui.theme.operationalGood
@@ -12,8 +13,6 @@ import cloud.dcompany.erp.ui.theme.operationalWarningContainer
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import android.content.Context
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -76,12 +75,14 @@ import cloud.dcompany.erp.ui.components.Field
 import cloud.dcompany.erp.ui.components.FormDialog
 import cloud.dcompany.erp.ui.components.OperationalBanner
 import cloud.dcompany.erp.ui.components.OperationalStatusBadge
+import cloud.dcompany.erp.ui.components.workspaceContentCanvas
 import cloud.dcompany.erp.ui.components.PickerField
 import cloud.dcompany.erp.ui.components.PremiumTabBar
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.TabOption
 import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
@@ -104,7 +105,7 @@ private fun ReservationsContent(
     vm: ReservationsViewModel,
 ) {
     Column(
-        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(Spacing.lg),
+        Modifier.fillMaxSize().workspaceContentCanvas().padding(Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
         ReservationControls(state, access, vm)
@@ -497,8 +498,8 @@ private fun ReservationRowSurface(
     actions: @Composable () -> Unit,
 ) {
     Column(
-        Modifier.fillMaxWidth().clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surfaceVariant)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd).padding(Spacing.md),
+        Modifier.fillMaxWidth().clip(Radius.shapeMd).liquidWorkspaceSurface(Radius.shapeMd)
+            .padding(Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm),
     ) {
         Row(
@@ -759,7 +760,7 @@ private fun NewGamingBookingDialog(state: ReservationsUiState, vm: ReservationsV
             onContact = { contact = it },
         )
         DateTimeFields(startsAt, endsAt, { startsAt = it }, { endsAt = it })
-        DecimalField(depositText, { depositText = it }, "Deposit (₹)")
+        DecimalField(depositText, { depositText = it }, "Deposit")
         OnlineOnlyFormNote()
     }
 }

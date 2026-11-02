@@ -1294,7 +1294,7 @@ function RefundRequestModal({
           )}
 
           <label className="block text-sm">
-            <span className="mb-1 block text-fg-muted">Refund amount (₹)</span>
+            <span className="mb-1 block text-fg-muted">Refund amount</span>
             <input
               className="input w-full font-mono text-lg"
               inputMode="decimal"
@@ -1304,7 +1304,7 @@ function RefundRequestModal({
             />
             {!validAmount && (
               <span className="mt-1 block text-xs text-accent-bad">
-                Enter an amount from ₹0.01 to {inr(Number(order.refundable_minor ?? 0))}.
+                Enter an amount from 0.01 to {inr(Number(order.refundable_minor ?? 0))}.
               </span>
             )}
           </label>

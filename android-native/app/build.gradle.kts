@@ -84,8 +84,8 @@ android {
         // Build 52 is immutable withheld predecessor history. This release keeps
         // Room 56 under a direct version code so CI and upgrade checks cannot
         // produce different identities from a local Gradle property.
-        versionCode = 54
-        versionName = "3.1.46"
+        versionCode = 59
+        versionName = "3.1.52"
         buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "false")
         buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("play"))
 
@@ -148,6 +148,22 @@ android {
             // Reuse the already-supported managed-client wire value. The
             // isolated application id and synthetic HTTPS endpoint distinguish
             // this QA build without weakening the production API contract.
+            buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("managed"))
+        }
+        // Visual QA only. This package uses an inert Application and a
+        // permission-free manifest, and cannot start the production activity.
+        create("executiveReview") {
+            initWith(getByName("debug"))
+            matchingFallbacks += "debug"
+            signingConfig = signingConfigs.getByName("debug")
+            applicationIdSuffix = ".executivereview"
+            versionNameSuffix = "-executive-review"
+            buildConfigField(
+                "String",
+                "API_BASE_URL",
+                buildConfigString("https://invalid.dcompany.test/api/v1/"),
+            )
+            buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "false")
             buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("managed"))
         }
     }

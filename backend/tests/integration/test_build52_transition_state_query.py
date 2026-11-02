@@ -137,7 +137,7 @@ def test_transition_query_preserves_every_old_table_through_upgrade_and_restore(
         )
         assert archived.returncode == 0, archived.stderr
 
-        migration = _run_alembic(url, "upgrade", "head")
+        migration = _run_alembic(url, "upgrade", "0091")
         assert migration.returncode == 0, migration.stderr
         after = _snapshot(url, clients)
         (tmp_path / "after0091.json").write_text(json.dumps(after, sort_keys=True))

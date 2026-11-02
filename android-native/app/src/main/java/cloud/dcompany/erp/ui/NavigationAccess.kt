@@ -3,6 +3,7 @@ package cloud.dcompany.erp.ui
 import cloud.dcompany.erp.core.auth.EffectivePermissions
 import cloud.dcompany.erp.core.auth.ErpPermission
 import cloud.dcompany.erp.core.net.MeResponse
+import cloud.dcompany.erp.ui.screens.staff.time.staffTimeAccess
 
 /** Membership money writes require both server permission and protected-owner identity. */
 fun canManageMemberships(profile: MeResponse): Boolean =
@@ -33,7 +34,10 @@ fun allowedDestinations(
     }
     return featureProfile.navigationOrder.filter { destination ->
         if (!featureProfile.includes(destination)) return@filter false
-        val audienceAllowed = (!featureProfile.requiresOwner(destination) || ownerWorkspace) &&
+        // Attendance opens only the separate self-time pane, never identity administration.
+        val ownTime = destination == Destination.Staff &&
+            (permissions.has(ErpPermission.StaffAttendanceWrite) || staffTimeAccess(profile).canManage)
+        val audienceAllowed = (!featureProfile.requiresOwner(destination) || ownerWorkspace || ownTime) &&
             (!featureProfile.requiresManagement(destination) || managementWorkspace)
         if (!audienceAllowed) return@filter false
         when (destination) {
@@ -56,11 +60,11 @@ fun allowedDestinations(
                 ErpPermission.StaffRead,
                 ErpPermission.StaffWrite,
                 ErpPermission.StaffAttendanceWrite,
+                ErpPermission.StaffPayrollWrite,
             )
             Destination.Inventory -> permissions.has(ErpPermission.InventoryRead)
-            Destination.Reports,
-            Destination.Analytics,
-            -> permissions.has(ErpPermission.AnalyticsRead)
+            Destination.Reports -> permissions.reportsAccess().canReadAny
+            Destination.Analytics -> permissions.has(ErpPermission.AnalyticsRead)
             Destination.Finance -> permissions.has(ErpPermission.FinanceRead)
             Destination.Events -> permissions.has(ErpPermission.GamingRead)
             Destination.Memberships -> permissions.has(ErpPermission.PosRead)

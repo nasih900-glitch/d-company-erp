@@ -13,17 +13,22 @@ import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 from urllib.parse import urljoin, urlsplit
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import httpx
-from sqlalchemy import and_, exists, or_, select
+from sqlalchemy import String, and_, exists, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
 from app.models.google_sheets_delivery import GoogleSheetsDelivery
+from app.models.staff_work import StaffWorkPolicy
 from app.models.tenant import Company
+
+if TYPE_CHECKING:
+    from sqlalchemy.sql.elements import ColumnElement
 
 MIRROR_SCHEMA = "erp-mirror.v1"
 MIRROR_SCHEMA_VERSION = 1
@@ -32,6 +37,10 @@ CONNECTION_TEST_SOURCE_TYPE = "mirror_configuration"
 LEGACY_TRANSACTIONS_EXPORT_MODE = "legacy_transactions"
 DAILY_COLLECTIONS_EXPORT_MODE = "daily_collections"
 DAILY_COLLECTIONS_CAPABILITY = "daily_collections.v1"
+STAFF_HOURS_CAPABILITY = "staff_hours.v1"
+STAFF_HOURS_EVENT_TYPE = "staff_hours.fact"
+STAFF_HOURS_CONNECTION_EVENT_TYPE = "staff_hours.connection_test"
+STAFF_HOURS_CONNECTION_SOURCE_TYPE = "staff_hours_configuration"
 # Google Sheets cells are limited to 50,000 characters. A byte ceiling below
 # that limit keeps the canonical JSON appendable even when it is all ASCII.
 MAX_CANONICAL_PAYLOAD_BYTES = 45 * 1024
@@ -66,9 +75,7 @@ class MirrorDestination:
 @dataclass(frozen=True, slots=True)
 class DispatcherConfig:
     allowed_hosts: frozenset[str] = field(
-        default_factory=lambda: frozenset(
-            {"script.google.com", "script.googleusercontent.com"}
-        )
+        default_factory=lambda: frozenset({"script.google.com", "script.googleusercontent.com"})
     )
     # Dispatch is deliberately sequential, so the lease covers the worst-case
     # redirect/timeout budget for every row in one batch.
@@ -111,9 +118,7 @@ class DeliveryOutcome:
         return cls(delivered=True, retryable=False)
 
     @classmethod
-    def failure(
-        cls, *, retryable: bool, error_code: str, error_detail: str
-    ) -> DeliveryOutcome:
+    def failure(cls, *, retryable: bool, error_code: str, error_detail: str) -> DeliveryOutcome:
         return cls(
             delivered=False,
             retryable=retryable,
@@ -122,9 +127,7 @@ class DeliveryOutcome:
         )
 
 
-DestinationResolver = Callable[
-    [AsyncSession, UUID, UUID], Awaitable[MirrorDestination | None]
-]
+DestinationResolver = Callable[[AsyncSession, UUID, UUID], Awaitable[MirrorDestination | None]]
 
 
 def _bounded_text(value: str, limit: int) -> str:
@@ -250,9 +253,7 @@ async def enqueue_google_sheets_event(
     source_id = _required_text("source_id", source_id, 200)
     source_revision = _required_text("source_revision", source_revision, 100)
     occurred_at = _aware_utc("occurred_at", occurred_at)
-    available_at = _aware_utc(
-        "available_at", available_at or datetime.now(UTC)
-    )
+    available_at = _aware_utc("available_at", available_at or datetime.now(UTC))
     payload_json = canonical_json(dict(payload))
     canonical_payload = json.loads(payload_json)
     if not isinstance(canonical_payload, dict):  # defensive; Mapping should guarantee this
@@ -288,9 +289,7 @@ async def enqueue_google_sheets_event(
             status="pending",
             attempt_count=0,
         )
-        .on_conflict_do_nothing(
-            constraint="uq_google_sheets_deliveries_company_event_key"
-        )
+        .on_conflict_do_nothing(constraint="uq_google_sheets_deliveries_company_event_key")
         .returning(GoogleSheetsDelivery.id)
     )
     inserted_id = (await session.execute(statement)).scalar_one_or_none()
@@ -396,7 +395,7 @@ async def enqueue_google_sheets_event_if_enabled(
     )
 
 
-def _delivery_dispatchable_clause():
+def _delivery_dispatchable_clause() -> ColumnElement[bool]:
     """SQL predicate that holds active business rows until verification."""
 
     current_company = aliased(Company)
@@ -412,8 +411,7 @@ def _delivery_dispatchable_clause():
             current_company.id == GoogleSheetsDelivery.company_id,
             current_company.deleted_at.is_(None),
             current_company.google_sheets_mirror_enabled.is_(True),
-            current_company.google_sheets_configuration_id
-            == GoogleSheetsDelivery.configuration_id,
+            current_company.google_sheets_configuration_id == GoogleSheetsDelivery.configuration_id,
             current_company.google_sheets_webhook_url.is_not(None),
             current_company.google_sheets_signing_secret_ciphertext.is_not(None),
             current_company.google_sheets_configured_at.is_not(None),
@@ -426,16 +424,14 @@ def _delivery_dispatchable_clause():
             verification,
             and_(
                 verification.company_id == current_company.id,
-                verification.configuration_id
-                == current_company.google_sheets_configuration_id,
+                verification.configuration_id == current_company.google_sheets_configuration_id,
             ),
         )
         .where(
             current_company.id == GoogleSheetsDelivery.company_id,
             current_company.deleted_at.is_(None),
             current_company.google_sheets_mirror_enabled.is_(True),
-            current_company.google_sheets_configuration_id
-            == GoogleSheetsDelivery.configuration_id,
+            current_company.google_sheets_configuration_id == GoogleSheetsDelivery.configuration_id,
             current_company.google_sheets_webhook_url.is_not(None),
             current_company.google_sheets_signing_secret_ciphertext.is_not(None),
             current_company.google_sheets_configured_at.is_not(None),
@@ -446,10 +442,58 @@ def _delivery_dispatchable_clause():
             verification.delivered_at >= current_company.google_sheets_configured_at,
         )
     )
+    staff_verification = aliased(GoogleSheetsDelivery)
+    is_staff = or_(
+        GoogleSheetsDelivery.event_type.startswith("staff_hours.", autoescape=True),
+        GoogleSheetsDelivery.source_type.startswith("staff_hours.", autoescape=True),
+        GoogleSheetsDelivery.source_type == STAFF_HOURS_CONNECTION_SOURCE_TYPE,
+    )
+    is_staff_connection_test = and_(
+        GoogleSheetsDelivery.event_type == STAFF_HOURS_CONNECTION_EVENT_TYPE,
+        GoogleSheetsDelivery.source_type == STAFF_HOURS_CONNECTION_SOURCE_TYPE,
+    )
+    # Staff opt-in is independent. Neither capability receipt grants the other.
+    is_staff_verified = exists(
+        select(1)
+        .select_from(current_company)
+        .join(
+            staff_verification,
+            and_(
+                staff_verification.company_id == current_company.id,
+                staff_verification.configuration_id
+                == current_company.google_sheets_configuration_id,
+            ),
+        )
+        .where(
+            current_company.id == GoogleSheetsDelivery.company_id,
+            current_company.google_sheets_configuration_id == GoogleSheetsDelivery.configuration_id,
+            staff_verification.event_type == STAFF_HOURS_CONNECTION_EVENT_TYPE,
+            staff_verification.source_type == STAFF_HOURS_CONNECTION_SOURCE_TYPE,
+            staff_verification.source_revision
+            == current_company.google_sheets_configuration_id.cast(String),
+            staff_verification.payload["required_capability"].as_string() == STAFF_HOURS_CAPABILITY,
+            staff_verification.payload["scope"]["company_id"].as_string()
+            == current_company.id.cast(String),
+            staff_verification.status == "delivered",
+            staff_verification.occurred_at >= current_company.google_sheets_configured_at,
+            staff_verification.delivered_at >= current_company.google_sheets_configured_at,
+        )
+    )
+    # Capability is company-scoped, but business facts are enrolled-person scoped.
+    # Compare UUID text without casting untrusted JSON into PostgreSQL UUIDs.
+    person_configured = exists(
+        select(StaffWorkPolicy.id).where(
+            StaffWorkPolicy.company_id == GoogleSheetsDelivery.company_id,
+            StaffWorkPolicy.user_id.cast(String)
+            == GoogleSheetsDelivery.payload["staff_id"].as_string(),
+        )
+    )
     return or_(
         is_connection_test,
+        is_staff_connection_test,
         ~is_current_active_configuration,
-        is_current_configuration_verified,
+        and_(~is_staff, is_current_configuration_verified),
+        and_(is_staff, is_staff_verified, person_configured),
     )
 
 
@@ -546,9 +590,9 @@ def build_signed_body(delivery: ClaimedDelivery, *, signing_secret: str) -> byte
             "event_id": str(delivery.event_id),
             "event_key": delivery.event_key,
             "event_type": delivery.event_type,
-            "occurred_at": _aware_utc(
-                "occurred_at", delivery.occurred_at
-            ).isoformat().replace("+00:00", "Z"),
+            "occurred_at": _aware_utc("occurred_at", delivery.occurred_at)
+            .isoformat()
+            .replace("+00:00", "Z"),
             "payload_json": payload_json,
             "payload_sha256": delivery.payload_sha256,
             "schema": MIRROR_SCHEMA,
@@ -558,9 +602,7 @@ def build_signed_body(delivery: ClaimedDelivery, *, signing_secret: str) -> byte
             "source_type": delivery.source_type,
         }
     )
-    signature = hmac.new(
-        secret_bytes, signed_payload.encode("utf-8"), hashlib.sha256
-    ).hexdigest()
+    signature = hmac.new(secret_bytes, signed_payload.encode("utf-8"), hashlib.sha256).hexdigest()
     return canonical_json(
         {
             "schema": MIRROR_SCHEMA,
@@ -681,13 +723,38 @@ def _http_outcome(
             and data.get("payload_sha256") == delivery.payload_sha256
         )
         if valid and (
+            delivery.event_type.startswith("staff_hours.")
+            or delivery.source_type.startswith("staff_hours.")
+            or delivery.source_type == STAFF_HOURS_CONNECTION_SOURCE_TYPE
+        ):
+            scope = {"company_id": str(delivery.company_id)}
+            valid = (
+                set(data)
+                == {"ok", "status", "event_id", "payload_sha256", "schema", "capability", "scope"}
+                and data.get("schema") == MIRROR_SCHEMA
+                and data.get("capability") == STAFF_HOURS_CAPABILITY
+                and data.get("scope") == scope
+            )
+            if delivery.event_type == STAFF_HOURS_CONNECTION_EVENT_TYPE:
+                valid = valid and (
+                    delivery.source_type == STAFF_HOURS_CONNECTION_SOURCE_TYPE
+                    and delivery.payload.get("required_capability") == STAFF_HOURS_CAPABILITY
+                    and delivery.payload.get("scope") == scope
+                )
+            else:
+                kind = delivery.payload.get("record_kind")
+                valid = valid and (
+                    delivery.event_type == STAFF_HOURS_EVENT_TYPE
+                    and kind in {"attendance", "policy"}
+                    and delivery.source_type == f"staff_hours.{kind}"
+                    and delivery.payload.get("payload_schema") == STAFF_HOURS_CAPABILITY
+                )
+        if valid and (
             delivery.event_type != CONNECTION_TEST_EVENT_TYPE
-            or delivery.payload.get("export_mode")
-            != DAILY_COLLECTIONS_EXPORT_MODE
+            or delivery.payload.get("export_mode") != DAILY_COLLECTIONS_EXPORT_MODE
             or (
                 data.get("capability") == DAILY_COLLECTIONS_CAPABILITY
-                and data.get("scope")
-                == delivery.payload.get("summary_scope")
+                and data.get("scope") == delivery.payload.get("summary_scope")
             )
         ):
             return DeliveryOutcome.success()
@@ -945,6 +1012,10 @@ __all__ = [
     "CONNECTION_TEST_EVENT_TYPE",
     "CONNECTION_TEST_SOURCE_TYPE",
     "DAILY_COLLECTIONS_CAPABILITY",
+    "STAFF_HOURS_CAPABILITY",
+    "STAFF_HOURS_EVENT_TYPE",
+    "STAFF_HOURS_CONNECTION_EVENT_TYPE",
+    "STAFF_HOURS_CONNECTION_SOURCE_TYPE",
     "DAILY_COLLECTIONS_EXPORT_MODE",
     "LEGACY_TRANSACTIONS_EXPORT_MODE",
     "MIRROR_SCHEMA",

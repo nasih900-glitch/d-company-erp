@@ -596,7 +596,7 @@ function OrdersTab() {
           <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             <Field label="Invoice issued from (shop date)"><input type="date" className="input w-full" value={receiptFilters.date_from} onChange={event=>setReceiptFilters({...receiptFilters,date_from:event.target.value})}/></Field>
             <Field label="Invoice issued through (shop date)"><input type="date" className="input w-full" value={receiptFilters.date_to} onChange={event=>setReceiptFilters({...receiptFilters,date_to:event.target.value})}/></Field>
-            <Field label="Exact invoice amount (₹)"><input className="input w-full" inputMode="decimal" value={receiptFilters.amount} onChange={event=>setReceiptFilters({...receiptFilters,amount:event.target.value})}/></Field>
+            <Field label="Exact invoice amount"><input className="input w-full" inputMode="decimal" value={receiptFilters.amount} onChange={event=>setReceiptFilters({...receiptFilters,amount:event.target.value})}/></Field>
             <Field label="Effective payment method"><select className="input w-full" value={receiptFilters.method} onChange={event=>setReceiptFilters({...receiptFilters,method:event.target.value})}><option value="">All methods</option>{['cash','upi','card','qr','wallet'].map(method=><option key={method} value={method}>{method.toUpperCase()}</option>)}</select></Field>
             <Field label="Station"><select className="input w-full" value={receiptFilters.station_id} onChange={event=>setReceiptFilters({...receiptFilters,station_id:event.target.value})}><option value="">All stations</option>{stationOptions.map(station=><option key={station.id} value={station.id}>{station.name}</option>)}</select></Field>
             <Field label="Payment recorded by"><select className="input w-full" value={receiptFilters.staff_user_id} onChange={event=>setReceiptFilters({...receiptFilters,staff_user_id:event.target.value})}><option value="">All recorded staff</option>{staffOptions.map(user=><option key={user.id} value={user.id}>{user.name} (current profile)</option>)}</select></Field>
@@ -2309,9 +2309,9 @@ function OpenShiftForm({
         </div>
         <p className="text-sm text-fg-muted">
           The opening float is the cash already in the drawer before you start.
-          Typical Indian café float: ₹500 — ₹1,000.
+          Typical Indian café float: 500 — 1,000.
         </p>
-        <Field label="Opening float (₹)">
+        <Field label="Opening float">
           <input type="number" required min={0} step="0.01" autoFocus
             className="input font-mono text-right text-xl" value={float}
             disabled={busy || Boolean(existingShift)}
@@ -2679,7 +2679,7 @@ export function CloseShiftForm({
           </button>
         </div>
 
-        <Field label="Counted cash (₹) — what's actually in the drawer">
+        <Field label="Counted cash — what's actually in the drawer">
           <input type="number" required min={0} step="0.01" autoFocus={mode === 'total'}
             disabled={busy || mode === 'denomination' || ambiguousCountedMinor !== null}
             className="input font-mono text-right text-xl disabled:opacity-80" value={mode === 'denomination' ? (denomTotalMinor / 100).toFixed(2) : counted}
@@ -2692,7 +2692,7 @@ export function CloseShiftForm({
               const count = parseInt(denomCounts[d] || '0', 10) || 0;
               return (
                 <div key={d} className="flex items-center gap-3 px-3 py-2">
-                  <span className="w-12 shrink-0 font-mono text-sm text-fg-muted">₹{d}</span>
+                  <span className="w-12 shrink-0 font-mono text-sm text-fg-muted">{d}</span>
                   <input type="number" min={0} step="1" inputMode="numeric" autoFocus={i === 0}
                     className="input font-mono text-right flex-1" value={denomCounts[d]}
                     placeholder="0"
@@ -2711,7 +2711,7 @@ export function CloseShiftForm({
           </div>
         )}
 
-        {mode === 'denomination' && <label className="flex items-start gap-2 rounded-lg border border-bg-border p-3 text-sm"><input type="checkbox" className="mt-1" checked={denominationsReviewed} disabled={busy || ambiguousCountedMinor !== null || !denominationInputValid} onChange={event => setDenominationsReviewed(event.target.checked)}/><span>I counted these notes and coins: {inr(denomTotalMinor)}. An empty drawer is a deliberate ₹0 count.</span></label>}
+        {mode === 'denomination' && <label className="flex items-start gap-2 rounded-lg border border-bg-border p-3 text-sm"><input type="checkbox" className="mt-1" checked={denominationsReviewed} disabled={busy || ambiguousCountedMinor !== null || !denominationInputValid} onChange={event => setDenominationsReviewed(event.target.checked)}/><span>I counted these notes and coins: {inr(denomTotalMinor)}. An empty drawer is a deliberate 0 count.</span></label>}
         {err && (
           <ErrorRow text={err}/>
         )}
@@ -2749,9 +2749,9 @@ export function androidShiftRecoveryMissingRequirements(
 ): string[] {
   const missing: string[] = [];
   if (counted.trim() === '') {
-    missing.push('Enter the exact physical cash count (₹0 is valid if the drawer is empty).');
+    missing.push('Enter the exact physical cash count (0 is valid if the drawer is empty).');
   } else if (parseRupeesToMinor(counted) === null) {
-    missing.push('Enter a valid cash count (₹0 or more, up to two decimal places).');
+    missing.push('Enter a valid cash count (0 or more, up to two decimal places).');
   }
   if (normalizedReason.length < 12) {
     missing.push('Add a recovery reason of at least 12 characters.');
@@ -2924,7 +2924,7 @@ export function RecoverAndroidShiftForm({
           </p>
         </div>
 
-        <Field label="Counted cash (₹) — exact physical drawer total">
+        <Field label="Counted cash — exact physical drawer total">
           <input
             type="number"
             required

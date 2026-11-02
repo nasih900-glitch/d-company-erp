@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import secrets
 from datetime import UTC, date, datetime
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -13,8 +13,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select, update
 
 from app.core.db import SessionDep  # noqa: TC001 - FastAPI resolves this at runtime
-from app.core.errors import ConflictError, NotFoundError, ValidationError
+from app.core.errors import ConflictError, ForbiddenError, NotFoundError, ValidationError
 from app.core.permissions import requires
+from app.core.roles import has_owner_role
 from app.core.tenant import TenantContext
 from app.models import Branch, Company
 from app.models.google_sheets_delivery import GoogleSheetsDelivery
@@ -23,14 +24,23 @@ from app.services.integrations.google_sheets_mirror import (
     CONNECTION_TEST_SOURCE_TYPE,
     DAILY_COLLECTIONS_CAPABILITY,
     DAILY_COLLECTIONS_EXPORT_MODE,
+    STAFF_HOURS_CAPABILITY,
+    STAFF_HOURS_CONNECTION_EVENT_TYPE,
+    STAFF_HOURS_CONNECTION_SOURCE_TYPE,
     DestinationValidationError,
     DispatcherConfig,
+    _delivery_dispatchable_clause,
     enqueue_google_sheets_event,
     validate_destination_url,
 )
 from app.services.integrations.google_sheets_secrets import (
     encrypt_google_sheets_signing_secret,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from sqlalchemy.engine import Row
 
 router = APIRouter()
 SettingsManager = Annotated[
@@ -114,7 +124,7 @@ async def _mirror_status(
             )
         ).scalar_one_or_none()
     current_configuration_id = company.google_sheets_configuration_id
-    count_rows = []
+    count_rows: Sequence[Row[tuple[str, int]]] = []
     if current_configuration_id is not None:
         count_rows = (
             await session.execute(
@@ -179,17 +189,14 @@ async def _mirror_status(
         and last_connection_test_at is not None
     )
     held_count = 0
-    if current_configuration_id is not None and not connection_verified:
+    if current_configuration_id is not None:
         held_count = int(
             await session.scalar(
                 select(func.count(GoogleSheetsDelivery.id)).where(
                     GoogleSheetsDelivery.company_id == company.id,
                     GoogleSheetsDelivery.configuration_id == current_configuration_id,
                     GoogleSheetsDelivery.status.in_(("pending", "leased")),
-                    ~(
-                        (GoogleSheetsDelivery.event_type == CONNECTION_TEST_EVENT_TYPE)
-                        & (GoogleSheetsDelivery.source_type == CONNECTION_TEST_SOURCE_TYPE)
-                    ),
+                    ~_delivery_dispatchable_clause(),
                 )
             )
             or 0
@@ -246,6 +253,42 @@ async def _configuration_is_verified(
     return verified_id is not None
 
 
+async def _staff_configuration_is_verified(session: SessionDep, company: Company) -> bool:
+    if (
+        not company.google_sheets_mirror_enabled
+        or company.google_sheets_configuration_id is None
+        or company.google_sheets_configured_at is None
+    ):
+        return False
+    return (
+        await session.scalar(
+            select(GoogleSheetsDelivery.id)
+            .where(
+                GoogleSheetsDelivery.company_id == company.id,
+                GoogleSheetsDelivery.configuration_id == company.google_sheets_configuration_id,
+                GoogleSheetsDelivery.event_type == STAFF_HOURS_CONNECTION_EVENT_TYPE,
+                GoogleSheetsDelivery.source_type == STAFF_HOURS_CONNECTION_SOURCE_TYPE,
+                GoogleSheetsDelivery.source_revision == str(company.google_sheets_configuration_id),
+                GoogleSheetsDelivery.payload["required_capability"].as_string()
+                == STAFF_HOURS_CAPABILITY,
+                GoogleSheetsDelivery.payload["scope"]["company_id"].as_string() == str(company.id),
+                GoogleSheetsDelivery.status == "delivered",
+                GoogleSheetsDelivery.occurred_at >= company.google_sheets_configured_at,
+                GoogleSheetsDelivery.delivered_at >= company.google_sheets_configured_at,
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+async def _any_configuration_is_verified(session: SessionDep, company: Company) -> bool:
+    """Generation lifecycle evidence only; never grant financial capability."""
+    return await _configuration_is_verified(
+        session, company
+    ) or await _staff_configuration_is_verified(session, company)
+
+
 async def _undelivered_business_counts(
     session: SessionDep,
     company: Company,
@@ -263,8 +306,14 @@ async def _undelivered_business_counts(
                 GoogleSheetsDelivery.configuration_id == company.google_sheets_configuration_id,
                 GoogleSheetsDelivery.status.in_(("pending", "leased", "quarantined")),
                 ~(
-                    (GoogleSheetsDelivery.event_type == CONNECTION_TEST_EVENT_TYPE)
-                    & (GoogleSheetsDelivery.source_type == CONNECTION_TEST_SOURCE_TYPE)
+                    (
+                        (GoogleSheetsDelivery.event_type == CONNECTION_TEST_EVENT_TYPE)
+                        & (GoogleSheetsDelivery.source_type == CONNECTION_TEST_SOURCE_TYPE)
+                    )
+                    | (
+                        (GoogleSheetsDelivery.event_type == STAFF_HOURS_CONNECTION_EVENT_TYPE)
+                        & (GoogleSheetsDelivery.source_type == STAFF_HOURS_CONNECTION_SOURCE_TYPE)
+                    )
                 ),
             )
             .group_by(GoogleSheetsDelivery.status)
@@ -373,7 +422,7 @@ async def configure_google_sheets_mirror(
         or company.google_sheets_configuration_id is None
         or summary_settings_changed
     )
-    was_verified = await _configuration_is_verified(session, company)
+    was_verified = await _any_configuration_is_verified(session, company)
     if material_change and (was_verified or summary_settings_changed):
         outstanding = await _undelivered_business_counts(session, company)
         if sum(outstanding.values()):
@@ -537,3 +586,101 @@ async def disconnect_google_sheets_mirror(
 
 
 __all__ = ["router"]
+
+
+StaffHoursSheetsManager = Annotated[TenantContext, Depends(requires("staff.payroll.write"))]
+
+
+def _require_staff_sheets_owner(tenant: TenantContext) -> None:
+    if not has_owner_role(tenant.roles):
+        raise ForbiddenError("Only an Owner can export staff time and draft-pay facts.")
+
+
+@router.get("/google-sheets/staff-hours")
+async def staff_hours_export_status(
+    session: SessionDep, tenant: StaffHoursSheetsManager
+) -> dict[str, object]:
+    """Capability status for people explicitly enrolled through an Owner draft policy."""
+    _require_staff_sheets_owner(tenant)
+    company = await _company_or_404(session, tenant.company_id, lock=False)
+    configured = bool(
+        company.google_sheets_mirror_enabled
+        and company.google_sheets_configuration_id
+        and company.google_sheets_configured_at
+    )
+    rows: Sequence[Row[tuple[str, datetime | None]]] = []
+    if configured:
+        rows = (
+            await session.execute(
+                select(GoogleSheetsDelivery.status, GoogleSheetsDelivery.delivered_at).where(
+                    GoogleSheetsDelivery.company_id == company.id,
+                    GoogleSheetsDelivery.configuration_id == company.google_sheets_configuration_id,
+                    GoogleSheetsDelivery.event_type == STAFF_HOURS_CONNECTION_EVENT_TYPE,
+                    GoogleSheetsDelivery.source_type == STAFF_HOURS_CONNECTION_SOURCE_TYPE,
+                    GoogleSheetsDelivery.source_revision
+                    == str(company.google_sheets_configuration_id),
+                    GoogleSheetsDelivery.payload["required_capability"].as_string()
+                    == STAFF_HOURS_CAPABILITY,
+                    GoogleSheetsDelivery.payload["scope"]["company_id"].as_string()
+                    == str(company.id),
+                    GoogleSheetsDelivery.occurred_at >= company.google_sheets_configured_at,
+                )
+            )
+        ).all()
+    verified = any(
+        status == "delivered"
+        and delivered_at is not None
+        and company.google_sheets_configured_at is not None
+        and delivered_at >= company.google_sheets_configured_at
+        for status, delivered_at in rows
+    )
+    return {
+        "capability": STAFF_HOURS_CAPABILITY,
+        "configured": configured,
+        "requested": bool(rows),
+        "people_scope": "owner_configured_only",
+        "verified": verified,
+    }
+
+
+@router.post("/google-sheets/staff-hours/test")
+async def queue_staff_hours_connection_check(
+    session: SessionDep, tenant: StaffHoursSheetsManager
+) -> dict[str, object]:
+    _require_staff_sheets_owner(tenant)
+    # Company capability never enrolls a person. An Owner-written draft policy
+    # is independently required before any attendance/policy facts can leave ERP.
+    # Lock, but do not change the existing financial destination/generation.
+    company = await _company_or_404(session, tenant.company_id)
+    if not (
+        company.google_sheets_mirror_enabled
+        and company.google_sheets_configuration_id
+        and company.google_sheets_configured_at
+    ):
+        raise ValidationError("Configure the existing Google Sheets mirror first.")
+    delivery = await enqueue_google_sheets_event(
+        session,
+        company_id=company.id,
+        configuration_id=company.google_sheets_configuration_id,
+        event_type=STAFF_HOURS_CONNECTION_EVENT_TYPE,
+        source_type=STAFF_HOURS_CONNECTION_SOURCE_TYPE,
+        source_id=str(uuid4()),
+        source_revision=str(company.google_sheets_configuration_id),
+        occurred_at=datetime.now(UTC),
+        payload={
+            "required_capability": STAFF_HOURS_CAPABILITY,
+            "scope": {"company_id": str(company.id)},
+            "status": "test",
+        },
+    )
+    return {
+        "event_id": str(delivery.event_id),
+        "status": "pending",
+        "capability": STAFF_HOURS_CAPABILITY,
+        "scope": {"company_id": str(company.id)},
+        "people_scope": "owner_configured_only",
+        "message": (
+            "Check queued for Owner-configured people only; "
+            "pay remains draft and financial export settings are unchanged."
+        ),
+    }

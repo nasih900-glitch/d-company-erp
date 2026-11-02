@@ -30,9 +30,9 @@ import androidx.core.view.WindowCompat
 /**
  * D Company executive palette.
  *
- * The interface uses the same monochrome foundation as the Web ERP. The
- * original gold company mark remains the brand accent; semantic colours are
- * reserved for operational state and always accompany text or an icon.
+ * The Executive Dark roles are shared by every native workspace. Semantic
+ * colours accompany operational labels or icons; the original company mark is
+ * unchanged.
  */
 @Immutable
 data class BrandPalette(
@@ -42,7 +42,7 @@ data class BrandPalette(
     val SurfaceRaised: Color,
     val SurfaceHover: Color,
     val SurfaceOverlay: Color,
-    /** Legacy neutral-primary name; the actual brand gold has its own role. */
+    /** Primary action/text accent; BrandAccent retains the original logo gold. */
     val Gold: Color,
     val BrandAccent: Color,
     val GoldBright: Color,
@@ -66,47 +66,50 @@ data class BrandPalette(
 )
 
 internal val NightPalette = BrandPalette(
-    Background = Color(0xFF050505), BackgroundSecondary = Color(0xFF0B0B0B),
-    Surface = Color(0xFF101010), SurfaceRaised = Color(0xFF191919),
-    SurfaceHover = Color(0xFF242424), SurfaceOverlay = Color(0xFF303030),
-    Gold = Color(0xFFF5F5F1), BrandAccent = Color(0xFFC6A15B),
-    GoldBright = Color(0xFFDDDDD7), GoldMuted = Color(0xFFAAAAA2),
-    Foreground = Color(0xFFF5F5F5), ForegroundMuted = Color(0xFFB0B0A8),
-    ForegroundFaint = Color(0xFF878780), Disabled = Color(0xFF6F6F69),
-    Good = Color(0xFF52C37E), GoodMuted = Color(0xFF153722),
-    Warning = Color(0xFFDDDDD7), WarningMuted = Color(0xFF191919),
-    Danger = Color(0xFFF4686E), DangerMuted = Color(0xFF471F25),
-    Information = Color(0xFFAAAAA2), InformationMuted = Color(0xFF191919),
-    Border = Color(0xFF303030), BorderSubtle = Color(0xFF303030),
-    ControlBorder = Color(0xFF74746E), FocusRing = Color(0xFFF5F5F1),
+    Background = Color(0xFF080E17), BackgroundSecondary = Color(0xFF0B1421),
+    Surface = Color(0xFF0F1A29), SurfaceRaised = Color(0xFF142235),
+    SurfaceHover = Color(0xFF19283A), SurfaceOverlay = Color(0xFF1D2D41),
+    Gold = Color(0xFFEBC577), BrandAccent = Color(0xFFC6A15B),
+    GoldBright = Color(0xFFF4D895), GoldMuted = Color(0xFFC9AA68),
+    Foreground = Color(0xFFF3F5F7), ForegroundMuted = Color(0xFFAAB5C5),
+    // #718096 is decorative-only: it is 3.99:1 on the raised surface.
+    ForegroundFaint = Color(0xFF96A3B5), Disabled = Color(0xFF8E9AAC),
+    Good = Color(0xFF42C49A), GoodMuted = Color(0xFF12382F),
+    Warning = Color(0xFFE7B95B), WarningMuted = Color(0xFF3B301B),
+    Danger = Color(0xFFE26970), DangerMuted = Color(0xFF3B1D24),
+    Information = Color(0xFF5AA7FF), InformationMuted = Color(0xFF142F4B),
+    Border = Color(0xFF273344), BorderSubtle = Color(0xFF273344),
+    ControlBorder = Color(0xFF708199), FocusRing = Color(0xFFEBC577),
 )
 
+// Build 45 had a dark palette only. The retained Day option uses the same brass
+// identity with darker text/control accents so small labels remain readable.
 internal val DayPalette = BrandPalette(
-    Background = Color(0xFFFAFAFA), BackgroundSecondary = Color(0xFFFFFFFF),
+    Background = Color(0xFFF7F7F7), BackgroundSecondary = Color(0xFFFFFFFF),
     Surface = Color(0xFFFFFFFF), SurfaceRaised = Color(0xFFF0F0F0),
     SurfaceHover = Color(0xFFE8E8E8), SurfaceOverlay = Color(0xFFFFFFFF),
-    Gold = Color(0xFF161615), BrandAccent = Color(0xFFC6A15B),
-    GoldBright = Color(0xFF31312E), GoldMuted = Color(0xFF53534F),
-    Foreground = Color(0xFF111111), ForegroundMuted = Color(0xFF5B5B56),
-    ForegroundFaint = Color(0xFF7A7A74), Disabled = Color(0xFF9A9A94),
-    Good = Color(0xFF1B7E4B), GoodMuted = Color(0xFFDCEFE4),
-    Warning = Color(0xFF31312E), WarningMuted = Color(0xFFF0F0F0),
+    Gold = Color(0xFF87621F), BrandAccent = Color(0xFFC6A15B),
+    GoldBright = Color(0xFF77561B), GoldMuted = Color(0xFF715B37),
+    Foreground = Color(0xFF111111), ForegroundMuted = Color(0xFF525252),
+    ForegroundFaint = Color(0xFF686868), Disabled = Color(0xFF888888),
+    Good = Color(0xFF176F43), GoodMuted = Color(0xFFDCEFE4),
+    Warning = Color(0xFF8A570B), WarningMuted = Color(0xFFFFF0D6),
     Danger = Color(0xFFBE3236), DangerMuted = Color(0xFFF9DFE0),
-    Information = Color(0xFF53534F), InformationMuted = Color(0xFFF0F0F0),
-    Border = Color(0xFFDEDEDE), BorderSubtle = Color(0xFFDEDEDE),
-    ControlBorder = Color(0xFF70706A), FocusRing = Color(0xFF111110),
+    Information = Color(0xFF1B5F9E), InformationMuted = Color(0xFFDFECF7),
+    Border = Color(0xFFD8D8D8), BorderSubtle = Color(0xFFD8D8D8),
+    ControlBorder = Color(0xFF686868), FocusRing = Color(0xFF87621F),
 )
 
 private val LocalBrandPalette = staticCompositionLocalOf { NightPalette }
 
 /** Semantic colours stay stable across appearances and always accompany text or an icon. */
 object Brand {
-    val Good = Color(0xFF2B9B5C)
-    val GoodMuted = Color(0xFFDCEFE4)
-    val Warning = Color(0xFFD17B0F)
-    val WarningMuted = Color(0xFFFFE8C4)
-    val Danger = Color(0xFFD94B51)
-    val DangerMuted = Color(0xFFF9DFE0)
+    val Good = Color(0xFF42C49A)
+    val GoodMuted = Color(0xFF12382F)
+    val Warning = Color(0xFFE7B95B)
+    val WarningMuted = Color(0xFF3B301B)
+    val Danger = Color(0xFFE26970)
+    val DangerMuted = Color(0xFF3B1D24)
     val Information = Color(0xFF4A83C2)
     val InformationMuted = Color(0xFFDCEAF8)
 }
@@ -152,9 +155,9 @@ object Spacing {
 /** Corner-radius scale — small controls vs. cards vs. dialogs vs. pills. */
 object Radius {
     val sm = 8.dp
-    val md = 10.dp
-    val lg = 14.dp
-    val xl = 18.dp
+    val md = 12.dp
+    val lg = 16.dp
+    val xl = 20.dp
     val pill = 999.dp
 
     val shapeSm = RoundedCornerShape(sm)
@@ -163,6 +166,9 @@ object Radius {
     val shapeXl = RoundedCornerShape(xl)
     val shapePill = RoundedCornerShape(pill)
 }
+
+/** Neutral workspace panels share a contour independently of controls and dialogs. */
+internal val WorkspacePanelShape = RoundedCornerShape(12.dp)
 
 /** Motion durations + the one easing curve used everywhere, so a screen
  * transition, a dialog, and a button press all feel like the same app
@@ -181,7 +187,7 @@ object Motion {
 private fun companyColorScheme(palette: BrandPalette, dark: Boolean) =
     (if (dark) darkColorScheme() else lightColorScheme()).copy(
         primary = palette.Gold, onPrimary = palette.Background,
-        primaryContainer = palette.SurfaceRaised, onPrimaryContainer = palette.Foreground,
+        primaryContainer = palette.Gold.copy(alpha = 0.16f), onPrimaryContainer = palette.GoldBright,
         secondary = palette.GoldMuted, onSecondary = palette.Background,
         secondaryContainer = palette.SurfaceHover, onSecondaryContainer = palette.Foreground,
         tertiary = palette.Information, onTertiary = palette.Background,
@@ -225,20 +231,20 @@ private val DCompanyTypography = Typography(
         letterSpacing = (-0.6).sp,
     ),
     headlineLarge = PreciseTextStyle.copy(
-        fontSize = 30.sp,
-        lineHeight = 36.sp,
+        fontSize = 28.sp,
+        lineHeight = 34.sp,
         fontWeight = FontWeight.SemiBold,
         letterSpacing = (-0.4).sp,
     ),
     headlineMedium = PreciseTextStyle.copy(
-        fontSize = 26.sp,
-        lineHeight = 32.sp,
+        fontSize = 24.sp,
+        lineHeight = 30.sp,
         fontWeight = FontWeight.SemiBold,
         letterSpacing = (-0.3).sp,
     ),
     headlineSmall = PreciseTextStyle.copy(
-        fontSize = 21.sp,
-        lineHeight = 27.sp,
+        fontSize = 20.sp,
+        lineHeight = 26.sp,
         fontWeight = FontWeight.SemiBold,
         letterSpacing = (-0.1).sp,
     ),

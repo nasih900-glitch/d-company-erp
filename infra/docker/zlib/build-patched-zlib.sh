@@ -3,7 +3,7 @@
 
 set -eu
 
-SOURCE_URL='https://zlib.net/fossils/zlib-1.3.2.tar.gz'
+SOURCE_URL='https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz'
 SOURCE_SHA256='bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16'
 NULL_GUARD_COMMIT='e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca'
 NULL_GUARD_SHA256='183bc8b9dd078a41a62de5c2d905d9b0196b45bc46f100d7e4147ec228207c74'

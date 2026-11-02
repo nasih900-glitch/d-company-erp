@@ -25,6 +25,7 @@ class GamingRejectedSessionAttentionTest {
                 hasRefreshError = false,
                 orphanedExtensionCount = 0,
                 rejectedSessionCount = state.rejectedSessionsForReview.size,
+                posLinkedReviewCount = 0,
                 needsCancellation = false,
                 awaitingPayment = false,
                 busy = false,

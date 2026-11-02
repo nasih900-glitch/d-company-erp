@@ -114,6 +114,7 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(
         ClientCompatibilityMiddleware,
+        resolve_android_policy=True,
         android_minimum=settings.android_min_supported_version_code,
         android_latest=settings.android_latest_version_code,
         policy_revision=settings.client_compatibility_policy_revision,

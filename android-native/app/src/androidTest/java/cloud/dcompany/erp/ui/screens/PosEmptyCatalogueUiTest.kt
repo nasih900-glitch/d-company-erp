@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
@@ -23,23 +25,32 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -49,8 +60,12 @@ import cloud.dcompany.erp.core.db.MenuCategoryEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
 import cloud.dcompany.erp.core.db.SyncState
 import cloud.dcompany.erp.core.net.CustomerRewardEligibility
+import cloud.dcompany.erp.core.sync.OutboxWorkStatus
+import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
+import cloud.dcompany.erp.ui.WorkspaceScaffold
 import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
+import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
 import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.screens.settings.LoyaltyProgramRulesDto
 import cloud.dcompany.erp.ui.screens.settings.LoyaltyRankRuleDto
@@ -201,10 +216,12 @@ class PosEmptyCatalogueUiTest {
         compose.onNodeWithTag("pos-inline-cash-received").assertIsDisplayed().assertIsEnabled()
         compose.onNodeWithTag("pos-take-payment").assertIsDisplayed().assertIsEnabled().performClick()
         compose.onNodeWithText("Split tender").assertDoesNotExist()
-        compose.onNodeWithText("Cash received (₹)").assertIsDisplayed()
+        compose.onNode(
+            hasText("Cash received") and hasAnyAncestor(isDialog()),
+        ).assertIsDisplayed()
         compose.onNodeWithContentDescription("Digit 5").performScrollTo().performClick()
         compose.onNodeWithContentDescription("Digit 0").performScrollTo().performClick()
-        compose.onNodeWithText("CONFIRM CASH · ₹50.00")
+        compose.onNodeWithText("CONFIRM CASH · 50.00")
             .assertIsDisplayed().assertIsEnabled().performClick()
         compose.runOnIdle { assertEquals(listOf("cash" to 5_000L), captures) }
     }
@@ -296,6 +313,8 @@ class PosEmptyCatalogueUiTest {
         )
 
         compose.onAllNodesWithText("Cold drinks").assertCountEquals(1)
+        compose.onNodeWithText(longDrink.sku).assertIsDisplayed()
+        compose.onNodeWithTag("pos-product-${longDrink.id}").assertHeightIsAtLeast(48.dp)
         val nameBounds = compose.onNodeWithText(longDrink.name)
             .assertIsDisplayed().getUnclippedBoundsInRoot()
         assertTrue(
@@ -303,7 +322,7 @@ class PosEmptyCatalogueUiTest {
             nameBounds.bottom - nameBounds.top > 24.dp,
         )
         compose.onNodeWithContentDescription(
-            "Add ${longDrink.name}, ₹125.00, Cold drinks to the current order",
+            "Add ${longDrink.name}, 125.00, Cold drinks to the current order",
         ).assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(listOf("long-drink"), actions) }
     }
@@ -451,6 +470,86 @@ class PosEmptyCatalogueUiTest {
         )
     }
 
+    @Test
+    fun posCartQueryCategoryAndScrollSurviveRealWorkspaceTabNavigation() {
+        val drinksCategory = MenuCategoryEntity("drinks", "Drinks", 0, false)
+        val snacksCategory = MenuCategoryEntity("snacks", "Snacks", 1, false)
+        val drinks = (1..30).map { index ->
+            menuItem(
+                id = "drink-$index",
+                name = "Audit Drink ${index.toString().padStart(2, '0')}",
+                priceMinor = 1_000L + index,
+            ).copy(categoryId = drinksCategory.id)
+        }
+        val snack = menuItem("snack-1", "Audit Snack", 2_000L)
+            .copy(categoryId = snacksCategory.id)
+        val state = mutableStateOf(
+            PosUiState(
+                categories = listOf(drinksCategory, snacksCategory),
+                items = drinks + snack,
+                operationalCategories = listOf(drinksCategory, snacksCategory),
+                operationalItems = drinks + snack,
+                online = true,
+                activeShiftId = "shift-retention",
+                canCollectPayment = true,
+                draftState = SyncState.DRAFT,
+                draftLocalId = "draft-retention",
+                draftRevision = 1L,
+            ),
+        )
+        val destination = mutableStateOf(Destination.Pos)
+
+        renderDynamic(
+            state = state,
+            onAddItem = { item ->
+                state.value = state.value.copy(
+                    cart = state.value.cart + CartLine(
+                        lineId = "line-${item.id}",
+                        item = item,
+                        qty = 1,
+                        unitPriceMinor = item.basePriceMinor,
+                    ),
+                )
+            },
+            onSelectCategory = { categoryId ->
+                state.value = state.value.copy(selectedCategoryId = categoryId)
+            },
+            workspaceDestination = destination,
+        )
+
+        compose.onNodeWithText("Drinks").performClick().assertIsSelected()
+        compose.onNode(
+            hasSetTextAction() and hasText("Search items…"),
+        ).performTextReplacement("Audit Drink")
+        val productGrid = hasScrollToIndexAction() and
+            hasAnyAncestor(hasTestTag("pos-catalog")) and
+            SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange)
+        compose.onAllNodes(productGrid).assertCountEquals(1)
+        compose.onNode(productGrid).performScrollToIndex(29)
+        compose.onNodeWithTag("pos-product-drink-30").assertIsDisplayed().performClick()
+        compose.onAllNodesWithText("Audit Drink 30").assertCountEquals(2)
+
+        compose.onNodeWithContentDescription("Shift. Open, review and close today's shift").performClick()
+        compose.onNodeWithTag("workspace-away-from-pos").assertIsDisplayed()
+        compose.onNodeWithContentDescription("POS. Take orders and payments").performClick()
+
+        compose.onNodeWithText("Drinks").assertIsSelected()
+        compose.onNode(
+            hasSetTextAction() and SemanticsMatcher.expectValue(
+                SemanticsProperties.EditableText,
+                AnnotatedString("Audit Drink"),
+            ),
+        ).assertIsDisplayed()
+        // This assertion deliberately does not scroll. The last tile is visible only if
+        // WorkspaceScaffold restored the product grid's non-zero LazyGrid position.
+        compose.onNodeWithTag("pos-product-drink-30").assertIsDisplayed()
+        compose.onAllNodesWithText("Audit Drink 30").assertCountEquals(2)
+        compose.runOnIdle {
+            assertEquals("drinks", state.value.selectedCategoryId)
+            assertEquals(listOf("drink-30"), state.value.cart.map { it.item.id })
+        }
+    }
+
     private fun menuItem(id: String, name: String, priceMinor: Long) = MenuItemEntity(
         id = id,
         categoryId = "audit",
@@ -528,13 +627,13 @@ class PosEmptyCatalogueUiTest {
         compose.onNodeWithText("Review PS5 Station 2").assertIsDisplayed()
         compose.onNodeWithText("PS5 Station 2 · Dual · 60 min").assertIsDisplayed()
         compose.onNode(hasSetTextAction()).assertIsDisplayed().assertIsEnabled()
-        compose.onNodeWithText("CONTINUE TO PAYMENT · ₹180.00")
+        compose.onNodeWithText("CONTINUE TO PAYMENT · 180.00")
             .assertIsDisplayed()
             .assertIsEnabled()
         compose.onNode(hasSetTextAction()).performClick().performTextReplacement("30")
         // Root IME handling must not leave the primary footer below the
         // keyboard; semantic presence alone is not enough for this assertion.
-        compose.onNodeWithText("CONTINUE TO PAYMENT · ₹180.00")
+        compose.onNodeWithText("CONTINUE TO PAYMENT · 180.00")
             .assertIsDisplayed().assertIsNotEnabled()
         compose.onNode(hasSetTextAction()).performImeAction()
         compose.onNode(hasSetTextAction()).assertIsNotFocused()
@@ -588,7 +687,7 @@ class PosEmptyCatalogueUiTest {
             ),
         )
 
-        compose.onNodeWithText("Review live bill · ₹120.00").assertIsDisplayed()
+        compose.onNodeWithText("Review live bill · 120.00").assertIsDisplayed()
         compose.onNodeWithText("Use points").performScrollTo().assertIsDisplayed().assertIsEnabled()
         compose.onNodeWithText("CONTINUE TO PAYMENT").assertIsDisplayed().assertIsEnabled()
         compose.onNodeWithText("Cash").assertDoesNotExist()
@@ -624,7 +723,7 @@ class PosEmptyCatalogueUiTest {
         )
 
         compose.onNodeWithTag("pos-payment-confirmation-inline").assertIsDisplayed()
-        compose.onNodeWithText("Direct POS bill · ₹120.00").assertIsDisplayed()
+        compose.onNodeWithText("Direct POS bill · 120.00").assertIsDisplayed()
         compose.onNodeWithText("Cash").assertIsDisplayed().assertIsEnabled()
         compose.onNodeWithText("Use points").assertDoesNotExist()
         compose.onNodeWithText("CONTINUE TO PAYMENT").assertDoesNotExist()
@@ -676,13 +775,13 @@ class PosEmptyCatalogueUiTest {
         )
 
         compose.onNodeWithText("UPI").assertIsEnabled().performClick()
-        compose.onNodeWithText("CONFIRM UPI · ₹120.00").assertIsEnabled().performClick()
+        compose.onNodeWithText("CONFIRM UPI · 120.00").assertIsEnabled().performClick()
         compose.waitForIdle()
         compose.runOnIdle { assertEquals(1, attempts) }
         compose.onNodeWithText("Payment submitted once").assertDoesNotExist()
 
         compose.onNodeWithText("UPI").assertIsEnabled().performClick()
-        compose.onNodeWithText("CONFIRM UPI · ₹120.00").assertIsEnabled().performClick()
+        compose.onNodeWithText("CONFIRM UPI · 120.00").assertIsEnabled().performClick()
         compose.waitForIdle()
         compose.runOnIdle { assertEquals(2, attempts) }
         compose.onNodeWithText("Payment submitted once").assertIsDisplayed().assertIsNotEnabled()
@@ -713,7 +812,7 @@ class PosEmptyCatalogueUiTest {
 
         compose.onNodeWithTag("pos-payment-confirmation-inline").assertIsDisplayed()
         compose.onNodeWithText("Split tender").assertIsEnabled().performClick()
-        compose.onNodeWithText("Cash amount (₹)").assertIsDisplayed()
+        compose.onNodeWithText("Cash amount").assertIsDisplayed()
 
         compose.runOnIdle {
             state.value = state.value.copy(
@@ -721,18 +820,18 @@ class PosEmptyCatalogueUiTest {
             )
         }
         compose.waitForIdle()
-        compose.onNodeWithText("Cash amount (₹)").assertDoesNotExist()
+        compose.onNodeWithText("Cash amount").assertDoesNotExist()
         compose.onNodeWithText("Split tender").assertIsEnabled().performClick()
-        compose.onNodeWithText("Cash amount (₹)").performTextReplacement("60")
-        compose.onNodeWithText("UPI amount (₹)").performTextReplacement("60")
-        compose.onNodeWithText("Cash received (₹)").performTextReplacement("60")
+        compose.onNodeWithText("Cash amount").performTextReplacement("60")
+        compose.onNodeWithText("UPI amount").performTextReplacement("60")
+        compose.onNodeWithText("Cash received").performTextReplacement("60")
 
         val actions = compose.onNodeWithTag("pos-payment-confirmation-actions")
             .assertIsDisplayed().getUnclippedBoundsInRoot()
         val root = compose.onNodeWithTag("pos-layout-root").getUnclippedBoundsInRoot()
         assertTrue("Payment actions must remain in the checkout pane: actions=$actions root=$root",
             actions.top >= root.top && actions.bottom <= root.bottom)
-        compose.onNodeWithText("CONFIRM SPLIT · ₹120.00")
+        compose.onNodeWithText("CONFIRM SPLIT · 120.00")
             .assertIsDisplayed().assertIsEnabled().performClick()
         compose.runOnIdle {
             assertEquals(1, submitted.size)
@@ -768,15 +867,64 @@ class PosEmptyCatalogueUiTest {
 
         compose.onNodeWithTag("pos-inline-notice").assertIsDisplayed()
         compose.onNodeWithTag("pos-payment-confirmation-inline").assertIsDisplayed()
-        val preset = compose.onNodeWithContentDescription(
-            "Set Cash received (₹) to ₹270.00",
-        ).assertIsDisplayed().assertHeightIsAtLeast(48.dp).getUnclippedBoundsInRoot()
-        val actions = compose.onNodeWithTag("pos-payment-confirmation-actions")
-            .assertIsDisplayed().getUnclippedBoundsInRoot()
+        val presetNode = compose.onNodeWithContentDescription(
+            "Set Cash received to 270.00",
+        ).assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        val bodyViewportNode = compose.onNodeWithTag(
+            "pos-payment-confirmation-body-viewport",
+            useUnmergedTree = true,
+        ).assertIsDisplayed()
+        val bodyScrollNode = compose.onNode(
+            hasScrollAction() and hasAnyAncestor(
+                hasTestTag("pos-payment-confirmation-body-viewport"),
+            ),
+            useUnmergedTree = true,
+        ).assertIsDisplayed()
+        val initialScroll = bodyScrollNode.fetchSemanticsNode()
+            .config[SemanticsProperties.VerticalScrollAxisRange].value()
+        for (attempt in 0 until 3) {
+            val presetBounds = presetNode.getUnclippedBoundsInRoot()
+            val viewportBounds = bodyViewportNode.getUnclippedBoundsInRoot()
+            if (presetBounds.top >= viewportBounds.top && presetBounds.bottom <= viewportBounds.bottom) {
+                break
+            }
+            bodyViewportNode.performTouchInput { swipeUp(durationMillis = 250) }
+            compose.waitForIdle()
+        }
+        val finalScroll = bodyScrollNode.fetchSemanticsNode()
+            .config[SemanticsProperties.VerticalScrollAxisRange].value()
         assertTrue(
-            "Held cash presets must be fully visible above pinned actions: " +
-                "preset=$preset actions=$actions",
-            preset.bottom <= actions.top,
+            "Physical reveal must advance the actual inline payment body: " +
+                "initial=$initialScroll final=$finalScroll",
+            finalScroll > initialScroll,
+        )
+        writeLayoutScreenshot("pos-held-cash-presets-visible.png")
+
+        val preset = presetNode.assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+            .getUnclippedBoundsInRoot()
+        val bodyViewport = bodyViewportNode.getUnclippedBoundsInRoot()
+        val actions = compose.onNodeWithTag("pos-payment-confirmation-actions")
+            .assertIsDisplayed().assertHeightIsAtLeast(48.dp).getUnclippedBoundsInRoot()
+        val root = compose.onNodeWithTag("pos-layout-root").getUnclippedBoundsInRoot()
+        assertTrue(
+            "Held cash preset must be fully visible in the clipped payment body: " +
+                "preset=$preset viewport=$bodyViewport",
+            preset.top >= bodyViewport.top && preset.bottom <= bodyViewport.bottom,
+        )
+        assertTrue(
+            "The clipped payment body must end above pinned actions: " +
+                "viewport=$bodyViewport actions=$actions",
+            bodyViewport.bottom <= actions.top,
+        )
+        assertTrue(
+            "Pinned payment actions must remain inside the POS root: actions=$actions root=$root",
+            actions.left >= root.left && actions.top >= root.top &&
+                actions.right <= root.right && actions.bottom <= root.bottom,
+        )
+        assertTrue(
+            "The clipped payment body must remain inside the POS root: viewport=$bodyViewport root=$root",
+            bodyViewport.left >= root.left && bodyViewport.top >= root.top &&
+                bodyViewport.right <= root.right && bodyViewport.bottom <= root.bottom,
         )
         compose.onNodeWithText("Enter cash received").assertIsDisplayed().assertIsNotEnabled()
     }
@@ -816,7 +964,7 @@ class PosEmptyCatalogueUiTest {
         val root = compose.onNodeWithTag("pos-layout-root").getUnclippedBoundsInRoot()
         assertTrue("Zero-total completion must remain reachable: actions=$actions root=$root",
             actions.top >= root.top && actions.bottom <= root.bottom)
-        compose.onNodeWithText("COMPLETE BENEFIT · ₹0 DUE")
+        compose.onNodeWithText("COMPLETE BENEFIT · 0 DUE")
             .assertIsDisplayed().assertIsEnabled().performClick()
         compose.runOnIdle { assertEquals(1, completions) }
         compose.onNodeWithText("Completion submitted once").assertIsNotEnabled().performClick()
@@ -892,13 +1040,13 @@ class PosEmptyCatalogueUiTest {
             onRedeemDirectReward = { dispatched += it.key },
         )
 
-        compose.onNodeWithText("Free snack or drink · 60 pts → ₹40.00")
+        compose.onNodeWithText("Free snack or drink · 60 pts → 40.00")
             .performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
         compose.runOnIdle { assertTrue(dispatched.isEmpty()) }
         compose.onNodeWithText("Review Free snack or drink")
             .performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(
-            "60 points → ₹40.00 fixed bill credit · program revision 4",
+            "60 points → 40.00 fixed bill credit · program revision 4",
         ).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Confirm reward")
             .performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
@@ -941,8 +1089,10 @@ class PosEmptyCatalogueUiTest {
         eligibleRewardCatalog: EligibleRewardCatalogState = EligibleRewardCatalogState(),
         onAddItem: (MenuItemEntity) -> Unit = {},
         onIncrementLine: (String) -> Unit = {},
+        onSelectCategory: (String?) -> Unit = {},
         onClearCart: () -> Unit = {},
         viewportSize: State<Pair<Int, Int>>? = null,
+        workspaceDestination: MutableState<Destination>? = null,
     ) {
         compose.setContent {
             DCompanyTheme {
@@ -954,7 +1104,11 @@ class PosEmptyCatalogueUiTest {
                     // direct child. A loose parent lets this test exercise the
                     // requested content viewport instead of silently using 1280x900.
                     Box(Modifier.fillMaxSize()) {
-                    Box(viewportModifier.background(MaterialTheme.colorScheme.background).testTag("pos-layout-root")) {
+                    Box(
+                        viewportModifier.background(MaterialTheme.colorScheme.background)
+                            .testTag("pos-layout-root"),
+                    ) {
+                        val posScreen: @Composable () -> Unit = {
                         PosScreen(
                             state = state.value,
                             recentReceipts = emptyList(),
@@ -974,7 +1128,7 @@ class PosEmptyCatalogueUiTest {
                             onRemove = {},
                             onIncrementLine = onIncrementLine,
                             onDecrementLine = {},
-                            onSelectCategory = {},
+                            onSelectCategory = onSelectCategory,
                             onClearCart = onClearCart,
                             onUpdateDraftDetails = { _, _, _, _ -> },
                             onRefresh = {},
@@ -1009,6 +1163,34 @@ class PosEmptyCatalogueUiTest {
                             eligibleRewardCatalog = eligibleRewardCatalog,
                             presentation = presentation,
                         )
+                        }
+                        val activeDestination = workspaceDestination
+                        if (activeDestination == null) {
+                            posScreen()
+                        } else {
+                            WorkspaceScaffold(
+                                destinations = listOf(Destination.Pos, Destination.Shift),
+                                currentDestination = activeDestination.value,
+                                employeeName = "Fixture cashier",
+                                locationLabel = "Fixture till",
+                                connectivityProblem = SyncAvailabilityProblem.NONE,
+                                outboxWorkStatus = OutboxWorkStatus(),
+                                syncing = false,
+                                canChangeTill = false,
+                                onOpenSupport = {},
+                                onChangeTill = {},
+                                onSignOut = {},
+                                onDestinationChanged = { activeDestination.value = it },
+                            ) { destination, _ ->
+                                when (destination) {
+                                    Destination.Pos -> posScreen()
+                                    Destination.Shift -> Box(
+                                        Modifier.fillMaxSize().testTag("workspace-away-from-pos"),
+                                    )
+                                    else -> error("Unexpected fixture destination: $destination")
+                                }
+                            }
+                        }
                     }
                     }
                 }
@@ -1053,7 +1235,7 @@ class PosEmptyCatalogueUiTest {
         // review layer. Exercise the entry's touch fallback so the assertion
         // does not race a still-opening platform IME; keyboard Done/focus is
         // covered independently by the held-bill input test above.
-        compose.onNodeWithContentDescription("Clear Manual discount (₹)")
+        compose.onNodeWithContentDescription("Clear Manual discount")
             .performScrollTo().assertIsEnabled().performClick()
         compose.onNodeWithContentDescription("Digit 2")
             .performScrollTo().assertIsEnabled().performClick()
@@ -1101,7 +1283,7 @@ class PosEmptyCatalogueUiTest {
         ).assertIsEnabled()
         compose.onNodeWithText("Apply discount").performScrollTo()
             .assertIsDisplayed().assertIsNotEnabled()
-        compose.onNodeWithText("CONTINUE TO PAYMENT · ₹210.00")
+        compose.onNodeWithText("CONTINUE TO PAYMENT · 210.00")
             .assertIsDisplayed().assertIsEnabled()
         compose.runOnIdle {
             assertEquals(listOf("held-notice-1" to 2_000L), updates)
