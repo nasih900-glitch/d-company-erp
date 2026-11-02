@@ -210,8 +210,8 @@ class ReportsOverviewUiTest {
         compose.onNodeWithTag("workspace-more-modules").assertIsDisplayed()
         compose.onNodeWithText("Gross revenue").assertIsDisplayed()
         compose.onNodeWithText("Linked customers").assertIsDisplayed()
-        compose.onNodeWithText("Sales included in chart ₹15.00").assertExists()
-        compose.onNodeWithText("Peak 18:00 · ₹14.00").assertExists()
+        compose.onNodeWithText("Sales included in chart 15.00").assertExists()
+        compose.onNodeWithText("Peak 18:00 · 14.00").assertExists()
         compose.onNodeWithText("1440 minute", substring = true).assertDoesNotExist()
         compose.onNodeWithTag("reports-overview-hour-panel").assertIsDisplayed()
         compose.onNodeWithTag("reports-overview-source-panel").assertIsDisplayed()
@@ -524,7 +524,7 @@ class ReportsOverviewUiTest {
         compose.onNodeWithTag("reports-overview-export").assertDoesNotExist()
         compose.onNodeWithText("Revenue").assertIsDisplayed()
         compose.onNode(
-            hasTestTag("reports-pnl-kpi-revenue") and hasAnyDescendant(hasText("₹14.00")),
+            hasTestTag("reports-pnl-kpi-revenue") and hasAnyDescendant(hasText("14.00")),
             useUnmergedTree = true,
         ).assertIsDisplayed()
         compose.onNodeWithTag("reports-overview-source-panel").assertDoesNotExist()
@@ -571,7 +571,7 @@ class ReportsOverviewUiTest {
         compose.onNodeWithText("Masala tea").performScrollTo().assertIsDisplayed()
         select(ReportsOperationalTab.INVENTORY)
         compose.onNodeWithText("Stock valuation").assertIsDisplayed()
-        assertTrue(compose.onAllNodes(hasText("₹0.42")).fetchSemanticsNodes().isNotEmpty())
+        assertTrue(compose.onAllNodes(hasText("0.42")).fetchSemanticsNodes().isNotEmpty())
         compose.onNodeWithTag("reports-period-menu").assertDoesNotExist()
         compose.onNodeWithTag("reports-overview-export").assertDoesNotExist()
         assertEquals(0, overviewReads)
@@ -579,7 +579,7 @@ class ReportsOverviewUiTest {
         compose.onNodeWithTag("reports-operational-inventory").performScrollToIndex(1)
         compose.onNodeWithText("Loose leaf tea").assertIsDisplayed()
         compose.onNodeWithText("0.1255").assertIsDisplayed()
-        compose.onNodeWithText("₹3.33").assertIsDisplayed()
+        compose.onNodeWithText("3.33").assertIsDisplayed()
         compose.runOnIdle {
             current.value = visibleReportsState(current.value, admitted.lease, admitted.access.copy(canReadInventory = false))
         }
@@ -849,7 +849,7 @@ class ReportsOverviewUiTest {
         }
         compose.onNodeWithTag("reports-overview-product-detail-0").assertTextEquals("FOOD")
         compose.onNodeWithTag("reports-overview-product-quantity-0").assertTextEquals("4.25")
-        compose.onNodeWithTag("reports-overview-product-gross-0").assertTextEquals("₹15.00")
+        compose.onNodeWithTag("reports-overview-product-gross-0").assertTextEquals("15.00")
         compose.onNodeWithTag("reports-overview-device-type-0").assertTextEquals("PS5")
         compose.onNodeWithTag("reports-overview-device-count-0").assertTextEquals("4")
         compose.onNodeWithTag("reports-overview-device-time-0").assertTextEquals("1h 1m 1.123s")

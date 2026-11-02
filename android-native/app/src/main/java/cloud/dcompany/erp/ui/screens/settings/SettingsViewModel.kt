@@ -159,7 +159,7 @@ internal fun validateLoyaltyRules(rules: LoyaltyProgramRulesDto): String? {
         return "Gaming earn points must be 0 to 1,000,000 and rupees must be 1 to 1,000,000."
     }
     if (rules.minorPerPoint !in 1..1_000_000) {
-        return "The value of 100 points must be between ₹1 and ₹10,00,000."
+        return "The value of 100 points must be between 1 and 10,00,000."
     }
     val expectedRanks = listOf("rookie", "player", "pro", "legend")
     if (rules.ranks.map { it.key } != expectedRanks) return "All four stable rank tiers are required."

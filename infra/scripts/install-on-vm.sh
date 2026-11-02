@@ -1566,7 +1566,7 @@ for path in sorted((root/"backend").rglob("*"), key=lambda path: path.relative_t
 candidate_manifest=hashlib.sha256("".join(manifest_rows).encode()).hexdigest()
 attestation=json.load(open(images))
 print(json.dumps({"prior_revision":prior,"prior_version":"3.1.46","prior_database_head":"0091",
- "candidate_revision":revision,"candidate_version":"3.1.52","candidate_database_head":"0093",
+ "candidate_revision":revision,"candidate_version":"3.1.52","candidate_database_head":"0094",
  "prior_source_archive_sha256":archive,"candidate_source_archive_sha256":candidate_archive,
  "prior_backend_manifest_sha256":manifest,
  "candidate_backend_manifest_sha256":candidate_manifest,

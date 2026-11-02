@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exact Build54/0091 -> Build58/0093 preservation admission.
+"""Exact Build54/0091 -> Build59/0094 preservation admission.
 
 Opaque tablet work is retained as reported, including current-build work. This
 profile never drains queues, reclassifies old rows, edits telemetry, or grants an
@@ -24,7 +24,7 @@ PRIOR_REVISION = "5ad146ae076f5178acc2c8e4cb840ecbb0d0343a"
 PRIOR_VERSION = "3.1.46"
 PRIOR_DATABASE_HEAD = "0091"
 CANDIDATE_VERSION = "3.1.52"
-CANDIDATE_DATABASE_HEAD = "0093"
+CANDIDATE_DATABASE_HEAD = "0094"
 PRIOR_SOURCE_ARCHIVE_SHA256 = (
     "7ded1fbc0afb2fb0dc93421bd6fc9b9e9ecef677e69b28ec1a4830d8252f6db5"
 )
@@ -90,8 +90,8 @@ BACKEND_UVICORN_ENTRYPOINT = [
 # Independent review fills these final closure values; the helper cannot hash
 # its own enclosing archive. Historical release maps remain immutable.
 CANDIDATE_RELEASE_FROZEN = True
-CANDIDATE_BACKEND_MANIFEST_SHA256: str | None = "968dbc0e0342aaaa2e5bf6d86ad9fdc2f7aaa50dfab86e13c2829b518bcc548f"
-CANDIDATE_PROTECTED_SOURCE_SHA256: str | None = "de8af01a710f3655d29f6a9339b29db20b9759d7b89666a56d85dc6007ce4d10"
+CANDIDATE_BACKEND_MANIFEST_SHA256: str | None = "c9549fcf3d3a850b10e8371ee7255795892108a90638385ec8b10079b7a783c6"
+CANDIDATE_PROTECTED_SOURCE_SHA256: str | None = "b37c9104ad6b05d1251d581faa48cda4fb8f5c2feb40fee5bb721a57c8fc5a4f"
 EXPECTED_POLICY_SCHEMA_ROWS: tuple[str, ...] = (
     "column|android_update_policy|1|id|integer|NO||||32|2|0||||||||||pg_catalog|int4|NO||||||NO|NEVER||YES",
     "column|android_update_policy|2|mode|character varying|NO||20|80|||||||||||||pg_catalog|varchar|NO||||||NO|NEVER||YES",
@@ -223,6 +223,48 @@ EXPECTED_0093_SCHEMA_ADDED_ROWS: tuple[str, ...] = (
     "trigger|orders|trg_orders_guard_gaming_bill_void|UPDATE|AFTER|EXECUTE FUNCTION guard_gaming_bill_void()",
     "trigger|orders|trg_orders_guard_gaming_void_totals|UPDATE|BEFORE|EXECUTE FUNCTION guard_gaming_void_order_totals()",
 )
+EXPECTED_0094_SCHEMA_ADDED_ROWS: tuple[str, ...] = (
+    'column|staff_work_policies|10|working_weekday_mask|integer|NO||||32|2|0||||||||||pg_catalog|int4|NO||||||NO|NEVER||YES',
+    'column|staff_work_policies|11|overtime_multiplier_basis_points|integer|YES||||32|2|0||||||||||pg_catalog|int4|NO||||||NO|NEVER||YES',
+    "column|staff_work_policies|12|pay_status|character varying|NO|'draft'::character varying|16|64|||||||||||||pg_catalog|varchar|NO||||||NO|NEVER||YES",
+    'column|staff_work_policies|13|reason|character varying|NO||500|2000|||||||||||||pg_catalog|varchar|NO||||||NO|NEVER||YES',
+    'column|staff_work_policies|14|created_at|timestamp with time zone|NO|now()||||||6|||||||||pg_catalog|timestamptz|NO||||||NO|NEVER||YES',
+    'column|staff_work_policies|15|updated_at|timestamp with time zone|NO|now()||||||6|||||||||pg_catalog|timestamptz|NO||||||NO|NEVER||YES',
+    'column|staff_work_policies|1|id|uuid|NO||||||||||||||||pg_catalog|uuid|NO||||||NO|NEVER||YES',
+    'column|staff_work_policies|2|company_id|uuid|NO||||||||||||||||pg_catalog|uuid|NO||||||NO|NEVER||YES',
+    'column|staff_work_policies|3|user_id|uuid|NO||||||||||||||||pg_catalog|uuid|NO||||||NO|NEVER||YES',
+    'column|staff_work_policies|4|actor_user_id|uuid|NO||||||||||||||||pg_catalog|uuid|NO||||||NO|NEVER||YES',
+    'column|staff_work_policies|5|revision|integer|NO||||32|2|0||||||||||pg_catalog|int4|NO||||||NO|NEVER||YES',
+    'column|staff_work_policies|6|effective_from|date|NO|||||||0|||||||||pg_catalog|date|NO||||||NO|NEVER||YES',
+    'column|staff_work_policies|7|monthly_salary_minor|bigint|NO||||64|2|0||||||||||pg_catalog|int8|NO||||||NO|NEVER||YES',
+    'column|staff_work_policies|8|daily_presence_minutes|integer|NO||||32|2|0||||||||||pg_catalog|int4|NO||||||NO|NEVER||YES',
+    'column|staff_work_policies|9|daily_break_minutes|integer|NO||||32|2|0||||||||||pg_catalog|int4|NO||||||NO|NEVER||YES',
+    "constraint|staff_work_policies|ck_staff_work_policy_draft_only|CHECK (pay_status::text = 'draft'::text)",
+    'constraint|staff_work_policies|ck_staff_work_policy_hours|CHECK (daily_presence_minutes >= 1 AND daily_presence_minutes <= 1440 AND daily_break_minutes >= 0 AND daily_break_minutes < daily_presence_minutes)',
+    'constraint|staff_work_policies|ck_staff_work_policy_overtime|CHECK (overtime_multiplier_basis_points IS NULL OR overtime_multiplier_basis_points >= 10000 AND overtime_multiplier_basis_points <= 40000)',
+    'constraint|staff_work_policies|ck_staff_work_policy_reason|CHECK (length(TRIM(BOTH FROM reason)) >= 1 AND length(TRIM(BOTH FROM reason)) <= 500)',
+    'constraint|staff_work_policies|ck_staff_work_policy_revision|CHECK (revision > 0)',
+    "constraint|staff_work_policies|ck_staff_work_policy_salary|CHECK (monthly_salary_minor >= 0 AND monthly_salary_minor <= '1000000000000'::bigint)",
+    'constraint|staff_work_policies|ck_staff_work_policy_weekdays|CHECK (working_weekday_mask >= 1 AND working_weekday_mask <= 127)',
+    'constraint|staff_work_policies|staff_work_policies_actor_user_id_fkey|FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE RESTRICT',
+    'constraint|staff_work_policies|staff_work_policies_company_id_fkey|FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT',
+    'constraint|staff_work_policies|staff_work_policies_pkey|PRIMARY KEY (id)',
+    'constraint|staff_work_policies|staff_work_policies_user_id_fkey|FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT',
+    'constraint|staff_work_policies|uq_staff_work_policy_revision|UNIQUE (company_id, user_id, revision)',
+    "function|guard_staff_work_policy||CREATE OR REPLACE FUNCTION public.guard_staff_work_policy()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\n        BEGIN\n            IF TG_OP <> 'INSERT' THEN\n                RAISE EXCEPTION 'staff work policy revisions are immutable' USING ERRCODE = '23514';\n            END IF;\n            IF NOT EXISTS (\n                SELECT 1 FROM users u WHERE u.id = NEW.user_id AND u.company_id = NEW.company_id\n            ) OR NOT EXISTS (\n                SELECT 1 FROM users u WHERE u.id = NEW.actor_user_id\n                    AND u.company_id = NEW.company_id\n            ) THEN\n                RAISE EXCEPTION 'staff work policy tenant scope is invalid' USING ERRCODE = '23514';\n            END IF;\n            RETURN NEW;\n        END $function$\n",
+    'index|staff_work_policies|ix_staff_work_policies_company_id|CREATE INDEX ix_staff_work_policies_company_id ON public.staff_work_policies USING btree (company_id)',
+    'index|staff_work_policies|ix_staff_work_policies_user_id|CREATE INDEX ix_staff_work_policies_user_id ON public.staff_work_policies USING btree (user_id)',
+    'index|staff_work_policies|staff_work_policies_pkey|CREATE UNIQUE INDEX staff_work_policies_pkey ON public.staff_work_policies USING btree (id)',
+    'index|staff_work_policies|uq_staff_work_policy_revision|CREATE UNIQUE INDEX uq_staff_work_policy_revision ON public.staff_work_policies USING btree (company_id, user_id, revision)',
+    'trigger|staff_work_policies|trg_staff_work_policy_guard|DELETE|BEFORE|EXECUTE FUNCTION guard_staff_work_policy()',
+    'trigger|staff_work_policies|trg_staff_work_policy_guard|INSERT|BEFORE|EXECUTE FUNCTION guard_staff_work_policy()',
+    'trigger|staff_work_policies|trg_staff_work_policy_guard|UPDATE|BEFORE|EXECUTE FUNCTION guard_staff_work_policy()',
+)
+EXPECTED_0094_TRIGGER_ADDED_ROWS: tuple[str, ...] = (
+    'trigger_binding|staff_work_policies|trg_staff_work_policy_guard|O|false|false|CREATE TRIGGER trg_staff_work_policy_guard BEFORE INSERT OR DELETE OR UPDATE ON staff_work_policies FOR EACH ROW EXECUTE FUNCTION guard_staff_work_policy()',
+    'trigger_binding|staff_work_policies|trg_staff_work_policy_no_truncate|O|false|false|CREATE TRIGGER trg_staff_work_policy_no_truncate BEFORE TRUNCATE ON staff_work_policies FOR EACH STATEMENT EXECUTE FUNCTION guard_staff_work_policy()',
+)
+
 EXPECTED_0093_SCHEMA_REMOVED_ROWS: tuple[str, ...] = (
     "function|capture_order_line_reporting_snapshot||CREATE OR REPLACE FUNCTION public.capture_order_line_reporting_snapshot()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\n        DECLARE\n            sold_item_name text;\n            sold_item_type text;\n            sold_item_company uuid;\n            sale_company uuid;\n            staged_item_name text;\n            staged_item_type text;\n            staged_company uuid;\n        BEGIN\n            IF TG_OP = 'UPDATE'\n               AND NEW.order_id IS NOT DISTINCT FROM OLD.order_id\n               AND NEW.menu_item_id IS NOT DISTINCT FROM OLD.menu_item_id THEN\n                IF NEW.menu_item_name_snapshot IS DISTINCT FROM OLD.menu_item_name_snapshot\n                   OR NEW.menu_item_type_snapshot IS DISTINCT FROM OLD.menu_item_type_snapshot\n                   OR NEW.reporting_snapshot_revision\n                        IS DISTINCT FROM OLD.reporting_snapshot_revision THEN\n                    RAISE EXCEPTION\n                        'sold item reporting snapshots are immutable'\n                        USING ERRCODE = '23514';\n                END IF;\n                RETURN NEW;\n            END IF;\n\n            SELECT item.name, item.type, item.company_id\n              INTO sold_item_name, sold_item_type, sold_item_company\n              FROM menu_items item\n             WHERE item.id = NEW.menu_item_id;\n            SELECT sale.company_id\n              INTO sale_company\n              FROM orders sale\n             WHERE sale.id = NEW.order_id;\n            IF sold_item_name IS NULL\n               OR char_length(trim(sold_item_name)) < 1\n               OR sold_item_type IS NULL\n               OR char_length(trim(sold_item_type)) < 1\n               OR sale_company IS NULL\n               OR sold_item_company IS DISTINCT FROM sale_company THEN\n                RAISE EXCEPTION\n                    'order line and sold item must have matching company provenance'\n                    USING ERRCODE = '23514';\n            END IF;\n\n            \n            SELECT addon.menu_item_name_snapshot,\n                   addon.menu_item_type_snapshot,\n                   addon.company_id\n              INTO staged_item_name, staged_item_type, staged_company\n              FROM gaming_session_addons addon\n              JOIN gaming_sessions gs\n                ON gs.id = addon.gaming_session_id\n               AND gs.order_id = NEW.order_id\n             WHERE addon.client_line_id = NEW.client_line_id\n               AND addon.menu_item_id = NEW.menu_item_id\n               AND addon.voided_at IS NULL\n             LIMIT 1;\n            IF staged_company IS NOT NULL THEN\n                IF staged_company IS DISTINCT FROM sale_company\n                   OR (NEW.menu_item_name_snapshot IS NOT NULL\n                       AND NEW.menu_item_name_snapshot IS DISTINCT FROM staged_item_name)\n                   OR (NEW.menu_item_type_snapshot IS NOT NULL\n                       AND NEW.menu_item_type_snapshot IS DISTINCT FROM staged_item_type) THEN\n                    RAISE EXCEPTION\n                        'gaming add-on order-line snapshot does not match its immutable source'\n                        USING ERRCODE = '23514';\n                END IF;\n                NEW.menu_item_name_snapshot := staged_item_name;\n                NEW.menu_item_type_snapshot := staged_item_type;\n                NEW.reporting_snapshot_revision := 49;\n                RETURN NEW;\n            END IF;\n    \n\n            IF TG_OP = 'INSERT'\n               AND (\n                    (NEW.menu_item_name_snapshot IS NOT NULL\n                     AND NEW.menu_item_name_snapshot IS DISTINCT FROM sold_item_name)\n                    OR\n                    (NEW.menu_item_type_snapshot IS NOT NULL\n                     AND NEW.menu_item_type_snapshot IS DISTINCT FROM sold_item_type)\n               ) THEN\n                RAISE EXCEPTION\n                    'client-supplied sold item snapshot does not match the catalogue'\n                    USING ERRCODE = '23514';\n            END IF;\n\n            NEW.menu_item_name_snapshot := sold_item_name;\n            NEW.menu_item_type_snapshot := sold_item_type;\n            NEW.reporting_snapshot_revision := 49;\n            RETURN NEW;\n        END\n        $function$\n",
     "function|guard_gaming_session_cancel_with_addons||CREATE OR REPLACE FUNCTION public.guard_gaming_session_cancel_with_addons()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\n        BEGIN\n            IF NEW.status = 'cancelled'\n               AND OLD.status IS DISTINCT FROM 'cancelled'\n               AND EXISTS (\n                    SELECT 1\n                      FROM gaming_session_addons addon\n                     WHERE addon.gaming_session_id = OLD.id\n                       AND addon.company_id = OLD.company_id\n                       AND addon.voided_at IS NULL\n               ) THEN\n                RAISE EXCEPTION\n                    'active Gaming add-ons must be voided before session cancellation'\n                    USING ERRCODE = '23514';\n            END IF;\n            RETURN NEW;\n        END\n        $function$\n",
@@ -375,7 +417,7 @@ SHA256 = re.compile(r"[a-f0-9]{64}")
 NAME = re.compile(r"[a-z][a-z0-9_]{0,62}")
 POLICY_TABLE = "android_update_policy"
 NEW_TABLES = frozenset(
-    (POLICY_TABLE, "gaming_void_receipts", "gaming_void_addon_lines")
+    (POLICY_TABLE, "gaming_void_receipts", "gaming_void_addon_lines", "staff_work_policies")
 )
 
 
@@ -888,18 +930,18 @@ def verify_pair(
             exact_catalogue_delta(
                 before["schema_catalog_rows"],
                 EXPECTED_0093_SCHEMA_REMOVED_ROWS,
-                EXPECTED_POLICY_SCHEMA_ROWS + EXPECTED_0093_SCHEMA_ADDED_ROWS,
+                EXPECTED_POLICY_SCHEMA_ROWS + EXPECTED_0093_SCHEMA_ADDED_ROWS + EXPECTED_0094_SCHEMA_ADDED_ROWS,
             )
             != after["schema_catalog_rows"]
         ):
             raise CompatibilityError(
-                "migration differs from the exact reviewed0092/0093 schema"
+                "migration differs from the exact reviewed0092/0093/0094 schema"
             )
         if (
             exact_catalogue_delta(
                 before["trigger_catalog_rows"],
                 EXPECTED_TRIGGER_REMOVED_ROWS,
-                EXPECTED_TRIGGER_ADDED_ROWS,
+                EXPECTED_TRIGGER_ADDED_ROWS + EXPECTED_0094_TRIGGER_ADDED_ROWS,
             )
             != after["trigger_catalog_rows"]
         ):

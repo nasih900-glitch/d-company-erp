@@ -197,9 +197,9 @@ export default function AnalyticsScreen() {
                     : []),
                 ]}>
                   <XAxis dataKey="name" stroke="#999"/>
-                  <YAxis stroke="#999" tickFormatter={(v) => `₹${v >= 1000 ? (v/1000).toFixed(0) + 'K' : v}`}/>
+                  <YAxis stroke="#999" tickFormatter={(v) => `${v >= 1000 ? (v/1000).toFixed(0) + 'K' : v}`}/>
                   <Tooltip contentStyle={{ background: '#1a1d2e', border: '1px solid #2d3149' }}
-                    formatter={(v: number) => [`₹${v.toLocaleString('en-IN')}`, 'Revenue']}/>
+                    formatter={(v: number) => [`${v.toLocaleString('en-IN')}`, 'Revenue']}/>
                   <Bar dataKey="value" fill="#7c3aed" radius={[6, 6, 0, 0]}/>
                 </BarChart>
               </ResponsiveContainer>

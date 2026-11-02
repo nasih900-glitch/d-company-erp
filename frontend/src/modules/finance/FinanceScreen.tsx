@@ -370,7 +370,7 @@ function OverviewTab() {
             <Stat label="CAC" value={metrics.cac_minor === null ? '—' : inrShort(metrics.cac_minor)}
               sub={metrics.cac_minor === null
                 ? 'no new customers this period'
-                : `₹${(metrics.marketing_spend_minor / 100).toFixed(0)} marketing ÷ ${metrics.new_customers_count} new`}/>
+                : `${(metrics.marketing_spend_minor / 100).toFixed(0)} marketing ÷ ${metrics.new_customers_count} new`}/>
             <Stat label="Burn rate" value={inrShort(metrics.burn_rate_minor)}
               tone={metrics.burn_rate_minor > 0 ? 'bad' : 'good'}
               sub={metrics.burn_rate_minor > 0 ? 'lost money this period, after cost of goods sold and expenses' : 'profitable this period'}/>
@@ -825,7 +825,7 @@ function ExpenseForm({
         createExpense: async () => {
           const amountMinor = parseRupeesToMinor(form.amount_rupees);
           if (amountMinor === null || amountMinor <= 0) {
-            throw new Error('Expense amount must be above ₹0 with at most two decimals.');
+            throw new Error('Expense amount must be above 0 with at most two decimals.');
           }
           if (form.paid_via === 'cash' && !form.shift_id) {
             throw new Error('Select the open shift drawer that paid this cash expense.');
@@ -891,7 +891,7 @@ function ExpenseForm({
             </Field>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Field label="Amount (₹)">
+            <Field label="Amount">
               <input type="number" min={0} step="0.01" required className="input font-mono text-right"
                 value={form.amount_rupees}
                 onChange={(e) => setForm({ ...form, amount_rupees: e.target.value })}/>
@@ -1679,7 +1679,7 @@ function CapitalForm({
     e.preventDefault();
     const amountMinor = rupeesToMinor(form.amount_rupees);
     if (amountMinor === null) {
-      setErr('Enter an amount greater than ₹0 with no more than two decimal places.');
+      setErr('Enter an amount greater than 0 with no more than two decimal places.');
       return;
     }
     const sourceRef = form.source_ref.trim();
@@ -1735,7 +1735,7 @@ function CapitalForm({
           </Field>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="Amount (₹)">
+          <Field label="Amount">
             <input type="number" min={0.01} step="0.01" required inputMode="decimal"
               className="input font-mono text-right" value={form.amount_rupees}
               onChange={(e) => setForm({ ...form, amount_rupees: e.target.value })}/>

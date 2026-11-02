@@ -296,7 +296,7 @@ describe('Orders & Shifts staff-facing shift feedback', () => {
       'Add a recovery reason of at least 12 characters.',
     ]);
     expect(androidShiftRecoveryMissingRequirements('0.001', 'Tablet is isolated', true)).toEqual([
-      'Enter a valid cash count (₹0 or more, up to two decimal places).',
+      'Enter a valid cash count (0 or more, up to two decimal places).',
     ]);
     expect(androidShiftRecoveryMissingRequirements('0.00', 'Tablet is isolated', true)).toEqual([]);
   });

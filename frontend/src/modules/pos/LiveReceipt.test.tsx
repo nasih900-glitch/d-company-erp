@@ -110,13 +110,13 @@ describe('LiveReceipt payment details', () => {
     expect(markup).toContain('aria-label="Payment split details"');
     expect(markup).toContain('PAYMENT SPLIT');
     expect(markup).toContain('Cash');
-    expect(markup).toContain('₹17.00');
+    expect(markup).toContain('17.00');
     expect(markup).toContain('UPI');
-    expect(markup).toContain('₹25.00');
+    expect(markup).toContain('25.00');
     expect(markup).toContain('Cash tendered');
-    expect(markup).toContain('₹20.00');
+    expect(markup).toContain('20.00');
     expect(markup).toContain('Change given');
-    expect(markup).toContain('₹3.00');
+    expect(markup).toContain('3.00');
     expect(markup).toContain('upi-ref-1');
   });
 

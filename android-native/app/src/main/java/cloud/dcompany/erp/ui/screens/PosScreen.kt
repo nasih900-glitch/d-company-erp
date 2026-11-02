@@ -136,6 +136,7 @@ import cloud.dcompany.erp.core.money.minorToRupeesInput
 import cloud.dcompany.erp.core.money.normalizeRupeeInput
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.core.net.currencyFreeLabel
 import cloud.dcompany.erp.core.net.CanonicalReceipt
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
@@ -2523,7 +2524,7 @@ private fun OrderDetailsDialog(
                         }
                     },
                     enabled = canDiscount,
-                    label = { Text("Manual discount (₹)") },
+                    label = { Text("Manual discount") },
                     supportingText = {
                         Text(
                             when {
@@ -2897,7 +2898,6 @@ internal fun CartPanel(
                 normalizeRupeeInput(entered)?.let(onCashTenderedChanged)
             },
             label = { Text("Cash received") },
-            prefix = { Text("₹") },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             modifier = detailModifier
@@ -3481,7 +3481,7 @@ private fun HeldOrderReviewDialog(
                     TouchMoneyEntry(
                         value = discountText,
                         onValueChange = { discountText = it },
-                        label = "Manual discount (₹)",
+                        label = "Manual discount",
                         enabled = canMutateDiscount,
                         maxMinor = review.maxManualDiscountMinor,
                         modifier = Modifier.fillMaxWidth(),
@@ -3853,7 +3853,7 @@ private fun DirectCheckoutReviewDialog(
                                     else -> choices.forEach { choice ->
                                         Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                                             ErpButton(
-                                                text = "${choice.label} · ${choice.pointsCost} pts → ${choice.valueMinor.asRupees()}",
+                                                text = "${choice.label.currencyFreeLabel()} · ${choice.pointsCost} pts → ${choice.valueMinor.asRupees()}",
                                                 onClick = {
                                                     check(choice.eligible && choice.affordable)
                                                     rewardReview = ReviewedRewardRedemption(
@@ -3900,8 +3900,8 @@ private fun DirectCheckoutReviewDialog(
                                         .padding(Spacing.sm),
                                     verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                                 ) {
-                                    Text("Review ${selected.label}", fontWeight = FontWeight.SemiBold)
-                                    Text(selected.description, style = MaterialTheme.typography.bodySmall)
+                                    Text("Review ${selected.label.currencyFreeLabel()}", fontWeight = FontWeight.SemiBold)
+                                    Text(selected.description.currencyFreeLabel(), style = MaterialTheme.typography.bodySmall)
                                     Text(
                                         "${selected.pointsCost} points → ${selected.valueMinor.asRupees()} fixed bill credit · program revision ${selected.programRevision}",
                                         style = MaterialTheme.typography.labelSmall,
@@ -4253,7 +4253,7 @@ private fun PayDialog(
                                 supportingText = {
                                     Text(
                                         pointsError
-                                            ?: "10 points = ₹1 · the server verifies the live balance",
+                                            ?: "10 points = 1 · the server verifies the live balance",
                                     )
                                 },
                                 isError = pointsError != null,
@@ -4347,7 +4347,7 @@ private fun PayDialog(
                         value = tendered,
                         onValueChange = { tendered = it },
                         enabled = !confirmationConsumed,
-                        label = "Cash received (₹)",
+                        label = "Cash received",
                         presetsMinor = cashTenderPresets(dueMinor),
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -4615,7 +4615,7 @@ private fun SplitTenderEditor(
                     onValueChange = { entered ->
                         normalizeRupeeInput(entered)?.let { onAmountChange(splitMethod, it) }
                     },
-                    label = { Text("${SplitPaymentPolicy.methodLabel(splitMethod)} amount (₹)") },
+                    label = { Text("${SplitPaymentPolicy.methodLabel(splitMethod)} amount") },
                     keyboardOptions = KeyboardOptions(
                         keyboardType = KeyboardType.Decimal,
                         imeAction = ImeAction.Next,
@@ -4640,7 +4640,7 @@ private fun SplitTenderEditor(
                 onValueChange = { entered ->
                     normalizeRupeeInput(entered)?.let(onCashTenderedChange)
                 },
-                label = { Text("Cash received (₹)") },
+                label = { Text("Cash received") },
                 supportingText = { Text("This may exceed only the cash part; change is calculated below.") },
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Decimal,
@@ -4719,7 +4719,7 @@ private fun DirectZeroTotalCompletionDialog(
     }
     if (inline) {
         SectionCard(
-            title = "Complete bill · ₹0.00 due",
+            title = "Complete bill · 0.00 due",
             subtitle = "Final bill confirmation",
             modifier = modifier.testTag("pos-zero-confirmation-inline"),
             contentFillsAvailableHeight = true,
@@ -4780,7 +4780,7 @@ private fun DirectZeroTotalCompletionDialog(
                                 onConfirm()
                             }
                         },
-                    ) { Text(if (confirmationConsumed) "Submitted once" else "COMPLETE · ₹0.00") }
+                    ) { Text(if (confirmationConsumed) "Submitted once" else "COMPLETE · 0.00") }
                 }
             }
         }
@@ -4790,7 +4790,7 @@ private fun DirectZeroTotalCompletionDialog(
         onDismissRequest = { if (!confirmationConsumed) onDismiss() },
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
-        title = { Text("Complete bill · ₹0.00 due") },
+        title = { Text("Complete bill · 0.00 due") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 Text(
@@ -4838,7 +4838,7 @@ private fun DirectZeroTotalCompletionDialog(
                         onConfirm()
                     }
                 },
-            ) { Text(if (confirmationConsumed) "Submitted once" else "COMPLETE · ₹0.00") }
+            ) { Text(if (confirmationConsumed) "Submitted once" else "COMPLETE · 0.00") }
         },
         dismissButton = {
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
@@ -4877,13 +4877,13 @@ private fun ZeroTotalCompletionDialog(
         confirmationConsumed -> "Completion submitted once"
         !online -> "Reconnect to complete"
         !confirmEnabled -> "Completion unavailable"
-        else -> "COMPLETE BENEFIT · ₹0 DUE"
+        else -> "COMPLETE BENEFIT · 0 DUE"
     }
 
     if (inline) {
         SectionCard(
-            title = checkout.sourceLabel?.let { "$it · ₹0.00 due" }
-                ?: "Member benefit · ₹0.00 due",
+            title = checkout.sourceLabel?.let { "$it · 0.00 due" }
+                ?: "Member benefit · 0.00 due",
             subtitle = "Final bill confirmation",
             modifier = modifier.testTag("pos-benefit-confirmation-inline"),
             contentFillsAvailableHeight = true,
@@ -4957,8 +4957,8 @@ private fun ZeroTotalCompletionDialog(
         shape = Radius.shapeLg,
         title = {
             Text(
-                checkout.sourceLabel?.let { "$it · ₹0.00 due" }
-                    ?: "Member benefit · ₹0.00 due",
+                checkout.sourceLabel?.let { "$it · 0.00 due" }
+                    ?: "Member benefit · 0.00 due",
             )
         },
         text = {

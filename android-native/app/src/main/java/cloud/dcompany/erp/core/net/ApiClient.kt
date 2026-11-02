@@ -22,6 +22,7 @@ import retrofit2.Retrofit
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 internal const val TERMINAL_ID_HEADER = "X-Terminal-Id"
 internal const val CLIENT_COMPATIBILITY_POLICY_REVISION_HEADER =
@@ -279,28 +280,70 @@ object ApiClient {
     internal inline fun <reified T> createEphemeralAuthorityApi(
         accessToken: String? = null,
         terminalId: String? = null,
-    ): T = createEphemeralAuthorityApi(T::class.java, accessToken, terminalId)
+        noinline beforeDispatch: () -> Unit = {},
+        singleAttempt: Boolean = false,
+    ): T = createEphemeralAuthorityApi(T::class.java, accessToken, terminalId, beforeDispatch, singleAttempt)
 
     internal fun <T> createEphemeralAuthorityApi(
         service: Class<T>,
         accessToken: String? = null,
         terminalId: String? = null,
+        beforeDispatch: () -> Unit = {},
+        singleAttempt: Boolean = false,
     ): T {
-        val client = baseClientBuilder()
-            .addInterceptor(ClientIdentityInterceptor())
-            .addInterceptor { chain ->
-                chain.proceed(
-                    chain.request().withEphemeralAuthority(accessToken, terminalId),
-                )
-            }
-            .addInterceptor(ErrorInterceptor(json))
-            .build()
         return Retrofit.Builder()
             .baseUrl(BuildConfig.API_BASE_URL)
-            .client(client)
+            .client(ephemeralAuthorityClient(accessToken, terminalId, beforeDispatch, singleAttempt))
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
             .create(service)
+    }
+
+    internal fun ephemeralAuthorityClient(
+        accessToken: String? = null,
+        terminalId: String? = null,
+        beforeDispatch: () -> Unit = {},
+        singleAttempt: Boolean = false,
+    ): OkHttpClient {
+        val builder = baseClientBuilder()
+            .retryOnConnectionFailure(!singleAttempt)
+            .followRedirects(!singleAttempt)
+            .followSslRedirects(!singleAttempt)
+            .addInterceptor(ClientIdentityInterceptor())
+            .addInterceptor(GuardedEphemeralAuthorityInterceptor(accessToken, terminalId, beforeDispatch))
+            .addInterceptor(ErrorInterceptor(json))
+        if (singleAttempt) {
+            // A request tag is per call; one captured API may perform multiple explicit reads/writes.
+            builder.addInterceptor { chain ->
+                chain.proceed(chain.request().newBuilder()
+                    .tag(EphemeralWireAttempt::class.java, EphemeralWireAttempt()).build())
+            }
+            builder.addNetworkInterceptor { chain ->
+                val attempt = chain.request().tag(EphemeralWireAttempt::class.java)
+                    ?: throw IOException("The one-attempt request fence is unavailable.")
+                // retryOnConnectionFailure(false) alone does not disable 503/421 follow-ups.
+                if (!attempt.started.compareAndSet(false, true)) {
+                    throw IOException("An automatic request replay was refused. Keep the original request for explicit review.")
+                }
+                beforeDispatch() // After connect, immediately before transport can write headers.
+                chain.proceed(chain.request())
+            }
+        }
+        return builder.build()
+    }
+
+    private class EphemeralWireAttempt(val started: AtomicBoolean = AtomicBoolean(false))
+
+    /** The caller's authority is checked immediately before handing immutable headers to transport. */
+    internal class GuardedEphemeralAuthorityInterceptor(
+        private val bearer: String?,
+        private val terminal: String?,
+        private val beforeDispatch: () -> Unit,
+    ) : Interceptor {
+        override fun intercept(chain: Interceptor.Chain): Response {
+            beforeDispatch()
+            return chain.proceed(chain.request().withEphemeralAuthority(bearer, terminal))
+        }
     }
 
     private val activeTerminalHeaders = ActiveTerminalHeaderContext()

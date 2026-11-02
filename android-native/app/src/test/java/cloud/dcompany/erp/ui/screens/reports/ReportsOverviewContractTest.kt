@@ -50,9 +50,9 @@ class ReportsOverviewContractTest {
 
     @Test
     fun `Overview money formatting is exact for zero signed and Long minimum values`() {
-        assertEquals("₹0.00", 0L.asReportsRupees())
-        assertEquals("-₹12.49", (-1_249L).asReportsRupees())
-        assertEquals("-₹92,23,37,20,36,85,47,758.08", Long.MIN_VALUE.asReportsRupees())
+        assertEquals("0.00", 0L.asReportsRupees())
+        assertEquals("-12.49", (-1_249L).asReportsRupees())
+        assertEquals("-92,23,37,20,36,85,47,758.08", Long.MIN_VALUE.asReportsRupees())
     }
 
     @Test

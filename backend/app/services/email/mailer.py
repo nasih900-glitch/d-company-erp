@@ -82,7 +82,7 @@ def _html_to_text(html: str) -> str:
 
 
 def _rs(minor: int) -> str:
-    return f"₹{minor / 100:,.2f}"
+    return f"{minor / 100:,.2f}"
 
 
 def _metric_card(label: str, value: str, color: str) -> str:
@@ -143,7 +143,7 @@ def render_pnl_email(
     if not expenses_rows:
         expenses_rows = (
             '<tr><td style="padding:6px 0;color:#6b7280;">No expenses recorded</td>'
-            '<td align="right" style="padding:6px 0;font-family:monospace;">₹0.00</td></tr>'
+            '<td align="right" style="padding:6px 0;font-family:monospace;">0.00</td></tr>'
         )
     html = f"""\
 <!doctype html>
@@ -215,7 +215,7 @@ def render_daily_pnl_email(
 ) -> tuple[str, str]:
     """Return (subject, html_body) for the daily P&L email."""
     def rs(minor: int) -> str:
-        return f"₹{minor / 100:,.2f}"
+        return f"{minor / 100:,.2f}"
 
     profit_color = "#10b981" if net_profit_minor >= 0 else "#ef4444"
     subject = f"D Company — Daily P&L {period_label} · Net {rs(net_profit_minor)}"

@@ -1388,8 +1388,8 @@ async def gstr1_csv(
         ["Note", "Verify portal table mapping before filing. ECO section 9(5) supplies are separated below."],
         [],
         ["Normal outward taxable supplies"],
-        ["Type", "Place of Supply", "Rate %", "Taxable Value ₹",
-         "IGST ₹", "CGST ₹", "SGST ₹", "Cess ₹"],
+        ["Type", "Place of Supply", "Rate %", "Taxable Value",
+         "IGST", "CGST", "SGST", "Cess"],
     ]
     for rate, vals in sorted(by_rate.items()):
         if not any(vals.values()):
@@ -1408,7 +1408,7 @@ async def gstr1_csv(
         out.extend([
             [],
             ["Restaurant services through ECO under CGST section 9(5)"],
-            ["Delivery platform", "Place of Supply", "Rate %", "Supply Value ₹", "D Company GST ₹"],
+            ["Delivery platform", "Place of Supply", "Rate %", "Supply Value", "D Company GST"],
         ])
         for rate, value in sorted(eco_by_rate.items()):
             if not value:
@@ -1514,7 +1514,7 @@ async def gstr3b_csv(
         ["Note", "Verify GST portal table mapping before filing."],
         [],
         ["Table 3.1 — Outward taxable supplies"],
-        ["", "Total taxable value ₹", "IGST ₹", "CGST ₹", "SGST ₹", "Cess ₹"],
+        ["", "Total taxable value", "IGST", "CGST", "SGST", "Cess"],
         [
             "Outward taxable supplies (other than zero-rated)",
             f"{normal_taxable_minor / 100:.2f}",

@@ -30,6 +30,7 @@ from app.api.v1.reports.router import router as reports_router
 from app.api.v1.settings.router import router as settings_router
 from app.api.v1.settings.google_sheets import router as google_sheets_settings_router
 from app.api.v1.staff.router import router as staff_router
+from app.api.v1.staff.work_time import router as staff_work_time_router
 from app.api.v1.tables.router import router as tables_router
 from app.api.v1.ws.router import router as ws_router
 
@@ -61,6 +62,7 @@ api_router.include_router(finance_router, prefix="/finance", tags=["finance"])
 api_router.include_router(tender_router, prefix="/finance/tender-corrections", tags=["finance"])
 api_router.include_router(ocr_router, prefix="/ocr", tags=["ocr"])
 api_router.include_router(staff_router, prefix="/staff", tags=["staff"])
+api_router.include_router(staff_work_time_router, prefix="/staff", tags=["staff"])
 api_router.include_router(analytics_router, prefix="/analytics", tags=["analytics"])
 api_router.include_router(reports_router, prefix="/reports", tags=["reports"])
 api_router.include_router(

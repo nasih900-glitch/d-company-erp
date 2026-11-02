@@ -105,6 +105,19 @@ class ExecutiveEntryPresentationTest {
     }
 
     @Test
+    fun `fully inset wide viewport retains finite geometry until height returns`() {
+        val normal = loginWideGeometry(1_280f, 550f, 1.3f)
+        val hidden = loginWideGeometry(1_280f, 0f, 1.3f)
+        assertEquals(0f, hidden.panelHeight, 0f)
+        assertEquals(0f, hidden.formTop, 0f)
+        assertEquals(normal.formZoneWidth, hidden.formZoneWidth, 0f)
+        assertEquals(normal.controlWidth, hidden.controlWidth, 0f)
+        assertFalse(hidden.showIdentity)
+        assertTrue(hidden.condensedForIme)
+        assertEquals(normal, loginWideGeometry(1_280f, 550f, 1.3f))
+    }
+
+    @Test
     fun `login glass remains native presentation over the preserved scene and auth surface`() {
         val source = Files.newBufferedReader(
             projectRoot().resolve("src/main/java/cloud/dcompany/erp/ui/screens/LoginScreen.kt"),

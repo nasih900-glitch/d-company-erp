@@ -55,10 +55,10 @@ class PosReceiptPrintTest {
         assertTrue(html.contains("Large &amp; cold"))
         assertTrue(html.contains("Extra shot x2"))
         assertTrue(html.contains("No &#39;ice&#39;"))
-        assertTrue(html.contains("₹350.00"))
-        assertTrue(html.contains("-₹10.00"))
+        assertTrue(html.contains("350.00"))
+        assertTrue(html.contains("-10.00"))
         assertTrue(html.contains("Cash received"))
-        assertTrue(html.contains("₹50.00"))
+        assertTrue(html.contains("50.00"))
         assertTrue(html.contains("27 Aug 2026 · 11:30 PM IST"))
         assertFalse(html.contains("2026-08-27T18:00:00Z"))
         assertFalse(html.contains("Coffee <large>"))
@@ -83,10 +83,10 @@ class PosReceiptPrintTest {
             ),
         )
 
-        assertTrue(html.contains("Split · Cash ₹100 + UPI ₹250"))
+        assertTrue(html.contains("Split · Cash 100 + UPI 250"))
         assertTrue(html.contains("Cash received"))
-        assertTrue(html.contains("₹200.00"))
-        assertTrue(html.contains("₹100.00"))
+        assertTrue(html.contains("200.00"))
+        assertTrue(html.contains("100.00"))
         assertFalse(html.contains("split:v1"))
     }
 

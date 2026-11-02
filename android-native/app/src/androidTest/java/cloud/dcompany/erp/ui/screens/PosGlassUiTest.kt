@@ -198,7 +198,7 @@ class PosGlassUiTest {
             useUnmergedTree = true,
         ).assertIsDisplayed()
         compose.onNode(
-            hasText("₹32.00") and hasAnyAncestor(hasTestTag("pos-cart-total")),
+            hasText("32.00") and hasAnyAncestor(hasTestTag("pos-cart-total")),
             useUnmergedTree = true,
         ).assertIsDisplayed()
         assertFullyContained(
@@ -280,7 +280,7 @@ class PosGlassUiTest {
             viewportTag = "pos-catalog",
         )
         assertRenderedTextContrast("Product 01", isDay = true)
-        assertRenderedTextContrast("₹10.00", isDay = true)
+        assertRenderedTextContrast("10.00", isDay = true)
         tile.performClick()
         compose.onNode(
             hasText("Product 01") and hasAnyAncestor(hasTestTag("pos-product-item-01")),
@@ -291,11 +291,11 @@ class PosGlassUiTest {
             useUnmergedTree = true,
         ).assertIsDisplayed()
         compose.onNode(
-            hasText("₹10.00") and hasAnyAncestor(hasTestTag("pos-product-item-01")),
+            hasText("10.00") and hasAnyAncestor(hasTestTag("pos-product-item-01")),
             useUnmergedTree = true,
         ).assertIsDisplayed()
         compose.onNode(
-            hasText("₹10.00") and hasAnyAncestor(hasTestTag("pos-cart")),
+            hasText("10.00") and hasAnyAncestor(hasTestTag("pos-cart")),
             useUnmergedTree = true,
         ).assertIsDisplayed()
         compose.onNodeWithTag("pos-take-payment").assertIsDisplayed().assertIsNotEnabled()
@@ -328,7 +328,7 @@ class PosGlassUiTest {
             "recomposed compact search",
             viewportTag = "pos-catalog",
         ).assertIsFocused()
-        compose.onNodeWithContentDescription("Add Product 01, ₹10.00, Drinks to the current order")
+        compose.onNodeWithContentDescription("Add Product 01, 10.00, Drinks to the current order")
             .assertIsDisplayed()
         val cash = assertFullTarget(
             compose.onNodeWithTag("pos-inline-cash-received"),
@@ -357,7 +357,7 @@ class PosGlassUiTest {
         )
         awaitWorkspaceGlass()
         val firstProduct = compose.onNodeWithContentDescription(
-            "Add Product 01, ₹10.00, Drinks to the current order",
+            "Add Product 01, 10.00, Drinks to the current order",
         ).assertIsDisplayed()
         val initialTop = firstProduct.fetchSemanticsNode().boundsInRoot.top
         val catalogScroll = verticalScrollOwner("pos-catalog")
@@ -371,7 +371,7 @@ class PosGlassUiTest {
             verticalScrollValue(catalogScroll) > initialCatalogScroll + 1f,
         )
         val firstAfter = compose.onAllNodesWithContentDescription(
-            "Add Product 01, ₹10.00, Drinks to the current order",
+            "Add Product 01, 10.00, Drinks to the current order",
         ).fetchSemanticsNodes()
         assertTrue("physical grid swipe must move or virtualize the first keyed item", firstAfter.isEmpty() || firstAfter.single().boundsInRoot.top < initialTop - 1f)
         val firstCartItem = compose.onNode(
@@ -429,7 +429,7 @@ class PosGlassUiTest {
         )
         awaitWorkspaceGlass()
         assertRenderedTextContrast("Product 01", isDay = false)
-        assertRenderedTextContrast("₹10.00", isDay = false)
+        assertRenderedTextContrast("10.00", isDay = false)
         assertEquals(0, compose.onAllNodesWithText("Scan").fetchSemanticsNodes().size)
         assertEquals(0, compose.onAllNodesWithContentDescription("Product photo").fetchSemanticsNodes().size)
         compose.onNodeWithContentDescription("Product 01, view only")
@@ -487,7 +487,7 @@ class PosGlassUiTest {
         compose.onNodeWithText("Customise Product 01").assertIsDisplayed()
         assertFullTarget(
             compose.onNode(
-                hasText("ADD · ₹10.00") and hasClickAction() and hasAnyAncestor(isDialog()),
+                hasText("ADD · 10.00") and hasClickAction() and hasAnyAncestor(isDialog()),
             ),
             "configuration confirmation",
             viewport = compose.onNode(isDialog()),

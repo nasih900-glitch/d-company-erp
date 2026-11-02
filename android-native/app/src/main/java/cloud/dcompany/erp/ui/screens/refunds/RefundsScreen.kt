@@ -1054,7 +1054,7 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
                 OutlinedTextField(
                     value = amount,
                     onValueChange = { amount = it.filter { c -> c.isDigit() || c == '.' } },
-                    label = { Text("Refund amount (₹)") },
+                    label = { Text("Refund amount") },
                     singleLine = true,
                     isError = invalidAmount || overRefund || amountMinor <= 0,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
@@ -1062,7 +1062,7 @@ private fun RefundDialog(order: Order, busy: Boolean, online: Boolean, vm: Refun
                 )
                 when {
                     invalidAmount -> Text("Use rupees with no more than 2 decimal places.", color = MaterialTheme.colorScheme.operationalDanger)
-                    amountMinor <= 0 -> Text("Refund amount must be greater than ₹0.", color = MaterialTheme.colorScheme.operationalDanger)
+                    amountMinor <= 0 -> Text("Refund amount must be greater than 0.", color = MaterialTheme.colorScheme.operationalDanger)
                     overRefund -> Text("That is above the latest refundable balance.", color = MaterialTheme.colorScheme.operationalDanger)
                 }
 

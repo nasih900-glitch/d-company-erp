@@ -170,7 +170,7 @@ it('voids a reviewed stopped-player session here with exact metadata and no POS 
   prepare(ended); await settle();
   expect(button('Void').disabled).toBe(false);
   act(() => button('Void').click()); await settle();
-  expect(document.body.textContent).toContain('Void ₹60.00 before POS');
+  expect(document.body.textContent).toContain('Void 60.00 before POS');
   const input = document.querySelector<HTMLInputElement>('input[placeholder="Why is this session being cancelled?"]')!;
   act(() => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Entered by mistake');

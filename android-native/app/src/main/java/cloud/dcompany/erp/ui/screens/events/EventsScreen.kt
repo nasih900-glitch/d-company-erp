@@ -718,7 +718,7 @@ private fun EventFormDialog(editing: Event?, state: EventsUiState, vm: EventsVie
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.fillMaxWidth(),
         )
-        DecimalField(priceRupees, { priceRupees = it }, "Ticket price (₹)")
+        DecimalField(priceRupees, { priceRupees = it }, "Ticket price")
         if (editing != null) {
             Text(
                 "Changing the price needs a fresh password unlock, same as Menu.",

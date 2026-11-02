@@ -235,7 +235,7 @@ class GamingInlineShiftWorkspaceUiTest {
         dual.assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick().assertIsSelected()
         compose.waitForIdle()
         recordDraftCheckpoint(draftCheckpoints, "after_dual")
-        compose.onNodeWithContentDescription("Choose 30 minutes, ₹100.00")
+        compose.onNodeWithContentDescription("Choose 30 minutes, 100.00")
             .assertIsDisplayed().assertIsSelected()
         repeat(2) { index ->
             val addPlayer = compose.onNode(
@@ -251,8 +251,8 @@ class GamingInlineShiftWorkspaceUiTest {
                     hasAnyAncestor(hasTestTag("gaming-control-pane")),
             ).assertIsDisplayed().assertIsSelected()
             compose.onNodeWithContentDescription(
-                if (index == 0) "Choose 30 minutes, ₹130.00"
-                else "Choose 30 minutes, ₹160.00",
+                if (index == 0) "Choose 30 minutes, 130.00"
+                else "Choose 30 minutes, 160.00",
             ).assertIsDisplayed().assertIsSelected()
         }
         compose.onNode(
@@ -260,7 +260,7 @@ class GamingInlineShiftWorkspaceUiTest {
                 hasAnyAncestor(hasTestTag("gaming-control-pane")),
         ).assertIsDisplayed().assertIsNotEnabled()
         // The hour is revealed only after clockwise travel beyond thirty.
-        compose.onNodeWithContentDescription("Choose 60 minutes, ₹210.00").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Choose 60 minutes, 210.00").assertDoesNotExist()
         compose.onNodeWithTag("gaming-station-board")
             .performScrollToNode(hasTestTag("gaming-inline-expansion-ps5-2"))
         compose.waitForIdle()
@@ -416,7 +416,7 @@ class GamingInlineShiftWorkspaceUiTest {
         compose.waitForIdle()
         recordDraftCheckpoint(draftCheckpoints, "after_gesture")
         capturePostGestureDiagnostic(touchInputWidth, touchInputHeight, draftCheckpoints)
-        compose.onNodeWithContentDescription("Choose 60 minutes, ₹210.00")
+        compose.onNodeWithContentDescription("Choose 60 minutes, 210.00")
             .assertIsDisplayed().assertIsSelected()
         val customerSearch = compose.onNodeWithContentDescription(
             "Search saved customers by name or phone",
@@ -433,7 +433,7 @@ class GamingInlineShiftWorkspaceUiTest {
         val start = compose.onNodeWithTag("gaming-start-action")
         revealShiftDetailTarget(start, "Blocked Start")
         start.assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
-            .assertIsNotEnabled().assertTextEquals("Start 60 min · ₹210.00")
+            .assertIsNotEnabled().assertTextEquals("Start 60 min · 210.00")
         val initialActionHost = compose.onNodeWithTag("gaming-primary-action-host")
             .getUnclippedBoundsInRoot()
         assertTrue("Start must be contained in its visible action host: start=${start.getUnclippedBoundsInRoot()} host=$initialActionHost",
@@ -457,19 +457,19 @@ class GamingInlineShiftWorkspaceUiTest {
         compose.onNodeWithContentDescription("Search saved customers by name or phone").assertDoesNotExist()
         assertPermanentRingGeometry(requireFullContainment = false)
         compose.runOnIdle { assertEquals(0, starts) }
-        val openingFloat = compose.onNodeWithContentDescription("Opening float (₹), zero")
+        val openingFloat = compose.onNodeWithContentDescription("Opening float, zero")
         revealShiftDetailTarget(openingFloat, "Opening float")
         openingFloat.assertIsDisplayed().assertHeightIsAtLeast(48.dp)
             .performClick().performTextInput("25")
         // Also constrain the shell to an IME-sized viewport, independently of emulator IME choice.
         compose.runOnIdle { viewportHeight.value = 480.dp }
-        val populatedFloat = compose.onNodeWithContentDescription("Opening float (₹), 25")
+        val populatedFloat = compose.onNodeWithContentDescription("Opening float, 25")
         revealShiftDetailTarget(populatedFloat, "Populated opening float")
         populatedFloat.assertIsDisplayed().assertHeightIsAtLeast(48.dp).performImeAction()
         assertPermanentRingGeometry(requireFullContainment = false)
         compose.runOnIdle { keyboard?.hide(); viewportHeight.value = 744.dp }
         val submitShift = compose.onNode(
-            hasText("Open shift with ₹25.00") and hasClickAction() and
+            hasText("Open shift with 25.00") and hasClickAction() and
                 hasAnyAncestor(hasTestTag("gaming-control-pane")),
         )
         revealShiftDetailTarget(submitShift, "Open shift submit")
@@ -485,7 +485,7 @@ class GamingInlineShiftWorkspaceUiTest {
         val returnedRing = compose.onNodeWithTag("gaming-control-ring")
         revealShiftRingWithOuterBoard(boardNode, returnedRing)
         assertPermanentRingGeometry(requireFullContainment = true)
-        compose.onNodeWithContentDescription("Choose 60 minutes, ₹210.00")
+        compose.onNodeWithContentDescription("Choose 60 minutes, 210.00")
             .assertIsDisplayed().assertIsSelected()
         val retainedSelection = compose.onNodeWithText("Retained Customer")
         revealShiftDetailTarget(retainedSelection, "Retained customer selection")
@@ -499,13 +499,13 @@ class GamingInlineShiftWorkspaceUiTest {
         val retainedAdd = compose.onNodeWithContentDescription("Add player")
         revealShiftDetailTarget(retainedAdd, "Retained disabled Add player")
         retainedAdd.assertIsDisplayed().assertHeightIsAtLeast(48.dp).assertIsNotEnabled()
-        val retainedSurcharge = compose.onNodeWithText("2 extra controllers · ₹60.00 surcharge")
+        val retainedSurcharge = compose.onNodeWithText("2 extra controllers · 60.00 surcharge")
         revealShiftDetailTarget(retainedSurcharge, "Retained controller surcharge")
         retainedSurcharge.assertIsDisplayed()
         val retainedStart = compose.onNodeWithTag("gaming-start-action")
         revealShiftDetailTarget(retainedStart, "Retained blocked Start")
         retainedStart.assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
-            .assertIsNotEnabled().assertTextEquals("Start 60 min · ₹210.00")
+            .assertIsNotEnabled().assertTextEquals("Start 60 min · 210.00")
         val returnedActionHost = compose.onNodeWithTag("gaming-primary-action-host")
             .getUnclippedBoundsInRoot()
         assertTrue(
@@ -986,8 +986,8 @@ class GamingInlineShiftWorkspaceUiTest {
                 put("board_scroll", scroll("gaming-station-board"))
                 put("pane_scroll", scroll("gaming-control-pane"))
                 put("detail_scroll", scroll("gaming-detail-scroll-owner"))
-                put("choose_30", markers("Choose 30 minutes, ₹160.00"))
-                put("choose_60", markers("Choose 60 minutes, ₹210.00"))
+                put("choose_30", markers("Choose 30 minutes, 160.00"))
+                put("choose_60", markers("Choose 60 minutes, 210.00"))
                 put("draft_checkpoints", draftCheckpoints)
             }.toString(2) + "\n",
         )

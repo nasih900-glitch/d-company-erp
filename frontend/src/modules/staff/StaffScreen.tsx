@@ -12,15 +12,15 @@
  *  - Soft-delete
  */
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Phone, UserPlus, Edit2, KeyRound, ShieldOff, ShieldCheck, Trash2,
-  Mail, AlertCircle, Loader2, Clock, LogIn, LogOut,
+  Mail, AlertCircle, Loader2, Clock,
 } from 'lucide-react';
 
 import { LIVE_MODE } from '@/lib/demo';
 import { STAFF, type StaffMember } from '@/lib/demo-data';
-import { attendance, auth, staff, type OnShiftDTO, type UserDTO, type RoleDTO } from '@/lib/erp-api';
-import { subscribeRealtime } from '@/lib/realtime';
+import { auth, staff, type UserDTO, type RoleDTO } from '@/lib/erp-api';
 import { roleLabel } from '@/lib/roles';
 import { useAuth } from '@/modules/auth/AuthContext';
 import Modal from '@/components/ui/Modal';
@@ -225,128 +225,13 @@ export default function StaffScreen() {
   );
 }
 
-// ---------------------------------------------------------------- Attendance
-// Fallback only — the real-time push (see subscribeRealtime below) is what
-// actually keeps this in sync; this just covers the rare case of a missed
-// or dropped push (e.g. reconnecting after a network blip).
-const ATTENDANCE_POLL_MS = 120_000;
-
+// Keep account administration separate from actual-break attendance recording.
 function AttendanceWidget() {
-  const { me } = useAuth();
-  const [onShift, setOnShift] = useState<OnShiftDTO[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  async function load() {
-    try {
-      setOnShift(await attendance.onShift());
-      setErr(null);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'failed to load on-shift list');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => { load(); }, []);
-
-  // On-shift roster is shared across every device. Real-time push is what
-  // actually keeps this current — the moment anyone clocks in or out,
-  // every other screen hears about it within about a second, quietly (no
-  // loading spinner). The interval below is just a safety net for a
-  // missed push, not the primary mechanism.
-  useEffect(() => {
-    const unsubscribe = subscribeRealtime('attendance', load);
-    const id = setInterval(load, ATTENDANCE_POLL_MS);
-    return () => { unsubscribe(); clearInterval(id); };
-  }, []);
-
-  const myEntry = onShift.find((s) => s.user_id === me?.user_id);
-  const clockedIn = !!myEntry;
-
-  async function handleClockIn() {
-    if (!me?.branch_id) {
-      setErr('No branch on this account — ask an owner to assign one before clocking in.');
-      return;
-    }
-    setBusy(true); setErr(null);
-    try {
-      await attendance.clockIn(me.branch_id);
-      await load();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'clock-in failed');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleClockOut() {
-    setBusy(true); setErr(null);
-    try {
-      await attendance.clockOut();
-      await load();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'clock-out failed');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="card mb-4">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <div className="font-semibold flex items-center gap-2">
-            <Clock size={15}/> Attendance
-          </div>
-          <p className="text-xs text-fg-muted mt-0.5">
-            {clockedIn
-              ? `You clocked in at ${formatClockTime(myEntry!.clock_in_at)}`
-              : 'You are not clocked in right now'}
-          </p>
-        </div>
-        <button
-          className={`btn ${clockedIn ? 'btn-ghost' : 'btn-primary'} !min-h-[36px]`}
-          onClick={clockedIn ? handleClockOut : handleClockIn}
-          disabled={busy || loading}
-        >
-          {busy
-            ? <Loader2 className="animate-spin" size={14}/>
-            : clockedIn ? <LogOut size={14}/> : <LogIn size={14}/>}
-          {clockedIn ? 'Clock out' : 'Clock in'}
-        </button>
-      </div>
-
-      {err && <div className="mt-3"><ErrorRow text={err}/></div>}
-
-      <div className="mt-4 pt-3 border-t border-bg-border/60">
-        <div className="text-xs text-fg-muted mb-2">
-          On shift now {onShift.length ? `(${onShift.length})` : ''}
-        </div>
-        {loading ? (
-          <div className="text-xs text-fg-muted flex items-center gap-2">
-            <Loader2 className="animate-spin" size={12}/> Loading…
-          </div>
-        ) : onShift.length ? (
-          <div className="flex flex-wrap gap-2">
-            {onShift.map((s) => (
-              <span key={s.id} className="chip text-xs">
-                {s.user_name ?? s.user_email ?? 'Staff'} · since {formatClockTime(s.clock_in_at)}
-              </span>
-            ))}
-          </div>
-        ) : (
-          <div className="text-xs text-fg-muted">Nobody is clocked in right now.</div>
-        )}
-      </div>
-    </div>
-  );
-}
-function formatClockTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return <div className="card mb-4 flex flex-wrap items-center justify-between gap-3">
+    <div><h3 className="flex items-center gap-2 font-semibold"><Clock size={16} /> Individual time & attendance</h3>
+      <p className="mt-1 text-sm text-fg-muted">Record actual breaks, review monthly hours and keep draft salary proposals separate from payments.</p></div>
+    <Link className="btn btn-ghost" to="/staff/time">Open working time</Link>
+  </div>;
 }
 
 // ---------------------------------------------------------------- UserCard

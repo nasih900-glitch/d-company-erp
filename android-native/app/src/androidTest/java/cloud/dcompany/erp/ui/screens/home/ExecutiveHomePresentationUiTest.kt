@@ -168,7 +168,7 @@ class ExecutiveHomePresentationUiTest {
             greetingBounds.right + 16.dp <= freshStatus.left,
         )
         compose.onNodeWithText("Today's sales").assertIsDisplayed()
-        compose.onNodeWithText("₹24,580.00").assertIsDisplayed()
+        compose.onNodeWithText("24,580.00").assertIsDisplayed()
         compose.onNodeWithText("Company live directory").assertIsDisplayed()
         compose.onNodeWithText("+17.05% vs previous day").assertIsDisplayed()
         compose.onNodeWithText("+14.29% vs previous day").assertIsDisplayed()
@@ -179,7 +179,7 @@ class ExecutiveHomePresentationUiTest {
             .assertIsDisplayed()
         compose.onNodeWithTag("home-activity-title-0", useUnmergedTree = true)
             .assertIsDisplayed().assertTextEquals("Paid order")
-        compose.onNodeWithText("POS ₹18,450.00").assertIsDisplayed()
+        compose.onNodeWithText("POS 18,450.00").assertIsDisplayed()
         assertFullyInsideRoot("home-recent-activity")
         assertFullyInsideRoot("home-sales-trend")
         assertWideLowerPanelsFit(fontScale = 1f, stateLabel = "loaded", expectedHeight = 276.dp)
@@ -197,7 +197,7 @@ class ExecutiveHomePresentationUiTest {
         assertApprovedWideGeometry()
         compose.onNodeWithTag("home-hour-profile").assertHeightIsAtLeast(100.dp)
         assertHourAxisAlignment()
-        compose.onNodeWithText("Range ₹0.00 to ₹2,050.00").assertIsDisplayed()
+        compose.onNodeWithText("Range 0.00 to 2,050.00").assertIsDisplayed()
         compose.onNodeWithTag("home-activity-4").assertIsDisplayed()
         compose.onNodeWithTag("home-activity-time-0", useUnmergedTree = true)
             .assertTextEquals("INV-1042 · 5:00 PM")
@@ -211,7 +211,7 @@ class ExecutiveHomePresentationUiTest {
             "Customers",
             "Company live directory",
             "Paid order",
-            "POS ₹18,450.00",
+            "POS 18,450.00",
             "Snapshot 23 Oct 2026 · fetched ${expectedFetchedTimestamp()}",
         )
             .forEach(::assertAllHomeTextDoesNotOverflow)
@@ -353,7 +353,7 @@ class ExecutiveHomePresentationUiTest {
         compose.onNodeWithText("Your role cannot view recent operational activity").assertIsDisplayed()
         compose.onNodeWithText("Paid order").assertDoesNotExist()
         compose.onNodeWithTag("home-hour-profile").assertIsDisplayed()
-        compose.onNodeWithText("POS ₹18,450.00").assertIsDisplayed()
+        compose.onNodeWithText("POS 18,450.00").assertIsDisplayed()
         assertFullyInsideRoot("home-recent-activity")
         assertFullyInsideRoot("home-sales-trend")
     }
@@ -445,8 +445,8 @@ class ExecutiveHomePresentationUiTest {
 
         val profile = compose.onNodeWithTag("home-hour-profile").assertIsDisplayed()
         val description = profile.fetchSemanticsNode().config[SemanticsProperties.ContentDescription].single()
-        assertTrue(description.contains("12am -₹100.00"))
-        assertTrue(description.contains("11pm ₹200.00"))
+        assertTrue(description.contains("12am -100.00"))
+        assertTrue(description.contains("11pm 200.00"))
         val signedBitmap = profile.captureToImage().asAndroidBitmap()
         try {
             val baseline = signedBitmap.height * 2f / 3f
@@ -570,7 +570,7 @@ class ExecutiveHomePresentationUiTest {
             text = "Live refresh unavailable",
             maximumLines = 2,
         )
-        compose.onNodeWithText("₹24,580.00").assertIsDisplayed()
+        compose.onNodeWithText("24,580.00").assertIsDisplayed()
         compose.onNodeWithText("Live activity is unavailable offline").assertIsDisplayed()
         assertTaggedTextFullyVisible(
             tag = "home-snapshot-label",
@@ -998,7 +998,7 @@ class ExecutiveHomePresentationUiTest {
             listOf(
                 Triple("home-recent-activity", "Recent activity", 1),
                 Triple("home-sales-trend", "POS sales by local hour", 1),
-                Triple("home-sales-trend", "POS ₹18,450.00", 1),
+                Triple("home-sales-trend", "POS 18,450.00", 1),
                 Triple("home-sales-trend", "Open Analytics", 1),
             )
         } else {
@@ -1032,7 +1032,7 @@ class ExecutiveHomePresentationUiTest {
         val salesBounds = compose.onNodeWithTag("home-sales-trend").getUnclippedBoundsInRoot()
         val actionBounds = compose.onNodeWithTag("home-open-analytics")
             .assertIsDisplayed().assertHeightIsAtLeast(48.dp).getUnclippedBoundsInRoot()
-        val supportingText = if (stateLabel.startsWith("loaded")) "POS ₹18,450.00" else "Hourly POS profile unavailable"
+        val supportingText = if (stateLabel.startsWith("loaded")) "POS 18,450.00" else "Hourly POS profile unavailable"
         val secondaryBounds = compose.onAllNodes(
             hasText(supportingText) and
                 hasAnyAncestor(hasTestTag("home-sales-trend")),
@@ -1117,14 +1117,14 @@ class ExecutiveHomePresentationUiTest {
         assertHourAxisAlignment()
         assertTaggedTextInkFitsOwner(
             tag = "home-profile-total",
-            expectedText = "POS ₹18,450.00",
+            expectedText = "POS 18,450.00",
             ownerTag = "home-sales-trend",
             stateLabel = stateLabel,
             fontScale = fontScale,
         )
         assertTaggedTextInkFitsOwner(
             tag = "home-profile-range",
-            expectedText = "Range ₹0.00 to ₹2,050.00",
+            expectedText = "Range 0.00 to 2,050.00",
             ownerTag = "home-sales-trend",
             stateLabel = stateLabel,
             fontScale = fontScale,
@@ -1251,7 +1251,7 @@ class ExecutiveHomePresentationUiTest {
             "Live activity is unavailable offline" -> "recent-offline"
             "POS sales by local hour" -> "sales-title"
             "Hourly POS profile unavailable" -> "sales-empty"
-            "POS ₹18,450.00" -> "sales-support"
+            "POS 18,450.00" -> "sales-support"
             "Open Analytics" -> "analytics-action"
             else -> error("Unreviewed Home lower-panel evidence text")
         }

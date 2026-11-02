@@ -250,8 +250,8 @@ class GamingStationPresentationTest {
 
         assertEquals(StationVisualState.Available, projection.presentation.state)
         assertEquals("Ready", projection.timerValue)
-        assertEquals("Fixed packages from ₹80.00", projection.pricingValue)
-        assertFalse(projection.pricingValue.contains("₹150.00"))
+        assertEquals("Fixed packages from 80.00", projection.pricingValue)
+        assertFalse(projection.pricingValue.contains("150.00"))
     }
 
     @Test
@@ -280,7 +280,7 @@ class GamingStationPresentationTest {
 
         assertEquals(StationVisualState.Active, projection.presentation.state)
         assertEquals("00:20:00 remaining", projection.timerValue)
-        assertEquals("Single · booked ₹80.00", projection.pricingValue)
+        assertEquals("Single · booked 80.00", projection.pricingValue)
         assertFalse(projection.pricingValue.contains("total", ignoreCase = true))
     }
 
@@ -385,10 +385,10 @@ class GamingStationPresentationTest {
             ),
         )
 
-        assertEquals("Fixed packages from ₹80.00", availableStationPricingDescription(station, packages))
+        assertEquals("Fixed packages from 80.00", availableStationPricingDescription(station, packages))
         assertEquals("Fixed-price tariff not synced", availableStationPricingDescription(station, emptyList()))
         assertEquals(
-            "Fixed packages from ₹70.00",
+            "Fixed packages from 70.00",
             availableStationPricingDescription(
                 station.copy(type = "simulator", ratePerHourMinor = 40_000),
                 listOf(
@@ -407,7 +407,7 @@ class GamingStationPresentationTest {
             ),
         )
         assertEquals(
-            "Fixed packages from ₹80.00",
+            "Fixed packages from 80.00",
             availableStationPricingDescription(
                 station.copy(type = "vr", ratePerHourMinor = 35_000),
                 listOf(

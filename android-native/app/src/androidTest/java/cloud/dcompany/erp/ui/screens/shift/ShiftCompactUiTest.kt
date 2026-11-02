@@ -102,12 +102,12 @@ class ShiftCompactUiTest {
             (form.right - form.left).value,
             1f,
         )
-        listOf("Decimal point", "Digit 0", "Delete last digit", "Clear Opening float (₹)")
+        listOf("Decimal point", "Digit 0", "Delete last digit", "Clear Opening float")
             .forEach { description ->
                 compose.onNodeWithContentDescription(description)
                     .assertIsDisplayed().assertHeightIsAtLeast(48.dp)
             }
-        compose.onNodeWithText("Open shift with ₹0.00")
+        compose.onNodeWithText("Open shift with 0.00")
             .assertIsDisplayed().assertIsEnabled().assertHeightIsAtLeast(48.dp)
     }
 
@@ -146,11 +146,11 @@ class ShiftCompactUiTest {
 
         // Primary action must be visible before any scroll, not merely
         // technically reachable below an always-expanded touch keypad.
-        compose.onNodeWithText("Open shift with ₹0.00").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Opening float (₹), zero")
+        compose.onNodeWithText("Open shift with 0.00").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Opening float, zero")
             .performScrollTo()
             .assertIsDisplayed()
-        listOf("Decimal point", "Digit 0", "Delete last digit", "Clear Opening float (₹)")
+        listOf("Decimal point", "Digit 0", "Delete last digit", "Clear Opening float")
             .forEach { description ->
                 compose.onNodeWithContentDescription(description)
                     .performScrollTo().assertIsDisplayed()
@@ -158,18 +158,18 @@ class ShiftCompactUiTest {
         compose.onNodeWithContentDescription("Decimal point").performScrollTo().performClick()
         compose.onNodeWithContentDescription("Digit 0").performScrollTo().performClick()
         compose.onNodeWithContentDescription("Delete last digit").performScrollTo().performClick()
-        compose.onNodeWithContentDescription("Clear Opening float (₹)").performScrollTo().performClick()
-        compose.onNodeWithContentDescription("Opening float (₹), zero")
+        compose.onNodeWithContentDescription("Clear Opening float").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Opening float, zero")
             .performScrollTo().performTextReplacement("210.50")
 
-        compose.onNodeWithText("Open shift with ₹210.50")
+        compose.onNodeWithText("Open shift with 210.50")
             .performScrollTo()
             .assertIsDisplayed()
             .assertIsEnabled()
             .performClick()
 
         compose.runOnIdle { assertEquals(21_050L, submittedMinor) }
-        compose.onNodeWithContentDescription("Opening float (₹), 210.50")
+        compose.onNodeWithContentDescription("Opening float, 210.50")
             .assertIsNotFocused()
     }
 
@@ -209,7 +209,7 @@ class ShiftCompactUiTest {
             }
         }
 
-        compose.onNodeWithText("Open shift with ₹0.00")
+        compose.onNodeWithText("Open shift with 0.00")
             .performScrollTo()
             .assertIsDisplayed()
             .performClick()
@@ -246,13 +246,13 @@ class ShiftCompactUiTest {
             }
         }
 
-        compose.onNodeWithContentDescription("Count of ₹500 notes")
+        compose.onNodeWithContentDescription("Count of 500 notes")
             .performScrollTo()
             .assertIsDisplayed()
             .assertIsEnabled()
             .performTextReplacement("1")
 
-        compose.onNodeWithText("₹500.00")
+        compose.onNodeWithText("500.00")
             .performScrollTo()
             .assertIsDisplayed()
         compose.onNodeWithText("Close shift")
@@ -289,16 +289,16 @@ class ShiftCompactUiTest {
         assertTrue("Drawer count should wrap its content on a tablet", dialogHeight < hostHeight - 48.dp)
 
         DENOMINATIONS.forEach { note ->
-            compose.onNodeWithContentDescription("Count of ₹$note notes")
+            compose.onNodeWithContentDescription("Count of $note notes")
                 .performScrollTo()
                 .assertIsDisplayed()
                 .assertIsEnabled()
         }
 
-        compose.onNodeWithContentDescription("Count of ₹500 notes")
+        compose.onNodeWithContentDescription("Count of 500 notes")
             .performScrollTo()
             .performTextReplacement("1")
-        compose.onNodeWithContentDescription("Count of ₹1 notes")
+        compose.onNodeWithContentDescription("Count of 1 notes")
             .performScrollTo()
             .performTextReplacement("2")
         compose.onNodeWithText("Use drawer count")
@@ -332,7 +332,7 @@ class ShiftCompactUiTest {
             }
         }
 
-        compose.onNodeWithContentDescription("Count of ₹1 notes")
+        compose.onNodeWithContentDescription("Count of 1 notes")
             .performScrollTo()
             .assertIsDisplayed()
             .performTextReplacement("1")
@@ -363,7 +363,7 @@ class ShiftCompactUiTest {
         // The Dialog creates its own window. Earlier tests mounted only its
         // content, so they could not catch reachability lost at that boundary.
         compose.onNode(isDialog()).assertExists()
-        compose.onNodeWithContentDescription("Count of ₹1 notes")
+        compose.onNodeWithContentDescription("Count of 1 notes")
             .performScrollTo()
             .performClick()
             .assertIsFocused()
@@ -399,8 +399,8 @@ class ShiftCompactUiTest {
             }
         }
 
-        compose.onNodeWithText("Open shift with ₹0.00").assertIsDisplayed()
-        listOf("Digit 2", "Decimal point", "Digit 0", "Delete last digit", "Clear Opening float (₹)")
+        compose.onNodeWithText("Open shift with 0.00").assertIsDisplayed()
+        listOf("Digit 2", "Decimal point", "Digit 0", "Delete last digit", "Clear Opening float")
             .forEach { description ->
                 compose.onNodeWithContentDescription(description)
                     .performScrollTo().assertIsDisplayed()
@@ -409,18 +409,18 @@ class ShiftCompactUiTest {
             .forEach { description ->
                 compose.onNodeWithContentDescription(description).performScrollTo().performClick()
             }
-        compose.onNodeWithContentDescription("Opening float (₹), 2.50").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Opening float, 2.50").assertIsDisplayed()
         compose.onNodeWithContentDescription("Delete last digit").performScrollTo().performClick()
-        compose.onNodeWithContentDescription("Opening float (₹), 2.5").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Clear Opening float (₹)")
+        compose.onNodeWithContentDescription("Opening float, 2.5").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Clear Opening float")
             .performScrollTo().performClick()
-        compose.onNodeWithContentDescription("Opening float (₹), zero").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Opening float, zero").assertIsDisplayed()
         listOf("Digit 2", "Digit 1", "Digit 0", "Decimal point", "Digit 5", "Digit 0")
             .forEach { description ->
                 compose.onNodeWithContentDescription(description).performScrollTo().performClick()
             }
 
-        compose.onNodeWithText("Open shift with ₹210.50")
+        compose.onNodeWithText("Open shift with 210.50")
             .performScrollTo()
             .assertIsDisplayed()
             .assertIsEnabled()
@@ -430,7 +430,7 @@ class ShiftCompactUiTest {
             assertEquals(21_050L, submittedMinor)
             assertEquals(1, submitCount)
         }
-        compose.onNodeWithContentDescription("Opening float (₹), 210.50")
+        compose.onNodeWithContentDescription("Opening float, 210.50")
             .assertIsNotFocused()
     }
 

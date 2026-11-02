@@ -165,7 +165,7 @@ class GamingBoardUiTest {
         compose.runOnIdle { viewport.value = 1_280 to 800 }
         compose.waitForIdle()
         assertDrinksFooterInsideViewport()
-        compose.onNodeWithText("Confirm add · ₹150.00").performClick()
+        compose.onNodeWithText("Confirm add · 150.00").performClick()
         compose.runOnIdle { assertEquals(listOf("mango" to 3), added) }
 
         compose.onNodeWithTag("gaming-drinks-search").performTextReplacement("Custom")
@@ -201,13 +201,13 @@ class GamingBoardUiTest {
         val replacement = original.copy(name = "Mango premium drink", basePriceMinor = 9_000)
         compose.runOnIdle { catalogue.value = listOf(replacement) }
         compose.onNodeWithText("Review Mango drink").assertIsDisplayed()
-        compose.onNodeWithText("Confirm add · ₹100.00").assertIsNotEnabled().performClick()
+        compose.onNodeWithText("Confirm add · 100.00").assertIsNotEnabled().performClick()
         compose.onNodeWithTag("gaming-drinks-review-stale").assertIsDisplayed()
         compose.runOnIdle { assertTrue(added.isEmpty()) }
         compose.onNodeWithText("Choose another item").performClick()
         compose.onNodeWithText("Mango premium drink").assertIsDisplayed()
         compose.onNodeWithText("Select").performClick()
-        compose.onNodeWithText("Confirm add · ₹90.00").performClick()
+        compose.onNodeWithText("Confirm add · 90.00").performClick()
         compose.runOnIdle { assertEquals(listOf(replacement to 1), added) }
         compose.onNodeWithText("Select").performClick()
         compose.runOnIdle { catalogue.value = emptyList() }
@@ -250,13 +250,13 @@ class GamingBoardUiTest {
         compose.onNodeWithContentDescription("POS. Take orders and payments").performClick()
         compose.onNodeWithContentDescription("Gaming. Manage stations and sessions").performClick()
         compose.onNodeWithText("Review Mango drink").assertIsDisplayed()
-        compose.onNodeWithText("Confirm add · ₹100.00").assertIsDisplayed()
+        compose.onNodeWithText("Confirm add · 100.00").assertIsDisplayed()
         compose.runOnIdle { assertTrue(confirmed.isEmpty()) }
         compose.onNodeWithContentDescription("POS. Take orders and payments").performClick()
         compose.runOnIdle { catalogue.value = listOf(original.copy(name = "Fresh mango drink", basePriceMinor = 9_000)) }
         compose.onNodeWithContentDescription("Gaming. Manage stations and sessions").performClick()
         compose.onNodeWithText("Review Mango drink").assertIsDisplayed()
-        compose.onNodeWithText("Confirm add · ₹100.00").assertIsNotEnabled().performClick()
+        compose.onNodeWithText("Confirm add · 100.00").assertIsNotEnabled().performClick()
         compose.onNodeWithTag("gaming-drinks-review-stale").assertIsDisplayed()
         compose.runOnIdle { assertTrue(confirmed.isEmpty()) }
     }
@@ -300,7 +300,7 @@ class GamingBoardUiTest {
         }
         compose.onNodeWithText("Select").performClick()
         compose.onNodeWithText("+").performClick().performClick()
-        compose.onNodeWithText("Confirm add · ₹150.00").assertIsDisplayed()
+        compose.onNodeWithText("Confirm add · 150.00").assertIsDisplayed()
         compose.onNodeWithContentDescription("POS. Take orders and payments").performClick()
         compose.runOnIdle { session.value = session.value.copy(id = "session-b") }
         compose.onNodeWithContentDescription("Gaming. Manage stations and sessions").performClick()
@@ -308,7 +308,7 @@ class GamingBoardUiTest {
         compose.onNodeWithTag("gaming-drinks-inline-confirm").assertDoesNotExist()
         compose.runOnIdle { assertTrue(confirmed.isEmpty()) }
         compose.onNodeWithText("Select").assertIsDisplayed().performClick()
-        compose.onNodeWithText("Confirm add · ₹50.00").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Confirm add · 50.00").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(listOf(Triple("session-b", original, 1)), confirmed) }
     }
 
@@ -739,7 +739,7 @@ class GamingBoardUiTest {
             }
         }
 
-        val sixtyMinutePrice = compose.onNodeWithContentDescription("Choose 60 minutes, ₹120.00")
+        val sixtyMinutePrice = compose.onNodeWithContentDescription("Choose 60 minutes, 120.00")
         capture("gaming-duration-price-before-hover.png", "dial-hover-fixture")
         sixtyMinutePrice.performMouseInput { enter() }
         capture("gaming-duration-price-hover.png", "dial-hover-fixture")
@@ -927,10 +927,10 @@ class GamingBoardUiTest {
             repeat(12) { step -> moveTo(ringPoint(width, height, 90f + (step + 1) * 15f), delayMillis = 16) }
             up()
         }
-        compose.onNodeWithContentDescription("Choose 60 minutes, ₹120.00").performClick()
+        compose.onNodeWithContentDescription("Choose 60 minutes, 120.00").performClick()
         dial.performSemanticsAction(SemanticsActions.SetProgress) { assertTrue(it(1f)) }
         compose.runOnIdle { assertEquals(1, ticks) }
-        compose.onNodeWithContentDescription("Choose 30 minutes, ₹80.00").performClick()
+        compose.onNodeWithContentDescription("Choose 30 minutes, 80.00").performClick()
         compose.runOnIdle { assertEquals(2, ticks); assertEquals("single-30", selected.value) }
     }
 
@@ -1047,7 +1047,7 @@ class GamingBoardUiTest {
         compose.waitForIdle()
         dial.performTouchInput { moveTo(ringPoint(width, height, 90f)); up() }
         compose.runOnIdle { assertEquals("single-60", selected.value); assertTrue(selections.isEmpty()) }
-        compose.onNodeWithContentDescription("Choose 30 minutes, ₹80.00").performClick()
+        compose.onNodeWithContentDescription("Choose 30 minutes, 80.00").performClick()
         compose.runOnIdle { assertEquals("single-30", selected.value); assertEquals(1, ticks) }
     }
 
@@ -1119,15 +1119,15 @@ class GamingBoardUiTest {
             }
         }
         val dial = compose.onNodeWithContentDescription("Session duration dial")
-        compose.onNodeWithContentDescription("Choose 60 minutes, ₹120.00").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Choose 60 minutes, 120.00").assertDoesNotExist()
         val ring = compose.onNodeWithTag("gaming-control-ring").getUnclippedBoundsInRoot()
-        val thirty = compose.onNodeWithContentDescription("Choose 30 minutes, ₹80.00").getUnclippedBoundsInRoot()
+        val thirty = compose.onNodeWithContentDescription("Choose 30 minutes, 80.00").getUnclippedBoundsInRoot()
         assertTrue((thirty.top + thirty.bottom) / 2 > (ring.top + ring.bottom) / 2)
         dial.performTouchInput {
             down(ringPoint(width, height, 90f))
             moveTo(ringPoint(width, height, 105f))
         }
-        compose.onNodeWithContentDescription("Choose 60 minutes, ₹120.00").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Choose 60 minutes, 120.00").assertIsDisplayed()
         compose.runOnIdle { assertEquals("single-30", selected.value) }
         dial.performTouchInput {
             repeat(11) { step -> moveTo(ringPoint(width, height, 120f + step * 15f), delayMillis = 16) }
@@ -1135,7 +1135,7 @@ class GamingBoardUiTest {
             up()
         }
         compose.runOnIdle { assertEquals("single-60", selected.value); assertEquals(1, ticks) }
-        compose.onNodeWithContentDescription("Choose 30 minutes, ₹80.00").performClick()
+        compose.onNodeWithContentDescription("Choose 30 minutes, 80.00").performClick()
         repeat(8) { dial.performTouchInput { click(ringPoint(width, height, 91f)) } }
         compose.runOnIdle { assertEquals("single-30", selected.value); assertEquals(2, ticks) }
     }
@@ -1204,9 +1204,9 @@ class GamingBoardUiTest {
             repeat(12) { step -> moveTo(ringPoint(width, height, 90f + (step + 1) * 15f), delayMillis = 16) }
             up()
         }
-        compose.onNodeWithText("Start 60 min · ₹120.00").assertIsDisplayed().performClick()
-        compose.onNodeWithContentDescription("Choose 30 minutes, ₹80.00").performClick()
-        compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Start 60 min · 120.00").assertIsDisplayed().performClick()
+        compose.onNodeWithContentDescription("Choose 30 minutes, 80.00").performClick()
+        compose.onNodeWithText("Start 30 min · 80.00").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(listOf("single-60", "single-30"), confirmed) }
     }
 
@@ -1244,7 +1244,7 @@ class GamingBoardUiTest {
                 }
                 up()
         }
-        compose.onNodeWithText("Start 60 min · ₹120.00").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Start 60 min · 120.00").assertIsDisplayed().performClick()
         dial.performTouchInput {
             down(Offset(width * 0.50f, height * 0.10f))
                 repeat(12) { step ->
@@ -1254,7 +1254,7 @@ class GamingBoardUiTest {
                 }
                 up()
         }
-        compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Start 30 min · 80.00").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(listOf("single-60", "single-30"), confirmed) }
     }
 
@@ -1287,13 +1287,13 @@ class GamingBoardUiTest {
 
         compose.onNodeWithText("START SESSION").assertIsDisplayed()
         compose.onNodeWithContentDescription("Session duration dial").assertIsDisplayed()
-        compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
+        compose.onNodeWithText("Start 30 min · 80.00").assertIsDisplayed()
         val width = compose.activity.resources.configuration.screenWidthDp
         if (width >= 1_100) {
             val search = compose.onNodeWithContentDescription(
                 "Search saved customers by name or phone",
             ).fetchSemanticsNode().boundsInRoot
-            val action = compose.onNodeWithText("Start 30 min · ₹80.00")
+            val action = compose.onNodeWithText("Start 30 min · 80.00")
                 .fetchSemanticsNode().boundsInRoot
             assertTrue("Saved-customer search should fit above Start", search.bottom <= action.top)
         }
@@ -1309,7 +1309,7 @@ class GamingBoardUiTest {
         } finally {
             bitmap.recycle()
         }
-        compose.onNodeWithText("Start 30 min · ₹80.00").performClick()
+        compose.onNodeWithText("Start 30 min · 80.00").performClick()
         compose.runOnIdle { assertEquals("single-30", confirmedPackageId) }
     }
 
@@ -1432,7 +1432,7 @@ class GamingBoardUiTest {
             "search", initialSearch,
         )
         initialSearch.assertIsDisplayed()
-        val initialStart = compose.onNodeWithText("Start 30 min · ₹80.00").performScrollTo()
+        val initialStart = compose.onNodeWithText("Start 30 min · 80.00").performScrollTo()
         captureDetailTargetBeforeAssert(
             "gaming-r7-4-board-initial-start-before-assert", "gaming-fixture-root",
             "start", initialStart,
@@ -1446,7 +1446,7 @@ class GamingBoardUiTest {
             "gaming-r7-4-board-dual-before-assert", "gaming-fixture-root", "dual", dual,
         )
         dual.assertIsDisplayed().performClick()
-        val dualStart = compose.onNodeWithText("Start 30 min · ₹100.00").performScrollTo()
+        val dualStart = compose.onNodeWithText("Start 30 min · 100.00").performScrollTo()
         captureDetailTargetBeforeAssert(
             "gaming-r7-4-board-dual-start-before-assert", "gaming-fixture-root",
             "start", dualStart,
@@ -1459,7 +1459,7 @@ class GamingBoardUiTest {
             "add_player", addPlayer,
         )
         addPlayer.assertIsDisplayed().performClick()
-        val extraPlayerStart = compose.onNodeWithText("Start 30 min · ₹130.00").performScrollTo()
+        val extraPlayerStart = compose.onNodeWithText("Start 30 min · 130.00").performScrollTo()
         captureDetailTargetBeforeAssert(
             "gaming-r7-4-board-extra-player-start-before-assert", "gaming-fixture-root",
             "start", extraPlayerStart,
@@ -1479,7 +1479,7 @@ class GamingBoardUiTest {
         board.performScrollToNode(hasTestTag("gaming-station-racing-1"))
         compose.onNodeWithTag("gaming-station-racing-1").assertIsDisplayed().performClick()
         board.performScrollToNode(hasTestTag("gaming-inline-expansion-racing-1"))
-        val racingStart = compose.onNodeWithText("Start 15 min · ₹70.00").performScrollTo()
+        val racingStart = compose.onNodeWithText("Start 15 min · 70.00").performScrollTo()
         captureDetailTargetBeforeAssert(
             "gaming-r7-4-board-racing-start-before-assert", "gaming-fixture-root",
             "start", racingStart,
@@ -1492,7 +1492,7 @@ class GamingBoardUiTest {
         board.performScrollToNode(hasTestTag("gaming-station-ps5-2"))
         compose.onNodeWithTag("gaming-station-ps5-2").performClick()
         board.performScrollToNode(hasTestTag("gaming-inline-expansion-ps5-2"))
-        val retainedStart = compose.onNodeWithText("Start 30 min · ₹130.00").performScrollTo()
+        val retainedStart = compose.onNodeWithText("Start 30 min · 130.00").performScrollTo()
         captureDetailTargetBeforeAssert(
             "gaming-r7-4-board-retained-start-before-assert", "gaming-fixture-root",
             "start", retainedStart,
@@ -1595,9 +1595,9 @@ class GamingBoardUiTest {
                 }
             }
         }
-        compose.onNodeWithText("90 min · ₹180.00").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("90 min · ₹180.00").performClick()
-        compose.onNodeWithText("Start 90 min · ₹180.00").assertIsDisplayed().performClick()
+        compose.onNodeWithText("90 min · 180.00").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("90 min · 180.00").performClick()
+        compose.onNodeWithText("Start 90 min · 180.00").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals("single-90", submitted) }
     }
 
@@ -1623,7 +1623,7 @@ class GamingBoardUiTest {
         compose.onNodeWithText("VR Racing Sim").performClick()
         compose.onNodeWithContentDescription("Session duration dial")
             .performTouchInput { click(Offset(width * 0.50f, height * 0.90f)) }
-        compose.onNodeWithText("Start 30 min · ₹140.00")
+        compose.onNodeWithText("Start 30 min · 140.00")
             .assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals("racing-30", submitted) }
     }
@@ -1715,7 +1715,7 @@ class GamingBoardUiTest {
             runningRingBounds,
             compose.onNodeWithTag("gaming-control-ring").fetchSemanticsNode().boundsInRoot,
         )
-        val initialExtensionChoice = compose.onNodeWithText("Add 60 min · ₹100.00")
+        val initialExtensionChoice = compose.onNodeWithText("Add 60 min · 100.00")
             .performScrollTo()
         captureDetailTargetBeforeAssert(
             "gaming-r7-4-extension-choice-before-assert", "extension-compact-viewport",
@@ -1768,7 +1768,7 @@ class GamingBoardUiTest {
             resultingTotalBounds.bottom <= extensionActions.top &&
                 resultingTotalBounds.top >= extensionViewport.top,
         )
-        val resultingBookedTotal = compose.onNodeWithText("Resulting booked total · ₹220.00")
+        val resultingBookedTotal = compose.onNodeWithText("Resulting booked total · 220.00")
         captureDetailTargetBeforeAssert(
             "gaming-r7-4-extension-booked-total-copy-before-assert",
             "extension-compact-viewport", "booked_total_copy", resultingBookedTotal,
@@ -1792,7 +1792,7 @@ class GamingBoardUiTest {
             "extension-compact-viewport", "extend", secondExtend,
         )
         secondExtend.assertIsDisplayed().performClick()
-        val secondChoice = compose.onNodeWithText("Add 60 min · ₹100.00").performScrollTo()
+        val secondChoice = compose.onNodeWithText("Add 60 min · 100.00").performScrollTo()
         captureDetailTargetBeforeAssert(
             "gaming-r7-4-extension-second-choice-before-assert",
             "extension-compact-viewport", "choice", secondChoice,
@@ -1834,7 +1834,7 @@ class GamingBoardUiTest {
             "extension-compact-viewport", "extend", thirdExtend,
         )
         thirdExtend.assertIsDisplayed().performClick()
-        val thirdChoice = compose.onNodeWithText("Add 60 min · ₹100.00").performScrollTo()
+        val thirdChoice = compose.onNodeWithText("Add 60 min · 100.00").performScrollTo()
         captureDetailTargetBeforeAssert(
             "gaming-r7-4-extension-third-choice-before-assert",
             "extension-compact-viewport", "choice", thirdChoice,
@@ -2164,7 +2164,7 @@ class GamingBoardUiTest {
             }
         }
         compose.onNode(
-            hasText("Single · booked ₹80.00") and
+            hasText("Single · booked 80.00") and
                 hasAnyAncestor(hasTestTag("gaming-station-ps5-1")),
             useUnmergedTree = true,
         ).assertIsDisplayed()
@@ -2172,7 +2172,7 @@ class GamingBoardUiTest {
         bookedBoard.performScrollToNode(
             hasTestTag("gaming-inline-expansion-ps5-1"),
         )
-        val bookedHeading = compose.onNodeWithText("Booked package · ₹80.00")
+        val bookedHeading = compose.onNodeWithText("Booked package · 80.00")
             .performScrollTo()
         captureDetailTargetBeforeAssert(
             "gaming-r7-4-booked-heading-before-assert",
@@ -2187,7 +2187,7 @@ class GamingBoardUiTest {
             "gaming-booked-subtotal-fixture-root", "booked_explanation", bookedExplanation,
         )
         bookedExplanation.assertIsDisplayed()
-        compose.onNodeWithText("Estimated ₹80.00").assertDoesNotExist()
+        compose.onNodeWithText("Estimated 80.00").assertDoesNotExist()
         compose.onNodeWithText("Package total", substring = true).assertDoesNotExist()
         val playersAction = compose.onNode(
             hasText("Players") and hasClickAction() and
@@ -2226,7 +2226,7 @@ class GamingBoardUiTest {
         compose.runOnIdle { state.value = state.value.copy(sessionAddons = listOf(drink)) }
         bookedBoard.performScrollToNode(hasTestTag("gaming-station-ps5-1"))
         val bookedBaseRow = compose.onNode(
-            hasText("Single · booked ₹80.00") and
+            hasText("Single · booked 80.00") and
                 hasAnyAncestor(hasTestTag("gaming-station-ps5-1")),
             useUnmergedTree = true,
         )
@@ -2255,7 +2255,7 @@ class GamingBoardUiTest {
             "gaming-r7-6-booked-item-amount-before-assert",
             "gaming-booked-subtotal-fixture-root", "item_amount", itemAmount,
         )
-        itemAmount.assertIsDisplayed().assertTextEquals("₹50.00")
+        itemAmount.assertIsDisplayed().assertTextEquals("50.00")
         val activeSubtotal = compose.onNodeWithTag("gaming-active-package-subtotal")
             .performScrollTo()
         captureDetailTargetBeforeAssert(
@@ -2263,19 +2263,19 @@ class GamingBoardUiTest {
             "gaming-booked-subtotal-fixture-root", "active_subtotal", activeSubtotal,
         )
         activeSubtotal.assertIsDisplayed()
-            .assertTextEquals("Current booked + items subtotal · ₹130.00")
+            .assertTextEquals("Current booked + items subtotal · 130.00")
         compose.onNodeWithTag("gaming-active-package-subtotal-qualifier")
             .performScrollTo().assertIsDisplayed()
             .assertTextEquals("Added players/controllers are separate")
-        val bookedHeadingAfterDrink = compose.onNodeWithText("Booked package · ₹80.00")
+        val bookedHeadingAfterDrink = compose.onNodeWithText("Booked package · 80.00")
             .performScrollTo()
         captureDetailTargetBeforeAssert(
             "gaming-r7-5-booked-heading-after-drink-before-assert",
             "gaming-booked-subtotal-fixture-root", "booked_heading", bookedHeadingAfterDrink,
         )
         bookedHeadingAfterDrink.assertIsDisplayed()
-        compose.onNodeWithText("Estimated ₹130.00").assertDoesNotExist()
-        compose.onNodeWithText("₹220.00").assertDoesNotExist()
+        compose.onNodeWithText("Estimated 130.00").assertDoesNotExist()
+        compose.onNodeWithText("220.00").assertDoesNotExist()
         compose.runOnIdle {
             // A server-voided drink remains in history but contributes no money.
             state.value = state.value.copy(sessionAddons = listOf(drink.copy(
@@ -2284,7 +2284,7 @@ class GamingBoardUiTest {
         }
         bookedBoard.performScrollToNode(hasTestTag("gaming-station-ps5-1"))
         val voidedBookedRow = compose.onNode(
-            hasText("Single · booked ₹80.00") and
+            hasText("Single · booked 80.00") and
                 hasAnyAncestor(hasTestTag("gaming-station-ps5-1")),
             useUnmergedTree = true,
         )
@@ -2300,7 +2300,7 @@ class GamingBoardUiTest {
         voidedBookedRow.assertIsDisplayed()
         bookedBoard.performScrollToNode(hasTestTag("gaming-inline-expansion-ps5-1"))
         compose.onNodeWithTag("gaming-active-package-subtotal").assertDoesNotExist()
-        compose.onNodeWithText("Current booked + items subtotal · ₹130.00")
+        compose.onNodeWithText("Current booked + items subtotal · 130.00")
             .assertDoesNotExist()
         compose.runOnIdle {
             state.value = state.value.copy(sessions = listOf(running.copy(
@@ -2310,7 +2310,7 @@ class GamingBoardUiTest {
         }
         bookedBoard.performScrollToNode(hasTestTag("gaming-station-ps5-1"))
         val endedAmount = compose.onNode(
-            hasText("₹170.00") and hasAnyAncestor(hasTestTag("gaming-station-ps5-1")),
+            hasText("170.00") and hasAnyAncestor(hasTestTag("gaming-station-ps5-1")),
             useUnmergedTree = true,
         )
         captureDiagnostic(
@@ -2323,8 +2323,8 @@ class GamingBoardUiTest {
             ),
         )
         endedAmount.assertIsDisplayed()
-        compose.onNodeWithText("Booked session ₹80.00").assertDoesNotExist()
-        compose.onNodeWithText("₹260.00").assertDoesNotExist()
+        compose.onNodeWithText("Booked session 80.00").assertDoesNotExist()
+        compose.onNodeWithText("260.00").assertDoesNotExist()
     }
 
     @Test
@@ -2469,7 +2469,7 @@ class GamingBoardUiTest {
                 "gaming-full-workspace", "search", wideSearch,
             )
             wideSearch.assertIsDisplayed()
-            val wideStart = compose.onNodeWithText("Start 30 min · ₹80.00")
+            val wideStart = compose.onNodeWithText("Start 30 min · 80.00")
                 .performScrollTo()
             captureDetailTargetBeforeAssert(
                 "gaming-r7-4-full-tablet-start-before-assert",
@@ -2822,8 +2822,8 @@ class GamingBoardUiTest {
             compose.onNodeWithContentDescription(
                 "Gaming duration ring. The booking marker stays fixed while the inner trace shows remaining time.",
             ).assertExists()
-            compose.onNodeWithText("₹80.00").assertIsDisplayed()
-            compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
+            compose.onNodeWithText("80.00").assertIsDisplayed()
+            compose.onNodeWithText("Start 30 min · 80.00").assertIsDisplayed()
             compose.onNodeWithText("Est. finish ·", substring = true).assertIsDisplayed()
             compose.onNodeWithContentDescription(
                 "Expected finish if started now, about",
@@ -2834,7 +2834,7 @@ class GamingBoardUiTest {
                 "Search saved customers by name or phone",
             ).fetchSemanticsNode()
             val clippedSearchBounds = searchNode.boundsInRoot
-            val startNode = compose.onNodeWithText("Start 30 min · ₹80.00")
+            val startNode = compose.onNodeWithText("Start 30 min · 80.00")
                 .fetchSemanticsNode()
             val paneNode = compose.onNodeWithTag("gaming-control-pane").fetchSemanticsNode()
             val dialPosition = dialNode.positionOnScreen
@@ -2889,7 +2889,7 @@ class GamingBoardUiTest {
                 }
                 up()
             }
-            compose.onNodeWithText("Start 60 min · ₹120.00").assertIsDisplayed().performClick()
+            compose.onNodeWithText("Start 60 min · 120.00").assertIsDisplayed().performClick()
             compose.runOnIdle { assertEquals("single-60", submittedPackageId) }
             dial.performTouchInput {
                 down(Offset(width * 0.50f, height * 0.10f))
@@ -2900,14 +2900,14 @@ class GamingBoardUiTest {
                 }
                 up()
             }
-            compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed().performClick()
+            compose.onNodeWithText("Start 30 min · 80.00").assertIsDisplayed().performClick()
             compose.runOnIdle { assertEquals("single-30", submittedPackageId) }
             compose.onNodeWithContentDescription("Search saved customers by name or phone")
                 .performScrollTo().assertIsDisplayed()
                 .performClick()
             compose.onNodeWithContentDescription("Search saved customers by name or phone")
                 .performTextInput("Ada")
-            compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
+            compose.onNodeWithText("Start 30 min · 80.00").assertIsDisplayed()
             capture("gaming-full-workspace-960x600-action.png", "gaming-full-workspace")
 
             compose.runOnIdle {

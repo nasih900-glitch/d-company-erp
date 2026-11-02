@@ -2222,7 +2222,7 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
         DecimalField(
             value = invoiceTotal,
             onValueChange = { invoiceTotal = it },
-            label = "Supplier invoice total (₹)",
+            label = "Supplier invoice total",
             modifier = Modifier.fillMaxWidth(),
         )
         Text(
@@ -2265,7 +2265,7 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
                         onValueChange = { v ->
                             lines = lines.replaceAt(index) { it.copy(unitCostRupees = v) }
                         },
-                        label = "₹ / unit",
+                        label = "Per unit",
                         modifier = Modifier.weight(0.7f),
                     )
                     if (lines.size > 1) {

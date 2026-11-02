@@ -4613,7 +4613,7 @@ async def redeem_points(
     if payload.points > max_points_for_bill:
         raise BusinessRuleError(
             f"This bill can only absorb {max_points_for_bill} points "
-            f"(₹{remaining_after_manual / 100:.2f})."
+            f"({remaining_after_manual / 100:.2f})."
         )
 
     points_result = await reserve_points_redemption(

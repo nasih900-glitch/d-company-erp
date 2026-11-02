@@ -9231,7 +9231,7 @@ private fun GamingInlineParticipantEditorContent(
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        "₹30 per started cumulative hour · paused time excluded",
+                        "30 per started cumulative hour · paused time excluded",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                     )
@@ -9370,7 +9370,7 @@ private fun GamingInlineParticipantEditorContent(
         }
         val confirmAction: @Composable () -> Unit = {
             if (canAdd) ErpButton(
-                text = "Confirm join · ₹30 first hour",
+                text = "Confirm join · 30 first hour",
                 onClick = {
                     onJoin(
                         selected?.customerId,
@@ -9742,7 +9742,7 @@ internal fun GamingParticipantsDialog(
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text("$basePlayers booked and fixed · ${active.size} late active · ${basePlayers + active.size}/4 now")
-                        Text("₹30 per started cumulative hour · ₹30 minimum · paused time excluded")
+                        Text("30 per started cumulative hour · 30 minimum · paused time excluded")
                         Text(
                             "Player-controller fees after join · ${(bookedControllerMinor + afterJoinFriendMinor).asRupees()} estimated",
                             fontWeight = FontWeight.Bold,
@@ -9755,7 +9755,7 @@ internal fun GamingParticipantsDialog(
                     }
                 }
                 leaving != null -> Text(
-                    "${leaving.name?.takeIf(String::isNotBlank) ?: "This friend"} will be marked left at the current actual play-time. Saved intervals remain in the audit history; a later rejoin continues the same cumulative ₹30-per-started-hour charge.",
+                    "${leaving.name?.takeIf(String::isNotBlank) ?: "This friend"} will be marked left at the current actual play-time. Saved intervals remain in the audit history; a later rejoin continues the same cumulative 30-per-started-hour charge.",
                 )
                 else -> LazyColumn(
                 modifier = Modifier
@@ -9770,7 +9770,7 @@ internal fun GamingParticipantsDialog(
                         subtitle = "$includedPlayers included in the package · capacity four",
                     ) {
                         Text(
-                            "Added friends are ₹30 per started cumulative hour each, minimum ₹30 per friend. Paused time is excluded.",
+                            "Added friends are 30 per started cumulative hour each, minimum 30 per friend. Paused time is excluded.",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -9877,7 +9877,7 @@ internal fun GamingParticipantsDialog(
                             )
                             Text(
                                 "${formatGamingParticipantDuration(cumulativeMillis)} cumulative · " +
-                                    "${estimatedFeeMinor.asRupees()} estimated · ₹30 per started cumulative hour",
+                                    "${estimatedFeeMinor.asRupees()} estimated · 30 per started cumulative hour",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.labelSmall,
                             )

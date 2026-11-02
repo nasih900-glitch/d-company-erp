@@ -722,7 +722,7 @@ private fun EmptyPanel(
         val cards: List<@Composable (Modifier) -> Unit> = listOf(
             { modifier ->
                 CompactStatCard(
-                    "Revenue", "₹0.00", modifier, "No recorded revenue",
+                    "Revenue", "0.00", modifier, "No recorded revenue",
                     Icons.AutoMirrored.Filled.TrendingUp, UiTone.Neutral,
                 )
             },
@@ -735,13 +735,13 @@ private fun EmptyPanel(
             { modifier ->
                 CompactStatCard(
                     if (presentation.showsEvents) "Average ticket" else "Average paid bill",
-                    "₹0.00", modifier, "No completed orders",
+                    "0.00", modifier, "No completed orders",
                     Icons.Filled.Payments, UiTone.Neutral,
                 )
             },
             { modifier ->
                 CompactStatCard(
-                    "Net profit", "₹0.00", modifier, "No activity",
+                    "Net profit", "0.00", modifier, "No activity",
                     Icons.Filled.Assessment, UiTone.Neutral,
                 )
             },

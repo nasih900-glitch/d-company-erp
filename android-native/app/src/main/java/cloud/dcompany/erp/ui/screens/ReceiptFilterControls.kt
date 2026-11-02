@@ -80,7 +80,7 @@ internal fun ReceiptFilterControls(
                 modifier = Modifier.weight(1f).testTag("receipt-filter-to"))
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-            OutlinedTextField(amount, { onAmountChange(it.take(20)) }, label = { Text("Invoice amount · ₹") },
+            OutlinedTextField(amount, { onAmountChange(it.take(20)) }, label = { Text("Invoice amount") },
                 singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 modifier = Modifier.weight(1f).testTag("receipt-filter-amount"))
             Box(Modifier.weight(1f)) {

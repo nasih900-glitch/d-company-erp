@@ -22,14 +22,14 @@ describe('Source-backed business language', () => {
     const row = { ...event({ voided_amount_minor: 18_000, amount_after_void_minor: 0,
       original_billable_minutes: 12, added_player_interval_count: 2, attendance_retained: true }),
       action: 'gaming_session_voided', action_code: 'GAM-VOID' };
-    expect(auditBusinessSummary(row)).toBe('Voided ₹180.00 · Amount after void ₹0.00 · Attendance retained');
+    expect(auditBusinessSummary(row)).toBe('Voided 180.00 · Amount after void 0.00 · Attendance retained');
     expect(businessLabel('added_player_interval_count')).toBe('Added-player attendance records');
     expect(businessLabel('original_billable_minutes')).toBe('Original recorded billable minutes');
   });
   it('summarizes retained amount and method without inventing a result', () => {
     expect(
       auditBusinessSummary(event({ amount_minor: 27000, method: 'upi' })),
-    ).toBe('₹270.00 · UPI');
+    ).toBe('270.00 · UPI');
     expect(
       auditBusinessSummary(
         event({
@@ -86,9 +86,9 @@ describe('Source-backed business language', () => {
     );
   });
   it('summarizes shift money independently and preserves recorded zero', () => {
-    expect(auditBusinessSummary({...event({opening_float_minor: 0}),action_code:'SHF-OPN'})).toBe('Opening float ₹0.00');
-    expect(auditBusinessSummary({...event({counted_minor: 10000, expected_minor: 10000, variance_minor: 0}),action_code:'SHF-CLS'})).toBe('Counted ₹100.00 · Expected ₹100.00 · Variance ₹0.00');
-    expect(auditBusinessSummary({...event({counted_minor: 10000}),action_code:'SHF-CLS'})).toBe('Counted ₹100.00');
+    expect(auditBusinessSummary({...event({opening_float_minor: 0}),action_code:'SHF-OPN'})).toBe('Opening float 0.00');
+    expect(auditBusinessSummary({...event({counted_minor: 10000, expected_minor: 10000, variance_minor: 0}),action_code:'SHF-CLS'})).toBe('Counted 100.00 · Expected 100.00 · Variance 0.00');
+    expect(auditBusinessSummary({...event({counted_minor: 10000}),action_code:'SHF-CLS'})).toBe('Counted 100.00');
     expect(auditBusinessSummary(event({status:'closed'}))).toBe('Additional retained facts below');
   });
   it('distinguishes retained readable references from a current linked bill', () => {

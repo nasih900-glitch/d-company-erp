@@ -1004,5 +1004,5 @@ internal fun Long.asReportsRupees(): String {
         }.joinToString(",")
     }
     val sign = if (this < 0L) "-" else ""
-    return "$sign₹$grouped.${parts[1].toString().padStart(2, '0')}"
+    return "$sign$grouped.${parts[1].toString().padStart(2, '0')}"
 }

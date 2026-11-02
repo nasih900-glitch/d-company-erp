@@ -56,7 +56,7 @@ class ExecutiveHomePresentationTest {
                 ),
             )!!
 
-            assertEquals("₹24,580.00", snapshot.revenue)
+            assertEquals("24,580.00", snapshot.revenue)
             assertEquals(null, snapshot.revenueComparison)
             assertEquals("48", snapshot.orders)
             assertEquals(null, snapshot.ordersComparison)
@@ -255,9 +255,9 @@ class ExecutiveHomePresentationTest {
         assertEquals(1f, signedPlot.yFractions.first(), 0f)
         assertEquals(signedPlot.zeroFraction, signedPlot.yFractions[12], 0f)
         assertEquals(0f, signedPlot.yFractions.last(), 0f)
-        assertTrue(homeSalesProfileAccessibility(signed).contains("12am -₹100.00"))
-        assertTrue(homeSalesProfileAccessibility(signed).contains("11pm ₹200.00"))
-        assertEquals("Range -₹100.00 to ₹200.00", homeSalesProfileRange(signed))
+        assertTrue(homeSalesProfileAccessibility(signed).contains("12am -100.00"))
+        assertTrue(homeSalesProfileAccessibility(signed).contains("11pm 200.00"))
+        assertEquals("Range -100.00 to 200.00", homeSalesProfileRange(signed))
 
         val extremes = homeSalesProfilePlot(
             (0..23).map { hour ->
@@ -274,7 +274,7 @@ class ExecutiveHomePresentationTest {
         )
         assertTrue(extremes.yFractions.all { it.isFinite() })
         assertTrue(extremes.zeroFraction.isFinite())
-        assertEquals("-₹92,23,37,20,36,85,47,758.08", homeMinorAsRupees(Long.MIN_VALUE))
+        assertEquals("-92,23,37,20,36,85,47,758.08", homeMinorAsRupees(Long.MIN_VALUE))
     }
 
     private fun compositeOverWhite(color: Color, alpha: Float): Color = Color(

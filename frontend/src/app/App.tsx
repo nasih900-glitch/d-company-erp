@@ -7,6 +7,7 @@ import RequireAuth from '@/modules/auth/RequireAuth';
 import { useAuth } from '@/modules/auth/AuthContext';
 import { hasAuditAccess, hasSupportAccess } from '@/lib/admin-access';
 import { LIVE_MODE } from '@/lib/demo';
+import { canUseStaffTime } from '@/modules/staff/staff-time-policy';
 import { canAccessRefunds } from '@/modules/refunds/refund-policy';
 import { canViewMemberships } from '@/modules/memberships/membership-policy';
 import { internalAppRouteOr } from '@/lib/internal-navigation';
@@ -37,6 +38,7 @@ const EventsScreen = lazy(() => import('@/modules/events/EventsScreen'));
 const FinanceScreen = lazy(() => import('@/modules/finance/FinanceScreen'));
 const OcrScreen = lazy(() => import('@/modules/ocr/OcrScreen'));
 const StaffScreen = lazy(() => import('@/modules/staff/StaffScreen'));
+const StaffTimeScreen = lazy(() => import('@/modules/staff/StaffTimeScreen'));
 const AnalyticsScreen = lazy(() => import('@/modules/analytics/AnalyticsScreen'));
 const ReportsScreen = lazy(() => import('@/modules/reports/ReportsScreen'));
 const SettingsScreen = lazy(() => import('@/modules/settings/SettingsScreen'));
@@ -92,6 +94,11 @@ function FeatureOnly({
 }) {
   if (GAMING_CENTRE_FEATURES[feature]) return <>{children}</>;
   return <Navigate to={internalAppRouteOr(fallback)} replace />;
+}
+
+function StaffTimeOnly({ children }: { children: ReactNode }) {
+  const { me } = useAuth();
+  return canUseStaffTime(me) ? <>{children}</> : <Navigate to={internalAppRouteOr(WEB_PRODUCT_PROFILE.defaultRoute)} replace />;
 }
 
 function ProfileOwnerOnly({ children }: { children: ReactNode }) {
@@ -219,6 +226,9 @@ export default function App() {
         } />
         <Route path="/ocr" element={
           <FeatureOnly feature="ocr"><ModuleAccessOnly module="ocr"><Screen><OcrScreen /></Screen></ModuleAccessOnly></FeatureOnly>
+        } />
+        <Route path="/staff/time" element={
+          <FeatureOnly feature="staffAdmin"><StaffTimeOnly><Screen><StaffTimeScreen /></Screen></StaffTimeOnly></FeatureOnly>
         } />
         <Route path="/staff" element={
           <FeatureOnly feature="staffAdmin"><ProfileOwnerOnly><Screen><StaffScreen /></Screen></ProfileOwnerOnly></FeatureOnly>

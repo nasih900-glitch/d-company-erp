@@ -1,4 +1,4 @@
-"""Real0091→0093 full-row proof with nonempty immutable finance receipts."""
+"""Real0091→0094 full-row proof with nonempty immutable finance receipts."""
 
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ async def stable_owned_schema(owned_policy_database, tmp_path):
     original_engine = owned_policy_database.kw["bind"]
     schema = tmp_path / "owned-empty0091-schema.dump"
     revision = tmp_path / "owned-empty0091-alembic.dump"
-    # Build the predecessor directly: a downgrade from0093 can preserve
+    # Build the predecessor directly: a downgrade from0094 can preserve
     # semantically equivalent rewritten function text rather than real0091 bytes.
     with _disposable_database("erp_build55_predecessor") as predecessor_url:
         migration = _run_alembic(predecessor_url, "upgrade", "0091")
@@ -192,6 +192,15 @@ async def test_build55_retains_nonempty_finance_audit_and_exact_stopped_restore(
             "start_at,rate_per_hour_minor,status,billing_mode,extra_controllers) "
             "VALUES(:session,:company,:station,:shift,:owner,:start_at,12000,'ended','hourly',0)"
         ), {**gaming_ids, "session": gaming_ids["session"] if index == 0 else uuid4()})
+    # Preserve nonempty existing staff facts and payroll along with finance.
+    await session.execute(text(
+        "INSERT INTO attendance(id,company_id,user_id,branch_id,clock_in_at,clock_out_at,break_minutes,source) "
+        "VALUES(:id,:company,:owner,:branch,CAST(:start_at AS timestamptz) - interval '12 hours',:start_at,60,'manual')"
+    ), {**gaming_ids, "id": uuid4()})
+    await session.execute(text(
+        "INSERT INTO payroll_entries(id,company_id,user_id,period_start,period_end,base_minor) "
+        "VALUES(:id,:company,:owner,CAST(:start_at AS timestamptz) - interval '30 days',:start_at,33300)"
+    ), {**gaming_ids, "id": uuid4()})
     await session.commit()
     before = _snapshot(dsn)
     assert before["tables"]["gaming_sessions"]["row_count"] == gaming_session_count
@@ -208,6 +217,8 @@ async def test_build55_retains_nonempty_finance_audit_and_exact_stopped_restore(
         "daily_tender_reconciliations",
         "payments",
         "audit_log",
+        "attendance",
+        "payroll_entries",
     ):
         assert before["tables"][name]["row_count"] > 0
     dump = tmp_path / "owned-build55-before.dump"
@@ -218,10 +229,10 @@ async def test_build55_retains_nonempty_finance_audit_and_exact_stopped_restore(
         check=False,
     )
     assert archived.returncode == 0, archived.stderr
-    migration = _run_alembic(url, "upgrade", "0093")
+    migration = _run_alembic(url, "upgrade", "0094")
     assert migration.returncode == 0, migration.stderr
     after = _snapshot(dsn)
-    after_receipt = tmp_path / "actual-after0093.json"
+    after_receipt = tmp_path / "actual-after0094.json"
     after_receipt.write_text(json.dumps(after, sort_keys=True))
     after_receipt.chmod(0o600)
     spec = importlib.util.spec_from_file_location(
@@ -233,7 +244,7 @@ async def test_build55_retains_nonempty_finance_audit_and_exact_stopped_restore(
     spec.loader.exec_module(verifier)
     proof = verifier.verify_pair(before, after, mode="post")
     assert proof["full_audit_finance_rows_preserved"] is True
-    assert len(after["tables"]) == len(before["tables"]) + 3
+    assert len(after["tables"]) == len(before["tables"]) + 4
     for name in verifier.NEW_TABLES:
         assert after["tables"][name] == {
             "row_count": 0,
@@ -278,3 +289,15 @@ async def test_build55_retains_nonempty_finance_audit_and_exact_stopped_restore(
         verifier.CompatibilityError, match="full legacy Gaming session history changed"
     ):
         verifier.verify_pair(before, tampered, mode="post")
+
+    # No new draft policy may be seeded during migration or before writer acceptance.
+    await session.execute(text(
+        "INSERT INTO staff_work_policies(id,company_id,user_id,actor_user_id,revision,effective_from,"
+        "monthly_salary_minor,daily_presence_minutes,daily_break_minutes,working_weekday_mask,reason) "
+        "VALUES(:id,:company,:owner,:owner,1,'2026-11-01',1200000,720,60,127,'Synthetic draft only')"
+    ), {**gaming_ids, "id": uuid4()})
+    await session.commit()
+    seeded = _snapshot(dsn)
+    assert seeded["tables"]["staff_work_policies"]["row_count"] == 1
+    with pytest.raises(verifier.CompatibilityError, match="new candidate tables must be empty"):
+        verifier.verify_pair(before, seeded, mode="post")

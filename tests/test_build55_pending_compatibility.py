@@ -396,9 +396,9 @@ def inventories(verifier, monkeypatch):
         trigger_catalog_sha256=verifier.sha(old_trigger.encode()),
     )
     after = deepcopy(before)
-    after["database_revision"] = "0093"
+    after["database_revision"] = "0094"
     after["tables"]["alembic_version"]["row_sha256"] = verifier.sha(
-        b'{"version_num": "0093"}'
+        b'{"version_num": "0094"}'
     )
     after["tables"]["android_update_policy"] = {
         "row_count": 0,
@@ -410,15 +410,17 @@ def inventories(verifier, monkeypatch):
     after["tables"]["gaming_sessions"]["row_sha256"] = verifier.sha(
         b"full rows with NULL new column"
     )
+    new_triggers = sorted([new_trigger, *verifier.EXPECTED_0094_TRIGGER_ADDED_ROWS])
     after.update(
-        trigger_catalog_rows=[new_trigger],
-        trigger_catalog_row_count=1,
-        trigger_catalog_sha256=verifier.sha(new_trigger.encode()),
+        trigger_catalog_rows=new_triggers,
+        trigger_catalog_row_count=len(new_triggers),
+        trigger_catalog_sha256=verifier.sha("\n".join(new_triggers).encode()),
     )
     after["schema_catalog_rows"] = sorted(
         [row for row in schema if row != old_function]
         + list(verifier.EXPECTED_POLICY_SCHEMA_ROWS)
         + [new_function]
+        + list(verifier.EXPECTED_0094_SCHEMA_ADDED_ROWS)
     )
     after["schema_catalog_row_count"] = len(after["schema_catalog_rows"])
     after["schema_catalog_sha256"] = verifier.sha(
@@ -427,7 +429,7 @@ def inventories(verifier, monkeypatch):
     return before, after
 
 
-def test_exact_reviewed0093_delta_keeps_nonempty_legacy_rows(verifier, inventories):
+def test_exact_reviewed0094_delta_keeps_nonempty_legacy_rows(verifier, inventories):
     before, after = inventories
     assert len(verifier.EXPECTED_POLICY_SCHEMA_ROWS) == 18
     assert verifier.sha("\n".join(verifier.EXPECTED_POLICY_SCHEMA_ROWS).encode()) == (
@@ -1046,6 +1048,21 @@ def test_build55_backend_write_surface_is_bounded_to_reviewed_corrections(verifi
     assert changed == {
         "backend/alembic/versions/0092_android_update_policy.py",
         "backend/alembic/versions/0093_gaming_void_retained_addons.py",
+        "backend/alembic/versions/0094_staff_work_policy.py",
+        "backend/app/api/v1/finance/router.py",
+        "backend/app/api/v1/router.py",
+        "backend/app/api/v1/staff/work_time.py",
+        "backend/app/api/v1/staff/router.py",
+        "backend/app/api/v1/settings/google_sheets.py",
+        "backend/app/services/integrations/google_sheets_mirror.py",
+        "backend/app/services/integrations/google_sheets_staff.py",
+        "backend/app/core/db.py",
+        "backend/app/models/staff_work.py",
+        "backend/app/services/alerts/business.py",
+        "backend/app/services/audit/recorder.py",
+        "backend/app/services/email/mailer.py",
+        "backend/app/services/pos/points.py",
+        "backend/app/services/staff_time.py",
         "backend/app/__init__.py",
         "backend/app/api/v1/analytics/router.py",
         "backend/app/api/v1/client_updates/router.py",
@@ -1498,3 +1515,34 @@ def test_candidate_runtime_rejects_old_or_mismatched_python(verifier, runtime, v
             row["Config"]["Env"] = [key + "=" + value for key, value in env.items()]
     with pytest.raises(verifier.CompatibilityError, match="environment changed"):
         verifier.verify_running_runtime(runtime, actual, identity)
+
+
+
+def test_staff_0094_catalogue_is_exactly_the_reviewed_postgresql_delta(verifier):
+    # Literal independent extraction from real PostgreSQL16 migration rehearsal.
+    assert verifier.CANDIDATE_DATABASE_HEAD == "0094"
+    assert len(verifier.EXPECTED_0094_SCHEMA_ADDED_ROWS) == 35
+    assert verifier.sha("\n".join(verifier.EXPECTED_0094_SCHEMA_ADDED_ROWS).encode()) == "6a5d31bb634cfbd9a91eca9ec45cb8ba067bb3093f6f403b142c29041db5d863"
+    assert len(verifier.EXPECTED_0094_TRIGGER_ADDED_ROWS) == 2
+    assert verifier.sha("\n".join(verifier.EXPECTED_0094_TRIGGER_ADDED_ROWS).encode()) == "70df46e74d8961c87e408744632bd7e31f8a3dc2427e5e9c49bbe19ea87f40f4"
+
+
+@pytest.mark.parametrize("change", ["seeded_policy", "missing_table", "changed_constraint", "missing_truncate_guard"])
+def test_staff_0094_drift_refuses_activation(verifier, inventories, change):
+    before, after = inventories
+    if change == "seeded_policy":
+        after["tables"]["staff_work_policies"] = {"row_count": 1, "row_sha256": "a" * 64}
+    elif change == "missing_table":
+        del after["tables"]["staff_work_policies"]
+    elif change == "changed_constraint":
+        row = next(row for row in after["schema_catalog_rows"] if row.startswith("constraint|staff_work_policies|ck_staff_work_policy_draft_only|"))
+        after["schema_catalog_rows"].remove(row)
+        after["schema_catalog_rows"].append(row.replace("draft", "active"))
+        _catalogue_hash(verifier, after)
+    else:
+        row = next(row for row in after["trigger_catalog_rows"] if "staff_work_policy_no_truncate" in row)
+        after["trigger_catalog_rows"].remove(row)
+        after["trigger_catalog_row_count"] = len(after["trigger_catalog_rows"])
+        after["trigger_catalog_sha256"] = verifier.sha("\n".join(after["trigger_catalog_rows"]).encode())
+    with pytest.raises(verifier.CompatibilityError):
+        verifier.verify_pair(before, after, mode="post")

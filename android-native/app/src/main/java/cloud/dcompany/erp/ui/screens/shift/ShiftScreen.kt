@@ -976,7 +976,7 @@ internal fun OpenShiftForm(
             action = if (compact) null else { { submit() } },
         ) {
             Text(
-                "Billing remains blocked until the shift is open. The opening float may be ₹0.00 when the drawer starts empty.",
+                "Billing remains blocked until the shift is open. The opening float may be 0.00 when the drawer starts empty.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (!online) {
@@ -993,7 +993,7 @@ internal fun OpenShiftForm(
             TouchMoneyEntry(
                 value = float,
                 onValueChange = { float = it },
-                label = "Opening float (₹)",
+                label = "Opening float",
                 enabled = canOpen && !busy && !blockedByRejectedShift,
                 presetsMinor = listOf(0L, 50_000L, 100_000L),
                 modifier = Modifier.fillMaxWidth(),
@@ -1738,7 +1738,7 @@ private fun DenominationCountRow(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("₹$note", color = MaterialTheme.colorScheme.onSurface)
+                    Text("$note", color = MaterialTheme.colorScheme.onSurface)
                     Text(
                         (note * 100 * (counts[note]?.toLongOrNull() ?: 0L)).asRupees(),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1747,7 +1747,7 @@ private fun DenominationCountRow(
                 WholeNumberStepper(
                     value = counts[note] ?: "",
                     onValueChange = { value -> onCountChange(note, value) },
-                    description = "Count of ₹$note notes",
+                    description = "Count of $note notes",
                     enabled = enabled,
                     modifier = Modifier.fillMaxWidth(),
                 )

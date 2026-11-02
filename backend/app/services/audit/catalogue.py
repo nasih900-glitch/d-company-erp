@@ -160,7 +160,7 @@ AREA_TYPES: dict[str, tuple[str, ...]] = {
         "MembershipBenefitReservation",
         "MembershipCustomerSpendApplication",
     ),
-    "staff": ("User", "UserRole", "Role", "Attendance", "PayrollEntry", "StaffAccess"),
+    "staff": ("User", "UserRole", "Role", "Attendance", "PayrollEntry", "StaffAccess", "StaffWorkPolicy"),
     "inventory": (
         "Ingredient",
         "Supplier",

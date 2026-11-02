@@ -760,7 +760,7 @@ private fun NewGamingBookingDialog(state: ReservationsUiState, vm: ReservationsV
             onContact = { contact = it },
         )
         DateTimeFields(startsAt, endsAt, { startsAt = it }, { endsAt = it })
-        DecimalField(depositText, { depositText = it }, "Deposit (₹)")
+        DecimalField(depositText, { depositText = it }, "Deposit")
         OnlineOnlyFormNote()
     }
 }

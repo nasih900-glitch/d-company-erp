@@ -252,7 +252,6 @@ internal fun homeMinorAsRupees(value: Long): String {
     }
     return buildString {
         if (value < 0) append('-')
-        append('₹')
         append(grouped)
         append('.')
         append(fractionValue.toString().padStart(2, '0'))

@@ -65,12 +65,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
@@ -87,6 +92,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import cloud.dcompany.erp.BuildConfig
 import cloud.dcompany.erp.R
 import cloud.dcompany.erp.ui.components.DCompanyBrandMark
@@ -292,7 +299,11 @@ internal fun loginWideGeometry(
     containerHeight: Float,
     fontScale: Float = 1f,
 ): LoginWideGeometry {
-    require(containerWidth > 0f && containerHeight > 0f && fontScale > 0f)
+    require(containerWidth.isFinite() && containerWidth > 0f)
+    require(containerHeight.isFinite() && containerHeight >= 0f)
+    require(fontScale.isFinite() && fontScale > 0f)
+    // Insets can consume the entire viewport during an IME/resize frame. Keep the
+    // same composition alive at zero height so focus and typed state survive.
     val compositionWidth = containerWidth
     val compositionHeight = containerHeight
     // The IME changes only the available height. Keep the horizontal composition anchored to
@@ -402,12 +413,21 @@ internal fun LoginWorkspace(
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
     val focus = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val view = LocalView.current
+    val emailFocus = remember { FocusRequester() }
+    val passwordFocus = remember { FocusRequester() }
+    var focusedInput by remember { mutableStateOf<FocusRequester?>(null) }
+    var inputToRestore by remember { mutableStateOf<FocusRequester?>(null) }
+    var restoreVisibleKeyboard by remember { mutableStateOf(false) }
 
     LaunchedEffect(successfulEmail) { successfulEmail?.let { email = it } }
     val canSubmit = email.isNotBlank() && password.isNotBlank() && !signingIn
     fun submit() {
         if (canSubmit) {
+            inputToRestore = null
             focus.clearFocus()
+            keyboard?.hide()
             onSignIn(email, password)
         }
     }
@@ -427,11 +447,19 @@ internal fun LoginWorkspace(
             onNext = { focus.moveFocus(FocusDirection.Next) },
             onSubmit = ::submit,
             onRecover = {
+                inputToRestore = null
+                focus.clearFocus()
+                keyboard?.hide()
                 password = ""
                 showPassword = false
                 onRecover(email)
             },
             onDismissSuccess = onDismissSuccess,
+            emailFocus = emailFocus,
+            passwordFocus = passwordFocus,
+            onInputFocusChanged = { input, focused ->
+                if (focused) focusedInput = input else if (focusedInput === input) focusedInput = null
+            },
         )
     }
 
@@ -439,6 +467,28 @@ internal fun LoginWorkspace(
         Modifier.fillMaxSize().background(LoginPanelBackground).imePadding(),
     ) {
         val wide = useWideLoginLayout(maxWidth.value)
+        val collapsed = maxHeight.value == 0f
+        // Capture before zero-sized descendants lose focus. Restoring only that
+        // input avoids stealing focus from another control after a resize.
+        val focusBeforeCollapse = remember(collapsed) { if (collapsed) focusedInput else null }
+        val keyboardBeforeCollapse = remember(collapsed) {
+            collapsed && ViewCompat.getRootWindowInsets(view)
+                ?.isVisible(WindowInsetsCompat.Type.ime()) == true
+        }
+        LaunchedEffect(collapsed) {
+            if (collapsed) {
+                inputToRestore = focusBeforeCollapse
+                restoreVisibleKeyboard = keyboardBeforeCollapse
+            } else {
+                val input = inputToRestore
+                inputToRestore = null
+                if (!signingIn && input != null) {
+                    input.requestFocus()
+                    // Restoring input focus must respect a keyboard the user dismissed.
+                    if (!restoreVisibleKeyboard) keyboard?.hide()
+                }
+            }
+        }
         WorkspaceBackgroundRenderer(
             image = LoginSceneBackground,
             modifier = Modifier.fillMaxSize().testTag("login-composition"),
@@ -793,6 +843,9 @@ private fun LoginForm(
     onSubmit: () -> Unit,
     onRecover: () -> Unit,
     onDismissSuccess: () -> Unit,
+    emailFocus: FocusRequester,
+    passwordFocus: FocusRequester,
+    onInputFocusChanged: (FocusRequester, Boolean) -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
     val wide = LocalLoginWide.current
@@ -826,6 +879,8 @@ private fun LoginForm(
             placeholder = { Text("Enter email", color = LoginMutedText) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth().heightIn(min = controlHeight).testTag("login-email")
+                .onFocusChanged { onInputFocusChanged(emailFocus, it.isFocused) }
+                .focusRequester(emailFocus)
                 .semantics { contentDescription = "Email" },
             shape = LoginControlShape,
             colors = inputColors,
@@ -860,6 +915,8 @@ private fun LoginForm(
             },
             singleLine = true,
             modifier = Modifier.fillMaxWidth().heightIn(min = controlHeight).testTag("login-password")
+                .onFocusChanged { onInputFocusChanged(passwordFocus, it.isFocused) }
+                .focusRequester(passwordFocus)
                 .semantics { contentDescription = "Password" },
             shape = LoginControlShape,
             colors = inputColors,

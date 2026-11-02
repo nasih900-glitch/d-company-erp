@@ -702,7 +702,7 @@ private fun ItemPricingDialog(
         OutlinedTextField(
             value = editor.basePriceRupees,
             onValueChange = { onChange(editor.copy(basePriceRupees = it)) },
-            label = { Text("Price (₹)") },
+            label = { Text("Price") },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             isError = editor.basePriceMinor == null,
@@ -791,7 +791,7 @@ private fun ItemCreateDialog(
         OutlinedTextField(
             value = editor.basePriceRupees,
             onValueChange = { onChange(editor.copy(basePriceRupees = it)) },
-            label = { Text("Price (₹)") },
+            label = { Text("Price") },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             isError = editor.basePriceMinor == null,

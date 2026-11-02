@@ -2112,7 +2112,7 @@ private fun ManualCollectionCreateDialog(
             val amountMinor = parseRupeesToMinor(amountRupees)
             when {
                 amountMinor == null || amountMinor <= 0 ->
-                    localError = "Enter an amount greater than ₹0 with no more than 2 decimal places."
+                    localError = "Enter an amount greater than 0 with no more than 2 decimal places."
                 sourceRef.trim().isEmpty() ->
                     localError = "Enter a reference that can be matched to payment evidence."
                 else -> {
@@ -2171,7 +2171,7 @@ private fun ManualCollectionCreateDialog(
             ) { shiftId = it }
             Note("This cash is added to the selected open shift drawer when the server records it.")
         }
-        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)", enabled = formEnabled)
+        DecimalField(amountRupees, { amountRupees = it }, "Amount", enabled = formEnabled)
         OutlinedTextField(
             value = sourceRef,
             onValueChange = { sourceRef = it.take(160) },
@@ -2231,7 +2231,7 @@ private fun TipPayoutCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
             val parsedAmount = parseRupeesToMinor(amountRupees)
             when {
                 parsedAmount == null || parsedAmount <= 0 ->
-                    localError = "Enter an amount greater than ₹0 with no more than 2 decimal places."
+                    localError = "Enter an amount greater than 0 with no more than 2 decimal places."
                 owed == null ->
                     localError = "Refresh the live Tips Payable balance before paying staff."
                 parsedAmount > owed ->
@@ -2289,7 +2289,7 @@ private fun TipPayoutCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
             ) { shiftId = it }
             Note("This cash is deducted from the selected open shift drawer as one recorded action.")
         }
-        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)", enabled = formEnabled)
+        DecimalField(amountRupees, { amountRupees = it }, "Amount", enabled = formEnabled)
         if (exceedsOwed) {
             Text(
                 "This is more than the ${owed?.asRupees()} currently owed to staff.",
@@ -2523,7 +2523,7 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
                 return@confirmExpense
             }
             if (amountMinor <= 0) {
-                localError = "Enter an amount greater than ₹0."
+                localError = "Enter an amount greater than 0."
                 return@confirmExpense
             }
             if (branchId.isBlank() || categoryId.isBlank()) {
@@ -2562,7 +2562,7 @@ private fun ExpenseCreateDialog(state: FinanceUiState, vm: FinanceViewModel) {
             state.categoryNames.entries.map { it.key to it.value },
             enabled = formEnabled,
         ) { categoryId = it }
-        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)", enabled = formEnabled)
+        DecimalField(amountRupees, { amountRupees = it }, "Amount", enabled = formEnabled)
         PickerField(
             "Paid via",
             paidViaLabel(paidVia),
@@ -2785,7 +2785,7 @@ private fun AssetCreateDialog(
                 branchId.isBlank() -> localError = "Pick a branch."
                 purchaseMinor == null ->
                     localError = "Purchase cost must be rupees with no more than 2 decimal places."
-                purchaseMinor <= 0 -> localError = "Enter a purchase cost greater than ₹0."
+                purchaseMinor <= 0 -> localError = "Enter a purchase cost greater than 0."
                 salvageMinor == null ->
                     localError = "Salvage value must be rupees with no more than 2 decimal places."
                 lifeMonths <= 0 -> localError = "Useful life must be a whole number of months greater than 0."
@@ -2829,7 +2829,7 @@ private fun AssetCreateDialog(
         DecimalField(
             purchaseRupees,
             { purchaseRupees = it },
-            "Purchase cost (₹)",
+            "Purchase cost",
             enabled = formEnabled,
         )
         OutlinedTextField(
@@ -2844,7 +2844,7 @@ private fun AssetCreateDialog(
         DecimalField(
             salvageRupees,
             { salvageRupees = it },
-            "Salvage value (₹)",
+            "Salvage value",
             enabled = formEnabled,
         )
         OutlinedTextField(
@@ -2876,7 +2876,7 @@ private fun CapitalEntryCreateDialog(partner: Partner, state: FinanceUiState, vm
             when {
                 amountMinor == null ->
                     localError = "Amount must be rupees with no more than 2 decimal places."
-                amountMinor <= 0 -> localError = "Enter an amount greater than ₹0."
+                amountMinor <= 0 -> localError = "Enter an amount greater than 0."
                 trimmedRef.isBlank() ->
                     localError = "Enter the unique bank, UPI, or cash-voucher reference that proves this movement."
                 else -> {
@@ -2895,7 +2895,7 @@ private fun CapitalEntryCreateDialog(partner: Partner, state: FinanceUiState, vm
             listOf("invest" to "Investment", "withdraw" to "Capital repayment"),
             enabled = formEnabled,
         ) { type = it }
-        DecimalField(amountRupees, { amountRupees = it }, "Amount (₹)", enabled = formEnabled)
+        DecimalField(amountRupees, { amountRupees = it }, "Amount", enabled = formEnabled)
         PickerField(
             "Settlement account", paidViaLabel(settlementAccount).let { if (it == "Bank transfer") "Bank" else it },
             listOf("cash" to "Cash", "bank" to "Bank", "upi" to "UPI"),

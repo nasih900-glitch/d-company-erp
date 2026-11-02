@@ -138,6 +138,7 @@ from app.models.remote_assistance import (
 from app.models.tables import Floor, Reservation, Table
 from app.models.tenant import Branch, Company, Terminal
 from app.models.tender_correction import DailyTenderReconciliation, PaymentTenderCorrection
+from app.models.staff_work import StaffWorkPolicy
 from app.models.user import Attendance, PayrollEntry, Role, User, UserRole
 
 __all__ = [
@@ -146,6 +147,7 @@ __all__ = [
     "AndroidUpdatePolicy",
     "Asset",
     "Attendance",
+    "StaffWorkPolicy",
     "AuditLog",
     "AuthOtpChallenge",
     "AuthRefreshSession",

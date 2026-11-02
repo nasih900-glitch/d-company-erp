@@ -12,7 +12,7 @@ class SemanticAuditPresentationTest {
     @Test fun participantVoidSeparatesOriginalChargeFromZeroDueAndRetainsAttendance() {
         val row = entry(""", "action_code":"GAM-VOID","business_details":{"voided_amount_minor":18000,"amount_after_void_minor":0,"original_billable_minutes":12,"added_player_interval_count":2,"attendance_retained":true}""")
             .copy(action = "gaming_session_voided")
-        assertEquals("Voided ₹180.00 · Amount after void ₹0.00 · Attendance retained", auditBusinessSummary(row))
+        assertEquals("Voided 180.00 · Amount after void 0.00 · Attendance retained", auditBusinessSummary(row))
         assertEquals("Added-player attendance records", auditBusinessLabel("added_player_interval_count"))
         assertEquals("Original recorded billable minutes", auditBusinessLabel("original_billable_minutes"))
     }
@@ -20,7 +20,7 @@ class SemanticAuditPresentationTest {
     @Test fun semanticCodeLabelAmountAndMethodHaveDistinctPurpose() {
         val row=entry(""", "action_code":"POS-PAY","action_label":"Payment recorded","business_details":{"amount_minor":27000,"method":"upi"},"summary":"Payment recorded" """)
         assertEquals("POS-PAY · Payment recorded",auditEntryTitle(row))
-        assertEquals("₹270.00 · UPI",auditBusinessSummary(row))
+        assertEquals("270.00 · UPI",auditBusinessSummary(row))
     }
     @Test fun otpRequesterNeverBecomesAuthenticatedStaffAndLegacyAttributionStaysExplicit() {
         assertEquals("OTP-approved requester · Current name",auditActor(entry().copy(actorKind="otp_approved_requester")))

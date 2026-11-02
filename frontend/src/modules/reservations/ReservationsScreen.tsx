@@ -499,7 +499,7 @@ function BookingForm({ onClose, onSuccess }: {
               onChange={(e) => setForm({ ...form, ends_at: e.target.value })}/>
           </Field>
         </div>
-        <Field label="Deposit (₹, optional)">
+        <Field label="Deposit (optional)">
           <input type="number" min={0} step="0.01" className="input font-mono text-right"
             value={form.deposit_rupees}
             onChange={(e) => setForm({ ...form, deposit_rupees: e.target.value })}/>

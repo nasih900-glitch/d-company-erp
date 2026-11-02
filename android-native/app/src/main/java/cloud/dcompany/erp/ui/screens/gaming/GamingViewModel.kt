@@ -4020,7 +4020,7 @@ class GamingViewModel : ViewModel() {
                     return@launch
                 }
                 notice.value = if (actionType == GamingSessionActionType.PARTICIPANT_JOIN) {
-                    "Friend joined at this play-time. ₹30 per started hour will be added at Stop."
+                    "Friend joined at this play-time. 30 per started hour will be added at Stop."
                 } else {
                     "Friend leave time saved. Their controller charge stopped at this play-time."
                 }

@@ -700,6 +700,10 @@ class ExecutiveEntryPresentationUiTest {
             fontScale = 1.3f,
             photoExpected = true,
         )
+        // An inset/resize transition can temporarily consume the full viewport.
+        // Do not replace the wide composition: restore it with the same focused form.
+        compose.runOnUiThread { availableHeight.value = 0 }
+        compose.waitForIdle()
         compose.runOnUiThread { availableHeight.value = 420 }
         compose.waitForIdle()
         val reducedHeightControlGeometry = horizontalControlGeometry(
@@ -754,6 +758,15 @@ class ExecutiveEntryPresentationUiTest {
         compose.runOnIdle {
             assertEquals(expectedEmail to expectedPassword, submittedCredentials)
         }
+        // Keyboard dismissal is an Android window animation, outside Compose's
+        // test clock. Check the final viewport only after native insets settle.
+        compose.waitUntil(timeoutMillis = 5_000) {
+            ViewCompat.getRootWindowInsets(compose.activity.window.decorView)?.let { insets ->
+                !insets.isVisible(WindowInsetsCompat.Type.ime()) &&
+                    insets.getInsets(WindowInsetsCompat.Type.ime()).bottom == 0
+            } == true
+        }
+        compose.waitForIdle()
         captureRoot(
             name = "entry-login-wide-reduced-1280x420-font1_3",
             testName = "wideHeightReductionKeepsFormIdentityFocusAndTypedState",

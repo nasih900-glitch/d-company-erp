@@ -109,8 +109,8 @@ class GamingDraftRecreationUiTest {
         compose.onNodeWithText("Dual · 2+ players").performScrollTo().assertIsDisplayed().assertIsSelected()
         compose.onNodeWithTag("gaming-booked-player-count").performScrollTo().assertTextEquals("4/4")
         compose.onNodeWithText("Add player").performScrollTo().assertIsDisplayed().assertIsNotEnabled()
-        compose.onNodeWithText("2 extra controllers · ₹60.00 surcharge").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithContentDescription("Choose 60 minutes, ₹210.00").assertDoesNotExist()
+        compose.onNodeWithText("2 extra controllers · 60.00 surcharge").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("Choose 60 minutes, 210.00").assertDoesNotExist()
         compose.onNodeWithContentDescription("Session duration dial").performTouchInput {
             down(Offset(width * 0.50f, height * 0.90f))
             repeat(12) { step ->
@@ -120,8 +120,8 @@ class GamingDraftRecreationUiTest {
             }
             up()
         }
-        compose.onNodeWithContentDescription("Choose 60 minutes, ₹210.00").assertIsDisplayed()
-        assertStartAction("Start 60 min · ₹210.00", "ps5-2")
+        compose.onNodeWithContentDescription("Choose 60 minutes, 210.00").assertIsDisplayed()
+        assertStartAction("Start 60 min · 210.00", "ps5-2")
         compose.runOnIdle { assertEquals("ps5-2", selectedId) }
     }
 
@@ -177,16 +177,16 @@ class GamingDraftRecreationUiTest {
         compose.onNodeWithText("Loading scoped catalogue").assertIsDisplayed()
         compose.onNodeWithTag("gaming-start-action").assertDoesNotExist()
         compose.runOnIdle { assertEquals("ps5-2", selectedId); projection.value = loaded }
-        assertStartAction("Start 60 min · ₹210.00", "ps5-2")
+        assertStartAction("Start 60 min · 210.00", "ps5-2")
         compose.onNodeWithText("Dual · 2+ players").performScrollTo().assertIsDisplayed().assertIsSelected()
         compose.onNodeWithTag("gaming-booked-player-count").performScrollTo().assertTextEquals("4/4")
         compose.onNodeWithText("Add player").performScrollTo().assertIsDisplayed().assertIsNotEnabled()
-        compose.onNodeWithText("2 extra controllers · ₹60.00 surcharge").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("2 extra controllers · 60.00 surcharge").performScrollTo().assertIsDisplayed()
         compose.runOnIdle {
             assertEquals("ps5-2", selectedId)
             projection.value = loaded.copy(stations = listOf(stations.first()))
         }
-        assertStartAction("Start 30 min · ₹80.00", "ps5-1")
+        assertStartAction("Start 30 min · 80.00", "ps5-1")
         compose.runOnIdle { assertEquals("ps5-1", selectedId) }
     }
 
@@ -194,7 +194,7 @@ class GamingDraftRecreationUiTest {
         compose.activityRule.scenario.onActivity(::installFixtureContent); chooseDualFourSixty()
         recreateWithInitialEmpty(authority(generation = 2))
         compose.runOnIdle { projection.value = loaded }
-        assertStartAction("Start 30 min · ₹80.00", "ps5-1")
+        assertStartAction("Start 30 min · 80.00", "ps5-1")
         compose.runOnIdle { assertEquals("ps5-1", selectedId) }
     }
 
@@ -202,7 +202,7 @@ class GamingDraftRecreationUiTest {
         compose.activityRule.scenario.onActivity(::installFixtureContent); chooseDualFourSixty()
         recreateWithInitialEmpty(authority(profile = me.copy(effectivePermissions = emptyList()), terminal = "other-till"))
         compose.runOnIdle { projection.value = loaded }
-        assertStartAction("Start 30 min · ₹80.00", "ps5-1")
+        assertStartAction("Start 30 min · 80.00", "ps5-1")
         compose.runOnIdle { assertEquals("ps5-1", selectedId); currentAuthority.value = null }
         compose.onNodeWithText("Verifying Gaming workspace. Draft actions are unavailable.").assertIsDisplayed()
         compose.onNodeWithTag("gaming-start-action").assertDoesNotExist()

@@ -32,6 +32,7 @@ object ErpPermission {
     const val StaffRead = "staff.read"
     const val StaffWrite = "staff.write"
     const val StaffAttendanceWrite = "staff.attendance.write"
+    const val StaffPayrollWrite = "staff.payroll.write"
     const val AnalyticsRead = "analytics.read"
     const val AnalyticsExport = "analytics.export"
     const val SettingsManage = "settings.manage"
@@ -428,6 +429,7 @@ private val PERMISSION_MODULE = mapOf(
     ErpPermission.StaffRead to "staff",
     ErpPermission.StaffWrite to "staff",
     ErpPermission.StaffAttendanceWrite to "staff",
+    ErpPermission.StaffPayrollWrite to "staff",
     ErpPermission.AnalyticsRead to "insights_reports",
     ErpPermission.AnalyticsExport to "insights_reports",
 )

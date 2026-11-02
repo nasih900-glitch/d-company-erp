@@ -168,8 +168,8 @@ class GamingDialogUiTest {
         compose.onNodeWithText("QA Cola").assertIsDisplayed()
         compose.onNodeWithText("PS5 1 · session session-").assertIsDisplayed()
         compose.onNodeWithText("Quantity · 2").assertIsDisplayed()
-        compose.onNodeWithText("Unit price · ₹40.00").assertIsDisplayed()
-        compose.onNodeWithText("Total · ₹80.00").assertIsDisplayed()
+        compose.onNodeWithText("Unit price · 40.00").assertIsDisplayed()
+        compose.onNodeWithText("Total · 80.00").assertIsDisplayed()
         compose.onNodeWithText("Modifiers · None").assertIsDisplayed()
         compose.onNodeWithText("Note · No ice").assertIsDisplayed()
         compose.onNodeWithText("Cancel").assertIsDisplayed().performClick()
@@ -178,7 +178,7 @@ class GamingDialogUiTest {
             assertEquals(0, confirmed)
         }
 
-        compose.onNodeWithText("Confirm add · ₹80.00").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Confirm add · 80.00").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(1, confirmed) }
     }
 
@@ -254,7 +254,7 @@ class GamingDialogUiTest {
         val reviewTitle = compose.onNodeWithText("Review friend join")
         Log.i("GamingJoinReview", "Before strict review assertion: ${reviewTitle.dialogTouchSnapshot()}")
         compose.onNodeWithText("Amina Rahman").assertIsDisplayed()
-        compose.onNodeWithText("Player-controller fees after join · ₹30.00 estimated")
+        compose.onNodeWithText("Player-controller fees after join · 30.00 estimated")
             .assertIsDisplayed()
         reviewTitle.assertIsDisplayed()
         compose.onNodeWithText("Confirm join").assertIsDisplayed().performClick()
@@ -321,10 +321,10 @@ class GamingDialogUiTest {
             }
         }
 
-        compose.onNodeWithText("Fixed packages from ₹80.00").assertIsDisplayed()
-        compose.onAllNodesWithText("₹200.00/hour").assertCountEquals(0)
+        compose.onNodeWithText("Fixed packages from 80.00").assertIsDisplayed()
+        compose.onAllNodesWithText("200.00/hour").assertCountEquals(0)
         compose.onNodeWithContentDescription(
-            "PS5 Station Fixed. Available. Ready. Fixed packages from ₹80.00. Select station",
+            "PS5 Station Fixed. Available. Ready. Fixed packages from 80.00. Select station",
         ).assertIsDisplayed()
     }
 
@@ -439,7 +439,7 @@ class GamingDialogUiTest {
         }
 
         compose.onNodeWithText("01:00:00").assertIsDisplayed()
-        compose.onNodeWithText("Estimated now · ₹200.00").assertIsDisplayed()
+        compose.onNodeWithText("Estimated now · 200.00").assertIsDisplayed()
         compose.onNodeWithText("Extend").assertIsDisplayed()
         compose.onNodeWithText("Transfer").assertIsDisplayed()
         compose.onNodeWithText("Stop & calculate").assertIsDisplayed()
@@ -931,7 +931,7 @@ class GamingDialogUiTest {
 
         compose.onNodeWithText("PENDING SYNC").assertIsDisplayed()
         compose.onNodeWithText("00:15:00").assertIsDisplayed()
-        compose.onNodeWithText("Booked package · ₹180.00").assertIsDisplayed()
+        compose.onNodeWithText("Booked package · 180.00").assertIsDisplayed()
         compose.onAllNodesWithText("+30 min").assertCountEquals(0)
         compose.onAllNodesWithText("Transfer").assertCountEquals(0)
         compose.onNodeWithText("Players").assertIsDisplayed().performClick()
@@ -2188,11 +2188,11 @@ class GamingDialogUiTest {
                 .bringIntoViewIfNeeded()
                 .performClick()
         }
-        compose.onNodeWithText("60 min · ₹180.00 total")
+        compose.onNodeWithText("60 min · 180.00 total")
             .bringIntoViewIfNeeded()
             .assertIsDisplayed()
             .performClick()
-        compose.onNodeWithText("Start 60 min · ₹180.00")
+        compose.onNodeWithText("Start 60 min · 180.00")
             .bringIntoViewIfNeeded()
             .assertIsDisplayed()
             .assertIsEnabled()
@@ -2222,7 +2222,7 @@ class GamingDialogUiTest {
             }
         }
 
-        compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
+        compose.onNodeWithText("Start 30 min · 80.00").assertIsDisplayed()
         compose.onNodeWithContentDescription("Session duration dial")
             .bringIntoViewIfNeeded()
             .performTouchInput {
@@ -2234,7 +2234,7 @@ class GamingDialogUiTest {
                 }
                 up()
             }
-        compose.onNodeWithText("Start 60 min · ₹120.00").assertIsDisplayed()
+        compose.onNodeWithText("Start 60 min · 120.00").assertIsDisplayed()
         compose.onNodeWithContentDescription("Session duration dial")
             .bringIntoViewIfNeeded()
             .performTouchInput {
@@ -2246,7 +2246,7 @@ class GamingDialogUiTest {
                 }
                 up()
             }
-        compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
+        compose.onNodeWithText("Start 30 min · 80.00").assertIsDisplayed()
         compose.onNodeWithContentDescription("Session duration dial")
             .bringIntoViewIfNeeded()
             .performTouchInput {
@@ -2258,7 +2258,7 @@ class GamingDialogUiTest {
                 }
                 up()
             }
-        compose.onNodeWithText("Start 60 min · ₹120.00")
+        compose.onNodeWithText("Start 60 min · 120.00")
             .bringIntoViewIfNeeded()
             .assertIsDisplayed()
             .performClick()
@@ -2293,14 +2293,14 @@ down(Offset(width * 0.50f, height * 0.90f))
                 }
                 up()
         }
-        compose.onNodeWithText("Start 60 min · ₹120.00")
+        compose.onNodeWithText("Start 60 min · 120.00")
             .bringIntoViewIfNeeded()
             .assertIsDisplayed()
 
         dial.performSemanticsAction(SemanticsActions.SetProgress) { setProgress ->
             assertTrue(setProgress(0f))
         }
-        compose.onNodeWithText("Start 30 min · ₹80.00")
+        compose.onNodeWithText("Start 30 min · 80.00")
             .bringIntoViewIfNeeded()
             .assertIsDisplayed()
             .assertIsEnabled()
@@ -2336,7 +2336,7 @@ down(Offset(width * 0.50f, height * 0.90f))
         compose.onNodeWithContentDescription("Expected finish if started now", substring = true)
             .bringIntoViewIfNeeded()
             .assertIsDisplayed()
-        compose.onNodeWithText("Start 30 min · ₹140.00").bringIntoViewIfNeeded().performClick()
+        compose.onNodeWithText("Start 30 min · 140.00").bringIntoViewIfNeeded().performClick()
         compose.runOnIdle { assertEquals("vr-racing-30", submittedPackage) }
     }
 

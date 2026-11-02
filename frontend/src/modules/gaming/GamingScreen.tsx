@@ -4518,7 +4518,7 @@ export default function GamingScreen() {
                             })}
                             {friendEstimate !== null && participantState.participants.length > 0 && (
                               <p className="text-fg">
-                                Late-friend controller fee: {inr(friendEstimate)} at ₹30 per started cumulative hour, minimum ₹30 per friend · estimated combined session total: {amount === null ? 'unavailable' : inr(amount + friendEstimate)}. Paused play is excluded; End session confirms the final bill.
+                                Late-friend controller fee: {inr(friendEstimate)} at 30 per started cumulative hour, minimum 30 per friend · estimated combined session total: {amount === null ? 'unavailable' : inr(amount + friendEstimate)}. Paused play is excluded; End session confirms the final bill.
                               </p>
                             )}
                             {participantState.current_player_count >= participantState.max_player_count && (
@@ -4563,7 +4563,7 @@ export default function GamingScreen() {
                                   saveContext="join"
                                 />
                                 <div className="flex items-center justify-between gap-2 text-[11px] text-fg-muted">
-                                  <span>₹30 / started cumulative hour · ₹30 minimum</span>
+                                  <span>30 / started cumulative hour · 30 minimum</span>
                                   <GamingMutationButton canManageSessions={canManageStations}
                                     className="btn btn-primary !py-1.5"
                                     disabled={friendSaving || gamingActionBusy !== null}
@@ -4775,7 +4775,7 @@ export default function GamingScreen() {
                       )}
                       {supportsPlayerModes && playerCount > 2 && (
                         <div className="mb-2 rounded-lg border border-bg-border bg-bg-raised p-2 text-xs text-fg-muted">
-                          {playerCount - 2} additional {playerCount - 2 === 1 ? 'controller' : 'controllers'} · ₹30 each per started hour, ₹30 minimum
+                          {playerCount - 2} additional {playerCount - 2 === 1 ? 'controller' : 'controllers'} · 30 each per started hour, 30 minimum
                         </div>
                       )}
                     </div>
@@ -5261,7 +5261,7 @@ export function LegacyPauseResolutionModal({
               disabled={busy}
             />
           </Field>
-          <Field label="Verified final amount (₹)">
+          <Field label="Verified final amount">
             <input
               required
               type="number"
@@ -5359,7 +5359,7 @@ function BillingRepairModal({
         <div className="p-3 rounded-lg bg-accent-bad/10 border border-accent-bad/40 text-sm">
           This is a protected financial correction. Verify the original package, duration, and price before entering an amount. The employee, reason, old value, and new value are audited.
         </div>
-        <Field label="Verified bill amount (₹)">
+        <Field label="Verified bill amount">
           <input
             autoFocus
             type="number"
@@ -5475,7 +5475,7 @@ function StationForm({
           <input className="input" required value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}/>
         </Field>
-        <Field label="Rate per hour (₹, incl. 18% GST)">
+        <Field label="Rate per hour (incl. 18% GST)">
           <input type="number" min={0} step="0.01" required className="input font-mono text-right"
             value={form.rate_rupees}
             onChange={(e) => setForm({ ...form, rate_rupees: e.target.value })}/>

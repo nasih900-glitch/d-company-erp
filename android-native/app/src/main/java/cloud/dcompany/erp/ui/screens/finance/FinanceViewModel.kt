@@ -969,7 +969,7 @@ class FinanceViewModel : ViewModel() {
                 formError.value = "Business date cannot be in the future."
             method !in FINANCE_PAYMENT_METHODS ->
                 formError.value = "Select Cash, UPI, Card or Bank transfer."
-            amountMinor <= 0 -> formError.value = "Enter an amount greater than ₹0."
+            amountMinor <= 0 -> formError.value = "Enter an amount greater than 0."
             method == "cash" && selectedDrawer == null ->
                 formError.value =
                     "Select the verified open shift whose drawer received this cash."
@@ -1016,7 +1016,7 @@ class FinanceViewModel : ViewModel() {
                 formError.value = "Select the verified shop for this payout."
             method !in FINANCE_PAYMENT_METHODS ->
                 formError.value = "Select Cash, UPI, Card or Bank transfer."
-            amountMinor <= 0 -> formError.value = "Enter an amount greater than ₹0."
+            amountMinor <= 0 -> formError.value = "Enter an amount greater than 0."
             method == "cash" && selectedDrawer == null ->
                 formError.value =
                     "Select the verified open shift whose drawer paid these tips."

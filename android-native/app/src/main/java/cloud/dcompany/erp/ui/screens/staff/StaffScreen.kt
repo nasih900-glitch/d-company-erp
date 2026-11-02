@@ -78,6 +78,9 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SyncProblem
 import cloud.dcompany.erp.core.auth.StaffAccess
 import cloud.dcompany.erp.core.net.MeResponse
+import cloud.dcompany.erp.ui.screens.staff.time.StaffTimeScreen
+import cloud.dcompany.erp.ui.screens.staff.time.staffTimeAccess
+import cloud.dcompany.erp.ui.screens.staff.time.staffIdentityAccess
 import cloud.dcompany.erp.ui.components.ActionIntent
 import cloud.dcompany.erp.ui.components.LiquidDropdownMenu
 import cloud.dcompany.erp.ui.components.ActionBar
@@ -102,13 +105,30 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-/**
- * Staff — login/role/attendance management. Price-free (there is no pay-rate
- * field anywhere in this backend — see StaffViewModel's class doc comment):
- * this screen only ever touches identity and access, never money.
- */
+/** Time uses its own online authority/receipts; existing identity writes keep their scoped outbox. */
 @Composable
 fun StaffScreen(profile: MeResponse, access: StaffAccess) {
+    val time = staffTimeAccess(profile)
+    val identityAccess = staffIdentityAccess(profile, access)
+    val canAdminister = identityAccess.canReadDirectory || identityAccess.canManageDirectory
+    var identity by remember(profile.userId, profile.companyId, time, canAdminister) { mutableStateOf(!time.canRead) }
+    Column(Modifier.fillMaxSize()) {
+        if (time.canRead && canAdminister) Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            TextButton({ identity = false }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Time & draft pay") }
+            TextButton({ identity = true }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Logins & access") }
+        }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            when {
+                !identity && time.canRead -> StaffTimeScreen(profile)
+                identity && canAdminister -> StaffIdentityScreen(profile, identityAccess)
+                else -> Text("This account has no staff-time or identity-management access.", Modifier.padding(16.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun StaffIdentityScreen(profile: MeResponse, access: StaffAccess) {
     val factory = remember(profile.userId, access) {
         viewModelFactory { initializer { StaffViewModel(profile, access) } }
     }
@@ -131,16 +151,6 @@ fun StaffScreen(profile: MeResponse, access: StaffAccess) {
         )
         if (state.canReadDirectory) {
             StaffSummary(state)
-        }
-        if (state.canReadDirectory || state.canUseAttendance) {
-            AttendanceCard(
-                state,
-                canClock = state.canUseAttendance,
-                onClockIn = vm::clockIn,
-                onClockOut = vm::clockOut,
-                onDismissError = vm::dismissAttendanceError,
-                onResolveUncertain = vm::retry,
-            )
         }
 
         state.notice?.let {

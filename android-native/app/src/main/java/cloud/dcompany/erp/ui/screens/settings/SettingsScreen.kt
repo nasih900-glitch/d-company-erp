@@ -86,6 +86,7 @@ import cloud.dcompany.erp.core.diagnostics.healthCaptureInsight
 import cloud.dcompany.erp.core.money.minorToRupeesInput
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.core.net.currencyFreeLabel
 import java.text.DateFormat
 import java.util.Date
 
@@ -208,7 +209,7 @@ private fun PointsTab(state: SettingsUiState, vm: SettingsViewModel) {
                 NumericSetting("For each rupees spent", draft.gamingEarnRupees) { value ->
                     vm.updateLoyaltyRules { it.copy(gamingEarnRupees = value) }
                 }
-                NumericSetting("Value of 100 points (₹)", draft.minorPerPoint) { value ->
+                NumericSetting("Value of 100 points", draft.minorPerPoint) { value ->
                     vm.updateLoyaltyRules { it.copy(minorPerPoint = value) }
                 }
             }
@@ -244,7 +245,7 @@ private fun PointsTab(state: SettingsUiState, vm: SettingsViewModel) {
                 draft.rewards.forEachIndexed { index, reward ->
                     if (index > 0) PanelDivider()
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(reward.label, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                        Text(reward.label.currencyFreeLabel(), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                         Switch(
                             checked = reward.enabled,
                             onCheckedChange = { enabled ->
@@ -269,7 +270,7 @@ private fun PointsTab(state: SettingsUiState, vm: SettingsViewModel) {
                             rules.copy(rewards = rules.rewards.map { if (it.key == reward.key) it.copy(pointsCost = value) else it })
                         }
                     }
-                    MoneySetting("Bill credit (₹)", reward.valueMinor) { value ->
+                    MoneySetting("Bill credit", reward.valueMinor) { value ->
                         vm.updateLoyaltyRules { rules ->
                             rules.copy(rewards = rules.rewards.map { if (it.key == reward.key) it.copy(valueMinor = value) else it })
                         }
@@ -402,7 +403,7 @@ internal fun loyaltyProgramChangeSummary(
     after: LoyaltyProgramRulesDto,
 ): List<String> = buildList {
     if (before.gamingEarnPoints != after.gamingEarnPoints || before.gamingEarnRupees != after.gamingEarnRupees) {
-        add("Gaming earn: ${before.gamingEarnPoints} per ₹${before.gamingEarnRupees} → ${after.gamingEarnPoints} per ₹${after.gamingEarnRupees}")
+        add("Gaming earn: ${before.gamingEarnPoints} per ${before.gamingEarnRupees} → ${after.gamingEarnPoints} per ${after.gamingEarnRupees}")
     }
     if (before.minorPerPoint != after.minorPerPoint) {
         add(

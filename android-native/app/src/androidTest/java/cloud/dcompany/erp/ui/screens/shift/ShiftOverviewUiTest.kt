@@ -89,9 +89,9 @@ class ShiftOverviewUiTest {
         var reviewed = false
         compose.setContent { ShiftFixture(width = 900, height = 620, onReview = { reviewed = true }) }
 
-        compose.onAllNodesWithText("₹100.00").assertCountEquals(2)
-        compose.onNodeWithText("₹140.00").assertIsDisplayed()
-        compose.onNodeWithText("₹240.00").assertIsDisplayed()
+        compose.onAllNodesWithText("100.00").assertCountEquals(2)
+        compose.onNodeWithText("140.00").assertIsDisplayed()
+        compose.onNodeWithText("240.00").assertIsDisplayed()
         screenshot("shift-overview-1280.png")
         compose.onNodeWithText("Review & close shift").performScrollTo().performClick()
         compose.runOnIdle { assertTrue(reviewed) }
@@ -397,19 +397,19 @@ class ShiftOverviewUiTest {
 
         compose.onNodeWithText("Count cash").performScrollTo().performClick()
         repeat(2) {
-            compose.onNodeWithContentDescription("Increase Count of ₹500 notes by one")
+            compose.onNodeWithContentDescription("Increase Count of 500 notes by one")
                 .performScrollTo().assertIsDisplayed().performClick()
         }
         compose.onNodeWithText("Use drawer count").performScrollTo().performClick()
-        compose.onNodeWithText("₹1,000.00").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("1,000.00").performScrollTo().assertIsDisplayed()
 
         compose.onNodeWithContentDescription("Gaming. Manage stations and sessions").performClick()
         compose.onNodeWithTag("workspace-away-from-shift").assertIsDisplayed()
         compose.onNodeWithContentDescription("Shift. Open, review and close today's shift").performClick()
         compose.onNodeWithText("Edit cash count").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("₹1,000.00").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("1,000.00").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Edit cash count").performClick()
-        compose.onNodeWithContentDescription("Count of ₹500 notes")
+        compose.onNodeWithContentDescription("Count of 500 notes")
             .performScrollTo()
             .assert(
                 SemanticsMatcher.expectValue(
@@ -421,7 +421,7 @@ class ShiftOverviewUiTest {
 
         restoration.emulateSavedInstanceStateRestore()
         compose.onNodeWithText("Edit cash count").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("₹1,000.00").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("1,000.00").performScrollTo().assertIsDisplayed()
     }
 
     private fun screenshot(filename: String) {

@@ -9,6 +9,7 @@ const source = readFileSync(
   'utf8',
 );
 const SECRET = 'receiver-contract-secret-with-more-than-32-bytes';
+const SPREADSHEET_ID = 'synthetic-native-sheet-id_1234567890';
 const COMPANY_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const BRANCH_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const CONFIGURATION_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
@@ -192,6 +193,8 @@ class WorkbookMock {
   corruptNextTailWrite = false;
   failDelete = false;
   failNextResponse = false;
+  id = SPREADSHEET_ID;
+  getId() { return this.id; }
   getSheetByName(name: string) { return this.sheets.get(name) ?? null; }
   insertSheet(name: string) {
     const sheet = new SheetMock(this, name);
@@ -218,8 +221,17 @@ function digest(value: string) {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
-function loadReceiver(options: { projectionCollision?: boolean; projectionEndRow?: number } = {}) {
+function loadReceiver(options: {
+  projectionCollision?: boolean;
+  projectionEndRow?: number;
+  spreadsheetId?: string | null;
+  returnedSpreadsheetId?: string;
+  failOpen?: boolean;
+} = {}) {
   const workbook = new WorkbookMock();
+  if (options.returnedSpreadsheetId) workbook.id = options.returnedSpreadsheetId;
+  const openedIds: string[] = [];
+  let activeCalls = 0;
   const projection = workbook.insertSheet('SHOP SALES REVENUE');
   projection.getRange('D2').setFormula(D2_FORMULA);
   if (options.projectionCollision) projection.getRange(94, 2).setValues([['manual']]);
@@ -236,8 +248,11 @@ function loadReceiver(options: { projectionCollision?: boolean; projectionEndRow
   };
   const properties = new Map([
     ['D_COMPANY_ERP_MIRROR_HMAC_SECRET', SECRET],
+    ['D_COMPANY_ERP_STAFF_HOURS_CONFIG', JSON.stringify({ company_id: COMPANY_ID, projection_end_row: options.projectionEndRow ?? 5000 })],
     ['D_COMPANY_ERP_DAILY_COLLECTIONS_CONFIG', JSON.stringify(config)],
+    ['D_COMPANY_ERP_SPREADSHEET_ID', options.spreadsheetId ?? SPREADSHEET_ID],
   ]);
+  if (options.spreadsheetId === null) properties.delete('D_COMPANY_ERP_SPREADSHEET_ID');
   const context = createContext({
     Date,
     JSON,
@@ -254,7 +269,13 @@ function loadReceiver(options: { projectionCollision?: boolean; projectionEndRow
     },
     LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock: () => undefined }) },
     SpreadsheetApp: {
-      getActiveSpreadsheet: () => workbook,
+      openById: (id: string) => {
+        openedIds.push(id);
+        if (options.failOpen) throw new Error('private Google permission detail must not leak');
+        if (id !== SPREADSHEET_ID) throw new Error('unexpected target');
+        return workbook;
+      },
+      getActiveSpreadsheet: () => { activeCalls += 1; throw new Error('no active spreadsheet in a web app'); },
       flush: () => undefined,
       ProtectionType: { SHEET: 'SHEET', RANGE: 'RANGE' },
     },
@@ -277,12 +298,20 @@ function loadReceiver(options: { projectionCollision?: boolean; projectionEndRow
       },
     },
   });
-  runInContext(`${source}\nthis.receiver = {doPost, setupDailyCollectionsProjection};`, context);
+  runInContext(`${source}\nthis.receiver = {doPost, doGet, setupDailyCollectionsProjection, setupStaffHoursProjection, staffEffectiveWork};`, context);
   const receiver = context.receiver as {
     doPost: (request: unknown) => { body: string };
+    doGet: () => { body: string };
     setupDailyCollectionsProjection: () => unknown;
+    setupStaffHoursProjection: () => unknown;
+    staffEffectiveWork: (row: unknown[], manualRows: unknown[][]) => {minutes: number | null; status: string};
   };
-  return { workbook, projection, receiver, config };
+  context.testConfig = config;
+  return {
+    workbook, projection, receiver, config, properties, openedIds,
+    activeCalls: () => activeCalls,
+    evaluate: (expression: string) => runInContext(expression, context),
+  };
 }
 
 function dailyPayload(overrides: Record<string, unknown> = {}) {
@@ -351,6 +380,336 @@ function send(receiver: ReturnType<typeof loadReceiver>['receiver'], signedEvent
   };
   return JSON.parse(receiver.doPost({ postData: { contents: JSON.stringify(request) } }).body) as Record<string, unknown>;
 }
+
+const STAFF_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+const ATTENDANCE_ID = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+
+function staffPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    payload_schema: 'staff_hours.v1', record_kind: 'attendance', record_id: ATTENDANCE_ID,
+    staff_id: STAFF_ID, staff_name: '=Staff QA', branch_id: BRANCH_ID,
+    business_timezone: 'Asia/Kolkata', currency: 'INR',
+    clock_in_at: '2026-11-02T08:00:00.000000Z', clock_out_at: '2026-11-02T20:00:00.000000Z',
+    actual_break_minutes: 60, gross_seconds: 43200, work_seconds: 39600,
+    monthly_salary_minor: null, daily_presence_minutes: null, planned_break_minutes: null,
+    daily_work_minutes: null, working_weekday_mask: null, effective_from: null,
+    pay_status: 'draft', overtime_pay_minor: null, payable_minor: null, review_required: false,
+    ...overrides,
+  };
+}
+
+function staffEvent(payload = staffPayload(), overrides: Record<string, unknown> = {}) {
+  return event(payload, {
+    event_type: 'staff_hours.fact', source_type: `staff_hours.${payload.record_kind}`,
+    source_id: payload.record_id, source_revision: '00001793700000000000',
+    event_key: 'staff:test', ...overrides,
+  });
+}
+
+describe('mandatory private receiver spreadsheet binding', () => {
+  const legacy = () => event({ currency: 'INR', amount_minor: 12345 }, {
+    event_type: 'finance.expense.recorded', source_type: 'expense',
+    source_id: ATTENDANCE_ID, source_revision: 'recorded-v1',
+  });
+
+  it.each([null, '', 'short', 'https://docs.google.com/spreadsheets/d/target/edit',
+    ` ${SPREADSHEET_ID}`, `${SPREADSHEET_ID}\n`, 'α'.repeat(30), 'a'.repeat(201)])(
+    'refuses absent or noncanonical binding %s before any Sheet access/write', (spreadsheetId) => {
+      const loaded = loadReceiver({ spreadsheetId });
+      expect(send(loaded.receiver, legacy())).toMatchObject({
+        ok: false, retryable: false, error_code: 'spreadsheet_not_configured',
+      });
+      expect(loaded.openedIds).toEqual([]);
+      expect(loaded.activeCalls()).toBe(0);
+      expect([...loaded.workbook.sheets.keys()]).toEqual(['SHOP SALES REVENUE']);
+      expect(loaded.projection.getRange('D2').getFormula()).toBe(D2_FORMULA);
+    },
+  );
+
+  it.each([
+    'getOrCreateMirrorSheet()',
+    'getDailyCollectionsD2Fingerprint()',
+    'getOrCreateDailyLogSheet()',
+    'getDailyLogSheet()',
+    'installDailyProjection(testConfig)',
+    'assertDailyCollectionsSetup(testConfig)',
+    'staffSheet("ERP Staff Hours v1", STAFF_HEADERS, false)',
+  ])('routes %s through mandatory binding without an ambient fallback', (expression) => {
+    const loaded = loadReceiver({ spreadsheetId: null });
+    expect(() => loaded.evaluate(expression)).toThrow('Configure the native spreadsheet ID');
+    expect(loaded.openedIds).toEqual([]);
+    expect(loaded.activeCalls()).toBe(0);
+    expect([...loaded.workbook.sheets.keys()]).toEqual(['SHOP SALES REVENUE']);
+  });
+
+  it('uses the exact configured ID for legacy, daily and staff writes with no active spreadsheet', () => {
+    const loaded = loadReceiver();
+    loaded.receiver.setupDailyCollectionsProjection();
+    loaded.receiver.setupStaffHoursProjection();
+    expect(send(loaded.receiver, legacy())).toMatchObject({ ok: true, status: 'accepted' });
+    expect(send(loaded.receiver, event(dailyPayload()))).toMatchObject({ ok: true, capability: 'daily_collections.v1' });
+    expect(send(loaded.receiver, staffEvent())).toMatchObject({ ok: true, capability: 'staff_hours.v1' });
+    expect(loaded.openedIds.length).toBeGreaterThan(7);
+    expect(new Set(loaded.openedIds)).toEqual(new Set([SPREADSHEET_ID]));
+    expect(loaded.activeCalls()).toBe(0);
+  });
+
+  it('refuses a mismatching opened workbook identity before append', () => {
+    const loaded = loadReceiver({ returnedSpreadsheetId: 'different-native-sheet_1234567890' });
+    expect(send(loaded.receiver, legacy())).toMatchObject({
+      ok: false, retryable: false, error_code: 'spreadsheet_binding_mismatch',
+    });
+    expect(loaded.openedIds).toEqual([SPREADSHEET_ID]);
+    expect([...loaded.workbook.sheets.keys()]).toEqual(['SHOP SALES REVENUE']);
+  });
+
+  it('sanitizes inaccessible target errors without acknowledging or relaxing existing retry policy', () => {
+    const loaded = loadReceiver({ failOpen: true });
+    const response = send(loaded.receiver, legacy());
+    expect(response).toMatchObject({ ok: false, retryable: true, error_code: 'internal_error' });
+    expect(JSON.stringify(response)).not.toContain('private Google permission detail');
+    expect([...loaded.workbook.sheets.keys()]).toEqual(['SHOP SALES REVENUE']);
+  });
+
+  it('does not cache a previously valid binding after the property is removed', () => {
+    const loaded = loadReceiver();
+    expect(send(loaded.receiver, legacy())).toMatchObject({ ok: true });
+    loaded.properties.delete('D_COMPANY_ERP_SPREADSHEET_ID');
+    expect(send(loaded.receiver, legacy())).toMatchObject({ ok: false, error_code: 'spreadsheet_not_configured' });
+    expect(loaded.workbook.getSheetByName('ERP Mirror v1')?.getLastRow()).toBe(2);
+    expect(loaded.activeCalls()).toBe(0);
+  });
+
+  it('does not select a target from the signed event payload', () => {
+    const loaded = loadReceiver();
+    const fact = legacy();
+    const payload = { currency: 'INR', amount_minor: 12345, spreadsheet_id: 'other-native-sheet_1234567890' };
+    const payloadJson = JSON.stringify(payload);
+    expect(send(loaded.receiver, { ...fact, payload_json: payloadJson, payload_sha256: digest(payloadJson) })).toMatchObject({ ok: true });
+    expect(loaded.openedIds).toEqual([SPREADSHEET_ID]);
+  });
+
+  it('keeps the exact seven-key health contract separate from binding readiness', () => {
+    const loaded = loadReceiver({ spreadsheetId: null });
+    expect(JSON.parse(loaded.receiver.doGet().body)).toEqual({
+      ok: true, service: 'D Company ERP Mirror', schema: 'erp-mirror.v1', schema_version: 1,
+      mode: 'append-only', tab: 'ERP Mirror v1', hmac_configured: true,
+    });
+    expect(loaded.openedIds).toEqual([]);
+  });
+});
+
+describe('independent staff-hours Apps Script capability', () => {
+  let loaded: ReturnType<typeof loadReceiver>;
+  beforeEach(() => {
+    loaded = loadReceiver({ projectionEndRow: 20 });
+    loaded.receiver.setupStaffHoursProjection();
+  });
+
+  it('proves staff capability separately without appending financial or staff business facts', () => {
+    const payload = { required_capability: 'staff_hours.v1', scope: { company_id: COMPANY_ID }, status: 'test' };
+    const response = send(loaded.receiver, event(payload, {
+      event_type: 'staff_hours.connection_test', source_type: 'staff_hours_configuration',
+      source_id: ATTENDANCE_ID, source_revision: CONFIGURATION_ID,
+    }));
+    expect(response).toMatchObject({ ok: true, capability: 'staff_hours.v1', scope: payload.scope });
+    expect(loaded.workbook.getSheetByName('ERP Mirror v1')).toBeNull();
+    expect(loaded.workbook.getSheetByName('ERP Staff Hours v1')?.getLastRow()).toBe(1);
+  });
+
+  it('appends an exact attendance fact once and keeps confirmed breaks distinct from planned breaks/pay', () => {
+    const fact = staffEvent();
+    expect(send(loaded.receiver, fact)).toMatchObject({ ok: true, status: 'accepted', capability: 'staff_hours.v1' });
+    expect(send(loaded.receiver, fact)).toMatchObject({ ok: true, status: 'duplicate', capability: 'staff_hours.v1' });
+    const log = loaded.workbook.getSheetByName('ERP Staff Hours v1')!;
+    expect(log.getLastRow()).toBe(2);
+    const row = log.getRange(2, 1, 1, 31).getValues()[0];
+    expect(row[4]).toBe("'=Staff QA");
+    expect(row.slice(11, 14)).toEqual([60, 43200, 39600]);
+    expect(row.slice(20, 24)).toEqual(['draft', '', '', false]);
+    expect(loaded.workbook.getSheetByName('STAFF HOURS ERP')?.getRange('A2').getFormula()).toContain('SORTN');
+  });
+
+  it('retains all manual and financial values, formulas and existing daily capability', () => {
+    loaded = loadReceiver({ projectionEndRow: 100 });
+    loaded.receiver.setupStaffHoursProjection();
+    loaded.receiver.setupDailyCollectionsProjection();
+    loaded.projection.getRange(2, 1).setValue('manual date');
+    loaded.projection.getRange(2, 2).setValue(1234);
+    const before = JSON.stringify([...loaded.projection.cells]);
+    const manual = loaded.workbook.getSheetByName('STAFF HOURS MANUAL OVERRIDES')!;
+    manual.getRange(2, 1).setValue('owner correction record');
+    manual.getRange(2, 5).setValue('Reason needs ERP review, not a payment');
+    const manualBefore = JSON.stringify([...manual.cells]);
+    loaded.receiver.setupStaffHoursProjection();
+    expect(send(loaded.receiver, staffEvent())).toMatchObject({ ok: true });
+    expect(JSON.stringify([...loaded.projection.cells])).toBe(before);
+    expect(JSON.stringify([...manual.cells])).toBe(manualBefore);
+    expect(send(loaded.receiver, event({
+      currency: 'INR', description: 'Daily test', export_mode: 'daily_collections',
+      required_capability: 'daily_collections.v1', status: 'test',
+      summary_scope: { branch_id: BRANCH_ID, business_timezone: 'Asia/Kolkata', start_date: '2026-10-01' },
+    }, { event_type: 'mirror.connection_test', source_type: 'mirror_configuration',
+      source_id: ATTENDANCE_ID, source_revision: CONFIGURATION_ID }))).toMatchObject({ ok: true, capability: 'daily_collections.v1' });
+  });
+
+  it.each([
+    { extra_field: true }, { payload_schema: 'staff_hours.v2' }, { pay_status: 'paid' },
+    { payable_minor: 1 }, { overtime_pay_minor: 0 }, { actual_break_minutes: true },
+    { actual_break_minutes: 721 }, { work_seconds: 43200 }, { gross_seconds: 43201 },
+    { monthly_salary_minor: 1200000 }, { staff_id: 'not-a-uuid' },
+  ])('rejects unknown or inconsistent staff fields before any append: %j', (drift) => {
+    expect(send(loaded.receiver, staffEvent(staffPayload(drift)))).toMatchObject({ ok: false, retryable: false });
+    expect(loaded.workbook.getSheetByName('ERP Staff Hours v1')?.getLastRow()).toBe(1);
+    expect(loaded.workbook.getSheetByName('ERP Mirror v1')).toBeNull();
+  });
+
+  it('preserves unknown actual breaks/net work and accepts exact microsecond-boundary duration', () => {
+    expect(send(loaded.receiver, staffEvent(staffPayload({ actual_break_minutes: null,
+      work_seconds: null, review_required: true })))).toMatchObject({ ok: true });
+    expect(send(loaded.receiver, staffEvent(staffPayload({
+      clock_in_at: '2026-11-02T08:00:00.000900Z', clock_out_at: '2026-11-02T08:00:01.000800Z',
+      actual_break_minutes: 0, gross_seconds: 0, work_seconds: 0,
+    }), { event_id: '11111111-1111-4111-8111-111111111111', source_revision: '00001793700000000001' }))).toMatchObject({ ok: true });
+  });
+
+  it('exports 720/60/660 every-day policy as draft metadata, never an actual break or pay', () => {
+    const payload = staffPayload({ record_kind: 'policy', branch_id: null, clock_in_at: null,
+      clock_out_at: null, actual_break_minutes: null, gross_seconds: null, work_seconds: null,
+      monthly_salary_minor: 1200000, daily_presence_minutes: 720, planned_break_minutes: 60,
+      daily_work_minutes: 660, working_weekday_mask: 127, effective_from: '2026-11-01', review_required: true });
+    expect(send(loaded.receiver, staffEvent(payload))).toMatchObject({ ok: true });
+    const row = loaded.workbook.getSheetByName('ERP Staff Hours v1')!.getRange(2, 1, 1, 31).getValues()[0];
+    expect(row.slice(14, 19)).toEqual([1200000, 720, 60, 660, 127]);
+    expect(row.slice(20, 24)).toEqual(['draft', '', '', true]);
+  });
+
+  it('does not acknowledge a stale projection, altered row, lost capability or changed scope', () => {
+    const fact = staffEvent();
+    expect(send(loaded.receiver, fact)).toMatchObject({ ok: true });
+    const log = loaded.workbook.getSheetByName('ERP Staff Hours v1')!;
+    log.getRange(2, 14).setValue(1);
+    expect(send(loaded.receiver, fact)).toMatchObject({ ok: false, error_code: 'staff_event_conflict' });
+    loaded.workbook.getSheetByName('STAFF HOURS ERP')!.getRange('A2').setFormula('=1');
+    expect(send(loaded.receiver, fact)).toMatchObject({ ok: false, error_code: 'staff_projection_not_verified' });
+  });
+
+  it('rejects conflicting source revisions and new keys beyond projection capacity before append', () => {
+    const narrow = loadReceiver({ projectionEndRow: 2 });
+    narrow.receiver.setupStaffHoursProjection();
+    expect(send(narrow.receiver, staffEvent())).toMatchObject({ ok: true });
+    expect(send(narrow.receiver, staffEvent(staffPayload(), {
+      event_id: '11111111-1111-4111-8111-111111111111', event_key: 'staff:other',
+    }))).toMatchObject({ ok: false, error_code: 'staff_revision_conflict' });
+    const other = staffPayload({ record_id: '11111111-1111-4111-8111-111111111111' });
+    expect(send(narrow.receiver, staffEvent(other, { event_id: other.record_id }))).toMatchObject({ ok: false, error_code: 'staff_capacity_exceeded' });
+    expect(narrow.workbook.getSheetByName('ERP Staff Hours v1')?.getLastRow()).toBe(2);
+  });
+
+  it('grows only the owned staff log grid before writing beyond its initial rows', () => {
+    const log = loaded.workbook.getSheetByName('ERP Staff Hours v1')!;
+    log.maxRows = 1;
+    expect(send(loaded.receiver, staffEvent())).toMatchObject({ ok: true });
+    expect(log.getMaxRows()).toBeGreaterThanOrEqual(2);
+    expect(log.getMaxRows()).toBeLessThanOrEqual(20000);
+  });
+
+  it('recovers a lost acknowledgement idempotently and refuses a corrupt unacknowledged tail', () => {
+    loaded.workbook.failNextResponse = true;
+    expect(send(loaded.receiver, staffEvent())).toMatchObject({ ok: false });
+    expect(send(loaded.receiver, staffEvent())).toMatchObject({ ok: true, status: 'duplicate' });
+    const broken = loadReceiver({ projectionEndRow: 20 });
+    broken.receiver.setupStaffHoursProjection();
+    broken.workbook.corruptNextTailWrite = true;
+    broken.workbook.failDelete = true;
+    expect(send(broken.receiver, staffEvent())).toMatchObject({ ok: false, error_code: 'write_verification_failed' });
+    expect(send(broken.receiver, staffEvent())).toMatchObject({ ok: false, error_code: 'staff_event_conflict' });
+  });
+
+  function currentRow() {
+    expect(send(loaded.receiver, staffEvent())).toMatchObject({ ok: true });
+    return loaded.workbook.getSheetByName('ERP Staff Hours v1')!.getRange(2, 1, 1, 31).getValues()[0];
+  }
+
+  function correction(row: unknown[], minutes: unknown = 600, reason: unknown = 'Owner reviewed actual work') {
+    return [ATTENDANCE_ID, row[1], row[27], minutes, reason, 'Sheet-only reviewed correction'];
+  }
+
+  it('binds reviewed work overrides to the current attendance ID, exact revision and hash, including zero', () => {
+    const row = currentRow();
+    const unchanged = JSON.stringify(row);
+    expect(loaded.receiver.staffEffectiveWork(row, [correction(row)])).toMatchObject({ minutes: 600, status: 'Manual correction' });
+    expect(loaded.receiver.staffEffectiveWork(row, [correction(row, 0)])).toMatchObject({ minutes: 0, status: 'Manual correction' });
+    const unknown = [...row]; unknown[13] = ''; unknown[23] = true;
+    expect(loaded.receiver.staffEffectiveWork(unknown, [])).toMatchObject({ minutes: null, status: 'ERP unknown' });
+    expect(loaded.receiver.staffEffectiveWork(unknown, [correction(unknown, 0)])).toMatchObject({ minutes: 0, status: 'Manual correction' });
+    expect(JSON.stringify(row)).toBe(unchanged);
+    const formula = loaded.workbook.getSheetByName('STAFF HOURS ERP')!.getRange('A2').getFormula();
+    expect(formula).toContain('EXACT(TO_TEXT(mrevision),revision)');
+    expect(formula).toContain('EXACT(TO_TEXT(mhash),hash)');
+    expect(formula).toContain('MAP(keys,LAMBDA(currentkey,SUM(N(EXACT(manualkeys,currentkey)))))');
+    expect(formula).toContain('IF(status="Manual correction",minutes,IF(known,work/60,""))');
+    expect(formula).toContain('IFERROR(INT(mminutes),-1)=mminutes');
+    const delimiters: string[] = [];
+    let quoted = false;
+    for (let index = 1; index < formula.length; index += 1) {
+      const token = formula[index];
+      if (token === '"') {
+        if (quoted && formula[index + 1] === '"') { index += 1; continue; }
+        quoted = !quoted;
+      } else if (!quoted) {
+        if (token === '(' || token === '{') delimiters.push(token);
+        if (token === ')') expect(delimiters.pop()).toBe('(');
+        if (token === '}') expect(delimiters.pop()).toBe('{');
+      }
+    }
+    expect(quoted).toBe(false);
+    expect(delimiters).toEqual([]);
+    expect(loaded.workbook.getSheetByName('STAFF HOURS ERP')!.getRange(1, 32, 1, 2).getValues()[0])
+      .toEqual(['Effective Work Minutes', 'Correction Status']);
+  });
+
+  it.each(['', null, true, 1.5, -1, 10081, '1.5', '00'])('refuses malformed reviewed work minutes %j', (minutes) => {
+    const row = currentRow();
+    expect(loaded.receiver.staffEffectiveWork(row, [correction(row, minutes)]))
+      .toMatchObject({ minutes: 660, status: 'Invalid correction' });
+  });
+
+  it.each(['', '  ', 123, 'x'.repeat(501)])('requires a nonblank bounded text reason: %j', (reason) => {
+    const row = currentRow();
+    expect(loaded.receiver.staffEffectiveWork(row, [correction(row, 600, reason)]))
+      .toMatchObject({ minutes: 660, status: 'Invalid correction' });
+  });
+
+  it('ignores stale overrides after an ERP revision, retains their history and accepts one new current correction', () => {
+    const before = currentRow();
+    const override = correction(before);
+    const manual = loaded.workbook.getSheetByName('STAFF HOURS MANUAL OVERRIDES')!;
+    manual.getRange(2, 1, 1, 6).setValues([override]);
+    const payload = staffPayload({ clock_out_at: '2026-11-02T20:01:00.000000Z', gross_seconds: 43260, work_seconds: 39660 });
+    expect(send(loaded.receiver, staffEvent(payload, { source_revision: '00001793700000000001', event_id: '11111111-1111-4111-8111-111111111111' }))).toMatchObject({ ok: true });
+    const row = loaded.workbook.getSheetByName('ERP Staff Hours v1')!.getRange(3, 1, 1, 31).getValues()[0];
+    expect(loaded.receiver.staffEffectiveWork(row, [override])).toMatchObject({ minutes: 661, status: 'Stale correction' });
+    const fresh = correction(row, 0);
+    manual.getRange(3, 1, 1, 6).setValues([fresh]);
+    expect(loaded.receiver.staffEffectiveWork(row, [override, fresh])).toMatchObject({ minutes: 0, status: 'Manual correction' });
+    expect(loaded.receiver.staffEffectiveWork(row, [fresh, correction(row, 600)])).toMatchObject({ minutes: 661, status: 'Ambiguous correction' });
+    expect(manual.getRange(2, 1, 1, 6).getValues()[0]).toEqual(override);
+    expect(loaded.workbook.getSheetByName('ERP Staff Hours v1')!.getRange(2, 1, 1, 31).getValues()[0]).toEqual(before);
+  });
+
+  it('refuses a hash-only mismatch and preserves unknown ERP work on stale or invalid corrections', () => {
+    const row = currentRow(); row[13] = ''; row[23] = true;
+    const badHash = correction(row); badHash[2] = '0'.repeat(64);
+    expect(loaded.receiver.staffEffectiveWork(row, [badHash])).toMatchObject({ minutes: null, status: 'Stale correction' });
+    const badRevision = correction(row); badRevision[1] = '1';
+    expect(loaded.receiver.staffEffectiveWork(row, [badRevision])).toMatchObject({ minutes: null, status: 'Invalid correction' });
+    const policy = [...row]; policy[2] = 'policy';
+    expect(loaded.receiver.staffEffectiveWork(policy, [correction(policy)])).toMatchObject({ minutes: null, status: 'Draft policy' });
+    const other = correction(row); other[0] = '11111111-1111-4111-8111-111111111111';
+    expect(loaded.receiver.staffEffectiveWork(row, [other])).toMatchObject({ minutes: null, status: 'ERP unknown' });
+  });
+});
 
 describe('daily collections Apps Script receiver', () => {
   let loaded: ReturnType<typeof loadReceiver>;
