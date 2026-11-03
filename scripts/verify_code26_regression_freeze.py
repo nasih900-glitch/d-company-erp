@@ -2327,6 +2327,7 @@ REVIEWED_CODE30_4_BUILD59_SHA256 = {
 }
 
 REVIEWED_CODE30_4_BUILD60_SHA256 = {
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/components/LiquidSharedComponentsUiTest.kt": "6349d071eb6ce9d04046187112edd32134bbcc9d92c7a5ecf4e515bb73c1fa2b",
     ".env.production.example": "f17ba6ff32762be37c803c205dce2ba9a09b2a5cd54698cb865ce1c9c30b516b",
     "README.md": "95c06b3a142ca8cef6a4d550305dc62485b39b630b379333ddbb1b7c9dd55b43",
     "android-native/app/build.gradle.kts": "262b6ba7b3036637c01cb82b1cb17b88b0a20e2c8d619682c8c102eb205d911d",
