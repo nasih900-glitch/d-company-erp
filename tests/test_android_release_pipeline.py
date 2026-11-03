@@ -928,7 +928,7 @@ class AndroidReleasePipelineTest(unittest.TestCase):
                     job,
                     flags=re.MULTILINE,
                 )
-                self.assertEqual(emulator_builds, ["15081367"])
+                self.assertEqual(emulator_builds, ["15917651"])
                 options = re.findall(
                     r"^\s*emulator-options:\s*(.+)$",
                     job,
