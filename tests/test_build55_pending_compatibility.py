@@ -5,8 +5,10 @@ from __future__ import annotations
 import ast
 import hashlib
 import importlib.util
+import io
 import json
 import subprocess
+import tarfile
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -965,6 +967,34 @@ def test_installer_backend_manifest_uses_verifier_posix_name_order(tmp_path, ver
     )
     assert namespace["candidate_manifest"] == verifier.sha(canonical.encode())
     assert verifier.sha(old_component_order.encode()) != namespace["candidate_manifest"]
+
+
+def test_frozen_candidate_backend_manifest_matches_current_git_archive_wire(tmp_path, verifier):
+    # Use actual committed backend bytes, excluding local test caches, and do not
+    # replace the reviewed constant as the synthetic privileged-I/O fixtures do.
+    archive = subprocess.check_output(["git", "archive", "HEAD", "backend"], cwd=ROOT)
+    with tarfile.open(fileobj=io.BytesIO(archive)) as source:
+        source.extractall(tmp_path, filter="data")
+    installer = (ROOT / "infra/scripts/install-on-vm.sh").read_text()
+    identity = installer.split("<<'PYIDENTITY'", 1)[1].split("\n", 1)[1].split("\nPYIDENTITY", 1)[0]
+    parsed = ast.parse(identity)
+    loop = next(node for node in parsed.body if isinstance(node, ast.For))
+    digest = next(
+        node for node in parsed.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "candidate_manifest" for target in node.targets)
+    )
+    namespace = {"root": tmp_path, "manifest_rows": [], "hashlib": hashlib}
+    exec(compile(ast.Module(body=[loop, digest], type_ignores=[]), "installer-PYIDENTITY-real-source", "exec"), namespace)
+    backend = verifier.inventory(tmp_path, ("backend",))
+    canonical = "".join(
+        f"{digest}\t{name.removeprefix('backend/')}\n" for name, digest in sorted(backend.items())
+    ).encode()
+    assert backend
+    assert namespace["candidate_manifest"] == verifier.sha(canonical)
+    assert namespace["candidate_manifest"] != verifier.inventory_hash(backend)
+    assert verifier.CANDIDATE_RELEASE_FROZEN is True
+    assert verifier.CANDIDATE_BACKEND_MANIFEST_SHA256 == namespace["candidate_manifest"]
 
 
 def test_installer_and_extractable_legacy_guard_have_complete_shell_syntax(tmp_path):

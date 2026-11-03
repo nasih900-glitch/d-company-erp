@@ -2363,9 +2363,9 @@ REVIEWED_CODE30_4_BUILD60_SHA256 = {
     "frontend/src/modules/staff/staff-pay-estimate.test.ts": "310f7f1bdbccb54b39c76184578024af03b31aacbfc14a050ed3dbe96ac1c80a",
     "frontend/src/modules/staff/staff-pay-estimate.ts": "6ed2905c2ce110c9b7ba175456e5b8e624938632a1367f01129e707c1191fe98",
     "infra/scripts/install-on-vm.sh": "908a87a3b4f5b6023e856306ffa185d0d74f562c3a47d42c87ff142d32d3ef55",
-    "infra/scripts/verify-build55-pending-compatibility.py": "6068cfecba21b2eee30711849a71b1bad94e33405e05b93fb78ae247b52801fc",
+    "infra/scripts/verify-build55-pending-compatibility.py": "70b6d16e2c2aafc128cba62ced8daf8489fd5625b3ce05a87cd7e61b41223ee0",
     "infra/scripts/verify-production-runtime-images.sh": "b67e5f8f535cf100ac457aa2fb2d873a6c37f6c582bb93041821a69aedc92f21",
-    "tests/test_build55_pending_compatibility.py": "86b483432381dc392fc3d9bf2c5054ce7ddf80a532d2bfbe00059efad59cea4b",
+    "tests/test_build55_pending_compatibility.py": "387390bc82f19a9bad95f824e93cd8b0880cc36083089db13c3c1950227c0186",
     "tests/test_code26_physical_audit_lane.py": "ae08428f1b8764f483ef5d0d0bdbcc1b6880d60055b992b79c91f7ef36a7e278",
     "tests/test_verified_pip_bootstrap.py": "10f0a1642c1699e9ce730d0548f3f9c5164add1273c27462f90bc2a512882de4"
 }
