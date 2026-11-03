@@ -78,6 +78,32 @@ internal data class StaffTimeSummary(
     @SerialName("reference_hourly_numerator_minor") val referenceHourlyNumeratorMinor: Long? = null,
     @SerialName("reference_hourly_denominator_minutes") val referenceHourlyDenominatorMinutes: Int? = null,
     @SerialName("policy_covers_full_month") val policyCoversFullMonth: Boolean = false,
+    @SerialName("pay_estimate") val payEstimate: TimePayEstimate? = null,
+)
+
+@Serializable internal data class TimePayEstimateDay(
+    val date: String,
+    @SerialName("paid_seconds") val paidSeconds: Long,
+    @SerialName("ordinary_seconds") val ordinarySeconds: Long,
+    @SerialName("extra_seconds") val extraSeconds: Long,
+)
+@Serializable internal data class TimePayEstimate(
+    val status: String,
+    val reason: String? = null,
+    val basis: String,
+    @SerialName("attendance_scope") val attendanceScope: String,
+    @SerialName("monthly_salary_minor") val monthlySalaryMinor: Long? = null,
+    @SerialName("daily_paid_seconds") val dailyPaidSeconds: Long? = null,
+    @SerialName("scheduled_days") val scheduledDays: Int? = null,
+    @SerialName("scheduled_paid_seconds") val scheduledPaidSeconds: Long? = null,
+    @SerialName("recorded_paid_seconds") val recordedPaidSeconds: Long? = null,
+    @SerialName("ordinary_seconds") val ordinarySeconds: Long? = null,
+    @SerialName("extra_seconds") val extraSeconds: Long? = null,
+    @SerialName("hourly_rate_minor") val hourlyRateMinor: Long? = null,
+    @SerialName("base_pay_minor") val basePayMinor: Long? = null,
+    @SerialName("overtime_125_minor") val overtime125Minor: Long? = null,
+    @SerialName("overtime_150_minor") val overtime150Minor: Long? = null,
+    val days: List<TimePayEstimateDay> = emptyList(),
 )
 
 @Serializable internal data class TimeSelfClockIn(@SerialName("branch_id") val branchId: String)

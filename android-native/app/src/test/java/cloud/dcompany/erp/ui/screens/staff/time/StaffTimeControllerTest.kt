@@ -90,6 +90,14 @@ class StaffTimeControllerTest {
         assertEquals(0, api.peopleCalls); assertEquals(0, api.policyCalls)
         c.selectPerson(other); c.openPolicy(); assertEquals(user, c.state.value.selectedId); assertNull(c.state.value.draft)
     }
+    @Test fun ordinaryStaffRejectsUnexpectedPrivatePayEstimateBeforePublishingSnapshot() = runBlocking {
+        val api = Api(); val env = Env(api); val c = controller(env, Store())
+        api.summaryHook = { month, id -> summary(id ?: user, month).copy(payEstimate = TimePayEstimate(
+            "unavailable", "Private salary review", "paid_presence_clock_in_workday", "company", monthlySalaryMinor = 1200000)) }
+        c.refresh()
+        assertNull(c.state.value.summary)
+        assertFalse(c.state.value.fresh)
+    }
     @Test fun ownerUsesDedicatedPeopleProjectionAndSeparatePolicyHistory() = runBlocking {
         val api = Api(); val c = controller(Env(api, true), Store()); c.refresh()
         assertEquals(1, api.peopleCalls); assertEquals(1, api.policyCalls)

@@ -83,6 +83,28 @@ class StaffTimeScreenUiTest {
         compose.onNodeWithText("Cancel", substring = false).assertHeightIsAtLeast(48.dp).performClick()
         compose.runOnIdle { assertNull(s.value.draft); assertEquals(0, confirms) }
     }
+    @Test fun ownerPayPreviewSeparatesOvertimeAndResetsOnSnapshotMonthAndPerson() {
+        val p = TimePayEstimate("available", basis = "paid_presence_clock_in_workday", attendanceScope = "selected_branch",
+            monthlySalaryMinor = 1200000, dailyPaidSeconds = 43200, scheduledDays = 30, scheduledPaidSeconds = 1296000,
+            recordedPaidSeconds = 50400, ordinarySeconds = 43200, extraSeconds = 7200, hourlyRateMinor = 3333,
+            basePayMinor = 40000, overtime125Minor = 8333, overtime150Minor = 10000)
+        val initial = state(true)
+        val s = render(initial.copy(summary = initial.summary!!.copy(payEstimate = p)))
+        compose.onNodeWithText("Draft pay", substring = false).performClick()
+        compose.onNodeWithTag("staff-pay-total").performScrollTo().assertTextEquals("Total estimate: 400.00")
+        compose.onNodeWithTag("staff-pay-ot-125").performScrollTo().performClick()
+        compose.onNodeWithTag("staff-pay-total").performScrollTo().assertTextEquals("Total estimate: 483.33")
+        compose.runOnIdle { s.value = s.value.copy(summary = s.value.summary!!.copy(asOf = "2026-11-02T10:00:00Z")) }
+        compose.onNodeWithTag("staff-pay-total").performScrollTo().assertTextEquals("Total estimate: 400.00")
+        compose.onNodeWithTag("staff-pay-ot-150").performScrollTo().performClick()
+        compose.onNodeWithTag("staff-pay-total").performScrollTo().assertTextEquals("Total estimate: 500.00")
+        compose.runOnIdle { s.value = s.value.copy(month = "2026-10", summary = s.value.summary!!.copy(month = "2026-10")) }
+        compose.onNodeWithTag("staff-pay-total").performScrollTo().assertTextEquals("Total estimate: 400.00")
+        compose.runOnIdle { s.value = s.value.copy(selectedId = other, summary = s.value.summary!!.copy(userId = other, name = "Synthetic colleague")) }
+        compose.onNodeWithText("Draft pay", substring = false).performClick()
+        compose.onNodeWithTag("staff-pay-total").performScrollTo().assertTextEquals("Total estimate: 400.00")
+        compose.runOnIdle { assertEquals(0, confirms) }
+    }
     @Test fun clockOutRequiresOwnActualBreakEntryAndDoesNotPrefillPlan() {
         val d = TimeEditDraft(TimeWriteKind.SELF_OUT, user, "Synthetic worker", 0, attendance = entry.copy(clockOutAt = null))
         val s = render(state().copy(draft = d))

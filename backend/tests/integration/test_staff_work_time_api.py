@@ -182,6 +182,7 @@ async def test_staff_cannot_read_another_person_or_salary_or_write_owner_actions
     assert own.status_code == 200
     assert own.json()["user_id"] == str(first.id)
     assert own.json()["policy"] is None
+    assert own.json()["pay_estimate"] is None
     assert "monthly_salary_minor" not in own.text
     for method, url, body in (
         ("GET", f"/api/v1/staff/time-summary?month=2026-11&user_id={second.id}", None),
@@ -195,6 +196,71 @@ async def test_staff_cannot_read_another_person_or_salary_or_write_owner_actions
     ):
         response = await client.request(method, url, headers=_write(headers), json=body)
         assert response.status_code == 403, response.text
+
+
+async def test_owner_estimate_uses_paid_presence_and_keeps_payroll_unposted(
+    client, session, staff_world, monkeypatch
+):
+    w = staff_world
+    user = w["people"][0]
+    clock = [datetime(2026, 11, 2, 4, tzinfo=UTC)]
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock[0].astimezone(tz) if tz else clock[0].replace(tzinfo=None)
+
+    monkeypatch.setattr(work_time, "datetime", Clock)
+    policy = await client.post(
+        f"/api/v1/staff/work-policies/{user.id}",
+        headers=_write(w["owner_headers"]),
+        json=_policy(),
+    )
+    assert policy.status_code == 201, policy.text
+    opened = await client.post(
+        f"/api/v1/staff/attendance/{user.id}/clock-in",
+        headers=_write(w["owner_headers"]),
+        json={"branch_id": str(w["branch"].id), "reason": "Record actual arrival"},
+    )
+    assert opened.status_code == 201, opened.text
+    clock[0] += timedelta(hours=14)
+    closed = await client.post(
+        f"/api/v1/staff/attendance/{user.id}/clock-out",
+        headers=_write(w["owner_headers"]),
+        json={
+            "attendance_id": opened.json()["id"],
+            "break_minutes": 60,
+            "reason": "Record actual departure and paid break",
+        },
+    )
+    assert closed.status_code == 200, closed.text
+    response = await client.get(
+        "/api/v1/staff/time-summary",
+        headers=w["owner_headers"],
+        params={"month": "2026-11", "user_id": str(user.id)},
+    )
+    assert response.status_code == 200, response.text
+    summary = response.json()
+    p = summary["pay_estimate"]
+    assert p["status"] == "available"
+    assert p["basis"] == "paid_presence_clock_in_workday"
+    assert p["attendance_scope"] == "selected_branch"
+    assert p["recorded_paid_seconds"] == 14 * 3600
+    assert p["ordinary_seconds"] == 12 * 3600
+    assert p["extra_seconds"] == 2 * 3600
+    assert p["base_pay_minor"] == 40000
+    assert p["overtime_125_minor"] == 8333
+    assert p["overtime_150_minor"] == 10000
+    assert summary["closed_work_seconds"] == 13 * 3600
+    assert summary["payable_minor"] is summary["overtime_pay_minor"] is None
+    assert (
+        await session.scalar(
+            select(func.count())
+            .select_from(PayrollEntry)
+            .where(PayrollEntry.company_id == w["company"].id)
+        )
+        == 0
+    )
 
 
 async def test_policy_replays_and_revisions_preserve_all_original_drafts(

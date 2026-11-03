@@ -92,6 +92,35 @@ internal fun validateTimeCorrection(body: TimeAttendanceCorrection) {
 internal fun timeDigest(value: String): String = MessageDigest.getInstance("SHA-256")
     .digest(value.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
 
+internal fun validateTimePayEstimate(summary: StaffTimeSummary) {
+    val p = summary.payEstimate ?: return
+    val safe = 9_007_199_254_740_991L
+    require(p.basis == "paid_presence_clock_in_workday" && p.attendanceScope in setOf("company", "selected_branch"))
+    require(p.days.size <= 31)
+    if (p.status == "unavailable") {
+        require(p.reason?.length in 1..500 && p.days.isEmpty())
+        require(p.basePayMinor == null && p.overtime125Minor == null && p.overtime150Minor == null)
+        return
+    }
+    require(p.status == "available" && p.reason == null && summary.policyCoversFullMonth)
+    val policy = requireNotNull(summary.policy)
+    val values = listOf(p.monthlySalaryMinor, p.dailyPaidSeconds, p.scheduledDays?.toLong(), p.scheduledPaidSeconds,
+        p.recordedPaidSeconds, p.ordinarySeconds, p.extraSeconds, p.hourlyRateMinor, p.basePayMinor, p.overtime125Minor, p.overtime150Minor)
+    require(values.all { it != null && it in 0..safe })
+    require(p.monthlySalaryMinor == policy.monthlySalaryMinor && p.dailyPaidSeconds == policy.dailyPresenceMinutes.toLong() * 60)
+    require(p.scheduledDays in 1..31 && p.scheduledPaidSeconds == p.scheduledDays!!.toLong() * p.dailyPaidSeconds!!)
+    require(p.ordinarySeconds!! <= p.scheduledPaidSeconds!! && p.basePayMinor!! <= p.monthlySalaryMinor!!)
+    require(p.overtime150Minor!! >= p.overtime125Minor!! && p.basePayMinor + p.overtime150Minor <= safe)
+    require(p.ordinarySeconds + p.extraSeconds!! <= p.recordedPaidSeconds!! && p.recordedPaidSeconds - p.ordinarySeconds - p.extraSeconds <= 1)
+    var previous = ""
+    p.days.forEach { day ->
+        require(YearMonth.from(LocalDate.parse(day.date)).toString() == summary.month && day.date > previous)
+        require(listOf(day.paidSeconds, day.ordinarySeconds, day.extraSeconds).all { it in 0..2_678_400L })
+        require(day.ordinarySeconds <= p.dailyPaidSeconds && day.ordinarySeconds + day.extraSeconds <= day.paidSeconds && day.paidSeconds - day.ordinarySeconds - day.extraSeconds <= 1)
+        previous = day.date
+    }
+}
+
 /** Local replay fence, not token verification or server authorization. Never retain either token. */
 internal fun staffTimeAuthBinding(access: String, refresh: String, profile: MeResponse): String? = runCatching {
     fun payload(token: String) = run {
