@@ -12,18 +12,27 @@ feature, payment posting, migration or Sheets integration. Room stays 58 and
 Alembic stays 0094. Production Gaming focus handlers and dial mechanics are
 unchanged.
 
-The saved-customer join UI test now establishes the real shown, settled
-software-keyboard viewport before selecting a saved customer. It observes raw
-keyboard removal and native window/layout completion before the original
-strict focus assertion. Interactive-window observation is scoped and restored
-in `finally`. The review's fixed sleep is replaced by actual confirmation
-button readiness. Existing no-write-before-confirm and exact saved-identity
-checks remain unchanged. Focus is neither forced nor polled to obtain a pass.
+The saved-customer join UI test begins with Android-dispatched finger input and
+verifies native touch mode. It establishes the real shown, settled keyboard
+viewport, observes raw keyboard removal and native window/layout completion,
+and retains the strict unfocused, no-write-before-confirm and exact saved-ID
+assertions. No downstream assertion is retried or polled to obtain a pass.
 
-The original hosted focus failure was not causally reproduced locally. These
-changes harden physical-input test preconditions; they do not establish that a
-production focus defect was fixed. Diagnostic evidence and earlier failures
-must remain available for review.
+An original-APK local control reproduced the same strict focus failure seen
+in hosted CI: the Login appearance fixture entered Android keyboard/non-touch
+mode, but its old
+Compose-level cleanup touch left that native mode enabled across activities.
+The unchanged Gaming test failed in that leaked state and passed again after
+an actual native touchscreen event. The Login fixture now captures and restores
+its original native input mode, including a legitimate keyboard-mode start,
+with checked event delivery, release, recycling and bounded native-state
+verification. A separate fixed-producer/original-consumer control passed
+before changing the consumer's initial finger input. Production focus handlers
+and customer selection behavior remain unchanged. Retain the original failed
+runs, same-APK causal controls and subsequent regression evidence. The local
+control used ARM64 and separate instrumentation invocations; exact native
+input mode was not recorded in the hosted run. Fresh complete hosted validation
+remains required.
 
 Complete exact-source **branch CI must pass before tagging this successor**.
 Then require canonical tagged CI, original-certificate signing, byte-verified

@@ -32,6 +32,11 @@ Inherited pay estimates are read-only and post no payroll or ledger entries.
 No new migration or Sheets activation is included. Configure actual staff
 terms only through normal Owner-authorized controls after verified deployment.
 
+Before branch CI, verify the native input-mode fixture cleanup from both touch
+and keyboard starts. Retain the fixed-producer/original-consumer control and
+complete Login/Gaming dialog suites; do not change production focus behavior
+or relax business assertions to compensate for a test's leaked native mode.
+
 Before staging or offering, complete application regression, original-signer
 upgrade tests, update/download checks and guarded live acceptance. Keep the
 minimum supported floor 54 and policy revision 4. Installation on the

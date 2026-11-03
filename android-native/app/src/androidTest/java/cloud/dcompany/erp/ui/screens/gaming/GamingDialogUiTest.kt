@@ -233,7 +233,12 @@ class GamingDialogUiTest {
                 flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
             }
             val customerSearch = compose.onNodeWithTag("gaming-customer-search")
-            customerSearch.performClick().assertIsFocused().performTextReplacement("Amina")
+            customerSearch.performAndroidScreenTouchWithOptionalIme()
+                .assertIsFocused().performTextReplacement("Amina")
+            val nativeSearchRoot = (customerSearch.fetchSemanticsNode().root as ViewRootForTest).view
+            compose.runOnIdle {
+                check(nativeSearchRoot.isInTouchMode) { "Saved-customer finger input must enter native touch mode" }
+            }
             customerSearch.awaitImeSettledTouchTarget()
             val playersList = compose.onNodeWithTag("gaming-players-list")
             playersList.performScrollToNode(hasText("Amina Rahman · 9876543210"))
