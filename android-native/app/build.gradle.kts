@@ -82,10 +82,10 @@ android {
         // version code so an installed tablet upgrades in place instead of
         // requiring an uninstall that would destroy its offline outbox.
         // Build 52 is immutable withheld predecessor history. This release keeps
-        // Room 56 under a direct version code so CI and upgrade checks cannot
+        // Room 58 under a direct version code so CI and upgrade checks cannot
         // produce different identities from a local Gradle property.
-        versionCode = 59
-        versionName = "3.1.52"
+        versionCode = 60
+        versionName = "3.1.53"
         buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "false")
         buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("play"))
 

@@ -10,6 +10,8 @@ import { ownerScope, readOwnerWorkspace, rememberOwnerWorkspace } from '@/lib/ow
 import { StableMutationIntent } from '@/lib/stable-mutation-intent';
 import { staffTime, type StaffTimePerson, type StaffAttendance, type StaffTimeAction, type StaffTimeSummary, type StaffWorkPolicy } from '@/lib/staff-time-api';
 import Modal from '@/components/ui/Modal';
+import StaffPayEstimateCard from './StaffPayEstimateCard';
+import { validatePayEstimate } from './staff-pay-estimate';
 import { canManageStaffTime, canUseStaffTime, confirmedWriteRefusal, currentMonth, duration, readUtcInput, utcInput, wholeMinutes } from './staff-time-policy';
 const GLASS = 'rounded-2xl border border-bg-border/70 bg-bg-surface/60 p-5 shadow-lg backdrop-blur-xl';
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -193,6 +195,8 @@ function StaffTimeWorkspace({
         return null;
       }) : Promise.resolve([])]);
       if (!mounted.current || sequence !== requests.current || !currentScope()) return;
+      validatePayEstimate(view, canManage);
+      if (live) validatePayEstimate(live, canManage);
       const companyMonth = currentMonth(view.timezone);
       if (!monthChosen.current && month !== companyMonth) {
         setMonth(companyMonth);
@@ -405,10 +409,11 @@ function StaffTimeWorkspace({
           {canManage && <button className="btn btn-ghost" disabled={locked} onClick={() => setDialog(row)}><Pencil size={14} /> Correct entry</button>}
         </article>)}</div>}
       </section>
+      {canManage && <StaffPayEstimateCard key={`${view.user_id}:${view.month}:${view.as_of}:${scope}`} summary={view} />}
       {canManage && <section className={GLASS} aria-label="Owner draft salary policies"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-wider text-accent">Draft only</p><h2 className="mt-1 font-semibold">Salary proposals & revisions</h2></div><button className="btn btn-ghost" disabled={locked || loading || inactive || !policiesReady} onClick={() => setDialog('policy')}>New draft revision</button></div>
         <p className="mt-3 text-sm text-fg-muted">No approved overtime rate, deductions or payable amount. These records do not post payroll or expenses.</p>
         {view.policy && <p className="mt-3 text-sm">Month reference proposal: {inr(view.policy.monthly_salary_minor)} · effective {view.policy.effective_from} · revision {view.policy.revision}</p>}
-        {view.policy_covers_full_month && view.reference_hourly_numerator_minor !== null && view.reference_hourly_denominator_minutes ? <p className="mt-2 text-sm">Planning equivalent / hour: {inr(view.reference_hourly_numerator_minor / view.reference_hourly_denominator_minutes)} <span className="text-fg-muted">· calendar-based reference, not an approved wage</span></p> : <p className="mt-2 text-sm text-fg-muted">A full-month reference is unavailable without one policy covering the whole month.</p>}
+        {!view.policy_covers_full_month && <p className="mt-2 text-sm text-fg-muted">A full-month reference is unavailable without one policy covering the whole month.</p>}
         {policyError && <p role="alert" className="mt-3 text-sm text-accent-warn">{policyError}</p>}
         <ol className="mt-4 space-y-3">{policies.map(p => <li key={p.id} className="rounded-xl border border-bg-border/60 p-3"><p className="text-sm font-semibold">Revision {p.revision} · {inr(p.monthly_salary_minor)} / month · draft</p><p className="mt-1 text-xs text-fg-muted">Effective {p.effective_from} · presence {p.daily_presence_minutes} min / break {p.daily_break_minutes} min</p><p className="mt-2 whitespace-pre-wrap break-words text-sm">{p.reason}</p></li>)}</ol>
         {!policies.length && <p className="mt-3 text-sm text-fg-muted">No draft policy recorded. The proposal defaults are not an active agreement.</p>}

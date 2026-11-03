@@ -5,8 +5,10 @@ from __future__ import annotations
 import ast
 import hashlib
 import importlib.util
+import io
 import json
 import subprocess
+import tarfile
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -871,7 +873,7 @@ def test_live_production_expanded_query_pin_is_distinct_from_old54_query(verifie
 
 def test_main_installer_orders_preservation_before_any_writer_and_never_reopens_credentials():
     source = (ROOT / "infra/scripts/install-on-vm.sh").read_text()
-    assert "grep -qx 'APP_VERSION=3.1.52'" in source
+    assert "grep -qx 'APP_VERSION=3.1.53'" in source
     assert "APP_VERSION=3.1.47" not in source
     profile = source.index(
         'if [ "$BUILD55_EXACT_TRANSITION" = true ]; then\n    BUILD55_PRE_TRANSITION='
@@ -892,7 +894,7 @@ def test_main_installer_orders_preservation_before_any_writer_and_never_reopens_
     assert 'sha256sum "$BUILD55_ACCEPTANCE_CREDENTIAL_FILE"' not in source
 
 
-@pytest.mark.parametrize("version", ["3.1.46", "3.1.47", "3.1.48", "3.1.49", "3.1.50", "3.1.51", "3.1.53"])
+@pytest.mark.parametrize("version", ["3.1.46", "3.1.47", "3.1.48", "3.1.49", "3.1.50", "3.1.51", "3.1.52", "3.1.54"])
 def test_current_profile_rejects_withheld_or_other_release_identity(verifier, monkeypatch, version):
     from types import SimpleNamespace
 
@@ -965,6 +967,34 @@ def test_installer_backend_manifest_uses_verifier_posix_name_order(tmp_path, ver
     )
     assert namespace["candidate_manifest"] == verifier.sha(canonical.encode())
     assert verifier.sha(old_component_order.encode()) != namespace["candidate_manifest"]
+
+
+def test_frozen_candidate_backend_manifest_matches_current_git_archive_wire(tmp_path, verifier):
+    # Use actual committed backend bytes, excluding local test caches, and do not
+    # replace the reviewed constant as the synthetic privileged-I/O fixtures do.
+    archive = subprocess.check_output(["git", "archive", "HEAD", "backend"], cwd=ROOT)
+    with tarfile.open(fileobj=io.BytesIO(archive)) as source:
+        source.extractall(tmp_path, filter="data")
+    installer = (ROOT / "infra/scripts/install-on-vm.sh").read_text()
+    identity = installer.split("<<'PYIDENTITY'", 1)[1].split("\n", 1)[1].split("\nPYIDENTITY", 1)[0]
+    parsed = ast.parse(identity)
+    loop = next(node for node in parsed.body if isinstance(node, ast.For))
+    digest = next(
+        node for node in parsed.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "candidate_manifest" for target in node.targets)
+    )
+    namespace = {"root": tmp_path, "manifest_rows": [], "hashlib": hashlib}
+    exec(compile(ast.Module(body=[loop, digest], type_ignores=[]), "installer-PYIDENTITY-real-source", "exec"), namespace)
+    backend = verifier.inventory(tmp_path, ("backend",))
+    canonical = "".join(
+        f"{digest}\t{name.removeprefix('backend/')}\n" for name, digest in sorted(backend.items())
+    ).encode()
+    assert backend
+    assert namespace["candidate_manifest"] == verifier.sha(canonical)
+    assert namespace["candidate_manifest"] != verifier.inventory_hash(backend)
+    assert verifier.CANDIDATE_RELEASE_FROZEN is True
+    assert verifier.CANDIDATE_BACKEND_MANIFEST_SHA256 == namespace["candidate_manifest"]
 
 
 def test_installer_and_extractable_legacy_guard_have_complete_shell_syntax(tmp_path):
@@ -1063,6 +1093,7 @@ def test_build55_backend_write_surface_is_bounded_to_reviewed_corrections(verifi
         "backend/app/services/email/mailer.py",
         "backend/app/services/pos/points.py",
         "backend/app/services/staff_time.py",
+        "backend/app/services/staff_pay_estimate.py",
         "backend/app/__init__.py",
         "backend/app/api/v1/analytics/router.py",
         "backend/app/api/v1/client_updates/router.py",
@@ -1263,7 +1294,7 @@ def test_candidate_backend_admits_only_exact_reviewed_python_patch(verifier):
     candidate = verifier.candidate_backend_environment(before, "b" * 40)
     assert before == original
     assert candidate == {
-        **before, "APP_VERSION": "3.1.52", "APP_REVISION": "b" * 40,
+        **before, "APP_VERSION": "3.1.53", "APP_REVISION": "b" * 40,
         "PYTHON_VERSION": "3.14.10",
         "PYTHON_SHA256": "de414a57119abef52784d8993e341d53aed635fc2b05c2607d9f98a2c5b72032",
         "LANG": "C.UTF-8",

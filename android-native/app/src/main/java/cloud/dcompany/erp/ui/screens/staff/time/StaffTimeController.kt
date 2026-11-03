@@ -413,8 +413,9 @@ internal class StaffTimeController(
         require(s.entries.size <= 5000 && s.entries.map { it.id }.distinct().size == s.entries.size)
         s.entries.forEach { require(it.userId == target); timeUuid(it.id); timeUuid(it.branchId); Instant.parse(it.clockInAt); it.clockOutAt?.let(Instant::parse) }
         require(s.entries.count { it.clockOutAt == null } <= 1)
-        if (!owner) require(s.policy == null && s.referenceHourlyNumeratorMinor == null && s.referenceHourlyDenominatorMinutes == null)
+        if (!owner) require(s.policy == null && s.referenceHourlyNumeratorMinor == null && s.referenceHourlyDenominatorMinutes == null && s.payEstimate == null)
         s.policy?.let { validatePolicy(it, target) }
+        validateTimePayEstimate(s)
     }
     private fun validatePolicy(p: TimeWorkPolicy, target: String) {
         timeUuid(p.id); require(p.userId == target && p.revision > 0 && p.payStatus == "draft")

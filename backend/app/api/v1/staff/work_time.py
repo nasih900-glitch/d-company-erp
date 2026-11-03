@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, date, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -25,6 +25,7 @@ from app.services.integrations.google_sheets_staff import (
     enqueue_staff_attendance_if_enabled,
     enqueue_staff_policy_if_enabled,
 )
+from app.services.staff_pay_estimate import presence_pay_estimate
 from app.services.staff_time import (
     AttendanceInterval,
     draft_schedule,
@@ -100,6 +101,32 @@ class WorkScheduleRead(BaseModel):
     working_weekday_mask: int
 
 
+class PayEstimateDayRead(BaseModel):
+    date: date
+    paid_seconds: int
+    ordinary_seconds: int
+    extra_seconds: int
+
+
+class PayEstimateRead(BaseModel):
+    status: Literal["available", "unavailable"]
+    reason: str | None = None
+    basis: Literal["paid_presence_clock_in_workday"] = "paid_presence_clock_in_workday"
+    attendance_scope: Literal["company", "selected_branch"] = "company"
+    monthly_salary_minor: int | None = None
+    daily_paid_seconds: int | None = None
+    scheduled_days: int | None = None
+    scheduled_paid_seconds: int | None = None
+    recorded_paid_seconds: int | None = None
+    ordinary_seconds: int | None = None
+    extra_seconds: int | None = None
+    hourly_rate_minor: int | None = None
+    base_pay_minor: int | None = None
+    overtime_125_minor: int | None = None
+    overtime_150_minor: int | None = None
+    days: list[PayEstimateDayRead] = Field(default_factory=list)
+
+
 class TimeSummaryRead(BaseModel):
     user_id: UUID
     name: str
@@ -121,6 +148,8 @@ class TimeSummaryRead(BaseModel):
     reference_hourly_numerator_minor: int | None = None
     reference_hourly_denominator_minutes: int | None = None
     policy_covers_full_month: bool = False
+    # Owner-only read projection. Null also keeps older clients compatible.
+    pay_estimate: PayEstimateRead | None = None
 
 
 class SelfClockInWrite(BaseModel):
@@ -393,17 +422,18 @@ async def time_summary(
             ).scalars()
         )
     now = datetime.now(UTC)
+    intervals = [
+        AttendanceInterval(
+            row.id,
+            row.clock_in_at,
+            row.clock_out_at,
+            row.break_minutes,
+            str(row.id) in confirmed_ids,
+        )
+        for row in entries
+    ]
     facts = summarize_intervals(
-        [
-            AttendanceInterval(
-                row.id,
-                row.clock_in_at,
-                row.clock_out_at,
-                row.break_minutes,
-                str(row.id) in confirmed_ids,
-            )
-            for row in entries
-        ],
+        intervals,
         month=period,
         timezone=company.timezone,
         now=now,
@@ -437,9 +467,28 @@ async def time_summary(
     if policy:
         result.schedule = WorkScheduleRead.model_validate(policy, from_attributes=True)
     # Salary data never piggybacks ordinary staff-directory or attendance access.
+    if can_manage:
+        result.pay_estimate = PayEstimateRead(
+            status="unavailable", reason="Record salary terms for this person first."
+        )
     if can_manage and policy:
         result.policy = WorkPolicyRead.model_validate(policy)
         result.policy_covers_full_month = policy.effective_from <= period
+        result.pay_estimate = PayEstimateRead.model_validate(
+            presence_pay_estimate(
+                intervals,
+                month=period,
+                timezone=company.timezone,
+                now=now,
+                monthly_salary_minor=policy.monthly_salary_minor,
+                daily_presence_minutes=policy.daily_presence_minutes,
+                working_weekday_mask=policy.working_weekday_mask,
+                policy_covers_full_month=result.policy_covers_full_month,
+            )
+        )
+        result.pay_estimate.attendance_scope = (
+            "selected_branch" if tenant.branch_id is not None else "company"
+        )
         if result.policy_covers_full_month:
             schedule = draft_schedule(
                 month=period,

@@ -151,6 +151,7 @@ internal fun StaffTimeContent(
                         }
                     }
                     "pay" -> if (state.canManage) {
+                        item { StaffPayEstimateCard(summary) }
                         item { SectionCard(Modifier.fillMaxWidth(), title = "Draft terms only") {
                             Text("Payable amount: not activated. Overtime pay: not activated.")
                             summary.policy?.let { p ->
@@ -251,7 +252,7 @@ private fun timeAction(kind: TimeWriteKind): String = when (kind) {
     TimeWriteKind.CORRECTION -> "Attendance correction"
     TimeWriteKind.POLICY -> "Draft pay terms"
 }
-private fun timeDuration(seconds: Long): String = "${seconds / 3600}h ${(seconds % 3600) / 60}m ${seconds % 60}s"
+internal fun timeDuration(seconds: Long): String = "${seconds / 3600}h ${(seconds % 3600) / 60}m ${seconds % 60}s"
 private fun timeStamp(value: String, timezone: String): String = runCatching {
     DateTimeFormatter.ofPattern("dd MMM yyyy, HH:mm:ss z").format(Instant.parse(value).atZone(ZoneId.of(timezone)))
 }.getOrElse { "Needs Owner time review" }

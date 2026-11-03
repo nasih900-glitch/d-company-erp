@@ -247,14 +247,9 @@ class LiquidSharedComponentsUiTest {
             colorDistance(unselectedDark, unselectedBright) >= 24,
         )
 
-        closed.performClick()
-        compose.onNodeWithTag("premium-tab-closed").assertIsSelected()
-        compose.onNodeWithTag("premium-tab-open").assertIsNotSelected()
+        // Check the selected material separately from the native touch-feedback overlay.
+        compose.runOnIdle { selected.value = "closed" }
         compose.waitUntil(3_000) { drawnSelection.get() == "closed" }
-        compose.runOnIdle {
-            assertEquals("Tab callback must run once", 1, callbackCount.get())
-            assertEquals("Tab callback must preserve the selected id", "closed", selected.value)
-        }
         val movedSelection = sample("premium-tab-closed", xFraction = .08f, yFraction = .5f)
         assertTrue(
             "The newly selected tab must receive the same workspace reference gold fill: " +
@@ -263,6 +258,17 @@ class LiquidSharedComponentsUiTest {
             colorDistance(movedSelection, expectedFill.get()) <= 12,
         )
         assertEquals(expectedContent.get(), textColor("premium-tab-label-closed"))
+
+        compose.runOnIdle { selected.value = "open" }
+        compose.waitUntil(3_000) { drawnSelection.get() == "open" }
+        closed.performClick()
+        compose.onNodeWithTag("premium-tab-closed").assertIsSelected()
+        compose.onNodeWithTag("premium-tab-open").assertIsNotSelected()
+        compose.waitUntil(3_000) { drawnSelection.get() == "closed" }
+        compose.runOnIdle {
+            assertEquals("Tab callback must run once", 1, callbackCount.get())
+            assertEquals("Tab callback must preserve the selected id", "closed", selected.value)
+        }
         open.assertIsDisplayed()
     }
 
@@ -868,6 +874,7 @@ class LiquidSharedComponentsUiTest {
         compose.runOnIdle {
             assertTrue("FormDialog must bind its actual popup root", formOwner.get() === formRoot.get())
         }
+        awaitRestoredFormViewport(formRoot, imeVisible = true)
         val disabledPicker = compose.onNodeWithContentDescription(
             "Disabled destination, No destination",
         )
@@ -907,9 +914,14 @@ class LiquidSharedComponentsUiTest {
             "A real FormDialog PickerField must project the scene instead of drawing a solid slab",
             colorDistance(pickerDark, pickerBright) >= 12,
         )
+        val imeBeforePicker = compose.runOnIdle {
+            checkNotNull(androidx.core.view.ViewCompat.getRootWindowInsets(formRoot.get()))
+                .isVisible(androidx.core.view.WindowInsetsCompat.Type.ime())
+        }
         compose.onNodeWithText("Counter one").assertIsDisplayed().performClick()
         compose.onNodeWithText("Counter two").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals("Counter two", selected.value) }
+        awaitRestoredFormViewport(formRoot, imeBeforePicker)
         disabledPicker.performScrollTo().assertIsDisplayed()
         val disabledBrightSurface = popupSample(
             formRoot,
@@ -941,6 +953,80 @@ class LiquidSharedComponentsUiTest {
         }
         compose.onNodeWithText("Cancel").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(1, dismisses.get()) }
+    }
+
+    @Test
+    fun formViewportWaitRefusesUnattachedRootAndReleasesFrameCallback() {
+        compose.setContent { Box(Modifier.fillMaxSize()) }
+        val unattachedRoot = AtomicReference(View(compose.activity))
+        val pendingFrames = AtomicInteger()
+
+        org.junit.Assert.assertThrows(androidx.compose.ui.test.ComposeTimeoutException::class.java) {
+            awaitRestoredFormViewport(unattachedRoot, imeVisible = true, timeoutMillis = 150, pendingFrames = pendingFrames)
+        }
+
+        assertEquals("An unsatisfied viewport must not leave Android frame callbacks behind", 0, pendingFrames.get())
+    }
+
+    private fun awaitRestoredFormViewport(
+        rootRef: AtomicReference<View>,
+        imeVisible: Boolean,
+        timeoutMillis: Long = 5_000,
+        pendingFrames: AtomicInteger = AtomicInteger(),
+    ) {
+        data class Viewport(
+            val frame: android.graphics.Rect,
+            val imeBottom: Int,
+            val width: Int,
+            val height: Int,
+            val originX: Int,
+            val originY: Int,
+        )
+        val instrumentation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
+        var previous: Viewport? = null
+        var stableFrames = 0
+        // Compose idleness alone does not settle the Android popup/IME window transition.
+        compose.waitUntil(timeoutMillis = timeoutMillis) {
+            val frame = java.util.concurrent.CountDownLatch(1)
+            val pending = java.util.concurrent.atomic.AtomicBoolean(true)
+            val callback = android.view.Choreographer.FrameCallback {
+                if (pending.compareAndSet(true, false)) pendingFrames.decrementAndGet()
+                frame.countDown()
+            }
+            pendingFrames.incrementAndGet()
+            try {
+                instrumentation.runOnMainSync {
+                    android.view.Choreographer.getInstance().postFrameCallback(callback)
+                }
+                check(frame.await(2, java.util.concurrent.TimeUnit.SECONDS)) { "Android did not render another frame" }
+            } finally {
+                instrumentation.runOnMainSync {
+                    android.view.Choreographer.getInstance().removeFrameCallback(callback)
+                    if (pending.compareAndSet(true, false)) pendingFrames.decrementAndGet()
+                }
+            }
+            val current = compose.runOnIdle {
+                val root = rootRef.get() ?: return@runOnIdle null
+                if (!root.isAttachedToWindow || !root.hasWindowFocus()) return@runOnIdle null
+                val insets = androidx.core.view.ViewCompat.getRootWindowInsets(root) ?: return@runOnIdle null
+                val imeBottom = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.ime()).bottom
+                if (insets.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) != imeVisible ||
+                    (imeVisible && imeBottom <= 0)
+                ) return@runOnIdle null
+                val bounds = android.graphics.Rect()
+                root.getWindowVisibleDisplayFrame(bounds)
+                if (bounds.isEmpty || root.width <= 0 || root.height <= 0) return@runOnIdle null
+                val origin = IntArray(2)
+                root.getLocationOnScreen(origin)
+                if (!bounds.intersect(origin[0], origin[1], origin[0] + root.width, origin[1] + root.height)) {
+                    return@runOnIdle null
+                }
+                Viewport(bounds, imeBottom, root.width, root.height, origin[0], origin[1])
+            }
+            stableFrames = if (current != null && current == previous) stableFrames + 1 else 0
+            previous = current
+            stableFrames >= 2
+        }
     }
 
     private fun renderScene(

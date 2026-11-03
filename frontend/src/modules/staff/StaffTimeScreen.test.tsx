@@ -3,7 +3,7 @@ import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Me } from '@/modules/auth/AuthContext';
-import type { StaffTimeSummary, StaffAttendance } from '@/lib/staff-time-api';
+import type { StaffTimeSummary, StaffAttendance, StaffPayEstimate } from '@/lib/staff-time-api';
 import { clearOwnerWorkspaces } from '@/lib/owner-workspace';
 const mocks = vi.hoisted(() => ({
   me: null as Me | null,
@@ -89,6 +89,23 @@ function summary(month: string, id = mocks.me!.user_id): StaffTimeSummary {
     reference_hourly_denominator_minutes: null
   };
 }
+
+const payEstimate: StaffPayEstimate = {
+  status: 'available', reason: null, basis: 'paid_presence_clock_in_workday', attendance_scope: 'selected_branch',
+  monthly_salary_minor: 1200000, daily_paid_seconds: 43200, scheduled_days: 30,
+  scheduled_paid_seconds: 1296000, recorded_paid_seconds: 50400, ordinary_seconds: 43200,
+  extra_seconds: 7200, hourly_rate_minor: 3333, base_pay_minor: 40000,
+  overtime_125_minor: 8333, overtime_150_minor: 10000, days: []
+};
+function estimatedSummary(month: string, id?: string): StaffTimeSummary {
+  const s = summary(month, id);
+  return { ...s, policy_covers_full_month: true, policy: {
+    id: 'policy-a', user_id: s.user_id, revision: 1, effective_from: `${month}-01`,
+    monthly_salary_minor: 1200000, daily_presence_minutes: 720, daily_break_minutes: 60,
+    working_weekday_mask: 127, overtime_multiplier_basis_points: null, pay_status: 'draft',
+    reason: 'Synthetic monthly terms', created_at: `${month}-01T00:00:00Z`
+  }, pay_estimate: payEstimate };
+}
 let host: HTMLDivElement, root: Root;
 const environment = globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT?: boolean;
@@ -153,6 +170,37 @@ async function saveForm() {
     cancelable: true
   })));
 }
+
+it('shows separate hours/base pay/optional overtime and resets the preview on person, month and refresh', async () => {
+  mocks.me = { ...employee, roles: ['owner'], effective_permissions: ['staff.payroll.write'] };
+  mocks.summary.mockImplementation(async (month: string, id?: string) => estimatedSummary(month, id));
+  await render();
+  expect(host.textContent).toContain('Base-pay estimate400.00');
+  expect(host.textContent).toContain('Selected branch attendance only.');
+  expect(host.textContent).toContain('Total estimate: 400.00');
+  await click('1.25× overtime');
+  expect(host.textContent).toContain('Optional overtime amount: 83.33');
+  expect(host.textContent).toContain('Total estimate: 483.33');
+  await fill('select', 'employee-b');
+  expect(findButton('No overtime').getAttribute('aria-pressed')).toBe('true');
+  expect(host.textContent).toContain('Total estimate: 400.00');
+  await click('1.5× overtime');
+  expect(host.textContent).toContain('Total estimate: 500.00');
+  await fill('input[type="month"]', '2026-09');
+  expect(findButton('No overtime').getAttribute('aria-pressed')).toBe('true');
+  await click('1.5× overtime');
+  await click('Refresh records');
+  expect(findButton('No overtime').getAttribute('aria-pressed')).toBe('true');
+  expect(mocks.submit).not.toHaveBeenCalled();
+});
+
+it('rejects salary estimates unexpectedly returned to ordinary staff', async () => {
+  mocks.summary.mockImplementation(async (month: string, id?: string) => estimatedSummary(month, id));
+  await render();
+  expect(host.textContent).toContain('The pay estimate could not be verified.');
+  expect(host.textContent).not.toContain('400.00');
+  expect(host.textContent).not.toContain('Hours & pay estimate');
+});
 it('allows ordinary staff own facts without fetching directory, admin roles or salary history', async () => {
   await render();
   expect(host.textContent).toContain('11h 0m');

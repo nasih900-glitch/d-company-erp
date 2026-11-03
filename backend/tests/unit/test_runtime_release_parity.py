@@ -270,8 +270,11 @@ async def test_chunked_oversize_and_read_timeout_fail_closed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_public_offer_concurrent_callers_share_one_probe() -> None:
+async def test_public_offer_concurrent_callers_share_one_probe(monkeypatch) -> None:
     runtime_parity._reset_public_runtime_parity_state_for_tests()
+    # This test measures coalescing, not the caller deadline (covered separately).
+    # A loaded runner may delay task startup before the mock transport is entered.
+    monkeypatch.setattr(runtime_parity, "PUBLIC_RUNTIME_PARITY_CALLER_WAIT_SECONDS", 10.0)
     entered = asyncio.Event()
     release = asyncio.Event()
     calls = 0
@@ -284,22 +287,35 @@ async def test_public_offer_concurrent_callers_share_one_probe() -> None:
         return _response()
 
     transport = httpx.MockTransport(respond)
-    checks = [
-        asyncio.create_task(
-            verify_runtime_parity_for_public_offer(
-                **IDENTITY,
-                settings=_settings(),
-                transport=transport,
+    state = runtime_parity._public_runtime_parity_state()
+    checks = []
+    try:
+        for _ in range(20):
+            checks.append(
+                asyncio.create_task(
+                    verify_runtime_parity_for_public_offer(
+                        **IDENTITY,
+                        settings=_settings(),
+                        transport=transport,
+                    )
+                )
             )
-        )
-        for _ in range(20)
-    ]
-    await asyncio.wait_for(entered.wait(), timeout=1)
-    await asyncio.sleep(0)
-    release.set()
-    await asyncio.gather(*checks)
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.gather(*checks)
 
-    assert calls == 1
+        assert calls == 1
+    finally:
+        release.set()
+        owned = set(checks) | set(state.in_flight.values())
+        for task in owned:
+            if not task.done():
+                task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.gather(*owned, return_exceptions=True), timeout=5)
+        finally:
+            runtime_parity._reset_public_runtime_parity_state_for_tests()
 
 
 @pytest.mark.asyncio

@@ -82,6 +82,25 @@ export interface StaffTimeSummary {
   scheduled_work_minutes: number | null;
   reference_hourly_numerator_minor: number | null;
   reference_hourly_denominator_minutes: number | null;
+  pay_estimate?: StaffPayEstimate | null;
+}
+export interface StaffPayEstimate {
+  status: 'available' | 'unavailable';
+  reason: string | null;
+  basis: 'paid_presence_clock_in_workday';
+  attendance_scope: 'company' | 'selected_branch';
+  monthly_salary_minor: number | null;
+  daily_paid_seconds: number | null;
+  scheduled_days: number | null;
+  scheduled_paid_seconds: number | null;
+  recorded_paid_seconds: number | null;
+  ordinary_seconds: number | null;
+  extra_seconds: number | null;
+  hourly_rate_minor: number | null;
+  base_pay_minor: number | null;
+  overtime_125_minor: number | null;
+  overtime_150_minor: number | null;
+  days: {date: string; paid_seconds: number; ordinary_seconds: number; extra_seconds: number}[];
 }
 export interface StaffPolicyWrite extends StaffSchedule {
   expected_revision: number;
