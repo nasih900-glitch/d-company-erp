@@ -34,6 +34,18 @@ control used ARM64 and separate instrumentation invocations; exact native
 input mode was not recorded in the hosted run. Fresh complete hosted validation
 remains required.
 
+Both hosted UI gates now pin official Android Emulator 37.1.11, build 15917651.
+The bounded diagnostic run `41713774466` completed three filtered first-case
+Gradle/UTP runs and all 34 Gaming Board tests on that SDK with no skipped or
+failed tests. Neither compared SDK had an observed unexpected emulator exit;
+the 36.5.10 baseline reached the five-minute workload budget. This supports
+compatibility for the next full gate, and does not establish the cause of the
+earlier emulator losses. Effective guest RAM differed: 37.1.11 used 4096 MB,
+while 36.5.10 used 3072 MB. Retain that confound rather than attributing the
+result solely to the SDK version. API 35/x86_64, two online guest CPUs,
+2560x1600 at 320dpi, SwiftShader with Vulkan disabled, and the compiler memory
+envelope are preserved. The bounded probe is not complete release acceptance.
+
 Complete exact-source **branch CI must pass before tagging this successor**.
 Then require canonical tagged CI, original-certificate signing, byte-verified
 artifacts, signed upgrade/download checks and the separate guarded production

@@ -374,7 +374,7 @@ jobs:
           profile: pixel_c
           disable-animations: true
           # Keep the same emulator build and host platform as CI.
-          emulator-build: 15081367
+          emulator-build: 15917651
           # Match CI's direct swiftshader request with Vulkan disabled. The
           # retained runtime diagnostics must prove the actually selected mode.
           emulator-options: -no-window -gpu swiftshader -feature -Vulkan -no-snapshot -noaudio -no-boot-anim

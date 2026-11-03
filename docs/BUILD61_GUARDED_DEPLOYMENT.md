@@ -37,6 +37,17 @@ and keyboard starts. Retain the fixed-producer/original-consumer control and
 complete Login/Gaming dialog suites; do not change production focus behavior
 or relax business assertions to compensate for a test's leaked native mode.
 
+Keep CI and tagged UI gates on the same reviewed Android Emulator 37.1.11
+build 15917651. Diagnostic run `41713774466` passed three filtered first-case
+runs and the 34-test Gaming Board inventory with no skips or failures on 37.
+The 36 baseline reached the bounded workload deadline; neither observed SDK
+had an unexpected exit. This is bounded compatibility evidence, not a proven
+explanation of earlier emulator losses or complete application acceptance.
+Record the effective RAM difference (37: 4096 MB; 36: 3072 MB) with the otherwise
+preserved API 35/x86_64, two CPUs, physical 2560x1600/320dpi and renderer
+configuration. Require a fresh full branch gate and canonical tagged gate;
+the unavailable physical Redmi Pad 2 remains a separate validation limitation.
+
 Before staging or offering, complete application regression, original-signer
 upgrade tests, update/download checks and guarded live acceptance. Keep the
 minimum supported floor 54 and policy revision 4. Installation on the
