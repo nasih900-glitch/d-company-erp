@@ -17,7 +17,7 @@ import cloud.dcompany.erp.ui.components.SectionCard
 @Composable
 internal fun StaffPayEstimateCard(summary: StaffTimeSummary) {
     // A fresh person/month/snapshot never inherits a previous overtime choice.
-    var overtime by remember(summary.userId, summary.month, summary.asOf, summary.payEstimate) { mutableStateOf(0) }
+    var overtime by remember(summary.userId, summary.month, summary.asOf, summary.payEstimate) { mutableIntStateOf(0) }
     var showDays by remember(summary.userId, summary.month, summary.asOf) { mutableStateOf(false) }
     val p = summary.payEstimate
     SectionCard(Modifier.fillMaxWidth().testTag("staff-pay-estimate"), title = "${summary.name} · Hours & pay estimate") {
