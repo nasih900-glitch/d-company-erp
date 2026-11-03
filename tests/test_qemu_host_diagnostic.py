@@ -75,6 +75,13 @@ class ProbeControls(unittest.TestCase):
             self.assertEqual(result['observed_output_bytes'], 1048576)
             self.assertTrue(result['truncated'])
             self.assertEqual(result['returncode'], 0)
+            failure_output = Path(directory) / 'failed-bootstrap'
+            failure = probe.bounded_capture([sys.executable, '-c',
+                'import sys; print("bootstrap loader failure", file=sys.stderr); raise SystemExit(127)'], failure_output)
+            self.assertEqual(failure['returncode'], 127)
+            self.assertEqual(failure['status'], 'unknown')
+            self.assertFalse(failure['truncated'])
+            self.assertEqual(failure_output.read_text(), 'bootstrap loader failure\n')
 
     def test_capture_deadline_terminates_only_its_new_session(self):
         # Synthetic /proc identity supports this Linux-only guard on the macOS host;
