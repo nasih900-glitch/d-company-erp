@@ -226,40 +226,48 @@ class GamingDialogUiTest {
             }
         }
 
-        val customerSearch = compose.onNodeWithTag("gaming-customer-search")
-        customerSearch.performClick().assertIsFocused().performTextReplacement("Amina")
-        val playersList = compose.onNodeWithTag("gaming-players-list")
-        playersList.performScrollToNode(hasText("Amina Rahman · 9876543210"))
-        compose.onNodeWithText("Amina Rahman · 9876543210").performClick()
-        // Selection recomposes this lazy item while the IME window is closing.
-        // Ask the list to materialize the updated row before checking its
-        // merged, clickable semantics and visible position.
-        playersList.performScrollToNode(hasText("Amina Rahman · 9876543210 · selected"))
-        compose.onNodeWithText("Amina Rahman · 9876543210 · selected").assertIsDisplayed()
-        // Re-materialize the search item before checking focus: LazyColumn may
-        // dispose its previous semantics node when the selected row recomposes.
-        playersList.performScrollToNode(hasTestTag("gaming-customer-search"))
-        compose.onNodeWithTag("gaming-customer-search").assertIsNotFocused()
-        compose.onNodeWithTag("gaming-add-player")
-            .performScrollTo()
-            .assertIsDisplayed()
-            .assertIsEnabled()
-            .performClick()
-        compose.runOnIdle { assertTrue(joins.isEmpty()) }
-        // The emulator IME reports its final onShown callback outside Compose's
-        // idling resources. Let the compact review window finish its inset
-        // layout, then keep the strict on-screen assertion below.
-        Thread.sleep(750)
-        saveImeScreenshot()
-        val reviewTitle = compose.onNodeWithText("Review friend join")
-        Log.i("GamingJoinReview", "Before strict review assertion: ${reviewTitle.dialogTouchSnapshot()}")
-        compose.onNodeWithText("Amina Rahman").assertIsDisplayed()
-        compose.onNodeWithText("Player-controller fees after join · 30.00 estimated")
-            .assertIsDisplayed()
-        reviewTitle.assertIsDisplayed()
-        compose.onNodeWithText("Confirm join").assertIsDisplayed().performClick()
-        compose.runOnIdle {
-            assertEquals(listOf(Triple("customer-amina", null, null)), joins)
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val originalFlags = automation.serviceInfo.flags
+        try {
+            automation.serviceInfo = automation.serviceInfo.apply {
+                flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            }
+            val customerSearch = compose.onNodeWithTag("gaming-customer-search")
+            customerSearch.performClick().assertIsFocused().performTextReplacement("Amina")
+            customerSearch.awaitImeSettledTouchTarget()
+            val playersList = compose.onNodeWithTag("gaming-players-list")
+            playersList.performScrollToNode(hasText("Amina Rahman · 9876543210"))
+            compose.onNodeWithText("Amina Rahman · 9876543210").performClick()
+            // Selection recomposes this lazy item while the IME window is closing.
+            // Ask the list to materialize the updated row before checking its
+            // merged, clickable semantics and visible position.
+            playersList.performScrollToNode(hasText("Amina Rahman · 9876543210 · selected"))
+            compose.onNodeWithText("Amina Rahman · 9876543210 · selected").assertIsDisplayed()
+            // Re-materialize the search item before checking focus: LazyColumn may
+            // dispose its previous semantics node when the selected row recomposes.
+            playersList.performScrollToNode(hasTestTag("gaming-customer-search"))
+            compose.onNodeWithTag("gaming-customer-search")
+                .awaitImeHiddenSettledTouchTarget()
+            compose.onNodeWithTag("gaming-customer-search").assertIsNotFocused()
+            compose.onNodeWithTag("gaming-add-player")
+                .performScrollTo()
+                .assertIsDisplayed()
+                .assertIsEnabled()
+                .performClick()
+            compose.runOnIdle { assertTrue(joins.isEmpty()) }
+            compose.onNodeWithText("Confirm join").awaitImeHiddenSettledTouchTarget()
+            val reviewTitle = compose.onNodeWithText("Review friend join")
+            Log.i("GamingJoinReview", "Before strict review assertion: ${reviewTitle.dialogTouchSnapshot()}")
+            compose.onNodeWithText("Amina Rahman").assertIsDisplayed()
+            compose.onNodeWithText("Player-controller fees after join · 30.00 estimated")
+                .assertIsDisplayed()
+            reviewTitle.assertIsDisplayed()
+            compose.onNodeWithText("Confirm join").assertIsDisplayed().performClick()
+            compose.runOnIdle {
+                assertEquals(listOf(Triple("customer-amina", null, null)), joins)
+            }
+        } finally {
+            automation.serviceInfo = automation.serviceInfo.apply { flags = originalFlags }
         }
     }
 
@@ -2788,6 +2796,32 @@ down(Offset(width * 0.50f, height * 0.90f))
             saveImeScreenshot()
         }
         Log.i("GamingDialogTouch", "IME-open real-touch target: $previous")
+        return checkNotNull(previous)
+    }
+
+    /** Observe native IME removal and layout, without polling or changing focus. */
+    private fun SemanticsNodeInteraction.awaitImeHiddenSettledTouchTarget(): DialogTouchSnapshot {
+        var previous: DialogTouchSnapshot? = null
+        var stableSamples = 0
+        try {
+            compose.waitUntil(timeoutMillis = 5_000) {
+                awaitAndroidFrame()
+                val view = (fetchSemanticsNode().root as ViewRootForTest).view
+                val rawImeHidden = compose.runOnIdle {
+                    val insets = ViewCompat.getRootWindowInsets(view)
+                    insets != null && !insets.isVisible(WindowInsetsCompat.Type.ime()) &&
+                        insets.getInsets(WindowInsetsCompat.Type.ime()).bottom == 0
+                }
+                val snapshot = dialogTouchSnapshot()
+                stableSamples = if (rawImeHidden && snapshot.imeBottom == 0 &&
+                    snapshot.touchTargetReady && snapshot == previous
+                ) stableSamples + 1 else 0
+                previous = snapshot
+                stableSamples >= 2
+            }
+        } finally {
+            saveImeScreenshot()
+        }
         return checkNotNull(previous)
     }
 

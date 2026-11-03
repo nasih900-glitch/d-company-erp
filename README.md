@@ -127,9 +127,9 @@ separately identified prototype, not another supported ERP app.
   links only to the live web ERP and verified artifacts from the official GitHub repository.
 
 Tagging a release that exactly matches the Android `versionName` triggers
-`.github/workflows/release.yml`. The current local candidate is `3.1.53`,
-Android installation build `60`, Room `58` and Alembic `0094`; see
-[`docs/V3_1_53_RELEASE_CANDIDATE.md`](docs/V3_1_53_RELEASE_CANDIDATE.md) for the
+`.github/workflows/release.yml`. The current local candidate is `3.1.54`,
+Android installation build `61`, Room `58` and Alembic `0094`; see
+[`docs/V3_1_54_RELEASE_CANDIDATE.md`](docs/V3_1_54_RELEASE_CANDIDATE.md) for the
 scope and outstanding gates. The historical additive
 Code30.3 patch used technical version `3.1.30` with Android installation build `38`,
 Room schema `52`, and backend migration head `0082`. It preserves Code30.2

@@ -223,6 +223,7 @@ CODE30_4_BUILD57_BASE = "dae7dc09911e6d0c724b235f0e6fcb5419c244c7"
 CODE30_4_BUILD58_BASE = "6eb61bf097afb7d6e306f3878a64f266adf451a1"
 # Signed, unoffered Build 59 is immutable; Build 60 uses a separate scoped overlay.
 CODE30_4_BUILD59_BASE = "226f1dc3e29d6a521153338cda9fc67f31b2087d"
+CODE30_4_BUILD60_BASE = "3401d1fb985f272c5cef568421cf3638c2c2e528"
 CODE30_2_FREEZE_CONTROL_PATHS = frozenset({
     "scripts/verify_code26_regression_freeze.py",
     "tests/test_code26_regression_freeze.py",
@@ -2370,6 +2371,31 @@ REVIEWED_CODE30_4_BUILD60_SHA256 = {
     "tests/test_verified_pip_bootstrap.py": "10f0a1642c1699e9ce730d0548f3f9c5164add1273c27462f90bc2a512882de4"
 }
 
+# Successor 61: only this reviewed overlay may override immutable build 60.
+REVIEWED_CODE30_4_BUILD61_SHA256 = {
+    '.env.production.example': '359e9577894dd1a9505093e1046d4a5991b5e50d0c5a6753721fcb2b2ec9cb2d',
+    'README.md': '8bd8f3d1517ce09240419aa300120fae096f98abb7fbf47641e8a99d92b2c223',
+    'android-native/app/build.gradle.kts': '4dc9e3577aa7e18f093d36de302f4e7892fb1580cc1fe5adb8d87b8bc47f9db1',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt': '39fe1d91cb37bb767c11018166aa3e12e7c2cf8aec42dbbd650af0115b45305c',
+    'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': '0566beb8ef34ca92b272962fd9292df1c33fbf75fd2a154b35b0d7a9007b6a22',
+    'backend/app/__init__.py': '28d25afbc88456150f4ba6f51aa6613de638419303d4c880ba6d69328566f043',
+    'backend/pyproject.toml': 'f34518b5848d30cce5817e74b8ad647eb6496a84beae9d9a0fb1709a3fbe0556',
+    'backend/tests/unit/test_release_contracts.py': '8bd6b94817940835ad5be1d39734476ba42658d995824c02efb21fcd6f7febf8',
+    'backend/tests/unit/test_remote_assistance_contract.py': '52b0565c368c850482b97587354200a8e42973f448f531f57620f5f07794b5f5',
+    'docker-compose.prod.yml': '5564c4dbbb47ba76ff3f4c6fc89283bb33e57e3e4c23fac790c22b623d8754a9',
+    'docs/BUILD61_GUARDED_DEPLOYMENT.md': '531b65375c33677168b5a8dcd770cb7a4049509c4309d3571a51cc8253b31823',
+    'docs/V3_1_54_RELEASE_CANDIDATE.md': 'd17d8d63b4eb46cc8b641a7b670b5e796db02c2d7237d49941e05ae075c95867',
+    'frontend/.env.example': '5d228826536c760a48a2a961f5b08e2289475d040e7573f9272a47514257cf5e',
+    'frontend/package-lock.json': '5f6325ca5a1d1a73b48d9ad735a6cce02d559100a360d3852ce7eae644d83c32',
+    'frontend/package.json': '5a1cc1581bbcbed377d2632475a66fcebe8e131c1ab30bd7ecd8e8280ecbbb89',
+    'infra/scripts/install-on-vm.sh': 'cdf3615601d066f729a01698be508da313e30ae1b613d4f34672318623e5a91b',
+    'infra/scripts/verify-build55-pending-compatibility.py': '54349fd4df7003c0fd00d51876a1b72d994b989b4dc320bb329afc1029d16aa9',
+    'infra/scripts/verify-production-runtime-images.sh': '309d0572c4b7f863b0dba1c59beeafe7c438d98c09aa99fbdc69538018334f78',
+    'tests/test_build55_pending_compatibility.py': 'a66f0f5867d76e4bc110fcd3ce0fe66bcaa9cb4d16f1fe4ec1626ee97222ff54',
+    'tests/test_code26_physical_audit_lane.py': '1fa260cade99a8cfecc48a94dfa74213e90bc77a32e5e818f3b9b778900455b0',
+    'tests/test_verified_pip_bootstrap.py': '5a08079df51791900f786de1e0d1edb4aa89fad528b08b51f1ce2a695e45acac',
+}
+
 REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
     path
     for path in (
@@ -2395,13 +2421,14 @@ REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
         | REVIEWED_CODE30_4_BUILD58_SHA256
         | REVIEWED_CODE30_4_BUILD59_SHA256
         | REVIEWED_CODE30_4_BUILD60_SHA256
+        | REVIEWED_CODE30_4_BUILD61_SHA256
     )
     if path.startswith(("backend/app/", "frontend/src/", "android-native/app/src/main/"))
 )
 
 
 def _current_code30_4_sha256(path: str, fallback: str | None = None) -> str | None:
-    return REVIEWED_CODE30_4_BUILD60_SHA256.get(path) or REVIEWED_CODE30_4_BUILD59_SHA256.get(path) or REVIEWED_CODE30_4_BUILD58_SHA256.get(path) or REVIEWED_CODE30_4_BUILD57_SHA256.get(path) or REVIEWED_CODE30_4_BUILD56_SHA256.get(path) or REVIEWED_CODE30_4_BUILD55_SHA256.get(path) or REVIEWED_CODE30_4_BUILD54_SHA256.get(path) or REVIEWED_CODE30_4_BUILD53_SHA256.get(path) or REVIEWED_CODE30_4_BUILD52_SHA256.get(path) or REVIEWED_CODE30_4_BUILD51_SHA256.get(path) or REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
+    return REVIEWED_CODE30_4_BUILD61_SHA256.get(path) or REVIEWED_CODE30_4_BUILD60_SHA256.get(path) or REVIEWED_CODE30_4_BUILD59_SHA256.get(path) or REVIEWED_CODE30_4_BUILD58_SHA256.get(path) or REVIEWED_CODE30_4_BUILD57_SHA256.get(path) or REVIEWED_CODE30_4_BUILD56_SHA256.get(path) or REVIEWED_CODE30_4_BUILD55_SHA256.get(path) or REVIEWED_CODE30_4_BUILD54_SHA256.get(path) or REVIEWED_CODE30_4_BUILD53_SHA256.get(path) or REVIEWED_CODE30_4_BUILD52_SHA256.get(path) or REVIEWED_CODE30_4_BUILD51_SHA256.get(path) or REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
         path,
         REVIEWED_CODE30_4_BUILD41_SHA256.get(
             path,
@@ -2616,6 +2643,7 @@ def _normalise_release_identity(path: str, text: str) -> str:
         return text
     normalised = text
     for current, baseline in (
+        ("3.1.54", "3.1.14"),
         ("3.1.53", "3.1.14"),
         ("3.1.52", "3.1.14"),
         ("3.1.51", "3.1.14"),
@@ -2713,10 +2741,10 @@ def _normalise_release_identity(path: str, text: str) -> str:
     ):
         normalised = normalised.replace(current, baseline)
     normalised = re.sub(
-        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60)\b", "version_code=25", normalised
+        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61)\b", "version_code=25", normalised
     )
     normalised = re.sub(
-        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60),\s*BuildConfig\.VERSION_CODE\)",
+        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61),\s*BuildConfig\.VERSION_CODE\)",
         "assertEquals(25, BuildConfig.VERSION_CODE)",
         normalised,
     )
@@ -2927,7 +2955,11 @@ def _code30_4_build59_delta_paths(root: Path) -> set[str]:
 
 
 def _code30_4_build60_delta_paths(root: Path) -> set[str]:
-    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD59_BASE).splitlines())
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD59_BASE, CODE30_4_BUILD60_BASE).splitlines())
+
+
+def _code30_4_build61_delta_paths(root: Path) -> set[str]:
+    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD60_BASE).splitlines())
     changed.update(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
     return {path for path in changed if path}
 
@@ -3294,6 +3326,15 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
             errors.append(f"Code30.4 build-59 file differs from reviewed bytes: {path}")
 
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD60_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD60_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-60 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-60 file differs from reviewed bytes: {path}")
+
     expected_build42_paths = set(REVIEWED_CODE30_4_BUILD42_SHA256) | set(
         CODE30_4_FREEZE_CONTROL_PATHS
     )
@@ -3429,6 +3470,13 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
     for path in sorted(current_build60_paths - expected_build60_paths):
         errors.append(f"unreviewed path entered the Code30.4 build-60 delta: {path}")
 
+    expected_build61_paths = set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build61_paths = _code30_4_build61_delta_paths(root)
+    for path in sorted(expected_build61_paths - current_build61_paths):
+        errors.append(f"reviewed Code30.4 build-61 delta path disappeared: {path}")
+    for path in sorted(current_build61_paths - expected_build61_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-61 delta: {path}")
+
     # Post-release Code30.3 maintenance tools are pinned by their own map.
     expected_paths = set(REVIEWED_CODE30_4_SHA256) | set(
         CODE30_4_FREEZE_CONTROL_PATHS
@@ -3438,7 +3486,7 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         REVIEWED_CODE30_4_BUILD41_SHA256
     ) | set(
         REVIEWED_CODE30_4_BUILD42_SHA256
-    ) | set(REVIEWED_CODE30_4_BUILD43_SHA256) | set(REVIEWED_CODE30_4_BUILD44_SHA256) | set(REVIEWED_CODE30_4_BUILD45_SHA256) | set(REVIEWED_CODE30_4_BUILD46_SHA256) | set(REVIEWED_CODE30_4_BUILD47_SHA256) | set(REVIEWED_CODE30_4_BUILD48_SHA256) | set(REVIEWED_CODE30_4_BUILD49_SHA256) | set(REVIEWED_CODE30_4_BUILD50_SHA256) | set(REVIEWED_CODE30_4_BUILD51_SHA256) | set(REVIEWED_CODE30_4_BUILD52_SHA256) | set(REVIEWED_CODE30_4_BUILD53_SHA256) | set(REVIEWED_CODE30_4_BUILD54_SHA256) | set(REVIEWED_CODE30_4_BUILD55_SHA256) | set(REVIEWED_CODE30_4_BUILD56_SHA256) | set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256)
+    ) | set(REVIEWED_CODE30_4_BUILD43_SHA256) | set(REVIEWED_CODE30_4_BUILD44_SHA256) | set(REVIEWED_CODE30_4_BUILD45_SHA256) | set(REVIEWED_CODE30_4_BUILD46_SHA256) | set(REVIEWED_CODE30_4_BUILD47_SHA256) | set(REVIEWED_CODE30_4_BUILD48_SHA256) | set(REVIEWED_CODE30_4_BUILD49_SHA256) | set(REVIEWED_CODE30_4_BUILD50_SHA256) | set(REVIEWED_CODE30_4_BUILD51_SHA256) | set(REVIEWED_CODE30_4_BUILD52_SHA256) | set(REVIEWED_CODE30_4_BUILD53_SHA256) | set(REVIEWED_CODE30_4_BUILD54_SHA256) | set(REVIEWED_CODE30_4_BUILD55_SHA256) | set(REVIEWED_CODE30_4_BUILD56_SHA256) | set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256)
     current_paths = _code30_4_delta_paths(root)
     for path in sorted(expected_paths - current_paths):
         errors.append(f"reviewed Code30.4 delta path disappeared: {path}")
@@ -3468,6 +3516,7 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         | REVIEWED_CODE30_4_BUILD58_SHA256
         | REVIEWED_CODE30_4_BUILD59_SHA256
         | REVIEWED_CODE30_4_BUILD60_SHA256
+        | REVIEWED_CODE30_4_BUILD61_SHA256
     )
     for path, expected_sha256 in current_hashes.items():
         # These files define the freeze itself and cannot carry a current-tree
@@ -3540,6 +3589,7 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD57_BASE}^{{commit}}")
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD58_BASE}^{{commit}}")
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD59_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD60_BASE}^{{commit}}")
     _verify_code30_2_exact_delta(root, errors)
     _verify_code30_3_exact_delta(root, errors)
     _verify_code30_4_exact_delta(root, errors)
@@ -3564,7 +3614,8 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
             path, candidate_normalised
         )
         reviewed_test_sha256 = (
-            REVIEWED_CODE30_4_BUILD60_SHA256.get(path)
+            REVIEWED_CODE30_4_BUILD61_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD60_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD59_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD58_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD57_SHA256.get(path)
