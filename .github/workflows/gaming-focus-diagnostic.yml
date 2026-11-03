@@ -1,0 +1,89 @@
+name: Gaming focus hosted diagnostic
+
+# Diagnostic branch only. No release authority, signing, secrets or deployment.
+# Logging and screenshot copies can perturb timing; passing does not prove a fix.
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [codex/gaming-focus-diagnostic-3154-r1]
+
+jobs:
+  gaming-focus-hosted-diagnostic:
+    runs-on: ubuntu-24.04
+    # Leave 20 minutes for cache and artifact cleanup after the blocking suite.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+          cache-dependency-path: |
+            android-native/*.gradle.kts
+            android-native/gradle.properties
+            android-native/gradle/wrapper/gradle-wrapper.properties
+            android-native/app/*.gradle.kts
+            android-native/audit-driver/*.gradle.kts
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        with:
+          packages: platform-tools
+      # GitHub's Linux runner exposes /dev/kvm, but the runner user is not
+      # consistently granted access. Without KVM the API-35 emulator can take
+      # several minutes to boot and the instrumentation process may be killed
+      # before it discovers any tests.
+      - name: Enable KVM for Android emulator
+        if: runner.os == 'Linux'
+        run: |
+          test -c /dev/kvm
+          # The hosted runner already created /dev/kvm. Change that device
+          # directly: udevadm trigger is not reliable in the runner container
+          # and can exit 1 before applying an otherwise valid rule.
+          sudo chmod 0666 /dev/kvm
+          test -r /dev/kvm
+          test -w /dev/kvm
+      # Room migration tests need a real Android SQLite/Room runtime. Keeping
+      # them blocking prevents a schema change from shipping an app that can no
+      # longer open an existing tablet database.
+      - name: Run Android instrumentation tests
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 35
+          arch: x86_64
+          cores: 2
+          # Instrumentation includes tablet reachability and density coverage.
+          # The action's default 320x640 phone AVD clips those layouts before
+          # Compose can scroll them; Pixel C keeps the suite on a real tablet
+          # class viewport, matching the 1280x800dp production target closely.
+          profile: pixel_c
+          disable-animations: true
+          # Keep emulator 36.5.10 fixed while comparing the host platform.
+          emulator-build: 15081367
+          # Request swiftshader directly with Vulkan disabled. These flags do
+          # not prove the selected mode; retained runtime diagnostics must.
+          emulator-options: -no-window -gpu swiftshader -feature -Vulkan -no-snapshot -noaudio -no-boot-anim
+          # Full-resolution captures and system gestures require physical
+          # 2560x1600 at 320dpi, preserving the 1280x800dp tablet layout.
+          # Configure before boot; this renders four times as many pixels as
+          # the former 1280x800 framebuffer, so retain host health diagnostics.
+          pre-emulator-launch-script: python3 scripts/configure_ci_android_avd.py test
+          # The pinned action runs each nonempty line in a fresh shell. Keep
+          # capture, normalization, logging, and assertion in one command.
+          script: |
+            guest_cpu_online_raw="$(adb shell cat /sys/devices/system/cpu/online)" && guest_cpu_online="$(printf '%s' "$guest_cpu_online_raw" | tr -d '\r')" && printf 'guest_cpu_online=%s\n' "$guest_cpu_online" && test "$guest_cpu_online" = "0-1"
+            navigation_qemu_raw="$(adb shell getprop ro.kernel.qemu)" && test "$(printf '%s' "$navigation_qemu_raw" | tr -d '\r')" = "1" && adb shell cmd overlay enable-exclusive --category com.android.internal.systemui.navbar.gestural && navigation_overlay_raw="$(adb shell cmd overlay list --user 0)" && printf '%s\n' "$navigation_overlay_raw" | python3 -c 'import sys; rows=[line.strip() for line in sys.stdin.read().replace("\r", "").splitlines() if line.strip().startswith("[x] com.android.internal.systemui.navbar.")]; assert rows==["[x] com.android.internal.systemui.navbar.gestural"], "Gesture-navigation proof requires exactly one active gestural overlay"; print("guest_navigation=gestural")'
+            diagnostic_status=0; D_COMPANY_REQUIRE_NATIVE_AVD_SIZE=1 bash scripts/run_android_instrumentation_ci.sh || diagnostic_status=$?; mkdir -p android-native/app/build/outputs/ci-diagnostics/owned-guest-pngs; for png in gaming-selected-focus-diagnostic.png gaming-saved-customer-review.png; do adb pull "/sdcard/Download/$png" "android-native/app/build/outputs/ci-diagnostics/owned-guest-pngs/$png" || true; done; exit "$diagnostic_status"
+      - name: Upload Android instrumentation reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gaming-focus-hosted-diagnostic-reports
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            android-native/app/build/reports/androidTests/
+            android-native/app/build/outputs/androidTest-results/
+            android-native/app/build/outputs/ci-diagnostics/
+

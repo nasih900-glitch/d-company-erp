@@ -235,9 +235,20 @@ class GamingDialogUiTest {
             val customerSearch = compose.onNodeWithTag("gaming-customer-search")
             customerSearch.performClick().assertIsFocused().performTextReplacement("Amina")
             customerSearch.awaitImeSettledTouchTarget()
+            fun traceSearch(stage: String) {
+                val nodes = compose.onAllNodes(hasTestTag("gaming-customer-search")).fetchSemanticsNodes()
+                val identities = nodes.joinToString { "${it.id}:${it.config.getOrElse(SemanticsProperties.Focused) { false }}" }
+                val snapshot = if (nodes.size == 1) {
+                    runCatching { compose.onNodeWithTag("gaming-customer-search").dialogTouchSnapshot() }.getOrNull()
+                } else null
+                Log.i("JoinFocusTest", "$stage count=${nodes.size} idsAndFocused=[$identities] snapshot=$snapshot")
+            }
+            traceSearch("before-result-scroll")
             val playersList = compose.onNodeWithTag("gaming-players-list")
             playersList.performScrollToNode(hasText("Amina Rahman · 9876543210"))
+            traceSearch("before-result-click")
             compose.onNodeWithText("Amina Rahman · 9876543210").performClick()
+            traceSearch("after-result-click")
             // Selection recomposes this lazy item while the IME window is closing.
             // Ask the list to materialize the updated row before checking its
             // merged, clickable semantics and visible position.
@@ -245,9 +256,15 @@ class GamingDialogUiTest {
             compose.onNodeWithText("Amina Rahman · 9876543210 · selected").assertIsDisplayed()
             // Re-materialize the search item before checking focus: LazyColumn may
             // dispose its previous semantics node when the selected row recomposes.
+            traceSearch("after-selected-row-before-search-rematerialize")
             playersList.performScrollToNode(hasTestTag("gaming-customer-search"))
+            traceSearch("after-search-rematerialize")
             compose.onNodeWithTag("gaming-customer-search")
                 .awaitImeHiddenSettledTouchTarget()
+            traceSearch("original-strict-focus-point")
+            InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(
+                "cp /sdcard/Download/gaming-saved-customer-review.png /sdcard/Download/gaming-selected-focus-diagnostic.png",
+            ).use { command -> FileInputStream(command.fileDescriptor).use { it.readBytes() } }
             compose.onNodeWithTag("gaming-customer-search").assertIsNotFocused()
             compose.onNodeWithTag("gaming-add-player")
                 .performScrollTo()

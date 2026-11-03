@@ -7496,8 +7496,16 @@ private fun GamingVisibleWindowDialogFrame(
             // and system-bar bounds. Sample both frame and origin immediately
             // before draw because WindowManager can relocate this full-height
             // root without dispatching another global layout.
+            var debugSampledBounds: IntRect? = null
+            var debugFirstSample = true
             val listener = android.view.ViewTreeObserver.OnPreDrawListener {
-                boundsState.refreshBeforeDraw(sampleVisibleBounds())
+                val sampled = sampleVisibleBounds()
+                if (debugFirstSample || sampled != debugSampledBounds) {
+                    android.util.Log.i("JoinFocusFrame", "bounds root=${System.identityHashCode(view)} title=$title old=$debugSampledBounds new=$sampled nativeFocused=${view.hasFocus()} windowFocused=${view.hasWindowFocus()}")
+                    debugFirstSample = false
+                    debugSampledBounds = sampled
+                }
+                boundsState.refreshBeforeDraw(sampled)
             }
             view.viewTreeObserver.addOnPreDrawListener(listener)
             boundsState.refreshBeforeDraw(sampleVisibleBounds())
@@ -7512,6 +7520,11 @@ private fun GamingVisibleWindowDialogFrame(
                 detectTapGestures { onDismissRequest() }
             })
             boundsState.visibleBounds?.let { bounds ->
+                val debugBodyToken = remember { Any() }
+                DisposableEffect(debugBodyToken) {
+                    android.util.Log.i("JoinFocusFrame", "body-enter token=${System.identityHashCode(debugBodyToken)} root=${System.identityHashCode(view)} title=$title bounds=$bounds")
+                    onDispose { android.util.Log.i("JoinFocusFrame", "body-dispose token=${System.identityHashCode(debugBodyToken)} root=${System.identityHashCode(view)} title=$title") }
+                }
                 Box(
                     modifier = Modifier
                         .absoluteOffset(
@@ -9724,6 +9737,13 @@ internal fun GamingParticipantsDialog(
         text = {
             val focusManager = LocalFocusManager.current
             val keyboardController = LocalSoftwareKeyboardController.current
+            val focusDebugView = LocalView.current
+            fun traceJoinFocus(stage: String) {
+                val frame = android.graphics.Rect()
+                focusDebugView.getWindowVisibleDisplayFrame(frame)
+                val insets = androidx.core.view.ViewCompat.getRootWindowInsets(focusDebugView)
+                android.util.Log.i("JoinFocusProduct", "$stage selected=${selected != null} manager=${System.identityHashCode(focusManager)} root=${System.identityHashCode(focusDebugView)} viewFocused=${focusDebugView.hasFocus()} windowFocused=${focusDebugView.hasWindowFocus()} frame=$frame rawIme=${insets?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime())} bottom=${insets?.getInsets(androidx.core.view.WindowInsetsCompat.Type.ime())?.bottom}")
+            }
             val review = pendingJoin
             val leaving = pendingLeave
             when {
@@ -9931,6 +9951,11 @@ internal fun GamingParticipantsDialog(
                     }
                     if (customerMode == "search") {
                         item {
+                            val focusDebugToken = remember { Any() }
+                            DisposableEffect(focusDebugToken) {
+                                traceJoinFocus("search-enter token=${System.identityHashCode(focusDebugToken)}")
+                                onDispose { traceJoinFocus("search-dispose token=${System.identityHashCode(focusDebugToken)}") }
+                            }
                             OutlinedTextField(
                                 value = query,
                                 onValueChange = { query = it.take(200); selected = null; onSearchCustomer(query) },
@@ -9938,15 +9963,20 @@ internal fun GamingParticipantsDialog(
                                 singleLine = true,
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .onFocusChanged { traceJoinFocus("search-focus token=${System.identityHashCode(focusDebugToken)} state=$it") }
                                     .testTag("gaming-customer-search"),
                             )
                         }
                         items(matches, key = { it.customerId ?: it.phone }) { option ->
                             TextButton(
                                 onClick = {
+                                    traceJoinFocus("select-before-state")
                                     selected = option
+                                    traceJoinFocus("select-after-state-before-clear")
                                     focusManager.clearFocus(force = true)
+                                    traceJoinFocus("select-after-clear")
                                     keyboardController?.hide()
+                                    traceJoinFocus("select-after-hide")
                                 },
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
