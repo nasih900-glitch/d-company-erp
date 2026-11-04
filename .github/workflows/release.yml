@@ -455,6 +455,7 @@ jobs:
               '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8' \
               -Pkotlin.compiler.execution.strategy=in-process "$@"
           }
+          gradle_release :buildSrc:test
           gradle_release :app:testReleaseUnitTest
           gradle_release :app:testDirectReleaseUnitTest
       # Compile distributable bytes before the long-lived signing key exists on
@@ -474,9 +475,21 @@ jobs:
           }
           gradle_release :app:assembleRelease :app:bundleRelease
           gradle_release :app:assembleDirectRelease
+      - name: Retain unsigned build evidence before validation
+        if: always()
+        run: python3 scripts/collect_android_unsigned_evidence.py --output unsigned-build-evidence
+      - name: Upload unsigned build evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-native-unsigned-build-evidence
+          if-no-files-found: error
+          retention-days: 30
+          path: unsigned-build-evidence/
       - name: Package unsigned artifacts for the isolated signer
         run: |
           set -euo pipefail
+          python3 scripts/collect_android_unsigned_evidence.py --verify-canonical
           package_dir='android-native/app/build/outputs/unsigned-release-package'
           play_dir='android-native/app/build/outputs/apk/release'
           direct_dir='android-native/app/build/outputs/apk/directRelease'
@@ -554,7 +567,7 @@ jobs:
   verify-android-reproducibility:
     needs: build-android
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Verify tagged source identity
@@ -586,6 +599,7 @@ jobs:
           test -z "$(find unsigned -mindepth 1 -maxdepth 1 ! -type f -print -quit)"
           (cd unsigned && sha256sum --check --strict UNSIGNED_SHA256SUMS)
       - name: Independently rebuild unsigned Play and direct artifacts
+        timeout-minutes: 30
         run: |
           set -euo pipefail
           test ! -e android-native/keystore.properties
@@ -602,6 +616,17 @@ jobs:
           # independent verifier from becoming the release pipeline's OOM path.
           gradle_release :app:assembleRelease :app:bundleRelease
           gradle_release :app:assembleDirectRelease
+      - name: Retain unsigned build evidence before validation
+        if: always()
+        run: python3 scripts/collect_android_unsigned_evidence.py --output independent-build-evidence
+      - name: Upload unsigned build evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-native-independent-build-evidence
+          if-no-files-found: error
+          retention-days: 30
+          path: independent-build-evidence/
       - name: Match independent bytes to producer bytes
         run: |
           set -euo pipefail
@@ -636,23 +661,28 @@ jobs:
             local producer=$1
             local rebuilt=$2
             local label=$3
-            test -s "$producer"
-            test -s "$rebuilt"
+            if ! test -s "$producer" || ! test -s "$rebuilt"; then
+              echo "Missing independent output: $label" >&2
+              return 1
+            fi
             if ! cmp --silent "$producer" "$rebuilt"; then
               echo "Independent rebuild mismatch: $label" >&2
               sha256sum "$producer" "$rebuilt" >&2
-              exit 1
+              return 1
             fi
           }
 
-          compare_exact unsigned/play-unsigned.apk "$rebuilt_play" 'Play APK'
-          compare_exact unsigned/direct-unsigned.apk "$rebuilt_direct" 'direct APK'
-          compare_exact unsigned/play-unsigned.aab "$rebuilt_aab" 'Play AAB'
-          compare_exact unsigned/play-output-metadata.json "$rebuilt_play_metadata" 'Play metadata'
-          compare_exact unsigned/direct-output-metadata.json "$rebuilt_direct_metadata" 'direct metadata'
-          compare_exact unsigned/play-AndroidManifest.xml "$rebuilt_play_manifest" 'Play manifest'
-          compare_exact unsigned/direct-AndroidManifest.xml "$rebuilt_direct_manifest" 'direct manifest'
+          failures=0
+          python3 scripts/collect_android_unsigned_evidence.py --verify-canonical || failures=$((failures + 1))
+          compare_exact unsigned/play-unsigned.apk "$rebuilt_play" 'Play APK' || failures=$((failures + 1))
+          compare_exact unsigned/direct-unsigned.apk "$rebuilt_direct" 'direct APK' || failures=$((failures + 1))
+          compare_exact unsigned/play-unsigned.aab "$rebuilt_aab" 'Play AAB' || failures=$((failures + 1))
+          compare_exact unsigned/play-output-metadata.json "$rebuilt_play_metadata" 'Play metadata' || failures=$((failures + 1))
+          compare_exact unsigned/direct-output-metadata.json "$rebuilt_direct_metadata" 'direct metadata' || failures=$((failures + 1))
+          compare_exact unsigned/play-AndroidManifest.xml "$rebuilt_play_manifest" 'Play manifest' || failures=$((failures + 1))
+          compare_exact unsigned/direct-AndroidManifest.xml "$rebuilt_direct_manifest" 'direct manifest' || failures=$((failures + 1))
           sha256sum "$rebuilt_play" "$rebuilt_direct" "$rebuilt_aab"
+          test "$failures" = 0
 
   # The signing key exists only after the pinned GitHub-owned setup and artifact
   # actions have completed on this fresh runner. No Gradle build or unsigned-

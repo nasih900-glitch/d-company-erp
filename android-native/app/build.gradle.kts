@@ -3,6 +3,7 @@
 // resolve without these.
 import java.io.FileInputStream
 import java.net.URI
+import java.nio.file.Files
 import java.util.Properties
 
 plugins {
@@ -84,8 +85,8 @@ android {
         // Build 52 is immutable withheld predecessor history. This release keeps
         // Room 58 under a direct version code so CI and upgrade checks cannot
         // produce different identities from a local Gradle property.
-        versionCode = 61
-        versionName = "3.1.54"
+        versionCode = 62
+        versionName = "3.1.55"
         buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "false")
         buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("play"))
 
@@ -228,6 +229,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.activity:activity-compose:1.9.3")
+    // API35+ baseline-profile installation requires1.4.x; do not inherit1.3.1 transitively.
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
 
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
@@ -273,4 +276,43 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
     add("physicalAuditImplementation", "androidx.compose.ui:ui-test-manifest")
+}
+
+// Official profgen runs in an isolated worker, without adding plugin classes
+// to buildSrc's exported runtime. Both tool bytes remain strictly verified/locked.
+val bundleProfileTools = configurations.create("bundleProfileTools") {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
+dependencies {
+    add(bundleProfileTools.name, "com.android.tools.build:gradle:8.7.3") { isTransitive = false }
+    add(bundleProfileTools.name, "org.jetbrains.kotlin:kotlin-stdlib:2.0.21") { isTransitive = false }
+}
+
+// AGP's module bundler enumerates DEX inputs independently of APK packaging.
+// Bind final BUNDLE names to that same variant's compiler APK before isolated signing.
+androidComponents {
+    onVariants(selector().withBuildType("release")) { variant ->
+        val apkArtifacts = variant.artifacts.get(com.android.build.api.artifact.SingleArtifact.APK)
+        val loader = variant.artifacts.getBuiltArtifactsLoader()
+        val canonical = tasks.register<cloud.dcompany.packaging.CanonicalBundleTask>("canonicalizeReleaseBundle") {
+            apkDirectory.set(apkArtifacts)
+            apkFile.set(apkArtifacts.map { directory ->
+                val built = requireNotNull(loader.load(directory)) { "Missing compiler APK metadata" }
+                require(built.variantName == variant.name && built.applicationId == variant.applicationId.get())
+                val artifact = built.elements.single()
+                require(artifact.filters.isEmpty() && artifact.versionCode == android.defaultConfig.versionCode && artifact.versionName == android.defaultConfig.versionName)
+                val declared = file(artifact.outputFile).toPath()
+                require(!Files.isSymbolicLink(declared))
+                require(declared.toRealPath().startsWith(directory.asFile.toPath().toRealPath()))
+                layout.file(providers.provider { declared.toFile() }).get()
+            })
+            profileTools.from(bundleProfileTools)
+            auditDirectory.set(layout.buildDirectory.dir("outputs/canonical-bundle-audit/release"))
+        }
+        variant.artifacts.use(canonical)
+            .wiredWithFiles(cloud.dcompany.packaging.CanonicalBundleTask::getRawBundle,
+                cloud.dcompany.packaging.CanonicalBundleTask::getCanonicalBundle)
+            .toTransform(com.android.build.api.artifact.SingleArtifact.BUNDLE)
+    }
 }

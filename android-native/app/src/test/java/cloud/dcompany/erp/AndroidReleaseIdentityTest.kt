@@ -8,15 +8,15 @@ import org.junit.Test
 class AndroidReleaseIdentityTest {
     @Test
     fun `release artifact keeps production and isolated audit identities distinct`() {
-        assertEquals(61, BuildConfig.VERSION_CODE)
+        assertEquals(62, BuildConfig.VERSION_CODE)
         if (BuildConfig.BUILD_TYPE == "physicalAudit") {
             assertEquals("cloud.dcompany.erp.physicalaudit", BuildConfig.APPLICATION_ID)
-            assertEquals("3.1.54-physical-audit", BuildConfig.VERSION_NAME)
+            assertEquals("3.1.55-physical-audit", BuildConfig.VERSION_NAME)
             assertEquals("managed", BuildConfig.DISTRIBUTION_CHANNEL)
             assertFalse(BuildConfig.DIRECT_UPDATES_ENABLED)
         } else {
             assertEquals("cloud.dcompany.erp", BuildConfig.APPLICATION_ID)
-            assertEquals("3.1.54", BuildConfig.VERSION_NAME)
+            assertEquals("3.1.55", BuildConfig.VERSION_NAME)
         }
     }
 }

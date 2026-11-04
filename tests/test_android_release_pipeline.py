@@ -100,6 +100,24 @@ def external_actions(source: str) -> list[str]:
 
 
 class AndroidReleasePipelineTest(unittest.TestCase):
+    def test_api35_profile_installer_is_explicitly_locked_and_verified(self) -> None:
+        import xml.etree.ElementTree as ET
+
+        self.assertIn('implementation("androidx.profileinstaller:profileinstaller:1.4.1")', APP_GRADLE_BUILD.read_text())
+        rows = [line for line in APP_DEPENDENCY_LOCK.read_text().splitlines() if line.startswith("androidx.profileinstaller:profileinstaller:")]
+        self.assertEqual(1, len(rows))
+        self.assertTrue(rows[0].startswith("androidx.profileinstaller:profileinstaller:1.4.1="))
+        configs = set(rows[0].split("=", 1)[1].split(","))
+        self.assertTrue({"releaseRuntimeClasspath", "directReleaseRuntimeClasspath", "debugRuntimeClasspath", "physicalAuditRuntimeClasspath"} <= configs)
+        tree = ET.parse(GRADLE_VERIFICATION_METADATA)
+        component = next(node for node in tree.findall(".//{*}component") if node.attrib == {"group": "androidx.profileinstaller", "name": "profileinstaller", "version": "1.4.1"})
+        actual = {artifact.attrib["name"]: artifact.find("{*}sha256").attrib["value"] for artifact in component}
+        self.assertEqual({
+            "profileinstaller-1.4.1.aar": "b519f9317ded1e2c1c2993038c0692e30da326ca99097d9331ff2d3a5861a428",
+            "profileinstaller-1.4.1.module": "6f11cf65e4bf8444995cc73e5aa3f81b082d66e720c0592bc5fc80d3f73850f7",
+            "profileinstaller-1.4.1.pom": "6dde43827b40535e4053d1c52d4b227a411556c289e65400c9a1cc61e2b41ce3",
+        }, actual)
+
     def test_android_compatibility_deadlines_cover_current_and_legacy_clients(self) -> None:
         client = ANDROID_COMPATIBILITY.read_text(encoding="utf-8")
         server = RUNTIME_PARITY.read_text(encoding="utf-8")
@@ -477,6 +495,7 @@ class AndroidReleasePipelineTest(unittest.TestCase):
                 "actions/checkout",
                 "actions/setup-java",
                 "actions/download-artifact",
+                "actions/upload-artifact",
             },
             {
                 action.split("@", 1)[0]
@@ -556,6 +575,13 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         self.assertNotIn("ANDROID_KEYSTORE_PASSWORD", verifier_job)
         self.assertIn("cmp --silent", verifier_job)
         self.assertIn("play-unsigned.aab", verifier_job)
+        self.assertEqual(7, sum(line.strip().startswith("compare_exact unsigned/") and line.endswith(" || failures=$((failures + 1))") for line in verifier_job.splitlines()))
+        self.assertIn('test "$failures" = 0', verifier_job)
+        self.assertLess(verifier_job.index("Retain unsigned build evidence before validation"), verifier_job.index("Match independent bytes to producer bytes"))
+        self.assertIn("outputs/bundle/release/app-release.aab", build_job)
+        self.assertIn("outputs/bundle/release/app-release.aab", verifier_job)
+        self.assertIn("--verify-canonical", build_job)
+        self.assertIn("--verify-canonical", verifier_job)
         self.assertNotIn("./gradlew", sign_job)
         self.assertIn("test ! -e android-native/dcompany-release.keystore", build_job)
         self.assertIn("sha256sum --check --strict UNSIGNED_SHA256SUMS", sign_job)
