@@ -193,12 +193,12 @@ function TierForm({
             onChange={(e) => setForm({ ...form, name: e.target.value })}/>
         </Field>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Monthly price (₹)">
+          <Field label="Monthly price">
             <input type="number" required min={0} step="0.01" className="input font-mono text-right"
               value={form.monthly_rupees}
               onChange={(e) => setForm({ ...form, monthly_rupees: e.target.value })}/>
           </Field>
-          <Field label="Annual price (₹, optional)">
+          <Field label="Annual price (optional)">
             <input type="number" min={0} step="0.01" className="input font-mono text-right"
               value={form.annual_rupees}
               onChange={(e) => setForm({ ...form, annual_rupees: e.target.value })}/>

@@ -364,7 +364,7 @@ function TipPayoutForm({
     event.preventDefault();
     const amountMinor = rupeesToMinor(form.amount_rupees);
     if (amountMinor === null) {
-      setErr('Enter an amount greater than ₹0 with no more than two decimal places.');
+      setErr('Enter an amount greater than 0 with no more than two decimal places.');
       return;
     }
     if (form.note.trim().length < 3) {
@@ -447,7 +447,7 @@ function TipPayoutForm({
           </Field>
         )}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="Amount (₹)">
+          <Field label="Amount">
             <input type="number" required min="0.01" step="0.01" inputMode="decimal" autoFocus
               className="input font-mono text-right text-xl" value={form.amount_rupees}
               onChange={(event) => setForm((current) => ({ ...current, amount_rupees: event.target.value }))}/>

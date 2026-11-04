@@ -2,9 +2,12 @@ package cloud.dcompany.erp.core.sync
 
 import android.os.SystemClock
 import cloud.dcompany.erp.BuildConfig
+import cloud.dcompany.erp.core.auth.SessionRefreshLease
 import cloud.dcompany.erp.core.auth.TokenStore
+import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ClientIdentityInterceptor
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -21,6 +24,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlin.math.min
 import kotlin.math.pow
@@ -278,18 +282,29 @@ internal class RealtimeSilenceTracker(
  * screens never fetch from this class; they read Room, and Room re-emits once
  * the authoritative refresh pull lands.
  */
-class RealtimeClient(
+class RealtimeClient internal constructor(
     private val tokens: TokenStore,
     private val scope: CoroutineScope,
-    monotonicMillis: () -> Long = SystemClock::elapsedRealtime,
+    monotonicMillis: () -> Long,
+    private val socketFactory: (Request, WebSocketListener) -> WebSocket,
+    private val refreshSession: suspend (SessionRefreshLease) -> String?,
+    private val reconnectDelay: suspend (Long) -> Unit = { delay(it) },
 ) {
-    private val client = OkHttpClient.Builder()
-        // No read timeout — a WebSocket is meant to sit open indefinitely.
-        // Liveness is judged by the silence watchdog below, never a socket
-        // timeout closing it out from under us.
-        .readTimeout(0, TimeUnit.MILLISECONDS)
-        .addInterceptor(ClientIdentityInterceptor())
-        .build()
+    constructor(
+        tokens: TokenStore,
+        scope: CoroutineScope,
+        monotonicMillis: () -> Long = SystemClock::elapsedRealtime,
+    ) : this(
+        tokens = tokens,
+        scope = scope,
+        monotonicMillis = monotonicMillis,
+        // The watchdog owns liveness; refresh uses ApiClient's separate dispatcher.
+        socketFactory = OkHttpClient.Builder()
+            .readTimeout(0, TimeUnit.MILLISECONDS)
+            .addInterceptor(ClientIdentityInterceptor())
+            .build()::newWebSocket,
+        refreshSession = ApiClient::refreshRejectedSession,
+    )
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -312,19 +327,24 @@ class RealtimeClient(
         connect(expectedReconnectTicket = null)
     }
 
-    private fun connect(expectedReconnectTicket: Long?) {
-        if (tokens.accessToken() == null) return
+    private fun connect(
+        expectedReconnectTicket: Long?,
+        expectedLogin: SessionRefreshLease? = null,
+    ) {
+        val connectionLease = tokens.refreshLease() ?: return
         socketLifecycle.openIf(
             canOpen = {
-                expectedReconnectTicket == null ||
-                    (!intentionallyClosed && reconnectTicket == expectedReconnectTicket)
+                tokens.currentAccessFor(connectionLease) != null &&
+                    (expectedLogin == null || tokens.currentAccessFor(expectedLogin) != null) &&
+                    (expectedReconnectTicket == null ||
+                        (!intentionallyClosed && reconnectTicket == expectedReconnectTicket))
             },
             create = { generation ->
                 if (expectedReconnectTicket == null) intentionallyClosed = false
                 cancelReconnectLocked()
-                client.newWebSocket(
+                socketFactory(
                     Request.Builder().url(wsUrl()).build(),
-                    Listener(generation),
+                    Listener(generation, connectionLease),
                 )
             },
         )
@@ -349,9 +369,13 @@ class RealtimeClient(
 
     private inner class Listener(
         private val generation: Long,
+        private val connectionLease: SessionRefreshLease,
     ) : WebSocketListener() {
 
         private val authentication = RealtimeAuthenticationGate()
+        private var presentedLease: SessionRefreshLease? = null
+
+        private fun currentAccess(): String? = presentedLease?.let(tokens::currentAccessFor)
 
         override fun onOpen(webSocket: WebSocket, response: Response) {
             socketLifecycle.ifCurrent(generation, webSocket) {
@@ -361,20 +385,24 @@ class RealtimeClient(
                 // rotated by the normal HTTP refresh flow while this socket
                 // was reconnecting must never leave it retrying with a stale
                 // one.
-                val token = tokens.accessToken()
-                if (token == null) {
-                    scope.launch { dropAndReconnect(generation, webSocket) }
+                val lease = tokens.refreshLease()?.takeIf {
+                    tokens.currentAccessFor(connectionLease) == it.accessToken
+                }
+                if (lease == null) {
+                    scope.launch { dropAndReconnect(generation, webSocket, connectionLease) }
                     return@ifCurrent
                 }
+                presentedLease = lease
+                val token = lease.accessToken
                 authentication.opened(token, wasReconnect)
                 val authenticated = runCatching {
                     webSocket.send(json.encodeToString(AuthFrame.serializer(), AuthFrame(token)))
                 }.getOrDefault(false)
                 if (!authenticated) {
-                    scope.launch { dropAndReconnect(generation, webSocket) }
+                    scope.launch { dropAndReconnect(generation, webSocket, lease) }
                     return@ifCurrent
                 }
-                startWatchdogLocked(generation, webSocket, authentication)
+                startWatchdogLocked(generation, webSocket, authentication, lease)
             }
         }
 
@@ -392,7 +420,7 @@ class RealtimeClient(
             socketLifecycle.ifCurrent(generation, webSocket) {
                 when (msg.type) {
                     "connected" -> {
-                        val decision = authentication.acknowledge(tokens.accessToken())
+                        val decision = authentication.acknowledge(currentAccess())
                         if (!decision.accepted) {
                             authenticationInvalid = true
                         } else {
@@ -407,7 +435,7 @@ class RealtimeClient(
                         }
                     }
                     "changed" -> if (
-                        authentication.canProcessAuthenticatedFrame(tokens.accessToken())
+                        authentication.canProcessAuthenticatedFrame(currentAccess())
                     ) {
                         msg.resource
                             ?.trim()
@@ -417,7 +445,7 @@ class RealtimeClient(
                         authenticationInvalid = true
                     }
                     "ping" -> {
-                        if (!authentication.canProcessAuthenticatedFrame(tokens.accessToken())) {
+                        if (!authentication.canProcessAuthenticatedFrame(currentAccess())) {
                             authenticationInvalid = true
                         } else {
                             // Replying isn't required by the server, but a send
@@ -433,26 +461,33 @@ class RealtimeClient(
                 }
             }
             if (sendFailed || authenticationInvalid) {
-                dropAndReconnect(generation, webSocket)
+                dropAndReconnect(generation, webSocket, presentedLease ?: connectionLease)
             }
         }
 
+        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+            // Retire before acknowledging: the resulting onClosed is already stale.
+            terminal(webSocket, code)
+            runCatching { webSocket.close(code, null) }
+        }
+
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-            handleTerminalCallback(generation, webSocket)
+            terminal(webSocket, code)
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-            handleTerminalCallback(generation, webSocket)
+            terminal(webSocket, null)
         }
-    }
 
-    private fun handleTerminalCallback(generation: Long, webSocket: WebSocket) {
-        var shouldReconnect = false
-        val cleared = socketLifecycle.clearIfCurrent(generation, webSocket) {
-            stopWatchdogLocked()
-            shouldReconnect = !intentionallyClosed
+        private fun terminal(webSocket: WebSocket, code: Int?) {
+            socketLifecycle.clearIfCurrent(generation, webSocket) {
+                stopWatchdogLocked()
+                scheduleReconnect(
+                    lease = presentedLease ?: connectionLease,
+                    refreshRejected = code == 4401 && presentedLease != null,
+                )
+            }
         }
-        if (cleared && shouldReconnect) scheduleReconnect()
     }
 
     /**
@@ -461,30 +496,33 @@ class RealtimeClient(
      * onClosed — so the reference is dropped and the reconnect scheduled
      * here rather than waiting for a callback that might not come.
      */
-    private fun dropAndReconnect(generation: Long, webSocket: WebSocket) {
-        var shouldReconnect = false
+    private fun dropAndReconnect(
+        generation: Long,
+        webSocket: WebSocket,
+        lease: SessionRefreshLease,
+    ) {
         val cleared = socketLifecycle.clearIfCurrent(generation, webSocket) {
             stopWatchdogLocked()
-            shouldReconnect = !intentionallyClosed
+            scheduleReconnect(lease)
         }
         if (!cleared) return
 
         runCatching { webSocket.close(1000, "stale") }
-        if (shouldReconnect) scheduleReconnect()
     }
 
     private fun checkLiveness(
         generation: Long,
         webSocket: WebSocket,
         authentication: RealtimeAuthenticationGate,
+        lease: SessionRefreshLease,
     ) {
         var stale = false
         socketLifecycle.ifCurrent(generation, webSocket) {
             stale = !intentionallyClosed &&
-                (!authentication.presentedTokenIsCurrent(tokens.accessToken()) ||
+                (!authentication.presentedTokenIsCurrent(tokens.currentAccessFor(lease)) ||
                     silenceTracker.hasExceeded(silenceLimitMs))
         }
-        if (stale) dropAndReconnect(generation, webSocket)
+        if (stale) dropAndReconnect(generation, webSocket, lease)
     }
 
     /** Caller holds [socketLifecycle]'s monitor through ifCurrent/open. */
@@ -492,12 +530,13 @@ class RealtimeClient(
         generation: Long,
         webSocket: WebSocket,
         authentication: RealtimeAuthenticationGate,
+        lease: SessionRefreshLease,
     ) {
         stopWatchdogLocked()
         watchdogJob = scope.launch {
             while (isActive) {
                 delay(serverPingIntervalMs / 2)
-                checkLiveness(generation, webSocket, authentication)
+                checkLiveness(generation, webSocket, authentication, lease)
             }
         }
     }
@@ -508,27 +547,60 @@ class RealtimeClient(
         watchdogJob = null
     }
 
-    private fun scheduleReconnect() {
+    private fun scheduleReconnect(lease: SessionRefreshLease, refreshRejected: Boolean = false) {
         socketLifecycle.inspect { current ->
             if (intentionallyClosed || current != null || reconnectJob != null) return@inspect
-            // Capped exponential backoff — instant retry on a blip, but a
-            // flaky network doesn't turn into a reconnect storm.
-            val delayMs = min(30_000L, (1000.0 * 2.0.pow(reconnectAttempt)).toLong())
-            reconnectAttempt += 1
             val ticket = ++reconnectTicket
-            reconnectJob = scope.launch {
-                delay(delayMs)
-                var shouldConnect = false
-                socketLifecycle.inspect { latest ->
-                    if (ticket == reconnectTicket) {
-                        reconnectJob = null
-                        shouldConnect = !intentionallyClosed && latest == null
+            // Reserve under the socket monitor; an old terminal callback must
+            // not schedule work after a replacement or disconnect wins.
+            reconnectJob = scope.launch(start = CoroutineStart.LAZY) {
+                try {
+                    while (isActive) {
+                        var delayMs: Long? = null
+                        socketLifecycle.inspect { latest ->
+                            if (canRecover(ticket, latest, lease)) {
+                                delayMs = min(30_000L, (1000.0 * 2.0.pow(reconnectAttempt)).toLong())
+                                reconnectAttempt += 1
+                            }
+                        }
+                        reconnectDelay(delayMs ?: return@launch)
+                        var admitted = false
+                        socketLifecycle.inspect { latest -> admitted = canRecover(ticket, latest, lease) }
+                        if (!admitted) return@launch
+                        if (refreshRejected) {
+                            val access = try {
+                                refreshSession(lease)
+                            } catch (_: IOException) {
+                                // Ambiguous refresh failure preserves credentials and
+                                // retries with capped backoff, never the rejected bearer.
+                                continue
+                            } ?: return@launch
+                            val currentAccess = tokens.currentAccessFor(lease) ?: return@launch
+                            // Another HTTP rotation may finish after our flight returns.
+                            if (currentAccess != access) continue
+                        }
+                        // connect rechecks both the ticket and login under the
+                        // same monitor used by disconnect/socket replacement.
+                        connect(expectedReconnectTicket = ticket, expectedLogin = lease)
+                        return@launch
+                    }
+                } finally {
+                    socketLifecycle.inspect {
+                        if (ticket == reconnectTicket) reconnectJob = null
                     }
                 }
-                if (shouldConnect) connect(expectedReconnectTicket = ticket)
             }
+            reconnectJob?.start()
         }
     }
+
+    /** Caller holds the socket monitor; token rotation may keep this login valid. */
+    private fun canRecover(
+        ticket: Long,
+        current: RealtimeSocketIdentity<WebSocket>?,
+        lease: SessionRefreshLease,
+    ): Boolean = ticket == reconnectTicket && !intentionallyClosed && current == null &&
+        tokens.currentAccessFor(lease) != null
 
     /** Caller holds [socketLifecycle]'s monitor through open/invalidate. */
     private fun cancelReconnectLocked() {

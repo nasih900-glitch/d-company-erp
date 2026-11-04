@@ -54,18 +54,18 @@ class GamingNextActionUiTest {
                 customerQuery.value = "Synthetic draft"
             }
         }
-        compose.onNodeWithText("Start 60 min · ₹210.00").assertIsDisplayed()
+        compose.onNodeWithText("Start 60 min · 210.00").assertIsDisplayed()
         compose.onNodeWithTag("gaming-booked-player-count").assertTextEquals("4/4").assertIsDisplayed()
         compose.runOnIdle { portrait.value = true }
-        compose.onNodeWithText("Start 60 min · ₹210.00").assertIsDisplayed()
+        compose.onNodeWithText("Start 60 min · 210.00").assertIsDisplayed()
         compose.onNodeWithTag("gaming-booked-player-count").assertTextEquals("4/4").assertIsDisplayed()
         compose.runOnIdle {
             assertEquals("Synthetic draft", observed.getValue("ps5-2").customerQuery.value)
             selected.value = "ps5-1"
         }
-        compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
+        compose.onNodeWithText("Start 30 min · 80.00").assertIsDisplayed()
         compose.runOnIdle { selected.value = "ps5-2" }
-        compose.onNodeWithText("Start 60 min · ₹210.00").assertIsDisplayed()
+        compose.onNodeWithText("Start 60 min · 210.00").assertIsDisplayed()
         compose.onNodeWithTag("gaming-booked-player-count").assertTextEquals("4/4").assertIsDisplayed()
     }
 

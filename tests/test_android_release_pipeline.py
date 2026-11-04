@@ -27,6 +27,7 @@ EMULATOR_CPU_GUARD = (
     'printf \'guest_cpu_online=%s\\n\' "$guest_cpu_online" && '
     'test "$guest_cpu_online" = "0-1"'
 )
+EMULATOR_GESTURE_GUARD = 'navigation_qemu_raw="$(adb shell getprop ro.kernel.qemu)" && test "$(printf \'%s\' "$navigation_qemu_raw" | tr -d \'\\r\')" = "1" && adb shell cmd overlay enable-exclusive --category com.android.internal.systemui.navbar.gestural && navigation_overlay_raw="$(adb shell cmd overlay list --user 0)" && printf \'%s\\n\' "$navigation_overlay_raw" | python3 -c \'import sys; rows=[line.strip() for line in sys.stdin.read().replace("\\r", "").splitlines() if line.strip().startswith("[x] com.android.internal.systemui.navbar.")]; assert rows==["[x] com.android.internal.systemui.navbar.gestural"], "Gesture-navigation proof requires exactly one active gestural overlay"; print("guest_navigation=gestural")\''
 EMULATOR_SUITE_COMMAND = (
     "D_COMPANY_REQUIRE_NATIVE_AVD_SIZE=1 "
     "bash scripts/run_android_instrumentation_ci.sh"
@@ -34,6 +35,7 @@ EMULATOR_SUITE_COMMAND = (
 EMULATOR_CPU_GUARD_AND_SUITE = (
     "          script: |\n"
     f"            {EMULATOR_CPU_GUARD}\n"
+    f"            {EMULATOR_GESTURE_GUARD}\n"
     f"            {EMULATOR_SUITE_COMMAND}\n"
 )
 GRADLE_WRAPPER = (
@@ -98,6 +100,24 @@ def external_actions(source: str) -> list[str]:
 
 
 class AndroidReleasePipelineTest(unittest.TestCase):
+    def test_api35_profile_installer_is_explicitly_locked_and_verified(self) -> None:
+        import xml.etree.ElementTree as ET
+
+        self.assertIn('implementation("androidx.profileinstaller:profileinstaller:1.4.1")', APP_GRADLE_BUILD.read_text())
+        rows = [line for line in APP_DEPENDENCY_LOCK.read_text().splitlines() if line.startswith("androidx.profileinstaller:profileinstaller:")]
+        self.assertEqual(1, len(rows))
+        self.assertTrue(rows[0].startswith("androidx.profileinstaller:profileinstaller:1.4.1="))
+        configs = set(rows[0].split("=", 1)[1].split(","))
+        self.assertTrue({"releaseRuntimeClasspath", "directReleaseRuntimeClasspath", "debugRuntimeClasspath", "physicalAuditRuntimeClasspath"} <= configs)
+        tree = ET.parse(GRADLE_VERIFICATION_METADATA)
+        component = next(node for node in tree.findall(".//{*}component") if node.attrib == {"group": "androidx.profileinstaller", "name": "profileinstaller", "version": "1.4.1"})
+        actual = {artifact.attrib["name"]: artifact.find("{*}sha256").attrib["value"] for artifact in component}
+        self.assertEqual({
+            "profileinstaller-1.4.1.aar": "b519f9317ded1e2c1c2993038c0692e30da326ca99097d9331ff2d3a5861a428",
+            "profileinstaller-1.4.1.module": "6f11cf65e4bf8444995cc73e5aa3f81b082d66e720c0592bc5fc80d3f73850f7",
+            "profileinstaller-1.4.1.pom": "6dde43827b40535e4053d1c52d4b227a411556c289e65400c9a1cc61e2b41ce3",
+        }, actual)
+
     def test_android_compatibility_deadlines_cover_current_and_legacy_clients(self) -> None:
         client = ANDROID_COMPATIBILITY.read_text(encoding="utf-8")
         server = RUNTIME_PARITY.read_text(encoding="utf-8")
@@ -192,8 +212,8 @@ class AndroidReleasePipelineTest(unittest.TestCase):
 
         self.assertIn("profile: pixel_c", ci_workflow)
         self.assertIn("profile: pixel_c", release_workflow)
-        self.assertIn("shell wm size 1280x800", instrumentation)
-        self.assertIn("shell wm density 160", instrumentation)
+        self.assertIn("shell wm size 2560x1600", instrumentation)
+        self.assertIn("shell wm density 320", instrumentation)
         self.assertIn("logical_viewport=1280x800dp", instrumentation)
         self.assertIn("shell wm size reset", instrumentation)
         self.assertIn("shell wm density reset", instrumentation)
@@ -475,6 +495,7 @@ class AndroidReleasePipelineTest(unittest.TestCase):
                 "actions/checkout",
                 "actions/setup-java",
                 "actions/download-artifact",
+                "actions/upload-artifact",
             },
             {
                 action.split("@", 1)[0]
@@ -554,6 +575,13 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         self.assertNotIn("ANDROID_KEYSTORE_PASSWORD", verifier_job)
         self.assertIn("cmp --silent", verifier_job)
         self.assertIn("play-unsigned.aab", verifier_job)
+        self.assertEqual(7, sum(line.strip().startswith("compare_exact unsigned/") and line.endswith(" || failures=$((failures + 1))") for line in verifier_job.splitlines()))
+        self.assertIn('test "$failures" = 0', verifier_job)
+        self.assertLess(verifier_job.index("Retain unsigned build evidence before validation"), verifier_job.index("Match independent bytes to producer bytes"))
+        self.assertIn("outputs/bundle/release/app-release.aab", build_job)
+        self.assertIn("outputs/bundle/release/app-release.aab", verifier_job)
+        self.assertIn("--verify-canonical", build_job)
+        self.assertIn("--verify-canonical", verifier_job)
         self.assertNotIn("./gradlew", sign_job)
         self.assertIn("test ! -e android-native/dcompany-release.keystore", build_job)
         self.assertIn("sha256sum --check --strict UNSIGNED_SHA256SUMS", sign_job)
@@ -708,6 +736,7 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         instrumentation_start = workflow.index("  android-instrumentation:")
         coordinated_job = workflow[coordinated_start:image_start]
         image_job = workflow[image_start:instrumentation_start]
+        self.assertEqual(coordinated_job.count("    timeout-minutes: 65\n"), 1)
 
         self.assertIn(
             "python -m pip install --only-binary=:all: --require-hashes "
@@ -885,7 +914,7 @@ class AndroidReleasePipelineTest(unittest.TestCase):
             self.assertEqual(
                 config.read_text(encoding="utf-8"),
                 "hw.cpu.ncore=2\nhw.ramSize=2048M\n"
-                "hw.lcd.width=1280\nhw.lcd.height=800\nhw.lcd.density=160\n",
+                "hw.lcd.width=2560\nhw.lcd.height=1600\nhw.lcd.density=320\n",
             )
 
     def test_ci_and_release_request_same_bounded_linux_emulator_quadrant(self) -> None:
@@ -926,13 +955,45 @@ class AndroidReleasePipelineTest(unittest.TestCase):
                     job,
                     flags=re.MULTILINE,
                 )
-                self.assertEqual(emulator_builds, ["15081367"])
+                self.assertEqual(emulator_builds, ["15917651"])
                 options = re.findall(
                     r"^\s*emulator-options:\s*(.+)$",
                     job,
                     flags=re.MULTILINE,
                 )
                 self.assertEqual(options, [expected])
+
+    def test_ci_gesture_guard_requires_an_owned_emulator_and_exact_overlay(self) -> None:
+        cases = (
+            ("valid", "1", "[x] com.android.internal.systemui.navbar.gestural\r\n", 0, 0, True),
+            ("three button", "1", "[x] com.android.internal.systemui.navbar.threebutton\n", 0, 0, False),
+            ("missing", "1", "", 0, 0, False),
+            ("ambiguous", "1", "[x] com.android.internal.systemui.navbar.gestural\n[x] com.android.internal.systemui.navbar.threebutton\n", 0, 0, False),
+            ("physical device", "0", "[x] com.android.internal.systemui.navbar.gestural\n", 0, 0, False),
+            ("apply failure", "1", "[x] com.android.internal.systemui.navbar.gestural\n", 7, 0, False),
+            ("partial read failure", "1", "[x] com.android.internal.systemui.navbar.gestural\n", 0, 7, False),
+        )
+        for name, qemu, overlays, apply_status, read_status, expected in cases:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                adb = root / "adb"
+                adb.write_text(
+                    '#!/bin/sh\ncase "$*" in\n'
+                    '"shell getprop ro.kernel.qemu") printf "%s\\n" "$FAKE_QEMU" ;;\n'
+                    '"shell cmd overlay enable-exclusive --category com.android.internal.systemui.navbar.gestural") exit "$FAKE_APPLY_STATUS" ;;\n'
+                    '"shell cmd overlay list --user 0") printf "%s" "$FAKE_OVERLAYS"; exit "$FAKE_READ_STATUS" ;;\n'
+                    '*) exit 91 ;;\nesac\n',
+                    encoding="utf-8",
+                )
+                adb.chmod(0o755)
+                result = subprocess.run(
+                    ["sh", "-c", EMULATOR_GESTURE_GUARD], capture_output=True, text=True,
+                    env={**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"],
+                         "FAKE_QEMU": qemu, "FAKE_OVERLAYS": overlays,
+                         "FAKE_APPLY_STATUS": str(apply_status), "FAKE_READ_STATUS": str(read_status)},
+                )
+                self.assertEqual(result.returncode == 0, expected, result.stderr)
+                if expected: self.assertIn("guest_navigation=gestural", result.stdout)
 
     def test_emulator_cpu_guard_fails_closed_before_the_full_suite(self) -> None:
         cases = (

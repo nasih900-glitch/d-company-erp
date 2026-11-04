@@ -15,9 +15,20 @@ shard_evidence_root="${diagnostics_dir}/instrumentation-shards"
 discovered_tests_file="${shard_evidence_root}/discovered-tests.txt"
 shard_verifier="${repo_root}/scripts/verify_android_instrumentation_shards.py"
 startup_diagnostics="${repo_root}/scripts/capture_android_startup_diagnostics.py"
+provenance_helper="${repo_root}/scripts/android_instrumentation_provenance.py"
+provenance_dir="${shard_evidence_root}/provenance"
+provenance_receipt_sha256=''
+source_inventory_sha256=''
+target_apk_sha256=''
+test_apk_sha256=''
+capture_run_id=''
+persistence_run_id=''
+gradle_runner_args=()
+raw_runner_args=()
 functional_shard_count=4
 stress_class='cloud.dcompany.erp.ui.PhysicalComponentFrameStressUiTest'
 gaming_board_class='cloud.dcompany.erp.ui.screens.gaming.GamingBoardUiTest'
+persistence_class='cloud.dcompany.erp.ui.theme.WorkspaceBackgroundPersistenceUiTest'
 expected_notification_skip='cloud.dcompany.erp.core.alarm.AlarmLifecycleDeviceTest#grantedNotificationCanBePostedWithPrivateVisibilityAndCancelled'
 expected_exact_alarm_skip='cloud.dcompany.erp.core.alarm.AlarmLifecycleDeviceTest#exactAlarmReachesFailClosedReceiverDuringEmulatedDeepIdle'
 device_serial=''
@@ -122,7 +133,7 @@ configure_tablet_viewport() {
   physical_size="$(adb -s "${device_serial}" shell wm size | tr -d '\r' | sed -n 's/^Physical size: //p')"
   physical_density="$(adb -s "${device_serial}" shell wm density | tr -d '\r' | sed -n 's/^Physical density: //p')"
   if [[ "${D_COMPANY_REQUIRE_NATIVE_AVD_SIZE:-0}" == '1' ]] && \
-     { [[ "${physical_size}" != '1280x800' ]] || [[ "${physical_density}" != '160' ]]; }; then
+     { [[ "${physical_size}" != '2560x1600' ]] || [[ "${physical_density}" != '320' ]]; }; then
     echo "Hosted emulator has unexpected physical display ${physical_size:-unknown} at ${physical_density:-unknown} dpi." >&2
     return 1
   fi
@@ -134,10 +145,11 @@ configure_tablet_viewport() {
   tablet_viewport_configured=1
 
   # Keep the 1280x800dp tablet layout. CI also verifies the AVD's physical
-  # framebuffer, because a post-boot wm override alone does not shrink it.
+  # 2560x1600/320dpi framebuffer required by full-resolution capture and system
+  # gesture tests. A post-boot override alone does not change the physical host.
   # Physical-device rendering remains a separate release gate.
-  adb -s "${device_serial}" shell wm size 1280x800 >/dev/null
-  adb -s "${device_serial}" shell wm density 160 >/dev/null
+  adb -s "${device_serial}" shell wm size 2560x1600 >/dev/null
+  adb -s "${device_serial}" shell wm density 320 >/dev/null
   adb -s "${device_serial}" shell settings put system accelerometer_rotation 0 >/dev/null
   adb -s "${device_serial}" shell settings put system user_rotation 0 >/dev/null
 
@@ -153,8 +165,8 @@ configure_tablet_viewport() {
     echo "rotation=$(adb -s "${device_serial}" shell settings get system user_rotation | tr -d '\r')"
   } | tee "${report}"
 
-  [[ "${effective_size}" == '1280x800' ]]
-  [[ "${effective_density}" == '160' ]]
+  [[ "${effective_size}" == '2560x1600' ]]
+  [[ "${effective_density}" == '320' ]]
   [[ "$(adb -s "${device_serial}" shell settings get system user_rotation | tr -d '\r')" == '0' ]]
 }
 
@@ -162,14 +174,14 @@ reassert_tablet_viewport() {
   local effective_size=''
   local effective_density=''
 
-  adb -s "${device_serial}" shell wm size 1280x800 >/dev/null
-  adb -s "${device_serial}" shell wm density 160 >/dev/null
+  adb -s "${device_serial}" shell wm size 2560x1600 >/dev/null
+  adb -s "${device_serial}" shell wm density 320 >/dev/null
   adb -s "${device_serial}" shell settings put system accelerometer_rotation 0 >/dev/null
   adb -s "${device_serial}" shell settings put system user_rotation 0 >/dev/null
   effective_size="$(adb -s "${device_serial}" shell wm size | tr -d '\r' | awk -F': ' '/Physical size:/{value=$2} /Override size:/{value=$2} END{print value}')"
   effective_density="$(adb -s "${device_serial}" shell wm density | tr -d '\r' | awk -F': ' '/Physical density:/{value=$2} /Override density:/{value=$2} END{print value}')"
-  [[ "${effective_size}" == '1280x800' ]]
-  [[ "${effective_density}" == '160' ]]
+  [[ "${effective_size}" == '2560x1600' ]]
+  [[ "${effective_density}" == '320' ]]
   [[ "$(adb -s "${device_serial}" shell settings get system user_rotation | tr -d '\r')" == '0' ]]
 }
 
@@ -264,8 +276,45 @@ outputs = [element.get("outputFile") for element in payload.get("elements", [])]
 outputs = [output for output in outputs if output]
 if len(outputs) != 1:
     raise SystemExit(f"Expected one APK output in {metadata}; found {len(outputs)}")
-print((metadata.parent / outputs[0]).resolve())
+output = pathlib.Path(outputs[0])
+if output.is_absolute() or len(output.parts) != 1:
+    raise SystemExit("APK output must be a basename within its metadata directory")
+print(metadata.parent / output)
 PY
+}
+
+prepare_instrumentation_provenance() {
+  local app_apk
+  local test_apk
+  local values
+  app_apk="$(resolve_apk_from_metadata "${app_metadata}")" || return 1
+  test_apk="$(resolve_apk_from_metadata "${test_metadata}")" || return 1
+  provenance_receipt_sha256="$(python3 "${provenance_helper}" create --repo-root "${repo_root}" \
+    --target-apk "${app_apk}" --test-apk "${test_apk}" --output "${provenance_dir}")" || return 1
+  [[ "${provenance_receipt_sha256}" =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s\n' "${provenance_receipt_sha256}" > "${provenance_dir}/initial-receipt-sha256.txt"
+  values="$(python3 "${provenance_helper}" values --repo-root "${repo_root}" --output "${provenance_dir}" \
+    --expected-receipt-sha256 "${provenance_receipt_sha256}")" || return 1
+  read -r source_inventory_sha256 target_apk_sha256 test_apk_sha256 capture_run_id persistence_run_id <<< "${values}"
+  gradle_runner_args=(
+    "-Pandroid.testInstrumentationRunnerArguments.dcompany.sourceInventorySha256=${source_inventory_sha256}"
+    "-Pandroid.testInstrumentationRunnerArguments.dcompany.targetApkSha256=${target_apk_sha256}"
+    "-Pandroid.testInstrumentationRunnerArguments.dcompany.testApkSha256=${test_apk_sha256}"
+    "-Pandroid.testInstrumentationRunnerArguments.dcompany.captureRunId=${capture_run_id}"
+    '-Pandroid.testInstrumentationRunnerArguments.dcompany.testDisplayId=0'
+  )
+  raw_runner_args=(
+    -e dcompany.sourceInventorySha256 "${source_inventory_sha256}"
+    -e dcompany.targetApkSha256 "${target_apk_sha256}"
+    -e dcompany.testApkSha256 "${test_apk_sha256}"
+    -e dcompany.captureRunId "${capture_run_id}"
+    -e dcompany.testDisplayId 0
+  )
+}
+
+verify_instrumentation_provenance() {
+  python3 "${provenance_helper}" verify --repo-root "${repo_root}" --output "${provenance_dir}" \
+    --expected-receipt-sha256 "${provenance_receipt_sha256}"
 }
 
 install_discovery_test_apks() {
@@ -277,9 +326,9 @@ install_discovery_test_apks() {
     echo "Instrumentation discovery APKs are missing after assembly." >&2
     return 1
   }
-  adb -s "${device_serial}" install -r -t "${app_apk}" >/dev/null
-  adb -s "${device_serial}" install -r -t "${test_apk}" >/dev/null
-  adb -s "${device_serial}" shell pm clear "${app_package}" >/dev/null
+  adb -s "${device_serial}" install -r -t "${app_apk}" >/dev/null || return 1
+  adb -s "${device_serial}" install -r -t "${test_apk}" >/dev/null || return 1
+  adb -s "${device_serial}" shell pm clear "${app_package}" >/dev/null || return 1
 }
 
 discover_instrumentation_tests() {
@@ -293,7 +342,7 @@ discover_instrumentation_tests() {
   if ! install_discovery_test_apks; then
     discovery_status=1
   elif ! adb -s "${device_serial}" shell am instrument -w -r \
-    -e log true "${test_runner}" | tee "${discovery_log}"; then
+    "${raw_runner_args[@]}" -e log true "${test_runner}" | tee "${discovery_log}"; then
     discovery_status=1
   fi
 
@@ -372,10 +421,15 @@ run_connected_instrumentation_lane() {
   mkdir -p "${lane_dir}"
   sample_host_health "${lane_dir}" before
   clear_connected_outputs
-  if ! reset_emulator_for_instrumentation_lane 2>&1 | tee "${lane_dir}/reset.log"; then
+  if ! verify_instrumentation_provenance; then
     lane_status=1
-  elif ! run_gradle_ci "$@" :app:connectedDebugAndroidTest \
+  elif ! reset_emulator_for_instrumentation_lane 2>&1 | tee "${lane_dir}/reset.log"; then
+    lane_status=1
+  elif ! run_gradle_ci "${gradle_runner_args[@]}" "$@" :app:connectedDebugAndroidTest \
     2>&1 | tee "${lane_dir}/gradle.log"; then
+    lane_status=1
+  fi
+  if ! verify_instrumentation_provenance; then
     lane_status=1
   fi
   sample_host_health "${lane_dir}" after
@@ -383,6 +437,54 @@ run_connected_instrumentation_lane() {
     lane_status=1
   fi
   return "${lane_status}"
+}
+
+run_persistence_stage() {
+  local stage=$1
+  local lane_name=$2
+  local lane_dir="${shard_evidence_root}/${lane_name}"
+  local stage_status=0
+  mkdir -p "${lane_dir}"
+  sample_host_health "${lane_dir}" before
+  verify_instrumentation_provenance || return 1
+  reset_emulator_for_instrumentation_lane 2>&1 | tee "${lane_dir}/reset.log" || return 1
+  # Python provides a portable deadline; adb exit alone does not prove a test passed.
+  if ! python3 - "${device_serial}" "${raw_runner_args[@]}" \
+    -e dcompany.persistenceRunId "${persistence_run_id}" \
+    -e class "${persistence_class}#${stage}" "${test_runner}" <<'PY_RUN' \
+    | tee "${lane_dir}/instrumentation.log"; then
+import subprocess
+import sys
+try:
+    result = subprocess.run(
+        ["adb", "-s", sys.argv[1], "shell", "am", "instrument", "-w", "-r", *sys.argv[2:]],
+        timeout=300,
+        check=False,
+    )
+    raise SystemExit(result.returncode)
+except subprocess.TimeoutExpired:
+    print("Persistence instrumentation exceeded 300 seconds", file=sys.stderr)
+    raise SystemExit(1)
+PY_RUN
+    stage_status=1
+  fi
+  if ! python3 "${shard_verifier}" single \
+    --log "${lane_dir}/instrumentation.log" --expected-test "${persistence_class}#${stage}"; then
+    stage_status=1
+  fi
+  if ! verify_instrumentation_provenance; then
+    stage_status=1
+  fi
+  sample_host_health "${lane_dir}" after
+  return "${stage_status}"
+}
+
+run_persistence_chain() {
+  # UTP lanes uninstall packages. Install once here, then preserve app data and
+  # both APKs between stages; reset only force-stops the app/test processes.
+  install_discovery_test_apks || return 1
+  run_persistence_stage stageAImportBothSlotsAndPersist persistence-stage-a || return 1
+  run_persistence_stage stageBVerifyBothSlotsAfterProcessRestart persistence-stage-b
 }
 
 install_alarm_test_apks() {
@@ -448,9 +550,13 @@ if ! run_gradle_ci :app:assembleDebug :app:assembleDebugAndroidTest \
   2>&1 | tee "${shard_evidence_root}/assemble.log"; then
   status=1
 else
-  capture_startup_diagnostics pre-discovery
-  if ! discover_instrumentation_tests; then
+  if ! prepare_instrumentation_provenance; then
     status=1
+  else
+    capture_startup_diagnostics pre-discovery
+    if ! discover_instrumentation_tests; then
+      status=1
+    fi
   fi
 fi
 
@@ -468,7 +574,7 @@ if [[ "${status}" -eq 0 ]]; then
       "functional-shard-${shard_index}" \
       "-Pandroid.testInstrumentationRunnerArguments.numShards=${functional_shard_count}" \
       "-Pandroid.testInstrumentationRunnerArguments.shardIndex=${shard_index}" \
-      "-Pandroid.testInstrumentationRunnerArguments.notClass=${stress_class},${gaming_board_class}"; then
+      "-Pandroid.testInstrumentationRunnerArguments.notClass=${stress_class},${gaming_board_class},${persistence_class}"; then
       status=1
       break
     fi
@@ -487,12 +593,19 @@ if [[ "${status}" -eq 0 ]]; then
 fi
 
 if [[ "${status}" -eq 0 ]]; then
+  if ! run_persistence_chain; then
+    status=1
+  fi
+fi
+
+if [[ "${status}" -eq 0 ]]; then
   if ! python3 "${shard_verifier}" verify \
     --expected-tests "${discovered_tests_file}" \
     --evidence-root "${shard_evidence_root}" \
     --functional-shards "${functional_shard_count}" \
     --stress-class "${stress_class}" \
     --gaming-board-class "${gaming_board_class}" \
+    --persistence-class "${persistence_class}" \
     --expected-skip "${expected_notification_skip}" \
     --expected-skip "${expected_exact_alarm_skip}" \
     --summary "${shard_evidence_root}/summary.txt"; then
@@ -534,7 +647,7 @@ if [[ "${status}" -eq 0 ]]; then
   else
     alarm_status=0
     if ! adb -s "${device_serial}" shell am instrument -w -r \
-      -e class "${alarm_tests}" "${alarm_runner}" | tee "${alarm_report}"; then
+      "${raw_runner_args[@]}" -e class "${alarm_tests}" "${alarm_runner}" | tee "${alarm_report}"; then
       alarm_status=1
     fi
     if [[ "${alarm_status}" -ne 0 ]] \
@@ -544,6 +657,10 @@ if [[ "${status}" -eq 0 ]]; then
       status=1
     fi
   fi
+fi
+
+if [[ "${status}" -eq 0 ]] && ! verify_instrumentation_provenance; then
+  status=1
 fi
 
 if [[ "${status}" -ne 0 ]]; then

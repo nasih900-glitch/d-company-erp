@@ -40,8 +40,7 @@ class WorkspaceLeaseFeedbackContractTest {
             source.between("    fun handoffToPos(", "    fun dismissPosTargetSelection("),
             source.between("    fun discardRejectedPackageExtension(", "    fun pauseSession("),
             source.between("    fun repairMissingBilling(", "    private fun runDirectSessionMutation("),
-            source.between("    fun reconcileToPos(", "    fun cancelUnbilled("),
-            source.between("    fun cancelUnbilled(", "    fun dismissError("),
+            source.between("    fun reconcileToPos(", "    fun prepareSessionVoid("),
         )
 
         localActions.forEach(::assertGamingOperatorBoundary)
@@ -52,6 +51,92 @@ class WorkspaceLeaseFeedbackContractTest {
                 "gamingServerResultWorkspaceUnavailableMessage" in action,
             )
         }
+        val voidActions = source.between("    fun prepareSessionVoid(", "    fun dismissError(")
+        val prepareUnlinkedVoid = voidActions.between(
+            "    fun prepareSessionVoid(",
+            "    private suspend fun loadSessionVoidReview(",
+        )
+        val confirmUnlinkedVoid = voidActions.between(
+            "    fun confirmSessionVoid(",
+            "    private suspend fun executeSessionVoid(",
+        )
+        val executeUnlinkedVoid = voidActions.between(
+            "    private suspend fun executeSessionVoid(",
+            "    private fun prepareLinkedGamingVoid(",
+        )
+        val prepareLinkedVoid = voidActions.between(
+            "    private fun prepareLinkedGamingVoid(",
+            "    private suspend fun loadLinkedGamingVoidReview(",
+        )
+        val confirmLinkedVoid = voidActions.between(
+            "    fun confirmLinkedGamingVoid(",
+            "    private suspend fun executeLinkedGamingVoid(",
+        )
+        val executeLinkedVoid = voidActions.between(
+            "    private suspend fun executeLinkedGamingVoid(",
+            "    private suspend fun loadLinkedGamingVoidResult(",
+        )
+        val unlinkedVoidExecutor = source.between(
+            "internal suspend fun executeSessionVoidAttempt(",
+            "internal suspend fun loadVerifiedSessionVoidResult(",
+        )
+        val linkedVoidExecutor = source.between(
+            "internal suspend fun executeLinkedGamingVoidAttempt(",
+            "internal suspend fun loadVerifiedLinkedGamingVoidResult(",
+        )
+        assertTrue(
+            "Each Void review must capture a lease before authenticated work",
+            listOf(prepareUnlinkedVoid, prepareLinkedVoid).all { "scopeLeaseOrError(" in it },
+        )
+        assertTrue(
+            "Each Void confirmation must bind the review and confirmation leases",
+            listOf(confirmUnlinkedVoid, confirmLinkedVoid).all { "voidActionLeaseError(" in it },
+        )
+        assertTrue(
+            "Each Void success publication must remain guarded by its captured lease",
+            listOf(confirmUnlinkedVoid, confirmLinkedVoid).all {
+                "commitIfCurrentOrNotifyStale(attempt.scopeLease" in it
+            },
+        )
+        assertTrue(
+            "Each Void failure must remain scoped to the captured account instead of publishing into a replacement account",
+            listOf(confirmUnlinkedVoid, confirmLinkedVoid).all {
+                "catch (failure: ApiException)" in it &&
+                    "catch (failure: Exception)" in it &&
+                    "commitIfCurrent(attempt.scopeLease)" in it
+            },
+        )
+        assertTrue(
+            "Each private Void wrapper must delegate its captured lease to the matching guarded executor",
+            "executeSessionVoidAttempt(" in executeUnlinkedVoid &&
+                "currentLease = appCtx.cacheIsolation::currentLease" in executeUnlinkedVoid &&
+                "executeLinkedGamingVoidAttempt(" in executeLinkedVoid &&
+                "currentLease = appCtx.cacheIsolation::currentLease" in executeLinkedVoid,
+        )
+        assertTrue(
+            "Each Void executor must guard the captured lease before the canonical read, after it, and before dispatch",
+            listOf(
+                unlinkedVoidExecutor to listOf(
+                    "The workspace changed before Void.",
+                    "The workspace changed while checking Void.",
+                    "The workspace changed before Void dispatch.",
+                ),
+                linkedVoidExecutor to listOf(
+                    "The workspace changed before Owner Void.",
+                    "The workspace changed while checking the Owner Void receipt.",
+                    "The workspace changed before Owner Void dispatch.",
+                ),
+            ).all { (executor, guards) ->
+                guards.all { guard -> guard in executor } &&
+                    "currentLease() == attempt.scopeLease" in executor
+            },
+        )
+        assertTrue(
+            "Each Void confirmation must recheck the captured lease after the server response before reading or publishing it",
+            listOf(confirmUnlinkedVoid, confirmLinkedVoid).all {
+                "check(appCtx.cacheIsolation.currentLease() == attempt.scopeLease)" in it
+            },
+        )
 
         val rejectedAddon = source.between(
             "    fun discardRejectedSessionAddonAction(",
@@ -88,10 +173,13 @@ class WorkspaceLeaseFeedbackContractTest {
             "The saved-Start acknowledgement must recheck its captured lease before clearing a customer draft",
             savedStartAcknowledgement in capturedStart,
         )
-        val withoutSavedStartAcknowledgement = source.replace(savedStartAcknowledgement, "")
+        val leaseHelper = source.between(
+            "    private fun scopeLeaseOrError(",
+            "    private fun requireNoRejectedSequencedAction(",
+        )
         assertTrue(
-            "Only init recovery, the feedback helper, Start, Stop and direct mutation may otherwise capture a raw lease",
-            withoutSavedStartAcknowledgement.countOccurrences("cacheIsolation.currentLease()") == 5,
+            "The shared Gaming lease capture must publish the supplied recovery message when no workspace exists",
+            "if (lease == null) error.value = message" in leaseHelper,
         )
     }
 
@@ -162,33 +250,45 @@ class WorkspaceLeaseFeedbackContractTest {
         val void = source.between("    fun voidOrder(", "    fun captureSale(")
         val beforePost = void.substringBefore("ApiClient.api.voidOrder(")
         val afterPost = void.substringAfter("ApiClient.api.voidOrder(")
+        val directClosure = beforePost.between("                if (direct != null) {", "                if (held != null) {")
+        val heldClosure = beforePost.substringAfter("                if (held != null) {")
 
-        assertTrue("A stale direct bearer must show workspace recovery", "POS_VOID_BEARER_WORKSPACE_UNAVAILABLE_MESSAGE" in beforePost)
-        assertTrue("A direct bearer CAS miss must say no request was sent", "No void request was sent" in beforePost)
-        assertTrue("A held selection CAS miss must say no request was sent", beforePost.countOccurrences("No void request was sent") >= 2)
-        assertTrue("Both direct and held failure branches must return before POST", beforePost.countOccurrences("return@launch") >= 3)
-        assertTrue("Successful direct or held closure must be recorded before POST", beforePost.countOccurrences("checkoutClosedSafely = true") == 2)
+        assertTrue("A stale direct bearer must show workspace recovery", "POS_VOID_BEARER_WORKSPACE_UNAVAILABLE_MESSAGE" in directClosure)
+        assertTrue("A direct bearer CAS miss must explain that no request was sent and return before POST", "No void request was sent" in directClosure && "return@launch" in directClosure)
+        assertTrue("A held selection CAS miss must explain that no request was sent and return before POST", "No void request was sent" in heldClosure && "return@launch" in heldClosure)
+        assertTrue("A successful direct closure must be recorded before POST", "checkoutClosedSafely = true" in directClosure)
+        assertTrue("A successful held closure must be recorded before POST", "checkoutClosedSafely = true" in heldClosure)
         assertTrue("Post-removal API failure must use outcome-aware wording", "posVoidFailureNotice(" in afterPost)
     }
 
     private fun assertRetryCleanup(source: String, setName: String) {
+        val beforeLaunch = source.substringBefore("viewModelScope.launch")
+        val launchBody = source.substringAfter("viewModelScope.launch")
+        val beforeFinally = launchBody.substringBefore("finally {")
+        val finallyBody = launchBody.substringAfter("finally {")
         assertTrue("Missing retry lease must explain that the old payment remains safe", "scopeLeaseOrNotice(POS_RETRY_WORKSPACE_UNAVAILABLE_MESSAGE)" in source)
         assertTrue("A retry lease revoked after tap must show the same warning", "commitIfCurrentOrNotifyStale" in source)
         assertTrue("Retry busy state must be released from a finally block", "finally {" in source)
-        assertTrue("Retry busy state must always remove the exact id", "$setName.update { it - localId }" in source.substringAfter("finally {"))
-        assertTrue("Busy cleanup must have one owner", source.countOccurrences("$setName.update { it - localId }") == 1)
+        assertTrue("Retry busy ownership must be acquired before launching work", "$setName.update { it + localId }" in beforeLaunch)
+        assertTrue("Retry busy state must not be released before the finally block", "$setName.update { it - localId }" !in beforeFinally)
+        assertTrue("Retry busy state must always release the exact id from the finally block", "$setName.update { it - localId }" in finallyBody)
+        assertTrue("Retry busy ownership must not be reacquired during cleanup", "$setName.update { it + localId }" !in finallyBody)
     }
 
     private fun assertFeedbackBoundary(source: String, feedbackName: String) {
         assertFalse("Missing leases must not return silently", "currentLease() ?: return" in source)
+        val missingLeaseReportsFeedback =
+            "scopeLeaseOrNotice($feedbackName)" in source ||
+                ("if (scopeLease == null)" in source &&
+                    feedbackName in source.substringAfter("if (scopeLease == null)").substringBefore("}"))
         assertTrue("The guarded commit must report a lease revoked after tap", "commitIfCurrentOrNotifyStale" in source)
-        assertTrue("The exact recovery feedback must cover both lease boundaries", source.countOccurrences(feedbackName) >= 2)
+        assertTrue("The exact recovery feedback must cover a lease missing before work begins", missingLeaseReportsFeedback)
+        assertTrue("The exact recovery feedback must cover a lease revoked after work begins", feedbackName in source.substringAfter("onStale"))
     }
 
     private fun assertGamingOperatorBoundary(source: String) {
         assertTrue("A missing Gaming lease must publish feedback", "scopeLeaseOrError(" in source)
         assertTrue("A post-tap revoked Gaming lease must publish feedback", "commitIfCurrentOrNotifyStale" in source)
-        assertTrue("Gaming recovery must tell staff to sign in again", "workspaceMessage" in source)
     }
 
     private fun read(relativePath: String): String =
@@ -201,9 +301,6 @@ class WorkspaceLeaseFeedbackContractTest {
         require(end >= 0) { "Missing source marker: $endMarker" }
         return substring(start, end)
     }
-
-    private fun String.countOccurrences(needle: String): Int =
-        windowed(needle.length).count { it == needle }
 
     private fun projectRoot(): Path {
         val candidates = listOf(

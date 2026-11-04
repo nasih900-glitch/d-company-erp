@@ -26,6 +26,8 @@ from app.core.roles import (
 )
 from app.core.tenant import TenantContext, TenantDep
 from app.models import Attendance, Branch, Role, User, UserRole
+from app.services.integrations.google_sheets_staff import enqueue_staff_attendance_if_enabled
+from app.services.staff_time import next_attendance_version
 
 router = APIRouter()
 
@@ -407,6 +409,8 @@ async def clock_in(
         raise ForbiddenError(
             "Clock in at your assigned branch or sign in on that branch's terminal."
         )
+    # NO KEY UPDATE still serializes these writers, while remaining compatible
+    # with actor foreign-key KEY SHARE locks during Sheet configuration/audits.
     # Serialize clock-ins per user: lock the user row first so a second
     # near-simultaneous request (double-tap, or a second device before the
     # UI re-syncs) blocks here until the first transaction commits its
@@ -417,7 +421,7 @@ async def clock_in(
     # race, since with no open row yet there is nothing for FOR UPDATE to
     # lock and both concurrent requests would still see zero rows.
     await session.execute(
-        select(User).where(User.id == tenant.user_id).with_for_update()
+        select(User).where(User.id == tenant.user_id).with_for_update(key_share=True)
     )
     already_open = (
         await session.execute(
@@ -445,6 +449,9 @@ async def clock_in(
         notes=payload.notes,
     )
     session.add(a)
+    await session.flush()
+    await session.refresh(a)
+    await enqueue_staff_attendance_if_enabled(session, attendance=a, actual_break_confirmed=False)
     return {"id": str(a.id)}
 
 
@@ -457,7 +464,7 @@ async def clock_out(
     # lock, two devices can both read the open Attendance row before either
     # commits and both report a successful clock-out with different times.
     await session.execute(
-        select(User).where(User.id == tenant.user_id).with_for_update()
+        select(User).where(User.id == tenant.user_id).with_for_update(key_share=True)
     )
     # Most recent still-open attendance row for this user in this company.
     # clock_in() guards against a second open row, but `.limit(1)` keeps
@@ -483,8 +490,22 @@ async def clock_out(
         raise BusinessRuleError(
             "No open clock-in found. Clock in before clocking out."
         )
-    a.clock_out_at = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    if (
+        a.clock_in_at > now
+        or a.break_minutes < 0
+        or a.break_minutes * 60 > (now - a.clock_in_at).total_seconds()
+    ):
+        raise BusinessRuleError(
+            "This attendance entry needs an Owner time correction before clock-out."
+        )
+    a.clock_out_at = now
+    a.updated_at = await next_attendance_version(session, a.updated_at)
     await session.flush()
+    await session.refresh(a)
+    await enqueue_staff_attendance_if_enabled(
+        session, attendance=a, actual_break_confirmed=a.break_minutes > 0,
+    )
     return {"id": str(a.id), "clock_out_at": a.clock_out_at.isoformat()}
 
 

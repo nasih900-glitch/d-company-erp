@@ -168,8 +168,8 @@ describe('Protected tender workflow in StrictMode', () => {
     await unlock();
     expect(host.textContent).toContain('Prepare source preview');
     await click('Prepare source');
-    expect(host.textContent).toContain('Complete Cash leg ₹270.00');
-    expect(host.textContent).toContain('Bill total change ₹0.00');
+    expect(host.textContent).toContain('Complete Cash leg 270.00');
+    expect(host.textContent).toContain('Bill total change 0.00');
     expect(localStorage.length).toBe(0);
     expect(mocks.unlock).toHaveBeenCalledTimes(1);
     expect(mocks.history.mock.calls[0][1]).toBe(

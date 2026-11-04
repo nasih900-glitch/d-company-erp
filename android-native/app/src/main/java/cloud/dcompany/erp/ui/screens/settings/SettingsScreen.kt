@@ -1,5 +1,7 @@
 package cloud.dcompany.erp.ui.screens.settings
 
+import android.net.Uri
+
 import cloud.dcompany.erp.ui.theme.operationalDanger
 import cloud.dcompany.erp.ui.theme.operationalDangerContainer
 import cloud.dcompany.erp.ui.theme.operationalGood
@@ -38,7 +40,7 @@ import androidx.compose.material.icons.filled.PointOfSale
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Store
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -77,22 +79,32 @@ import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.WorkspaceBackgroundSlot
+import cloud.dcompany.erp.ui.theme.WorkspaceBackgroundUiState
 import cloud.dcompany.erp.core.diagnostics.AppHealthRecorder
 import cloud.dcompany.erp.core.diagnostics.healthCaptureInsight
 import cloud.dcompany.erp.core.money.minorToRupeesInput
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.core.net.currencyFreeLabel
 import java.text.DateFormat
 import java.util.Date
 
 @Composable
-fun SettingsScreen(
+internal fun SettingsScreen(
     canManageSystem: Boolean,
     statusProfile: cloud.dcompany.erp.core.net.MeResponse? = null,
     onPasswordChanged: () -> Unit = {},
     onReportProblem: () -> Unit = {},
     onStartHealthRecording: () -> Boolean = { false },
     remoteAssistanceContent: (@Composable () -> Unit)? = null,
+    workspaceBackgroundState: WorkspaceBackgroundUiState = WorkspaceBackgroundUiState(),
+    onImportWorkspaceBackground: (WorkspaceBackgroundSlot, Uri) -> Unit = { _, _ -> },
+    onResetWorkspaceBackground: (WorkspaceBackgroundSlot) -> Unit = {},
+    onSelectWorkspaceBackgroundPreset: (String) -> Unit = {},
+    onUseSavedWorkspaceBackground: () -> Unit = {},
+    onCancelWorkspaceBackgroundOperation: () -> Unit = {},
+    onClearWorkspaceBackgroundNotice: () -> Unit = {},
     vm: SettingsViewModel = viewModel(),
     presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
 ) {
@@ -117,7 +129,7 @@ fun SettingsScreen(
         if (canManageSystem) addAll(SettingsTab.entries.filter {
             it != SettingsTab.Devices && (it != SettingsTab.Terminals || showTerminalSettings)
         }) else add(SettingsTab.Account)
-        if (statusAuthority != null) add(SettingsTab.Devices)
+        if (statusAuthority != null || statusProfile?.releaseControlAccess == true) add(SettingsTab.Devices)
     }
     val activeTab = state.tab.takeIf { it in visibleTabs } ?: SettingsTab.Account
     LaunchedEffect(activeTab) {
@@ -146,6 +158,13 @@ fun SettingsScreen(
                     onReportProblem,
                     onStartHealthRecording,
                     remoteAssistanceContent,
+                    workspaceBackgroundState,
+                    onImportWorkspaceBackground,
+                    onResetWorkspaceBackground,
+                    onSelectWorkspaceBackgroundPreset,
+                    onUseSavedWorkspaceBackground,
+                    onCancelWorkspaceBackgroundOperation,
+                    onClearWorkspaceBackgroundNotice,
                 )
                 SettingsTab.Company -> CompanyTab(state, vm, presentation)
                 SettingsTab.Branches -> BranchesTab(state, vm, presentation)
@@ -190,7 +209,7 @@ private fun PointsTab(state: SettingsUiState, vm: SettingsViewModel) {
                 NumericSetting("For each rupees spent", draft.gamingEarnRupees) { value ->
                     vm.updateLoyaltyRules { it.copy(gamingEarnRupees = value) }
                 }
-                NumericSetting("Value of 100 points (₹)", draft.minorPerPoint) { value ->
+                NumericSetting("Value of 100 points", draft.minorPerPoint) { value ->
                     vm.updateLoyaltyRules { it.copy(minorPerPoint = value) }
                 }
             }
@@ -226,7 +245,7 @@ private fun PointsTab(state: SettingsUiState, vm: SettingsViewModel) {
                 draft.rewards.forEachIndexed { index, reward ->
                     if (index > 0) PanelDivider()
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(reward.label, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                        Text(reward.label.currencyFreeLabel(), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                         Switch(
                             checked = reward.enabled,
                             onCheckedChange = { enabled ->
@@ -251,7 +270,7 @@ private fun PointsTab(state: SettingsUiState, vm: SettingsViewModel) {
                             rules.copy(rewards = rules.rewards.map { if (it.key == reward.key) it.copy(pointsCost = value) else it })
                         }
                     }
-                    MoneySetting("Bill credit (₹)", reward.valueMinor) { value ->
+                    MoneySetting("Bill credit", reward.valueMinor) { value ->
                         vm.updateLoyaltyRules { rules ->
                             rules.copy(rewards = rules.rewards.map { if (it.key == reward.key) it.copy(valueMinor = value) else it })
                         }
@@ -384,7 +403,7 @@ internal fun loyaltyProgramChangeSummary(
     after: LoyaltyProgramRulesDto,
 ): List<String> = buildList {
     if (before.gamingEarnPoints != after.gamingEarnPoints || before.gamingEarnRupees != after.gamingEarnRupees) {
-        add("Gaming earn: ${before.gamingEarnPoints} per ₹${before.gamingEarnRupees} → ${after.gamingEarnPoints} per ₹${after.gamingEarnRupees}")
+        add("Gaming earn: ${before.gamingEarnPoints} per ${before.gamingEarnRupees} → ${after.gamingEarnPoints} per ${after.gamingEarnRupees}")
     }
     if (before.minorPerPoint != after.minorPerPoint) {
         add(
@@ -474,6 +493,13 @@ private fun AccountTab(
     onReportProblem: () -> Unit,
     onStartHealthRecording: () -> Boolean,
     remoteAssistanceContent: (@Composable () -> Unit)?,
+    workspaceBackgroundState: WorkspaceBackgroundUiState,
+    onImportWorkspaceBackground: (WorkspaceBackgroundSlot, Uri) -> Unit,
+    onResetWorkspaceBackground: (WorkspaceBackgroundSlot) -> Unit,
+    onSelectWorkspaceBackgroundPreset: (String) -> Unit,
+    onUseSavedWorkspaceBackground: () -> Unit,
+    onCancelWorkspaceBackgroundOperation: () -> Unit,
+    onClearWorkspaceBackgroundNotice: () -> Unit,
 ) {
     var code by remember { mutableStateOf("") }
     var pwd by remember { mutableStateOf("") }
@@ -574,6 +600,15 @@ private fun AccountTab(
             }
             }
         }
+        WorkspaceBackgroundSettingsCard(
+            state = workspaceBackgroundState,
+            onImport = onImportWorkspaceBackground,
+            onReset = onResetWorkspaceBackground,
+            onSelectPreset = onSelectWorkspaceBackgroundPreset,
+            onUseSavedCustom = onUseSavedWorkspaceBackground,
+            onCancelOperation = onCancelWorkspaceBackgroundOperation,
+            onClearNotice = onClearWorkspaceBackgroundNotice,
+        )
         remoteAssistanceContent?.invoke()
         SectionCard(
             title = "App health",

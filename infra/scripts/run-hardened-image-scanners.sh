@@ -196,7 +196,7 @@ for index in "${!SERVICES[@]}"; do
   fi
   CONFIG_IMAGE_IDS+=("$scanner_config_id")
   printf '%s\n' "$identity_validation" >> "$METADATA"
-  if [ "$service" = caddy ]; then
+  if { [ "$service" = caddy ] || [ "$service" = backend ]; }; then
     ZLIB_VEX_DOCUMENTS+=("")
     continue
   fi
@@ -591,7 +591,7 @@ PY
   chmod 0444 "$syft_report"
 
   # Re-resolve the exact tag at the final boundary before Grype consumes the
-  # archive and, for the four r0 services, the image-specific VEX. The archive
+  # archive and, for the three r0 services, the image-specific VEX. The archive
   # verifier binds this runtime identity to the config image ID carried by the
   # scanner reports and any generated VEX.
   if [ "$(docker image inspect --format '{{.Id}}' "$image_ref")" != "$runtime_image_id" ]; then
@@ -608,13 +608,13 @@ PY
     --mount "type=bind,src=$CACHE_MOUNT,dst=/scanner-cache" \
     --mount "type=bind,src=$archive,dst=/scan/image.tar,readonly"
   )
-  if [ "$service" != caddy ]; then
+  if [ "$service" != caddy ] && [ "$service" != backend ]; then
     grype_arguments+=(
       --mount "type=bind,src=$zlib_vex_document,dst=/scan/zlib.openvex.json,readonly"
     )
   fi
   grype_arguments+=("$GRYPE_IMAGE" "docker-archive:/scan/image.tar")
-  if [ "$service" != caddy ]; then
+  if [ "$service" != caddy ] && [ "$service" != backend ]; then
     grype_arguments+=(--vex /scan/zlib.openvex.json)
   fi
   grype_arguments+=(--fail-on high --output json)
@@ -629,9 +629,9 @@ PY
     echo "Grype produced no evidence for $service." >&2
     exit 1
   fi
-  if [ "$service" = caddy ]; then
-    python3 "$ZLIB_VEX_VERIFIER" --caddy-fixed-sbom "$syft_report" \
-      "$image_ref" "$config_image_id" "caddy=$grype_report" >> "$METADATA"
+  if { [ "$service" = caddy ] || [ "$service" = backend ]; }; then
+    python3 "$ZLIB_VEX_VERIFIER" "--$service-fixed-sbom" "$syft_report" \
+      "$image_ref" "$config_image_id" "$service=$grype_report" >> "$METADATA"
   else
     python3 "$ZLIB_VEX_VERIFIER" "$zlib_vex_document" \
       "$image_ref" "$config_image_id" "$service=$grype_report" >> "$METADATA"

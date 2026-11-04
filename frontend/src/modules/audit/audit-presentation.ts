@@ -32,6 +32,17 @@ export function auditActor(entry: BusinessAuditEntryDTO): string {
 }
 export function businessLabel(value: string): string {
   const labels: Record<string, string> = {
+    update_mode_before: 'Update mode before',
+    update_mode_after: 'Update mode after',
+    policy_revision: 'Policy revision',
+    minimum_supported_build: 'Minimum supported build',
+    environment_safety_floor: 'Deployment safety floor',
+    global_installations: 'Applies to all direct Android installations',
+    voided_amount_minor: 'Original charge voided',
+    amount_after_void_minor: 'Amount after void',
+    original_billable_minutes: 'Original recorded billable minutes',
+    added_player_interval_count: 'Added-player attendance records',
+    attendance_retained: 'Attendance and settlement evidence retained',
     qty_delta: 'Quantity change',
     qty: 'Quantity',
     base_unit: 'Stock unit',
@@ -152,6 +163,22 @@ export function auditReadableSourceReference(entry: BusinessAuditEntryDTO): stri
 export function auditBusinessSummary(entry: BusinessAuditEntryDTO): string {
   const facts = entry.business_details ?? {};
   const pieces: string[] = [];
+  if (entry.action === 'android_update_policy_changed') {
+    const mode = facts.update_mode_after;
+    const minimum = facts.minimum_supported_build;
+    if (mode === 'optional' || mode === 'required') pieces.push(`${mode === 'required' ? 'Required' : 'Optional'} updates`);
+    if (typeof minimum === 'number' && Number.isSafeInteger(minimum)) pieces.push(`Minimum supported build ${minimum}`);
+    if (facts.global_installations === true) pieces.push('All direct Android installations');
+    if (pieces.length) return pieces.join(' · ');
+  }
+  if (entry.action === 'gaming_session_voided') {
+    const original = facts.voided_amount_minor;
+    const after = facts.amount_after_void_minor;
+    if (typeof original === 'number' && Number.isSafeInteger(original)) pieces.push(`Voided ${inr(original)}`);
+    if (typeof after === 'number' && Number.isSafeInteger(after)) pieces.push(`Amount after void ${inr(after)}`);
+    if (facts.attendance_retained === true) pieces.push('Attendance retained');
+    if (pieces.length) return pieces.join(' · ');
+  }
   if (entry.action_code === 'SHF-OPN') {
     const opening = facts.opening_float_minor;
     if (typeof opening === 'number' && Number.isSafeInteger(opening))

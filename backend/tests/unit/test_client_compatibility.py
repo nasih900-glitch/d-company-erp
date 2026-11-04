@@ -13,6 +13,14 @@ from app.core.config import Settings, get_settings
 from app.core.middleware import ClientCompatibilityMiddleware
 from app.core.release_identity import ReleaseIdentity
 
+@pytest.fixture(autouse=True)
+def inherit_policy_for_optional_offer_tests(monkeypatch):
+    from app.services.client_updates.policy import policy_snapshot
+    async def inherited(settings):
+        return policy_snapshot(settings, None)
+    monkeypatch.setattr(public_router, "resolve_android_update_policy", inherited)
+
+
 _TEST_SHEETS_ENCRYPTION_KEY = "Z2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2c="
 
 

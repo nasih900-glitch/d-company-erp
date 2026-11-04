@@ -15,6 +15,16 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -23,6 +33,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -37,6 +53,11 @@ import cloud.dcompany.erp.ui.components.ActionIntent
 import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.components.OperationalBanner
 import cloud.dcompany.erp.ui.components.UiTone
+import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.LocalWorkspaceGlassScene
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
+import cloud.dcompany.erp.ui.theme.workspaceGlass
 import kotlinx.coroutines.launch
 
 private data class GamingAlarmPermissionState(
@@ -59,13 +80,26 @@ private enum class AlarmSettingsTarget {
  */
 @Composable
 @SuppressLint("InlinedApi") // Every POST_NOTIFICATIONS operation is routed away below API 33.
-internal fun GamingAlarmPermissionCard() {
-    OperationalAlarmPermissionCard(contextLabel = "Gaming timer", compact = true)
+internal fun GamingAlarmPermissionCard(
+    wide: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
+    OperationalAlarmPermissionCard(
+        contextLabel = "Gaming timer",
+        compact = true,
+        gamingWideLayout = wide,
+        modifier = modifier,
+    )
 }
 
 @Composable
 @SuppressLint("InlinedApi")
-internal fun OperationalAlarmPermissionCard(contextLabel: String, compact: Boolean = false) {
+internal fun OperationalAlarmPermissionCard(
+    contextLabel: String,
+    compact: Boolean = false,
+    gamingWideLayout: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
@@ -192,16 +226,14 @@ internal fun OperationalAlarmPermissionCard(contextLabel: String, compact: Boole
         shouldShowRationale = shouldShowNotificationRationale,
     )
 
-    OperationalBanner(
-        title = "$contextLabel alerts need attention",
-        detail = feedback ?: (
-            "Allow notifications and precise alarms for screen-off session alerts. " +
-                "Server time still protects billing."
-            ),
-        tone = UiTone.Warning,
-        icon = Icons.Filled.NotificationsOff,
-        compact = compact && feedback == null,
-    ) {
+    val title = if (compact) "$contextLabel alerts off" else "$contextLabel alerts need attention"
+    val detail = feedback ?: if (compact) {
+        "Enable notifications and precise alarms. Billing time stays accurate."
+    } else {
+        "Allow notifications and precise alarms for screen-off session alerts. " +
+            "Server time still protects billing."
+    }
+    val actionContent: @Composable RowScope.() -> Unit = {
             when (notificationRoute) {
                 NotificationPermissionRoute.REQUEST_SYSTEM_DIALOG -> {
                     ErpButton(
@@ -279,6 +311,76 @@ internal fun OperationalAlarmPermissionCard(contextLabel: String, compact: Boole
                     intent = ActionIntent.Secondary,
                 )
             }
+    }
+    if (gamingWideLayout && feedback == null) {
+        GamingWideAlarmPermissionNotice(
+            title = title,
+            detail = detail,
+            modifier = modifier,
+            actions = actionContent,
+        )
+    } else {
+        OperationalBanner(
+            title = title,
+            detail = detail,
+            tone = UiTone.Warning,
+            icon = Icons.Filled.NotificationsOff,
+            modifier = modifier.testTag("gaming-alarm-permission-banner"),
+            compact = compact && feedback == null,
+            compactActionLayout = compact && feedback == null,
+            showFullDetail = feedback != null,
+            action = actionContent,
+        )
+    }
+}
+
+@Composable
+private fun GamingWideAlarmPermissionNotice(
+    title: String,
+    detail: String,
+    modifier: Modifier = Modifier,
+    actions: @Composable RowScope.() -> Unit,
+) {
+    Row(
+        modifier.fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .clip(Radius.shapeLg)
+            .workspaceGlass(
+                scene = LocalWorkspaceGlassScene.current,
+                role = WorkspaceGlassRole.WARNING,
+                day = MaterialTheme.colorScheme.background.luminance() > 0.5f,
+                shape = Radius.shapeLg,
+            )
+            .testTag("gaming-alarm-permission-banner")
+            .padding(horizontal = Spacing.md, vertical = Spacing.xs),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Filled.NotificationsOff,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.tertiary,
+        )
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+                title,
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+            )
+            Text(
+                detail,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+            )
+        }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            actions()
+        }
     }
 }
 

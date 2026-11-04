@@ -211,17 +211,44 @@ class AndroidPerformanceOwnershipContractTest {
             "@Composable\nprivate fun GamingAmbientBackdrop(",
         )
 
+        val headline = gaming.between(
+            "private fun GamingBoardHeadline(",
+            "@Composable\nprivate fun GamingCommandPanel(",
+        )
+        val tableRow = gaming.between(
+            "private fun GamingStationTableRow(",
+            "internal fun gamingStationRowProjection(",
+        )
         assertTrue(
-            "Active, available, payment-due, and shift status must remain on the station board",
-            "GamingBoardHeadline(state, onRefresh)" in workspace,
+            "The adaptive station table must retain one authoritative status header",
+            workspace.countOccurrences("GamingBoardHeadline(") == 1 &&
+                workspace.countOccurrences("stickyHeader(key = \"station-table-header\")") == 1,
         )
-        assertFalse(
-            "The whole station board must not observe the one-second clock",
-            "wallClock.value" in workspace,
+        assertTrue(
+            "Each station row and selected expansion must retain a stable station-only key",
+            "item(key = \"station-row-${'$'}{station.id}\")" in workspace &&
+                workspace.countOccurrences("item(key = \"station-controls-${'$'}{station.id}\")") == 1,
         )
+        assertTrue(
+            "The board header must retain authoritative active, available, payment-due and shift values",
+            "operationalActiveGamingSessionCount(state.sessions)" in headline &&
+                "state.stations.count { it.isActive && state.activeFor(it.id) == null }" in headline &&
+                "gamingShiftSummary(" in headline &&
+                "${'$'}active active" in headline &&
+                "${'$'}available available" in headline &&
+                "${'$'}{state.readyForPos.size} payment due" in headline &&
+                "${'$'}{shift.label}" in headline,
+        )
+        assertTrue(
+            "Only active or locally pending-start rows may observe the one-second clock",
+            "val shouldTick = session?.status == \"active\"" in tableRow &&
+                "session?.status == \"starting\" && session.localState == GamingSessionState.START_PENDING" in tableRow &&
+                "val nowMillis = if (shouldTick) wallClock.value else frozenMillis" in tableRow,
+        )
+        assertFalse("The board header must never observe the one-second clock", "wallClock.value" in headline)
         val hero = gaming.between("private fun GamingStationHero(", "@Composable\nprivate fun GamingStationArtwork(")
         assertTrue(
-            "Only an active station's detail should read the ticking clock",
+            "The selected hero keeps its separately gated active-session clock ownership",
             "if (ticking) wallClock.value else frozenNow" in hero,
         )
     }

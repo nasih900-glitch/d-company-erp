@@ -87,6 +87,18 @@ describe('Google Sheets settings daily collections controls', () => {
     expect(container.textContent).toContain('cccccccc-cccc-4ccc-8ccc-cccccccccccc');
   });
 
+  it('directs setup to a private explicit-workbook project instead of the public workbook script', () => {
+    expect(container.textContent).toContain('private standalone project');
+    expect(container.textContent).toContain('owned and editable only by the workbook Owner');
+    expect(container.textContent).toContain('D_COMPANY_ERP_SPREADSHEET_ID');
+    expect(container.textContent).toContain('native spreadsheet ID');
+    expect(container.textContent).toContain('refuses writes without a valid workbook binding');
+    expect(container.textContent).toContain('Keep signing secrets out of workbook-bound or shared projects');
+    expect(container.textContent).toContain('Keep the binding fixed for a verified connection');
+    expect(container.textContent).toContain('after queued entries drain, followed by new verification');
+    expect(container.textContent).not.toContain('Extensions → Apps Script');
+  });
+
   it('shows the backend generation-drain failure instead of claiming the scope changed', async () => {
     api.configureGoogleSheetsMirror.mockRejectedValue(
       new Error('Google Sheets has 2 undelivered business entries in the current verified connection.'),

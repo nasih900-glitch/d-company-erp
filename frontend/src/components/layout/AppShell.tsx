@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 
 import { useAuth } from '@/modules/auth/AuthContext';
+import { canUseStaffTime } from '@/modules/staff/staff-time-policy';
 import { hasSupportAccess } from '@/lib/admin-access';
 import { rolesLabel } from '@/lib/roles';
 import { canAccessRefunds } from '@/modules/refunds/refund-policy';
@@ -106,6 +107,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
   const hasProductManagementAccess = canManageGamingCentreProducts(me, demo);
   const [supportUnread, setSupportUnread] = useState(0);
   const accessibleModules = me?.accessible_modules;
+  const hasStaffTimeAccess = canUseStaffTime(me);
   const navGroups = useMemo(
     () => visibleProfileNavigationGroups({
       isOwner: isProtectedOwner,
@@ -115,6 +117,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
       hasMembershipAccess,
       hasProductManagementAccess,
       accessibleModules,
+      hasStaffTimeAccess,
     }),
     [
       accessibleModules,
@@ -124,6 +127,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
       hasRefundAccess,
       hasSystemAccess,
       isProtectedOwner,
+      hasStaffTimeAccess,
     ],
   );
   const navItems = useMemo(() => navGroups.flatMap((group) => group.items), [navGroups]);

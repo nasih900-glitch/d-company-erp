@@ -26,27 +26,36 @@ class LaunchAppearanceTest {
     }
 
     @Test
-    fun `starting styles preserve neutral palette and original manifest icon`() {
+    fun `starting styles align Android launch surface with selected Splash ink and original mark`() {
         val styles = DocumentBuilderFactory.newInstance().newDocumentBuilder()
             .parse(root().resolve("src/main/res/values-v31/launch_themes.xml").toFile())
             .getElementsByTagName("style")
-        assertEquals(2, styles.length)
-        for (index in 0 until styles.length) {
-            val style = styles.item(index) as org.w3c.dom.Element
+        val startingStyles = (0 until styles.length).map { styles.item(it) as org.w3c.dom.Element }
+            .filter { it.getAttribute("name").startsWith("Theme.DCompany.Start.") }
+        assertEquals(2, startingStyles.size)
+        for (style in startingStyles) {
             assertEquals("Theme.DCompany", style.getAttribute("parent"))
-            val night = style.getAttribute("name").endsWith("Night")
             val items = style.getElementsByTagName("item")
             val values = (0 until items.length).associate {
                 val item = items.item(it) as org.w3c.dom.Element
                 item.getAttribute("name") to item.textContent.trim()
             }
             for (name in listOf("windowSplashScreenBackground", "windowBackground", "statusBarColor", "navigationBarColor")) {
-                assertEquals(if (night) "#050505" else "#FAFAFA", values["android:$name"])
+                assertEquals("#0E061F", values["android:$name"])
             }
-            assertEquals((!night).toString(), values["android:windowLightStatusBar"])
-            assertEquals((!night).toString(), values["android:windowLightNavigationBar"])
-            assertFalse("Do not replace the original launcher artwork", values.keys.any { "Icon" in it })
+            assertEquals("@mipmap/ic_launcher_foreground", values["android:windowSplashScreenAnimatedIcon"])
+            assertEquals("false", values["android:windowLightStatusBar"])
+            assertEquals("false", values["android:windowLightNavigationBar"])
         }
+        val fallback = (0 until styles.length).map { styles.item(it) as org.w3c.dom.Element }
+            .single { it.getAttribute("name") == "Theme.DCompany" }
+        val fallbackItems = fallback.getElementsByTagName("item")
+        val fallbackValues = (0 until fallbackItems.length).associate {
+            val item = fallbackItems.item(it) as org.w3c.dom.Element
+            item.getAttribute("name") to item.textContent.trim()
+        }
+        assertEquals("#0E061F", fallbackValues["android:windowSplashScreenBackground"])
+        assertEquals("@mipmap/ic_launcher_foreground", fallbackValues["android:windowSplashScreenAnimatedIcon"])
     }
 
     @Test

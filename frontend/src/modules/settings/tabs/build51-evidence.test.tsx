@@ -82,8 +82,8 @@ describe('Build 51 truthful evidence labels', () => {
     expect(markup).toContain('Recorded close preserved');
     expect(markup).toContain('physical count and variance stay unchanged');
     expect(markup).toContain('daily unallocated actuals are separate');
-    expect(markup).toContain('₹60.00');
-    expect(markup).toContain('₹350.00');
+    expect(markup).toContain('60.00');
+    expect(markup).toContain('350.00');
   });
   it('shows exact daily final actuals and residual even when unresolved financial deltas are null', () => {
     const receipt = {
@@ -100,10 +100,10 @@ describe('Build 51 truthful evidence labels', () => {
     const markup = renderToStaticMarkup(
       <TenderReceiptFacts receipt={receipt} />,
     );
-    expect(markup).toContain('₹330.00');
-    expect(markup).toContain('₹300.00');
-    expect(markup).toContain('₹80.00');
-    expect(markup).toContain('₹-30.00');
+    expect(markup).toContain('330.00');
+    expect(markup).toContain('300.00');
+    expect(markup).toContain('80.00');
+    expect(markup).toContain('-30.00');
     expect(markup).toContain('No financial posting');
     expect(markup).toContain('Total difference');
     expect(markup).not.toContain('Applied unallocated classification');
@@ -124,8 +124,8 @@ describe('Build 51 truthful evidence labels', () => {
       <TenderReceiptFacts receipt={receipt} />,
     );
     expect(markup).toContain('Applied unallocated classification');
-    expect(markup).toContain('+₹20.00');
+    expect(markup).toContain('+20.00');
     expect(markup).toContain('revenue unchanged');
-    expect(markup).toContain('₹0.00');
+    expect(markup).toContain('0.00');
   });
 });

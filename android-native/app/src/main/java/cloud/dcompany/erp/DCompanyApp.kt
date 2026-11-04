@@ -30,6 +30,7 @@ import cloud.dcompany.erp.core.diagnostics.PersistedDiagnosticStartupIdentity
 import cloud.dcompany.erp.core.diagnostics.PersistedDiagnosticStartupIdentityCapture
 import cloud.dcompany.erp.core.diagnostics.SyncHealthSample
 import cloud.dcompany.erp.core.net.ApiClient
+import cloud.dcompany.erp.core.net.ForegroundCompatibilityPoller
 import cloud.dcompany.erp.core.net.ClientCompatibilityGate
 import cloud.dcompany.erp.core.net.ConnectivityObserver
 import cloud.dcompany.erp.core.net.ClientCompatibilityState
@@ -248,6 +249,7 @@ class DCompanyApp : Application() {
     private val foregroundLock = Any()
     private val foregroundActivities = ForegroundActivityTracker()
     private var foregroundMaintenanceJob: Job? = null
+    private lateinit var foregroundCompatibilityPoller: ForegroundCompatibilityPoller
     private var foregroundDiagnosticJob: Job? = null
     private val compatibilityRecheckCallbacks = object : Application.ActivityLifecycleCallbacks {
         override fun onActivityResumed(activity: Activity) {
@@ -258,6 +260,7 @@ class DCompanyApp : Application() {
             synchronized(foregroundLock) {
                 if (foregroundActivities.onStarted()) {
                     remoteAssistance.onAppForegrounded()
+                    foregroundCompatibilityPoller.start()
                     startForegroundMaintenanceLocked()
                     startForegroundDiagnosticSamplingLocked()
                 }
@@ -268,6 +271,7 @@ class DCompanyApp : Application() {
             synchronized(foregroundLock) {
                 if (foregroundActivities.onStopped()) {
                     remoteAssistance.onAppBackgrounded()
+                    foregroundCompatibilityPoller.stop()
                     foregroundMaintenanceJob?.cancel()
                     foregroundMaintenanceJob = null
                     foregroundDiagnosticJob?.cancel()
@@ -326,6 +330,17 @@ class DCompanyApp : Application() {
                 }
             },
             clearRequiredNotice = updateRequirementStore::clearIfPolicyRevision,
+            initialPolicyAuthority = updateRequirementStore.restoreAuthority(),
+            persistPolicyDecision = { authority, notice ->
+                updateRequirementStore.persistDecision(authority, notice).also { saved ->
+                    if (!saved) Log.e("DCompanyUpdate", "Could not persist update policy authority.")
+                }
+            },
+        )
+        foregroundCompatibilityPoller = ForegroundCompatibilityPoller(
+            scope = appScope,
+            online = { ::connectivity.isInitialized && connectivity.online.value },
+            check = clientCompatibility::recheckNonBlocking,
         )
         ApiClient.onUpdateRequired = clientCompatibility::requireUpdate
 

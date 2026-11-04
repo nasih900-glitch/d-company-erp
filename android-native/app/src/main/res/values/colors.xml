@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- System appearance before Compose reads the saved preference. -->
-    <color name="brandBackground">#FAFAFA</color>
+    <color name="brandBackground">#F7F7F7</color>
     <bool name="lightSystemBars">true</bool>
 </resources>

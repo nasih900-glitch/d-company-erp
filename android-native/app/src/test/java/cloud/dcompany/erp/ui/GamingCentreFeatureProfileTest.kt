@@ -121,6 +121,29 @@ class GamingCentreFeatureProfileTest {
     }
 
     @Test
+    fun `owner Reports route admits either reduced analytics or finance while non-owner remains excluded`() {
+        val analyticsOwner = profile(
+            roles = listOf("owner"),
+            protectedAccess = true,
+            permissions = listOf(ErpPermission.AnalyticsRead),
+        )
+        val financeOwner = analyticsOwner.copy(
+            effectivePermissions = listOf(ErpPermission.FinanceRead),
+        )
+        val emptyOwner = analyticsOwner.copy(effectivePermissions = emptyList())
+        val privilegedManager = analyticsOwner.copy(
+            roles = listOf("manager"),
+            protectedAccess = false,
+            effectivePermissions = listOf(ErpPermission.AnalyticsRead, ErpPermission.FinanceRead),
+        )
+
+        assertTrue(Destination.Reports in allowedDestinations(analyticsOwner))
+        assertTrue(Destination.Reports in allowedDestinations(financeOwner))
+        assertFalse(Destination.Reports in allowedDestinations(emptyOwner))
+        assertFalse(Destination.Reports in allowedDestinations(privilegedManager))
+    }
+
+    @Test
     fun `gaming centre presentation hides dormant workflows but full hospitality retains them`() {
         val focused = WorkspaceFeatureProfiles.GamingCentre.presentationPolicy()
         val full = WorkspaceFeatureProfiles.FullHospitality.presentationPolicy()

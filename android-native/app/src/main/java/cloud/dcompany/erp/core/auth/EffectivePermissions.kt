@@ -32,11 +32,31 @@ object ErpPermission {
     const val StaffRead = "staff.read"
     const val StaffWrite = "staff.write"
     const val StaffAttendanceWrite = "staff.attendance.write"
+    const val StaffPayrollWrite = "staff.payroll.write"
     const val AnalyticsRead = "analytics.read"
+    const val AnalyticsExport = "analytics.export"
     const val SettingsManage = "settings.manage"
     const val MembershipsManage = "memberships.manage"
     const val AdminAuditRead = "admin.audit.read"
     const val AdminSystem = "admin.system"
+}
+
+private val NORMALIZED_OWNER_ROLE_CODES = setOf("owner", "co_owner", "super_owner")
+
+internal fun Iterable<String>.hasNormalizedOwnerRole(): Boolean = any(NORMALIZED_OWNER_ROLE_CODES::contains)
+
+/**
+ * One policy for the Owner-only, linked Gaming Void surface and its bounded
+ * board projection. The backend repeats every authority and financial check;
+ * this only decides whether the Android client may request that projection.
+ */
+internal fun MeResponse.canVoidPosLinkedSessions(): Boolean {
+    val permissions = EffectivePermissions.from(this)
+    return roles.hasNormalizedOwnerRole() &&
+        permissions.has(ErpPermission.GamingWrite) &&
+        permissions.has(ErpPermission.PosRead) &&
+        permissions.has(ErpPermission.PosWrite) &&
+        permissions.has(ErpPermission.PosVoid)
 }
 
 data class StaffAccess(
@@ -52,6 +72,10 @@ data class PosAccess(
 )
 data class GamingAccess(
     val canManageSessions: Boolean = false,
+    /** UI hint only; the backend rechecks normalized Owner role and exact scope. */
+    val canVoidUnlinkedSessionsAcrossShifts: Boolean = false,
+    /** UI hint only; the backend rechecks public Owner role under row locks. */
+    val canVoidPosLinkedSessions: Boolean = false,
     /** UI hint only; the backend also requires protected/audit identity. */
     val canReconcileLegacySessions: Boolean = false,
     /** Gaming writes need the POS shift read contract even when POS is hidden. */
@@ -89,6 +113,14 @@ data class FinanceAccess(
 ) {
     val isViewOnly: Boolean
         get() = !canRecordExpenses && !canManageAssets && !canRecordPartnerCapital
+}
+data class ReportsAccess(
+    val canReadOverview: Boolean = false,
+    val canReadPnl: Boolean = false,
+    val canExportOverview: Boolean = false,
+    val canReadInventory: Boolean = false,
+) {
+    val canReadAny: Boolean get() = canReadOverview || canReadPnl
 }
 data class EventsAccess(
     val canManageEvents: Boolean = false,
@@ -230,6 +262,14 @@ class EffectivePermissions private constructor(private val granted: Set<String>)
         canRecordExpenses = has(ErpPermission.FinanceWrite),
         canManageAssets = has(ErpPermission.FinanceAssetsWrite),
         canRecordPartnerCapital = has(ErpPermission.FinancePartnerWrite),
+    )
+
+    fun reportsAccess() = ReportsAccess(
+        canReadOverview = has(ErpPermission.AnalyticsRead),
+        canReadPnl = has(ErpPermission.FinanceRead),
+        canReadInventory = has(ErpPermission.AnalyticsRead) && has(ErpPermission.InventoryRead),
+        // Export is deliberately absent from all legacy role/module fallback grants.
+        canExportOverview = has(ErpPermission.AnalyticsRead) && has(ErpPermission.AnalyticsExport),
     )
 
     fun eventsAccess() = EventsAccess(
@@ -389,5 +429,7 @@ private val PERMISSION_MODULE = mapOf(
     ErpPermission.StaffRead to "staff",
     ErpPermission.StaffWrite to "staff",
     ErpPermission.StaffAttendanceWrite to "staff",
+    ErpPermission.StaffPayrollWrite to "staff",
     ErpPermission.AnalyticsRead to "insights_reports",
+    ErpPermission.AnalyticsExport to "insights_reports",
 )

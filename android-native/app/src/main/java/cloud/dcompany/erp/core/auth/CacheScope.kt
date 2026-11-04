@@ -6,6 +6,9 @@ import androidx.sqlite.db.SimpleSQLiteQuery
 import cloud.dcompany.erp.core.db.ErpDatabase
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.atomic.AtomicLong
 
 data class CacheScope(
@@ -246,6 +249,10 @@ class CacheIsolationCoordinator internal constructor(
 
     @Volatile
     private var activeLease: CacheScopeLease? = null
+    private val _activeLease = MutableStateFlow<CacheScopeLease?>(null)
+
+    /** Exact, generation-bearing read authority for lease-bound screen projections. */
+    val activeLeaseFlow: StateFlow<CacheScopeLease?> = _activeLease.asStateFlow()
 
     internal constructor(context: Context, db: ErpDatabase) : this(
         RoomScopeDataPurger(db),
@@ -280,8 +287,13 @@ class CacheIsolationCoordinator internal constructor(
     }
 
     private fun deactivateLocked() {
-        activeLease = null
+        publishLeaseLocked(null)
         generations.incrementAndGet()
+    }
+
+    private fun publishLeaseLocked(lease: CacheScopeLease?) {
+        activeLease = lease
+        _activeLease.value = lease
     }
 
     /**
@@ -364,7 +376,7 @@ class CacheIsolationCoordinator internal constructor(
                 )
             }
             val lease = newLease(scope)
-            activeLease = lease
+            publishLeaseLocked(lease)
             CachedScopeLeaseActivation(CacheScopeActivation.RETAINED, lease)
         }
 
@@ -397,7 +409,7 @@ class CacheIsolationCoordinator internal constructor(
                 return@withLock CachedScopeLeaseAdoption.StoredScopeMismatch
             }
             val lease = newLease(scope)
-            activeLease = lease
+            publishLeaseLocked(lease)
             CachedScopeLeaseAdoption.Ready(lease = lease, adopted = true)
         }
 
@@ -413,7 +425,7 @@ class CacheIsolationCoordinator internal constructor(
             )
         }
         if (stored == scope) {
-            activeLease = newLease(scope)
+            publishLeaseLocked(newLease(scope))
             return@withLock CacheScopeActivation.RETAINED
         }
 
@@ -483,7 +495,7 @@ class CacheIsolationCoordinator internal constructor(
                 "The tablet could not securely save the active account scope. Try again or ask support.",
             )
         }
-        activeLease = newLease(scope)
+        publishLeaseLocked(newLease(scope))
         CacheScopeActivation.PURGED
     }
 

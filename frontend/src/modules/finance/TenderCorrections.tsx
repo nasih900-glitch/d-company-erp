@@ -467,7 +467,7 @@ function TenderWorkspace({
                             value={inr(daily.recorded_upi_minor)}
                           />
                           <label className="text-sm">
-                            Confirmed Cash actual (₹)
+                            Confirmed Cash actual
                             <input
                               className="input mt-1 w-full"
                               inputMode="decimal"
@@ -479,7 +479,7 @@ function TenderWorkspace({
                             />
                           </label>
                           <label className="text-sm">
-                            Confirmed UPI actual (₹)
+                            Confirmed UPI actual
                             <input
                               className="input mt-1 w-full"
                               inputMode="decimal"

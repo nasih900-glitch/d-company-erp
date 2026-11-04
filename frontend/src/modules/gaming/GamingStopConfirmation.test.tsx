@@ -18,7 +18,7 @@ describe('GamingStopConfirmation', () => {
     );
 
     expect(markup).toContain('End PS5 Station 1?');
-    expect(markup).toContain('fixed package charge is ₹120.00');
+    expect(markup).toContain('fixed package charge is 120.00');
     expect(markup).toContain('approximately 42 min');
     expect(markup).toContain('moves this session to Payment Due');
     expect(markup).toContain('End session');
@@ -29,8 +29,8 @@ describe('GamingStopConfirmation', () => {
       <GamingStopConfirmation stationName="PS5 Station 1" elapsedMinutes={29}
         estimatedAmountMinor={8_000} estimatedFriendMinor={3_000} fixedPrice
         busy={false} onConfirm={vi.fn()} onCancel={vi.fn()}/>);
-    expect(markup).toContain('fixed package charge is ₹80.00');
-    expect(markup).toContain('estimated ₹30.00 controller charge');
+    expect(markup).toContain('fixed package charge is 80.00');
+    expect(markup).toContain('estimated 30.00 controller charge');
     expect(markup).toContain('server confirms their actual presence and final total');
   });
 

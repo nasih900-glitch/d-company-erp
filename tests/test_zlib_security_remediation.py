@@ -58,6 +58,7 @@ def test_official_zlib_source_and_complete_upstream_patch_chain_are_hash_bound()
         "96040ee84d0d187905283912dbd3f7b66ac2033976a2ceefe9b8cca63143d9c2",
     ):
         assert value in build
+    assert "SOURCE_URL='https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz'" in build
     assert "make test" in build
     assert "grep -Fc" in build
     assert "-eq 2" in build
@@ -151,9 +152,11 @@ def test_every_alpine_runtime_installs_and_proves_the_patched_library() -> None:
 
     backend = (ROOT / "infra/docker/backend.Dockerfile").read_text()
     assert backend.count(
-        "python:3.14.8-alpine3.24@sha256:"
-        "f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72"
+        "python:3.14.10-alpine3.24@sha256:"
+        "eb2c62658b8d51bff0acc408504b76521d02030de56a8a3c1e830083e89b89d2"
     ) == 3
+    assert "apk info -v zlib" not in backend
+    assert 'printf \'%s\\n\' "$installed_packages" | grep -Fx \'zlib-1.3.2-r1\'' in backend
     redis = (ROOT / "infra/docker/redis.Dockerfile").read_text()
     assert redis.count(
         "redis:7.4.11-alpine3.21@sha256:"
@@ -643,7 +646,7 @@ def test_caddy_fixed_sbom_argument_is_narrowly_bound(tmp_path: Path) -> None:
                 "--caddy-fixed-sbom",
                 str(sbom_path),
             ],
-            "separate Caddy verifier mode",
+            "separate fixed-SBOM verifier mode",
         ),
     )
     for command, error in cases:
@@ -714,3 +717,85 @@ def test_redis_is_a_locally_built_release_image() -> None:
     parity = (ROOT / "ops/runtime_release_parity.py").read_text()
     assert '("caddy", "postgres", "redis", "backend", "frontend")' in parity
     assert 'frozenset({"postgres", "redis", "backend", "frontend"})' in parity
+
+
+def _backend_r1_evidence(architecture: str = "x86_64") -> tuple[dict, dict]:
+    sbom = _caddy_sbom()
+    sbom["distro"]["versionID"] = "3.24.3"
+    package = sbom["artifacts"][0]
+    package["metadata"]["architecture"] = architecture
+    package["purl"] = (
+        f"pkg:apk/alpine/zlib@1.3.2-r1?arch={architecture}&distro=alpine-3.24.3"
+    )
+    report = _caddy_grype()
+    report["source"]["target"]["tags"] = [IMAGE_PRODUCT]
+    return sbom, report
+
+
+def _verify_backend_fixed(tmp_path: Path, sbom: dict, report: dict) -> subprocess.CompletedProcess[str]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    sbom_path, report_path = tmp_path / "backend.syft.json", tmp_path / "backend-grype.json"
+    sbom_path.write_text(json.dumps(sbom), encoding="utf-8")
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    return subprocess.run(
+        [sys.executable, str(VEX_VERIFIER), "--backend-fixed-sbom", str(sbom_path),
+         IMAGE_PRODUCT, IMAGE_ID, f"backend={report_path}"],
+        text=True, capture_output=True, check=False,
+    )
+
+
+@pytest.mark.parametrize("architecture", ["x86_64", "aarch64"])
+@pytest.mark.parametrize("omitted_ignored", [False, True])
+def test_backend_fixed_r1_requires_bound_sbom_and_zero_suppressions(
+    tmp_path: Path, architecture: str, omitted_ignored: bool,
+) -> None:
+    sbom, report = _backend_r1_evidence(architecture)
+    if omitted_ignored:
+        del report["ignoredMatches"]
+    result = _verify_backend_fixed(tmp_path, sbom, report)
+    assert result.returncode == 0, result.stderr
+    assert "backend_fixed_zlib_ignored_matches=0" in result.stdout
+    assert "backend_fixed_zlib_version=1.3.2-r1" in result.stdout
+
+
+@pytest.mark.parametrize("defect", [
+    "r0", "duplicate_package", "wrong_distro", "wrong_port", "wrong_arch",
+    "wrong_purl_arch", "wrong_purl_distro", "metadata_version", "missing_runtime",
+    "wrong_sbom_id", "wrong_report_id", "wrong_tag", "null_ignored", "object_ignored",
+    "suppression", "residual_cve", "high", "critical", "wrong_scanner", "invalid_database",
+])
+def test_backend_fixed_r1_rejects_untrusted_or_suppressed_evidence(tmp_path: Path, defect: str) -> None:
+    sbom, report = _backend_r1_evidence()
+    package = sbom["artifacts"][0]
+    if defect == "r0": package["version"] = "1.3.2-r0"
+    elif defect == "duplicate_package": sbom["artifacts"].append(dict(package))
+    elif defect == "wrong_distro": sbom["distro"]["versionID"] = "3.23.5"
+    elif defect == "wrong_port": package["metadata"]["gitCommitOfApkPort"] = "c" * 40
+    elif defect == "wrong_arch": package["metadata"]["architecture"] = "unknown"
+    elif defect == "wrong_purl_arch": package["purl"] = package["purl"].replace("x86_64", "aarch64")
+    elif defect == "wrong_purl_distro": package["purl"] = package["purl"].replace("3.24.3", "3.24.2")
+    elif defect == "metadata_version": package["metadata"]["version"] = "1.3.2-r0"
+    elif defect == "missing_runtime": package["metadata"]["files"] = []
+    elif defect == "wrong_sbom_id": sbom["source"]["metadata"]["imageID"] = "sha256:" + "c" * 64
+    elif defect == "wrong_report_id": report["source"]["target"]["imageID"] = "sha256:" + "c" * 64
+    elif defect == "wrong_tag": report["source"]["target"]["tags"] = [CADDY_PRODUCT]
+    elif defect == "null_ignored": report["ignoredMatches"] = None
+    elif defect == "object_ignored": report["ignoredMatches"] = {}
+    elif defect == "suppression": report["ignoredMatches"] = [{"vulnerability": {"id": "CVE-other"}}]
+    elif defect == "residual_cve": report["matches"] = [{"vulnerability": {"id": "CVE-2026-85091", "severity": "Medium"}}]
+    elif defect in {"high", "critical"}: report["matches"] = [{"vulnerability": {"id": "CVE-other", "severity": defect}}]
+    elif defect == "wrong_scanner": report["descriptor"]["version"] = "unreviewed"
+    elif defect == "invalid_database": report["descriptor"]["db"]["status"]["valid"] = False
+    else: raise AssertionError(defect)
+    result = _verify_backend_fixed(tmp_path, sbom, report)
+    assert result.returncode != 0, (defect, result.stdout)
+
+
+def test_backend_fixed_mode_rejects_wrong_or_duplicate_service_binding(tmp_path: Path) -> None:
+    sbom, report = _backend_r1_evidence()
+    assert _verify_backend_fixed(tmp_path, sbom, report).returncode == 0
+    base = [sys.executable, str(VEX_VERIFIER), "--backend-fixed-sbom", str(tmp_path / "backend.syft.json"), IMAGE_PRODUCT, IMAGE_ID]
+    for reports in ([f"caddy={tmp_path / 'backend-grype.json'}"],
+                    [f"backend={tmp_path / 'backend-grype.json'}"] * 2):
+        result = subprocess.run(base + reports, text=True, capture_output=True, check=False)
+        assert result.returncode != 0

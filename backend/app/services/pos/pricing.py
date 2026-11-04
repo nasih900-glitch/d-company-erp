@@ -206,6 +206,82 @@ class TimeBasedPricing:
 
 
 @dataclass(frozen=True, slots=True)
+class ImmutableLineSnapshot:
+    """Previously priced line amounts that must not consult today's catalogue."""
+
+    line_total_minor: int
+    discount_minor: int
+    taxable_value_minor: int
+    cgst_minor: int
+    sgst_minor: int
+    igst_minor: int
+    cess_minor: int
+
+
+@dataclass(frozen=True, slots=True)
+class ImmutableSnapshotOrderTotals:
+    subtotal_minor: int
+    discount_minor: int
+    cgst_minor: int
+    sgst_minor: int
+    igst_minor: int
+    cess_minor: int
+    tax_minor: int
+    round_off_minor: int
+    total_minor: int
+
+
+def aggregate_immutable_line_snapshots(
+    lines: list[ImmutableLineSnapshot],
+) -> ImmutableSnapshotOrderTotals:
+    """Validate and total immutable add-on prices without catalogue repricing."""
+
+    if not lines:
+        raise BusinessRuleError("a retained add-on bill requires at least one line")
+    for line in lines:
+        values = (
+            line.line_total_minor,
+            line.discount_minor,
+            line.taxable_value_minor,
+            line.cgst_minor,
+            line.sgst_minor,
+            line.igst_minor,
+            line.cess_minor,
+        )
+        if any(value < 0 for value in values):
+            raise BusinessRuleError("retained add-on snapshot contains a negative amount")
+        expected_total = (
+            line.taxable_value_minor
+            + line.cgst_minor
+            + line.sgst_minor
+            + line.igst_minor
+            + line.cess_minor
+        )
+        if line.line_total_minor != expected_total:
+            raise BusinessRuleError(
+                "retained add-on snapshot no longer matches its immutable tax parts"
+            )
+    subtotal = sum(line.taxable_value_minor for line in lines)
+    cgst = sum(line.cgst_minor for line in lines)
+    sgst = sum(line.sgst_minor for line in lines)
+    igst = sum(line.igst_minor for line in lines)
+    cess = sum(line.cess_minor for line in lines)
+    inclusive = sum(line.line_total_minor for line in lines)
+    rounded, round_off = _round_to_rupee(inclusive)
+    return ImmutableSnapshotOrderTotals(
+        subtotal_minor=subtotal,
+        discount_minor=sum(line.discount_minor for line in lines),
+        cgst_minor=cgst,
+        sgst_minor=sgst,
+        igst_minor=igst,
+        cess_minor=cess,
+        tax_minor=cgst + sgst + igst + cess,
+        round_off_minor=round_off,
+        total_minor=rounded,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class MembershipDiscountRates:
     food: Decimal = Decimal("0")
     gaming: Decimal = Decimal("0")

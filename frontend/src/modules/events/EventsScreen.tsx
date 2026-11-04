@@ -359,7 +359,7 @@ function EventForm({
               value={form.capacity}
               onChange={(e) => setForm({ ...form, capacity: e.target.value })}/>
           </Field>
-          <Field label="Ticket price (₹, incl. 18% GST)">
+          <Field label="Ticket price (incl. 18% GST)">
             <input type="number" min={0} step="0.01" required className="input font-mono text-right"
               value={form.price_rupees}
               onChange={(e) => setForm({ ...form, price_rupees: e.target.value })}/>

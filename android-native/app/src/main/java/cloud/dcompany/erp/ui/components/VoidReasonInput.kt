@@ -88,9 +88,11 @@ fun VoidReasonInput(
     onPresetSelected: (String) -> Unit,
     onCustomReasonChange: (String) -> Unit,
     modifier: Modifier = Modifier,
+    parentOwnsScrolling: Boolean = false,
     compactCustomLayout: Boolean = false,
     onExitCustomMode: () -> Unit = {},
     compactCustomActions: (@Composable RowScope.() -> Unit)? = null,
+    required: Boolean = true,
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
     val customFocus = remember { FocusRequester() }
@@ -98,7 +100,7 @@ fun VoidReasonInput(
     val coroutineScope = rememberCoroutineScope()
     val customSelected = selectedId == VOID_REASON_OTHER_ID
 
-    LaunchedEffect(customSelected, compactCustomLayout) {
+    LaunchedEffect(customSelected, compactCustomLayout, parentOwnsScrolling) {
         if (customSelected) {
             customFocus.requestFocus()
             // Some OEM IMEs ignore a show request made in the same frame that
@@ -107,13 +109,18 @@ fun VoidReasonInput(
             withFrameNanos { }
             keyboard?.show()
             withFrameNanos { }
-            scrollState.scrollTo(scrollState.maxValue)
+            if (!parentOwnsScrolling) {
+                scrollState.scrollTo(scrollState.maxValue)
+            }
         }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
+    val viewportModifier = if (parentOwnsScrolling) {
+        // The containing form owns one continuous viewport. A nested
+        // zero-range ScrollBy owner prevents relocation from reaching it.
+        Modifier
+    } else {
+        Modifier
             .heightIn(
                 max = if (compactCustomLayout && customSelected) {
                     VOID_REASON_COMPACT_EDITOR_HEIGHT
@@ -122,17 +129,21 @@ fun VoidReasonInput(
                 },
             )
             .verticalScroll(scrollState)
-            // Standard forms can consume the IME inset normally. Compact
-            // custom mode intentionally does not: its 120dp field/action body
-            // must stay deterministic even when a Dialog reports no inset,
-            // and must not scroll past its actions when an OEM does report it.
+            // Standalone forms consume the IME inset here. Compact custom
+            // mode intentionally keeps its deterministic 120dp body.
             .then(
                 if (compactCustomLayout && customSelected) {
                     Modifier
                 } else {
                     Modifier.imePadding()
                 },
-            ),
+            )
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .then(viewportModifier),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         if (!(compactCustomLayout && customSelected)) {
@@ -202,7 +213,12 @@ fun VoidReasonInput(
                 supportingText = if (compactCustomLayout) {
                     null
                 } else {
-                    { Text("Required · ${customReason.length}/$VOID_REASON_MAX_LENGTH") }
+                    {
+                        Text(
+                            "${if (required) "Required" else "Optional"} · " +
+                                "${customReason.length}/$VOID_REASON_MAX_LENGTH",
+                        )
+                    }
                 },
                 trailingIcon = if (compactCustomLayout) {
                     {
@@ -231,7 +247,7 @@ fun VoidReasonInput(
                     .semantics {
                         contentDescription = "Custom cancellation reason"
                         stateDescription = if (customReason.isBlank()) {
-                            "Required, empty"
+                            "${if (required) "Required" else "Optional"}, empty"
                         } else {
                             "${customReason.length} of $VOID_REASON_MAX_LENGTH characters"
                         }
@@ -248,7 +264,9 @@ fun VoidReasonInput(
                             keyboard?.show()
                             coroutineScope.launch {
                                 withFrameNanos { }
-                                scrollState.scrollTo(scrollState.maxValue)
+                                if (!parentOwnsScrolling) {
+                                    scrollState.scrollTo(scrollState.maxValue)
+                                }
                             }
                         },
                         modifier = Modifier
@@ -269,7 +287,9 @@ fun VoidReasonInput(
                         keyboard?.show()
                         coroutineScope.launch {
                             withFrameNanos { }
-                            scrollState.scrollTo(scrollState.maxValue)
+                            if (!parentOwnsScrolling) {
+                                scrollState.scrollTo(scrollState.maxValue)
+                            }
                         }
                     },
                     modifier = Modifier

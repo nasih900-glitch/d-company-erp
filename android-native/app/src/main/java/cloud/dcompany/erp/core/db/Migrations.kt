@@ -3093,6 +3093,21 @@ val MIGRATION_55_56 = object : Migration(55, 56) {
     }
 }
 
+/** Preserve the server's bounded Gaming Void policy across process death and recreation. */
+val MIGRATION_56_57 = object : Migration(56, 57) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `serverPlayElapsedMs` INTEGER")
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `voidReasonRequired` INTEGER")
+    }
+}
+
+/** Keep the server-retained add-on bill reachable after process death. */
+val MIGRATION_57_58 = object : Migration(57, 58) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `gaming_session_cache` ADD COLUMN `retainedAddonOrderId` TEXT")
+    }
+}
+
 val ALL_MIGRATIONS = arrayOf(
     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
     MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
@@ -3104,5 +3119,5 @@ val ALL_MIGRATIONS = arrayOf(
     MIGRATION_39_40, MIGRATION_40_41, MIGRATION_41_42, MIGRATION_42_43, MIGRATION_43_44,
     MIGRATION_44_45, MIGRATION_45_46, MIGRATION_46_47, MIGRATION_47_48, MIGRATION_48_49,
     MIGRATION_49_50, MIGRATION_50_51, MIGRATION_51_52, MIGRATION_52_53, MIGRATION_53_54,
-    MIGRATION_54_55, MIGRATION_55_56,
+    MIGRATION_54_55, MIGRATION_55_56, MIGRATION_56_57, MIGRATION_57_58,
 )

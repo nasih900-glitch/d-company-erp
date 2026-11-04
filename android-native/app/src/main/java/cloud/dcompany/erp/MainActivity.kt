@@ -16,6 +16,8 @@ import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,7 +30,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Button
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LinearProgressIndicator
@@ -44,6 +46,12 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.key
+import androidx.compose.ui.graphics.Color
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
+import cloud.dcompany.erp.ui.theme.LocalWorkspaceGlassScene
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -61,6 +69,9 @@ import cloud.dcompany.erp.ui.SessionViewModel
 import cloud.dcompany.erp.ui.TerminalChangeUiState
 import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceScaffold
+import cloud.dcompany.erp.ui.MutableWorkspaceRouteAuthority
+import cloud.dcompany.erp.ui.WorkspaceRouteRejection
+import cloud.dcompany.erp.ui.WorkspaceRouteRequestResult
 import cloud.dcompany.erp.ui.allowedDestinations
 import cloud.dcompany.erp.ui.canManageSystemSettings
 import cloud.dcompany.erp.ui.resolveWorkspaceDestination
@@ -69,6 +80,8 @@ import cloud.dcompany.erp.ui.usesAdvancedTerminalWorkflow
 import cloud.dcompany.erp.ui.screens.accesscontrol.AccessControlScreen
 import cloud.dcompany.erp.ui.screens.audit.AuditLogScreen
 import cloud.dcompany.erp.ui.screens.analytics.AnalyticsScreen
+import cloud.dcompany.erp.ui.screens.home.ExecutiveHomeScreen
+import cloud.dcompany.erp.ui.screens.FreshLoginSuccessScreen
 import cloud.dcompany.erp.ui.screens.customers.CustomersScreen
 import cloud.dcompany.erp.ui.screens.events.EventsScreen
 import cloud.dcompany.erp.ui.screens.memberships.MembershipsScreen
@@ -95,6 +108,7 @@ import cloud.dcompany.erp.ui.screens.gaming.GamingDraftScope
 import cloud.dcompany.erp.ui.screens.gaming.gamingDraftAuthority
 import cloud.dcompany.erp.ui.screens.shift.ShiftScreen
 import cloud.dcompany.erp.ui.screens.LoginScreen
+import cloud.dcompany.erp.ui.screens.ExecutiveEntrySplash
 import cloud.dcompany.erp.ui.screens.PosScreen
 import cloud.dcompany.erp.ui.screens.PosViewModel
 import cloud.dcompany.erp.ui.screens.TerminalSelectionScreen
@@ -103,6 +117,7 @@ import cloud.dcompany.erp.ui.theme.AppearancePreference
 import cloud.dcompany.erp.ui.theme.syncLaunchAppearance
 import cloud.dcompany.erp.ui.theme.AppearanceStore
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
+import cloud.dcompany.erp.ui.theme.WorkspaceBackgroundController
 import cloud.dcompany.erp.core.net.ClientCompatibilityState
 import cloud.dcompany.erp.core.net.ClientUpdateNotice
 import cloud.dcompany.erp.core.net.safeHttpsUpdateUrl
@@ -113,6 +128,8 @@ import cloud.dcompany.erp.core.update.InstallerLaunchResult
 import cloud.dcompany.erp.core.update.matchesDescriptor
 import cloud.dcompany.erp.core.update.validateDirectUpdateMetadata
 import cloud.dcompany.erp.core.auth.EffectivePermissions
+import cloud.dcompany.erp.core.auth.canVoidPosLinkedSessions
+import cloud.dcompany.erp.core.auth.hasNormalizedOwnerRole
 import cloud.dcompany.erp.core.alarm.OperationalNotificationDestination
 import cloud.dcompany.erp.core.alarm.OperationalNotificationTarget
 import cloud.dcompany.erp.core.alarm.OperationalRouteDecision
@@ -137,6 +154,13 @@ import cloud.dcompany.erp.ui.remote.remoteModule
 import cloud.dcompany.erp.ui.remote.remoteRouteKey
 import cloud.dcompany.erp.ui.remote.rememberRemoteNotificationAccessAction
 import java.io.File
+
+internal fun retainedGamingBillTarget(
+    orderId: String,
+    allowedDestinations: List<Destination>,
+): OperationalNotificationTarget.HeldOrder? = orderId
+    .takeIf { it.isNotBlank() && Destination.Pos in allowedDestinations }
+    ?.let { OperationalNotificationTarget.HeldOrder(it) }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -294,10 +318,12 @@ private fun AppRoot(
     onAppearancePreferenceChanged: (AppearancePreference) -> Unit,
     session: SessionViewModel = viewModel(),
     appUpdate: AppUpdateViewModel = viewModel(),
+    workspaceBackgrounds: WorkspaceBackgroundController = viewModel(),
 ) {
     val compatibility = DCompanyApp.instance.clientCompatibility
     val compatibilityState by compatibility.state.collectAsStateWithLifecycle()
     val appUpdateState by appUpdate.state.collectAsStateWithLifecycle()
+    val workspaceBackgroundState by workspaceBackgrounds.state.collectAsStateWithLifecycle()
     // The connectivity observer owns the user-visible state. Raw per-request
     // outcomes still protect writes immediately, but cannot repeatedly
     // invalidate this entire application root while the network is flapping.
@@ -318,6 +344,7 @@ private fun AppRoot(
     }
     val syncing by DCompanyApp.instance.sync.syncing.collectAsStateWithLifecycle()
     val state by session.state.collectAsStateWithLifecycle()
+    val freshLoginPending = (state as? AuthState.SignedIn)?.freshLoginNonce != null
     val signingIn by session.signingIn.collectAsStateWithLifecycle()
     val loginError by session.loginError.collectAsStateWithLifecycle()
     val accountSafetyNotice by session.accountSafetyNotice.collectAsStateWithLifecycle()
@@ -366,29 +393,80 @@ private fun AppRoot(
         ClientCompatibilityState.Supported -> Unit
     }
 
-    when (val s = state) {
-        is AuthState.Loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+    // Keep the notice privacy lease at a stable root call site while its UI
+    // moves between Login, setup and workspace scene hosts.
+    RemoteSensitiveContent(enabled = !freshLoginPending && (
+        accountSafetyNotice != null || accessChangeNotice != null ||
+            rejectedNotificationOpenNotice != null || notificationRouteNotice != null
+    )) { }
+    val rootOverlays: @Composable () -> Unit = {
+        if (!freshLoginPending && compatibilityState is ClientCompatibilityState.Checking) {
+            CompatibilityCheckOverlay()
         }
+        if (!freshLoginPending && accountSafetyNotice != null) {
+            RemoteSensitiveContent { AlertDialog(
+                onDismissRequest = session::dismissAccountSafetyNotice,
+                title = { Text("Account safety lock") },
+                text = { Text(accountSafetyNotice.orEmpty()) },
+                confirmButton = {
+                    TextButton(onClick = session::dismissAccountSafetyNotice) { Text("OK") }
+                },
+            ) }
+        } else if (!freshLoginPending && accessChangeNotice != null) {
+            RemoteSensitiveContent { AlertDialog(
+                onDismissRequest = session::dismissAccessChangeNotice,
+                title = { Text("Access updated") },
+                text = { Text(accessChangeNotice.orEmpty()) },
+                confirmButton = {
+                    TextButton(onClick = session::dismissAccessChangeNotice) { Text("OK") }
+                },
+            ) }
+        } else if (!freshLoginPending && rejectedNotificationOpenNotice != null) {
+            RemoteSensitiveContent { AlertDialog(
+                onDismissRequest = DCompanyApp.instance.notificationRoutes::dismissRejectedOpenNotice,
+                title = { Text("Alert not opened") },
+                text = { Text(rejectedNotificationOpenNotice.orEmpty()) },
+                confirmButton = {
+                    TextButton(
+                        onClick = DCompanyApp.instance.notificationRoutes::dismissRejectedOpenNotice,
+                    ) { Text("OK") }
+                },
+            ) }
+        } else if (!freshLoginPending && notificationRouteNotice != null) {
+            RemoteSensitiveContent { AlertDialog(
+                onDismissRequest = { notificationRouteNotice = null },
+                title = { Text("Alert could not be opened") },
+                text = { Text(notificationRouteNotice.orEmpty()) },
+                confirmButton = {
+                    TextButton(onClick = { notificationRouteNotice = null }) { Text("OK") }
+                },
+            ) }
+        } else if (!freshLoginPending && compatibilityState is ClientCompatibilityState.UpdateAvailable) {
+            val notice = (compatibilityState as ClientCompatibilityState.UpdateAvailable).notice
+            OptionalUpdateBanner(
+                notice = notice,
+                updateState = appUpdateState,
+                outboxWorkStatus = outboxWorkStatus,
+                onDismiss = compatibility::dismissOptionalUpdate,
+                onDownload = { appUpdate.download(notice) },
+                onCancelDownload = appUpdate::cancel,
+                onDiscardDownload = appUpdate::discard,
+                onOpenUpdateLink = onOpenUpdateLink,
+                onInstall = {
+                    appUpdate.verifiedFile(notice)?.let { file ->
+                        appUpdate.installerLaunchResult(notice, onInstallVerifiedUpdate(file))
+                    }
+                },
+            )
+        }
+    }
 
-        is AuthState.VerifyingCached -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.padding(24.dp),
-            ) {
-                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                Text("Checking access", style = MaterialTheme.typography.titleLarge)
-                Text(
-                    "Restoring ${s.me.name}'s workspace safely…",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    "If the server is unavailable, the last verified offline workspace will open automatically.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
+    when (val s = state) {
+        is AuthState.Loading -> ExecutiveEntrySplash()
+
+        is AuthState.VerifyingCached -> ExecutiveEntrySplash(
+            statusText = "Restoring ${s.me.name}'s workspace safely",
+        )
 
         is AuthState.SigningOut -> Box(Modifier.fillMaxSize(), Alignment.Center) {
             Column(
@@ -425,10 +503,13 @@ private fun AppRoot(
                         onSignIn = session::signIn,
                         appearancePreference = appearancePreference,
                         onAppearancePreferenceChanged = onAppearancePreferenceChanged,
+                        overlay = {
+                            if (pendingNotificationTarget != null) {
+                                PendingNotificationSignInBanner(pendingNotificationTarget!!)
+                            }
+                            rootOverlays()
+                        },
                     )
-                }
-                if (pendingNotificationTarget != null) {
-                    PendingNotificationSignInBanner(pendingNotificationTarget!!)
                 }
             }
         }
@@ -454,54 +535,59 @@ private fun AppRoot(
                     ),
                 )
             }
-            Box(Modifier.fillMaxSize()) {
-                TerminalSelectionScreen(
-                    employeeName = s.me.name,
-                    terminals = s.terminals,
-                    choosing = s.choosing,
-                    error = s.error,
-                    isReassignment = s.reassigning,
-                    previousTerminalName = s.previousTerminalName,
-                    onConfirm = session::selectTerminal,
-                    onRefresh = session::refreshTerminalChoices,
-                    onExit = if (s.reassigning) session::cancelTerminalReassignment else session::signOut,
-                )
-                TextButton(
-                    onClick = ::openSetupSupport,
-                    modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
-                ) {
-                    Text("Help")
-                }
-            }
-            BugReportDialog(
-                state = bugReportState,
-                connectivity = reportConnectivity,
-                onReasonChange = bugReportVm::reasonChanged,
-                onContinuationChange = bugReportVm::continuationChanged,
-                onDescriptionChange = bugReportVm::descriptionChanged,
-                onAttachmentChange = bugReportVm::attachmentChanged,
-                onAttachmentRejected = bugReportVm::attachmentRejected,
-                onAttachmentPreviewReadyChange = bugReportVm::attachmentPreviewReadyChanged,
-                onAttachmentConsentChange = bugReportVm::attachmentConsentChanged,
-                onSubmit = {
-                    bugReportVm.submit(
-                        currentAndroidBugReportContext(
-                            launchContext = bugReportState.launchContext,
-                            branchId = s.me.branchId,
-                            branchName = s.me.branchName,
-                            terminalId = null,
-                            terminalName = null,
-                            connectivity = reportConnectivity,
-                        ),
+            TerminalSelectionScreen(
+                employeeName = s.me.name,
+                selectionCompanyId = s.me.companyId,
+                selectionBranchId = s.me.branchId,
+                selectionUserId = s.me.userId,
+                terminals = s.terminals,
+                choosing = s.choosing,
+                error = s.error,
+                isReassignment = s.reassigning,
+                previousTerminalName = s.previousTerminalName,
+                onConfirm = session::selectTerminal,
+                onRefresh = session::refreshTerminalChoices,
+                onExit = if (s.reassigning) session::cancelTerminalReassignment else session::signOut,
+                backgroundState = workspaceBackgroundState,
+                trailingOverlay = {
+                    TextButton(
+                        onClick = ::openSetupSupport,
+                        modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
+                    ) {
+                        Text("Help")
+                    }
+                    BugReportDialog(
+                        state = bugReportState,
+                        connectivity = reportConnectivity,
+                        onReasonChange = bugReportVm::reasonChanged,
+                        onContinuationChange = bugReportVm::continuationChanged,
+                        onDescriptionChange = bugReportVm::descriptionChanged,
+                        onAttachmentChange = bugReportVm::attachmentChanged,
+                        onAttachmentRejected = bugReportVm::attachmentRejected,
+                        onAttachmentPreviewReadyChange = bugReportVm::attachmentPreviewReadyChanged,
+                        onAttachmentConsentChange = bugReportVm::attachmentConsentChanged,
+                        onSubmit = {
+                            bugReportVm.submit(
+                                currentAndroidBugReportContext(
+                                    launchContext = bugReportState.launchContext,
+                                    branchId = s.me.branchId,
+                                    branchName = s.me.branchName,
+                                    terminalId = null,
+                                    terminalName = null,
+                                    connectivity = reportConnectivity,
+                                ),
+                            )
+                        },
+                        onRetry = bugReportVm::retrySubmitted,
+                        onOpenHistory = bugReportVm::showHistory,
+                        onCloseHistory = bugReportVm::closeHistory,
+                        onRefreshHistory = { bugReportVm.refreshHistory(silent = false) },
+                        onRetryHistoryItem = bugReportVm::retryHistoryItem,
+                        onDiscardHistoryItem = bugReportVm::discardHistoryItem,
+                        onDismiss = bugReportVm::dismiss,
                     )
+                    rootOverlays()
                 },
-                onRetry = bugReportVm::retrySubmitted,
-                onOpenHistory = bugReportVm::showHistory,
-                onCloseHistory = bugReportVm::closeHistory,
-                onRefreshHistory = { bugReportVm.refreshHistory(silent = false) },
-                onRetryHistoryItem = bugReportVm::retryHistoryItem,
-                onDiscardHistoryItem = bugReportVm::discardHistoryItem,
-                onDismiss = bugReportVm::dismiss,
             )
         }
 
@@ -534,7 +620,11 @@ private fun AppRoot(
             }
         }
 
-        is AuthState.SignedIn -> {
+        is AuthState.SignedIn -> AuthenticatedWorkspaceHandoff(
+            signedIn = s,
+            backgroundState = workspaceBackgroundState,
+            onContinue = session::acknowledgeFreshLoginHandoff,
+        ) {
             // Authority is part of the workspace lifetime. If an owner revokes
             // a module, dispose every feature ViewModel from the old profile
             // so its polling/queued actions cannot continue behind a removed tab.
@@ -562,14 +652,55 @@ private fun AppRoot(
                 )
                 val bugReportState by bugReportVm.state.collectAsStateWithLifecycle()
                 var confirmSignOut by remember(s.me.userId) { mutableStateOf(false) }
-                var currentDestination by rememberSaveable(s.me.userId) {
+                val currentDestinationState = rememberSaveable(s.me.userId) {
                     mutableStateOf(resolveWorkspaceDestination(null, destinations))
                 }
-                var operationalFocus by remember(s.me.userId) {
+                val currentDestination by currentDestinationState
+                val operationalFocusState = remember(s.me.userId) {
                     mutableStateOf<OperationalNotificationTarget?>(null)
                 }
+                var operationalFocus by operationalFocusState
                 var exactRefundReceiptOrderId by remember(s.me.userId) {
                     mutableStateOf<String?>(null)
+                }
+                val currentDestinations = rememberUpdatedState(destinations)
+                val routeAuthority = remember(s.me.userId, currentDestinationState) {
+                    MutableWorkspaceRouteAuthority(
+                        readDestination = { currentDestinationState.value },
+                        writeDestination = { currentDestinationState.value = it },
+                        allowedDestinations = { currentDestinations.value },
+                    )
+                }
+                fun acceptWorkspaceNavigation(
+                    target: Destination,
+                    beforeCommit: () -> Unit = {},
+                    afterCommit: () -> Unit = {},
+                ): Boolean = when (
+                    val result = routeAuthority.replace(
+                        target = target,
+                        beforeCommit = beforeCommit,
+                        afterCommit = afterCommit,
+                    )
+                ) {
+                    is WorkspaceRouteRequestResult.Accepted -> {
+                        true
+                    }
+
+                    is WorkspaceRouteRequestResult.Rejected -> {
+                        if (result.reason == WorkspaceRouteRejection.SAME_DESTINATION) {
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                }
+                fun finishShellNavigation(target: Destination) {
+                    val focusDestination = when (operationalFocusState.value?.destination) {
+                        OperationalNotificationDestination.POS -> Destination.Pos
+                        OperationalNotificationDestination.GAMING -> Destination.Gaming
+                        null -> null
+                    }
+                    if (focusDestination != target) operationalFocusState.value = null
                 }
                 LaunchedEffect(pendingNotificationTarget, destinations, s.me.userId) {
                     val target = pendingNotificationTarget ?: return@LaunchedEffect
@@ -598,9 +729,13 @@ private fun AppRoot(
                                 target = target,
                             )
                             if (exists) {
-                                operationalFocus = target
-                                remoteAssistance.uiGateway.markRouteTransition()
-                                currentDestination = destination
+                                acceptWorkspaceNavigation(
+                                    target = destination,
+                                    beforeCommit = {
+                                        operationalFocus = target
+                                        remoteAssistance.uiGateway.markRouteTransition()
+                                    },
+                                )
                             } else {
                                 notificationRouteNotice = if (
                                     DCompanyApp.instance.connectivity.online.value
@@ -646,8 +781,10 @@ private fun AppRoot(
                         navigate = { module ->
                             val destination = module.destination()
                             if (destination in destinations) {
-                                remoteAssistance.uiGateway.markRouteTransition()
-                                currentDestination = destination
+                                acceptWorkspaceNavigation(
+                                    target = destination,
+                                    beforeCommit = remoteAssistance.uiGateway::markRouteTransition,
+                                )
                             }
                         },
                         refreshCurrent = {
@@ -702,9 +839,27 @@ private fun AppRoot(
                         ),
                     )
                 }
+                var presentedRemoteGrantId by remember(s.me.userId) { mutableStateOf<String?>(null) }
+                val pendingRemoteGrant = remoteAssistanceState.pendingGrant
+                LaunchedEffect(
+                    pendingRemoteGrant?.grantId,
+                    visibleDestination,
+                    remotePrivacyBlocked,
+                ) {
+                    presentedRemoteGrantId = when {
+                        pendingRemoteGrant == null -> null
+                        !remoteSemanticUiAdmission(
+                            visibleDestination.remoteRouteKey(),
+                            sensitiveOverlayVisible = false,
+                        ) -> null
+                        presentedRemoteGrantId == pendingRemoteGrant.grantId -> presentedRemoteGrantId
+                        !remotePrivacyBlocked -> pendingRemoteGrant.grantId
+                        else -> null
+                    }
+                }
                 WorkspaceScaffold(
                     destinations = destinations,
-                    currentDestination = visibleDestination,
+                    currentDestination = currentDestination,
                     employeeName = s.me.name,
                     locationLabel = locationLabel,
                     connectivityProblem = syncAvailability,
@@ -725,26 +880,154 @@ private fun AppRoot(
                     onSignOut = { confirmSignOut = true },
                     onReviewRemoteSupportRequest = {
                         if (Destination.Help in destinations) {
-                            remoteAssistance.uiGateway.markRouteTransition()
-                            currentDestination = Destination.Help
-                            operationalFocus = null
+                            acceptWorkspaceNavigation(
+                                target = Destination.Help,
+                                beforeCommit = remoteAssistance.uiGateway::markRouteTransition,
+                                afterCommit = { operationalFocus = null },
+                            )
                         }
                     },
                     onStopRemoteSupport = remoteAssistance::stopByUser,
                     onDestinationChanged = {
-                        if (it !in destinations) return@WorkspaceScaffold
+                        acceptWorkspaceNavigation(
+                            target = it,
+                            beforeCommit = remoteAssistance.uiGateway::markRouteTransition,
+                            afterCommit = { finishShellNavigation(it) },
+                        )
+                    },
+                    railRouteAuthority = routeAuthority,
+                    onRailDestinationBeforeCommit = {
                         remoteAssistance.uiGateway.markRouteTransition()
-                        currentDestination = it
-                        val focusDestination = when (operationalFocus?.destination) {
-                            OperationalNotificationDestination.POS -> Destination.Pos
-                            OperationalNotificationDestination.GAMING -> Destination.Gaming
-                            null -> null
+                    },
+                    onRailDestinationAccepted = ::finishShellNavigation,
+                    backgroundState = workspaceBackgroundState,
+                    overlays = {
+                        key(s.me.companyId, s.me.userId) {
+                            pendingRemoteGrant
+                                ?.takeIf { it.grantId == presentedRemoteGrantId }
+                                ?.let { grant ->
+                                RemoteSensitiveContent {
+                                    RemoteAssistanceConsentDialog(
+                                        grant = grant,
+                                        busy = remoteAssistanceState.decisionInFlight,
+                                        onDeny = remoteAssistance::denyPendingGrant,
+                                        onAllow = remoteAssistance::allowPendingGrant,
+                                    )
+                                }
+                            }
+
+                            BugReportDialog(
+                                    state = bugReportState,
+                                    connectivity = reportConnectivity,
+                                    onReasonChange = bugReportVm::reasonChanged,
+                                    onContinuationChange = bugReportVm::continuationChanged,
+                                    onDescriptionChange = bugReportVm::descriptionChanged,
+                                    onAttachmentChange = bugReportVm::attachmentChanged,
+                                    onAttachmentRejected = bugReportVm::attachmentRejected,
+                                    onAttachmentPreviewReadyChange = bugReportVm::attachmentPreviewReadyChanged,
+                                    onAttachmentConsentChange = bugReportVm::attachmentConsentChanged,
+                                    onSubmit = {
+                                        bugReportVm.submit(
+                                            currentAndroidBugReportContext(
+                                                launchContext = bugReportState.launchContext,
+                                                branchId = s.me.branchId,
+                                                branchName = s.me.branchName,
+                                                terminalId = activeTerminal?.terminalId,
+                                                terminalName = activeTerminal?.terminalName,
+                                                connectivity = reportConnectivity,
+                                            ),
+                                        )
+                                    },
+                                    onRetry = bugReportVm::retrySubmitted,
+                                    onOpenHistory = bugReportVm::showHistory,
+                                    onCloseHistory = bugReportVm::closeHistory,
+                                    onRefreshHistory = { bugReportVm.refreshHistory(silent = false) },
+                                    onRetryHistoryItem = bugReportVm::retryHistoryItem,
+                                    onDiscardHistoryItem = bugReportVm::discardHistoryItem,
+                                    onDismiss = bugReportVm::dismiss,
+                            )
+
+                            if (confirmSignOut) {
+                                RemoteSensitiveContent { AlertDialog(
+                                    onDismissRequest = { confirmSignOut = false },
+                                    title = { Text("Sign out of this tablet?") },
+                                    text = {
+                                        Text(
+                                            "The open shift stays open. Unsaved carts and form edits will be " +
+                                                "discarded; saved offline work remains safely on this tablet.",
+                                        )
+                                    },
+                                    confirmButton = {
+                                        TextButton(
+                                            onClick = {
+                                                confirmSignOut = false
+                                                session.signOut()
+                                            },
+                                        ) { Text("Sign out") }
+                                    },
+                                    dismissButton = {
+                                        TextButton(onClick = { confirmSignOut = false }) {
+                                            Text("Stay signed in")
+                                        }
+                                    },
+                                ) }
+                            }
+
+                            when (val change = terminalChange) {
+                                TerminalChangeUiState.Idle -> Unit
+                                is TerminalChangeUiState.Confirm -> RemoteSensitiveContent { AlertDialog(
+                                    onDismissRequest = session::dismissTerminalChange,
+                                    title = { Text("Change this tablet's till?") },
+                                    text = {
+                                        Text(
+                                            "Current till: ${change.terminalName}. The app will first verify a live " +
+                                                "connection, a clean Sync queue, no open/closing shift, and no active " +
+                                                "or unbilled gaming work. If any check fails, this assignment stays unchanged.",
+                                        )
+                                    },
+                                    confirmButton = {
+                                        TextButton(onClick = session::confirmTerminalReassignment) {
+                                            Text("Run safety checks")
+                                        }
+                                    },
+                                    dismissButton = {
+                                        TextButton(onClick = session::dismissTerminalChange) { Text("Cancel") }
+                                    },
+                                ) }
+                                TerminalChangeUiState.Checking -> RemoteSensitiveContent { AlertDialog(
+                                    onDismissRequest = {},
+                                    title = { Text("Checking this tablet") },
+                                    text = {
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                                            Text("Verifying the current till, Shift, Gaming and saved Sync work…")
+                                        }
+                                    },
+                                    confirmButton = {},
+                                ) }
+                                is TerminalChangeUiState.Blocked -> RemoteSensitiveContent { AlertDialog(
+                                    onDismissRequest = session::dismissTerminalChange,
+                                    title = { Text("Till not changed") },
+                                    text = { Text(change.message) },
+                                    confirmButton = {
+                                        TextButton(onClick = session::dismissTerminalChange) { Text("OK") }
+                                    },
+                                ) }
+                            }
+                            rootOverlays()
                         }
-                        if (focusDestination != it) operationalFocus = null
                     },
                 ) { destination, navigateTo ->
                     when (destination) {
-                            Destination.Dashboard -> AnalyticsScreen()
+                            Destination.Dashboard -> ExecutiveHomeScreen(
+                                employeeName = s.me.name,
+                                locationLabel = locationLabel,
+                                destinations = destinations,
+                                navigateTo = navigateTo,
+                            )
                             Destination.Pos -> {
                                 // Constructing a feature ViewModel starts its
                                 // initial API pulls. Keep it inside its allowed
@@ -822,8 +1105,12 @@ private fun AppRoot(
                                     onLoadMoreReceiptSearch = pos::loadMoreReceiptSearch,
                                     onRefundCanonicalReceipt = if (Destination.Refunds in destinations) {
                                         { receipt ->
-                                            exactRefundReceiptOrderId = receipt.orderId
-                                            currentDestination = Destination.Refunds
+                                            acceptWorkspaceNavigation(
+                                                target = Destination.Refunds,
+                                                beforeCommit = {
+                                                    exactRefundReceiptOrderId = receipt.orderId
+                                                },
+                                            )
                                         }
                                     } else null,
                                     onFocusOldestOverdue = pos::focusOldestOverdueOrder,
@@ -849,6 +1136,10 @@ private fun AppRoot(
                                     GamingScreen(
                                         access = permissions.gamingAccess().let { granted ->
                                             granted.copy(
+                                                canVoidUnlinkedSessionsAcrossShifts =
+                                                    s.me.roles.hasNormalizedOwnerRole(),
+                                                canVoidPosLinkedSessions =
+                                                    s.me.canVoidPosLinkedSessions(),
                                                 canReconcileLegacySessions =
                                                     granted.canReconcileLegacySessions &&
                                                         s.me.protectedAccess && s.me.auditAccess,
@@ -858,6 +1149,14 @@ private fun AppRoot(
                                         focusSessionId = gamingFocus?.sessionId,
                                         focusStationId = gamingFocus?.stationId,
                                         onDismissFocus = { operationalFocus = null },
+                                        onOpenRetainedOrder = { orderId ->
+                                            retainedGamingBillTarget(orderId, destinations)?.let { target ->
+                                                acceptWorkspaceNavigation(
+                                                    target = Destination.Pos,
+                                                    beforeCommit = { operationalFocus = target },
+                                                )
+                                            }
+                                        },
                                     )
                                 }
                             }
@@ -889,7 +1188,7 @@ private fun AppRoot(
                                 access = permissions.staffAccess(),
                             )
                             Destination.Inventory -> InventoryScreen(access = permissions.inventoryAccess())
-                            Destination.Reports -> ReportsScreen()
+                            Destination.Reports -> ReportsScreen(access = permissions.reportsAccess())
                             Destination.Analytics -> AnalyticsScreen()
                             Destination.Finance -> FinanceScreen(access = permissions.financeAccess())
                             Destination.Events -> EventsScreen(access = permissions.eventsAccess())
@@ -917,6 +1216,13 @@ private fun AppRoot(
                                         onReplaceDeviceKey = remoteAssistance::startDeviceKeyReplacement,
                                     )
                                 },
+                                workspaceBackgroundState = workspaceBackgroundState,
+                                onImportWorkspaceBackground = workspaceBackgrounds::import,
+                                onResetWorkspaceBackground = workspaceBackgrounds::reset,
+                                onSelectWorkspaceBackgroundPreset = workspaceBackgrounds::selectPreset,
+                                onUseSavedWorkspaceBackground = workspaceBackgrounds::useSavedCustom,
+                                onCancelWorkspaceBackgroundOperation = workspaceBackgrounds::cancel,
+                                onClearWorkspaceBackgroundNotice = workspaceBackgrounds::clearNotice,
                             )
                             Destination.SupportInbox -> SupportInboxScreen()
                             Destination.Help -> HelpScreen(
@@ -930,213 +1236,65 @@ private fun AppRoot(
                     }
                 }
 
-                var presentedRemoteGrantId by remember(s.me.userId) { mutableStateOf<String?>(null) }
-                val pendingRemoteGrant = remoteAssistanceState.pendingGrant
-                LaunchedEffect(
-                    pendingRemoteGrant?.grantId,
-                    visibleDestination,
-                    remotePrivacyBlocked,
-                ) {
-                    presentedRemoteGrantId = when {
-                        pendingRemoteGrant == null -> null
-                        !remoteSemanticUiAdmission(
-                            visibleDestination.remoteRouteKey(),
-                            sensitiveOverlayVisible = false,
-                        ) -> null
-                        presentedRemoteGrantId == pendingRemoteGrant.grantId -> presentedRemoteGrantId
-                        !remotePrivacyBlocked -> pendingRemoteGrant.grantId
-                        else -> null
-                    }
-                }
-                pendingRemoteGrant
-                    ?.takeIf { it.grantId == presentedRemoteGrantId }
-                    ?.let { grant ->
-                    RemoteSensitiveContent {
-                        RemoteAssistanceConsentDialog(
-                            grant = grant,
-                            busy = remoteAssistanceState.decisionInFlight,
-                            onDeny = remoteAssistance::denyPendingGrant,
-                            onAllow = remoteAssistance::allowPendingGrant,
-                        )
-                    }
-                }
 
-                BugReportDialog(
-                        state = bugReportState,
-                        connectivity = reportConnectivity,
-                        onReasonChange = bugReportVm::reasonChanged,
-                        onContinuationChange = bugReportVm::continuationChanged,
-                        onDescriptionChange = bugReportVm::descriptionChanged,
-                        onAttachmentChange = bugReportVm::attachmentChanged,
-                        onAttachmentRejected = bugReportVm::attachmentRejected,
-                        onAttachmentPreviewReadyChange = bugReportVm::attachmentPreviewReadyChanged,
-                        onAttachmentConsentChange = bugReportVm::attachmentConsentChanged,
-                        onSubmit = {
-                            bugReportVm.submit(
-                                currentAndroidBugReportContext(
-                                    launchContext = bugReportState.launchContext,
-                                    branchId = s.me.branchId,
-                                    branchName = s.me.branchName,
-                                    terminalId = activeTerminal?.terminalId,
-                                    terminalName = activeTerminal?.terminalName,
-                                    connectivity = reportConnectivity,
-                                ),
-                            )
-                        },
-                        onRetry = bugReportVm::retrySubmitted,
-                        onOpenHistory = bugReportVm::showHistory,
-                        onCloseHistory = bugReportVm::closeHistory,
-                        onRefreshHistory = { bugReportVm.refreshHistory(silent = false) },
-                        onRetryHistoryItem = bugReportVm::retryHistoryItem,
-                        onDiscardHistoryItem = bugReportVm::discardHistoryItem,
-                        onDismiss = bugReportVm::dismiss,
-                )
-
-                if (confirmSignOut) {
-                    RemoteSensitiveContent { AlertDialog(
-                        onDismissRequest = { confirmSignOut = false },
-                        title = { Text("Sign out of this tablet?") },
-                        text = {
-                            Text(
-                                "The open shift stays open. Unsaved carts and form edits will be " +
-                                    "discarded; saved offline work remains safely on this tablet.",
-                            )
-                        },
-                        confirmButton = {
-                            TextButton(
-                                onClick = {
-                                    confirmSignOut = false
-                                    session.signOut()
-                                },
-                            ) { Text("Sign out") }
-                        },
-                        dismissButton = {
-                            TextButton(onClick = { confirmSignOut = false }) {
-                                Text("Stay signed in")
-                            }
-                        },
-                    ) }
-                }
-
-                when (val change = terminalChange) {
-                    TerminalChangeUiState.Idle -> Unit
-                    is TerminalChangeUiState.Confirm -> RemoteSensitiveContent { AlertDialog(
-                        onDismissRequest = session::dismissTerminalChange,
-                        title = { Text("Change this tablet's till?") },
-                        text = {
-                            Text(
-                                "Current till: ${change.terminalName}. The app will first verify a live " +
-                                    "connection, a clean Sync queue, no open/closing shift, and no active " +
-                                    "or unbilled gaming work. If any check fails, this assignment stays unchanged.",
-                            )
-                        },
-                        confirmButton = {
-                            TextButton(onClick = session::confirmTerminalReassignment) {
-                                Text("Run safety checks")
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(onClick = session::dismissTerminalChange) { Text("Cancel") }
-                        },
-                    ) }
-                    TerminalChangeUiState.Checking -> RemoteSensitiveContent { AlertDialog(
-                        onDismissRequest = {},
-                        title = { Text("Checking this tablet") },
-                        text = {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                                Text("Verifying the current till, Shift, Gaming and saved Sync work…")
-                            }
-                        },
-                        confirmButton = {},
-                    ) }
-                    is TerminalChangeUiState.Blocked -> RemoteSensitiveContent { AlertDialog(
-                        onDismissRequest = session::dismissTerminalChange,
-                        title = { Text("Till not changed") },
-                        text = { Text(change.message) },
-                        confirmButton = {
-                            TextButton(onClick = session::dismissTerminalChange) { Text("OK") }
-                        },
-                    ) }
-                }
             }
         }
     }
 
-    if (compatibilityState is ClientCompatibilityState.Checking) {
-        CompatibilityCheckOverlay()
+    if (state !is AuthState.SignedIn && state !is AuthState.SignedOut &&
+        state !is AuthState.SelectTerminal) {
+        rootOverlays()
     }
-    if (accountSafetyNotice != null) {
-        RemoteSensitiveContent { AlertDialog(
-            onDismissRequest = session::dismissAccountSafetyNotice,
-            title = { Text("Account safety lock") },
-            text = { Text(accountSafetyNotice.orEmpty()) },
-            confirmButton = {
-                TextButton(onClick = session::dismissAccountSafetyNotice) { Text("OK") }
-            },
-        ) }
-    } else if (accessChangeNotice != null) {
-        RemoteSensitiveContent { AlertDialog(
-            onDismissRequest = session::dismissAccessChangeNotice,
-            title = { Text("Access updated") },
-            text = { Text(accessChangeNotice.orEmpty()) },
-            confirmButton = {
-                TextButton(onClick = session::dismissAccessChangeNotice) { Text("OK") }
-            },
-        ) }
-    } else if (rejectedNotificationOpenNotice != null) {
-        RemoteSensitiveContent { AlertDialog(
-            onDismissRequest = DCompanyApp.instance.notificationRoutes::dismissRejectedOpenNotice,
-            title = { Text("Alert not opened") },
-            text = { Text(rejectedNotificationOpenNotice.orEmpty()) },
-            confirmButton = {
-                TextButton(
-                    onClick = DCompanyApp.instance.notificationRoutes::dismissRejectedOpenNotice,
-                ) { Text("OK") }
-            },
-        ) }
-    } else if (notificationRouteNotice != null) {
-        RemoteSensitiveContent { AlertDialog(
-            onDismissRequest = { notificationRouteNotice = null },
-            title = { Text("Alert could not be opened") },
-            text = { Text(notificationRouteNotice.orEmpty()) },
-            confirmButton = {
-                TextButton(onClick = { notificationRouteNotice = null }) { Text("OK") }
-            },
-        ) }
-    } else if (compatibilityState is ClientCompatibilityState.UpdateAvailable) {
-        val notice = (compatibilityState as ClientCompatibilityState.UpdateAvailable).notice
-        OptionalUpdateBanner(
-            notice = notice,
-            updateState = appUpdateState,
-            outboxWorkStatus = outboxWorkStatus,
-            onDismiss = compatibility::dismissOptionalUpdate,
-            onDownload = { appUpdate.download(notice) },
-            onCancelDownload = appUpdate::cancel,
-            onDiscardDownload = appUpdate::discard,
-            onOpenUpdateLink = onOpenUpdateLink,
-            onInstall = {
-                appUpdate.verifiedFile(notice)?.let { file ->
-                    appUpdate.installerLaunchResult(notice, onInstallVerifiedUpdate(file))
-                }
-            },
-        )
+
+}
+
+/**
+ * Keeps the entire authenticated workspace subtree absent until the exact
+ * explicit-login handoff is consumed. Tests exercise this same production
+ * branch with a sentinel workspace rather than mirroring its condition.
+ */
+@Composable
+internal fun AuthenticatedWorkspaceHandoff(
+    signedIn: AuthState.SignedIn,
+    backgroundState: cloud.dcompany.erp.ui.theme.WorkspaceBackgroundUiState,
+    onContinue: (Long) -> Boolean,
+    workspace: @Composable () -> Unit,
+) {
+    val nonce = signedIn.freshLoginNonce
+    Crossfade(
+        targetState = nonce,
+        animationSpec = tween(durationMillis = 180),
+        label = "fresh-login-to-workspace",
+    ) { visibleNonce ->
+        if (visibleNonce == null) {
+            workspace()
+        } else {
+            RemoteSensitiveContent {
+                FreshLoginSuccessScreen(
+                    nonce = visibleNonce,
+                    employeeName = signedIn.me.name,
+                    backgroundState = backgroundState,
+                    onContinue = onContinue,
+                )
+            }
+        }
     }
 }
 
 @Composable
 private fun CompatibilityCheckOverlay() {
+    val glass = LocalWorkspaceGlassScene.current != null
     Box(
         Modifier.fillMaxWidth().padding(16.dp),
         contentAlignment = Alignment.TopCenter,
     ) {
         Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = if (glass) Modifier.liquidWorkspaceSurface(
+                cloud.dcompany.erp.ui.theme.Radius.shapePill, WorkspaceGlassRole.UTILITY,
+            ) else Modifier,
+            color = if (glass) Color.Transparent else MaterialTheme.colorScheme.surfaceVariant,
             shape = cloud.dcompany.erp.ui.theme.Radius.shapePill,
-            shadowElevation = 4.dp,
+            shadowElevation = if (glass) 0.dp else 4.dp,
         ) {
             Row(
                 Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
@@ -1160,11 +1318,18 @@ private fun CompatibilityCheckOverlay() {
 
 @Composable
 private fun PendingNotificationSignInBanner(target: OperationalNotificationTarget) {
+    val glass = LocalWorkspaceGlassScene.current != null
     Box(
         Modifier.fillMaxSize().padding(16.dp),
         contentAlignment = Alignment.TopCenter,
     ) {
-        Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = cloud.dcompany.erp.ui.theme.Radius.shapeMd) {
+        Surface(
+            modifier = if (glass) Modifier.liquidWorkspaceSurface(
+                cloud.dcompany.erp.ui.theme.Radius.shapeMd, WorkspaceGlassRole.UTILITY,
+            ) else Modifier,
+            color = if (glass) Color.Transparent else MaterialTheme.colorScheme.surfaceVariant,
+            shape = cloud.dcompany.erp.ui.theme.Radius.shapeMd,
+        ) {
             Text(
                 text = when (target) {
                     is OperationalNotificationTarget.HeldOrder ->
@@ -1212,9 +1377,20 @@ private fun SessionViewModelScope(
     CompositionLocalProvider(LocalViewModelStoreOwner provides owner, content = content)
 }
 
+internal fun optionalUpdateMayDismiss(
+    notice: ClientUpdateNotice,
+    state: AppUpdateUiState,
+    installedVersionCode: Int = BuildConfig.VERSION_CODE,
+): Boolean {
+    val descriptor = (validateDirectUpdateMetadata(notice, installedVersionCode) as? DirectUpdateMetadataResult.Valid)
+        ?.descriptor ?: return true
+    val active = state is AppUpdateUiState.Downloading || state is AppUpdateUiState.Verifying
+    return !active || !state.matchesDescriptor(descriptor)
+}
+
 /** A banner, not a dialog: staff can keep using the till without dismissing it. */
 @Composable
-private fun OptionalUpdateBanner(
+internal fun OptionalUpdateBanner(
     notice: ClientUpdateNotice,
     updateState: AppUpdateUiState,
     outboxWorkStatus: OutboxWorkStatus,
@@ -1225,11 +1401,18 @@ private fun OptionalUpdateBanner(
     onOpenUpdateLink: (String) -> Unit,
     onInstall: () -> Unit,
 ) {
+    val glass = LocalWorkspaceGlassScene.current != null
     Box(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         contentAlignment = Alignment.TopCenter,
     ) {
-        Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = cloud.dcompany.erp.ui.theme.Radius.shapeMd) {
+        Surface(
+            modifier = if (glass) Modifier.liquidWorkspaceSurface(
+                cloud.dcompany.erp.ui.theme.Radius.shapeMd, WorkspaceGlassRole.UTILITY,
+            ) else Modifier,
+            color = if (glass) Color.Transparent else MaterialTheme.colorScheme.surfaceVariant,
+            shape = cloud.dcompany.erp.ui.theme.Radius.shapeMd,
+        ) {
             Column(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -1243,7 +1426,10 @@ private fun OptionalUpdateBanner(
                     Text(notice.message, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                         UpdateVersionAndNotes(notice, compact = true)
                     }
-                    TextButton(onClick = onDismiss) { Text("Later") }
+                    TextButton(
+                        onClick = onDismiss,
+                        enabled = optionalUpdateMayDismiss(notice, updateState),
+                    ) { Text("Later") }
                 }
                 UpdateActionArea(
                     notice = notice,

@@ -5,6 +5,7 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -32,6 +33,42 @@ class GamingPausePolicyTest {
         assertEquals(1, restored.pauseVersion)
         assertEquals(77_778L, sessionPlayElapsedMillis(restored, start + 86_400_000))
         assertEquals(400L, estimatedCurrentAmountMinor(restored, start + 86_400_000))
+    }
+
+    @Test
+    fun `cached optional reason advances at thirty minutes only while session remains active`() {
+        val justBefore = session().copy(
+            serverPlayElapsedMs = 1_799_999L,
+            voidReasonRequired = false,
+            retainedAddonOrderId = "retained-order-1",
+        )
+        val restored = justBefore.toCacheEntity().toGameSession()
+        assertEquals(1_799_999L, restored.serverPlayElapsedMs)
+        assertEquals(false, restored.voidReasonRequired)
+        assertEquals("retained-order-1", restored.retainedAddonOrderId)
+        assertFalse(restored.requiresVoidReason(start + 1_799_999L))
+        assertTrue(restored.requiresVoidReason(start + 1_800_000L))
+        assertFalse(restored.copy(status = "paused", pausedAt = restored.startAt)
+            .requiresVoidReason(start + 86_400_000L))
+        assertFalse(restored.copy(status = "ended", endAt = restored.startAt)
+            .requiresVoidReason(start + 86_400_000L))
+        assertTrue(restored.copy(voidReasonRequired = true).requiresVoidReason(start + 1L))
+        assertTrue(restored.copy(voidReasonRequired = null).requiresVoidReason(start + 1L))
+    }
+
+    @Test
+    fun `participant void evidence follows locked billing mode`() {
+        val participant = session().copy(participantRevision = 1, billingRevision = 2)
+        assertTrue(participant.copy(billingMode = "package", amountMinor = 8_000L)
+            .hasReviewedParticipantVoidEvidence())
+        assertTrue(participant.copy(billingMode = "hourly", amountMinor = null)
+            .hasReviewedParticipantVoidEvidence())
+        assertFalse(participant.copy(billingMode = "package", amountMinor = null)
+            .hasReviewedParticipantVoidEvidence())
+        assertFalse(participant.copy(billingMode = "hourly", amountMinor = 1L)
+            .hasReviewedParticipantVoidEvidence())
+        assertFalse(participant.copy(billingMode = "legacy_ambiguous", amountMinor = 8_000L)
+            .hasReviewedParticipantVoidEvidence())
     }
 
     @Test

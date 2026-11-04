@@ -676,7 +676,7 @@ function GRNForm({
                   <input type="number" required min={0} step="0.01" placeholder="Qty"
                     className="input !min-h-[36px] !py-1.5 font-mono text-right"
                     value={ln.qty} onChange={(e) => updLine(i, { qty: e.target.value })}/>
-                  <input type="number" required min={0} step="0.01" placeholder="₹/unit"
+                  <input type="number" required min={0} step="0.01" placeholder="Per unit"
                     className="input !min-h-[36px] !py-1.5 font-mono text-right"
                     value={ln.unit_cost_rupees}
                     onChange={(e) => updLine(i, { unit_cost_rupees: e.target.value })}/>

@@ -23,6 +23,7 @@ RUN npm run build
 
 # --- runtime ---
 FROM nginx:alpine-slim@sha256:3b171d7224b669faa3cc2137fea0a65301791df1ec1f271ebd2a2b7461f7fade
+ENV NGINX_VERSION=1.31.8
 ARG APP_VERSION=dev
 ARG APP_REVISION=unknown
 LABEL org.opencontainers.image.title="D Company ERP Web" \
@@ -47,10 +48,19 @@ RUN set -eux; \
       'libcrypto3=3.5.9-r0' \
       'libssl3=3.5.9-r0' \
       'pcre2=10.49-r0'; \
+    test "$(apk --print-arch)" = 'x86_64'; \
+    printf '%s\n' 'e09fa32f0a0eab2b879ccbbc4d0e4fb9751486eedda75e35fac65802cc9faa266425edf83e261137a2f4d16281ce2c1a5f4502930fe75154723da014214f0655  /etc/apk/keys/nginx_signing.rsa.pub' | sha512sum -c -; \
+    wget -T 30 -qO /tmp/dcompany-nginx-1.31.8-r1.apk 'https://nginx.org/packages/mainline/alpine/v3.24/main/x86_64/nginx-1.31.8-r1.apk'; \
+    printf '%s\n' '51bb8ca7072b422c9355656e45a1aafec24eb1606adb3a84c562f80731d3f848  /tmp/dcompany-nginx-1.31.8-r1.apk' | sha256sum -c -; \
+    apk add --no-cache --no-network --upgrade --repositories-file /dev/null /tmp/dcompany-nginx-1.31.8-r1.apk; \
+    rm /tmp/dcompany-nginx-1.31.8-r1.apk; \
     installed_packages="$(apk info -v)"; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'pcre2-10.49-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'nginx-1.31.8-r1'; \
+    test "$NGINX_VERSION" = '1.31.8'; \
+    nginx -v 2>&1 | grep -Fx 'nginx version: nginx/1.31.8'; \
     apk info -e zlib; \
     apk info -v | grep -Fx 'zlib-1.3.2-r0'; \
     sh /tmp/verify-patched-zlib.sh; \

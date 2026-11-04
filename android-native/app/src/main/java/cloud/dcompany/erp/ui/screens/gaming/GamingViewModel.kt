@@ -17,6 +17,7 @@ import cloud.dcompany.erp.core.auth.authorizeAction
 import cloud.dcompany.erp.core.auth.commitIfCurrentOrNotifyStale
 import cloud.dcompany.erp.core.alarm.GamingAlarmReconciler
 import cloud.dcompany.erp.core.db.GamingSessionCacheEntity
+import cloud.dcompany.erp.core.db.HeldOrderCacheEntity
 import cloud.dcompany.erp.core.db.GamingSessionAddonActionState
 import cloud.dcompany.erp.core.db.GamingSessionAddonActionType
 import cloud.dcompany.erp.core.db.GamingSessionAddonCacheEntity
@@ -51,12 +52,21 @@ import cloud.dcompany.erp.core.db.observeResolvedOpenShift
 import cloud.dcompany.erp.core.db.isCorrectableGamingStopClockRejection
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
+import cloud.dcompany.erp.core.net.CheckoutClaimResult
 import cloud.dcompany.erp.core.net.ErpApi
+import cloud.dcompany.erp.core.net.ManualBackendOperation
+import cloud.dcompany.erp.core.net.ManualBackendRequestAdmission
+import cloud.dcompany.erp.core.net.Order
+import cloud.dcompany.erp.core.net.OrderLine
 import cloud.dcompany.erp.core.net.LoginRequest
 import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.core.net.outboxProvenanceHeaders
+import cloud.dcompany.erp.core.checkout.CheckoutClientInstancePolicy
+import cloud.dcompany.erp.core.checkout.HeldOrderClaimPolicy
 import cloud.dcompany.erp.core.sync.ResourceRefreshResult
+import cloud.dcompany.erp.core.sync.gamingActionRequestHash
+import kotlinx.serialization.encodeToString
 import cloud.dcompany.erp.ui.screens.CartModifierSelection
 import cloud.dcompany.erp.ui.screens.configuredUnitPriceMinor
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
@@ -67,6 +77,7 @@ import cloud.dcompany.erp.core.db.CustomerDirectoryStateEntity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -79,8 +90,11 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.time.Instant
+import java.security.MessageDigest
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.serialization.json.JsonNull
 
 data class GamingUiState(
@@ -127,13 +141,30 @@ data class GamingUiState(
     val initialLoadFailed: Boolean
         get() = !everSynced && stations.isEmpty() && !refreshing && !refreshError.isNullOrBlank()
 
-    fun activeFor(stationId: String): GameSession? =
-        sessions.firstOrNull {
-            it.stationId == stationId && (
-                it.status in setOf("starting", "start_failed", "active", "paused", "stopping") ||
-                    it.isUnbilledEnded()
+    fun activeFor(stationId: String): GameSession? = sessions
+        .asSequence()
+        .filter { session ->
+            session.stationId == stationId && (
+                session.status in setOf("starting", "start_failed", "active", "paused", "stopping") ||
+                    (session.status == "ended" && session.orderId == null)
                 )
         }
+        // This selector is operational authority for occupancy, start and
+        // transfer. Historical POS-linked review rows must never reserve a
+        // station after their gameplay lifecycle ended.
+        .minWithOrNull(
+            compareBy<GameSession> { if (it.status == "ended") 1 else 0 }
+                .thenByDescending(GameSession::startAt)
+                .thenByDescending(GameSession::id),
+        )
+
+    /** Historical Owner review work, deliberately separate from station occupancy. */
+    val posLinkedReviewSessions: List<GameSession>
+        get() = sessions
+            .asSequence()
+            .filter { it.status == "ended" && !it.orderId.isNullOrBlank() }
+            .sortedWith(compareByDescending(GameSession::startAt).thenByDescending(GameSession::id))
+            .toList()
 
     val readyForPos: List<GameSession>
         get() = sessions.filter { session ->
@@ -144,7 +175,9 @@ data class GamingUiState(
     val needsCancellation: List<GameSession>
         get() = sessions.filter {
             gamingCleanupWorkflowMessageOrNull(it.lastError) == null &&
-                it.canCancelUnbilled() && it.amountMinor == 0L && !hasActiveAddons(it)
+                it.status == "ended" &&
+                it.canCancelUnbilled() &&
+                it.amountMinor == 0L
         }
 
     /** Start/Stop refusals remain station work; Send refusals already belong to the POS queue. */
@@ -186,6 +219,31 @@ data class GamingUiState(
 
     fun participantsFor(session: GameSession): List<GamingParticipantUi> =
         mergeGamingParticipants(session, participantCache, sessionActions, customers)
+
+    fun cancellationBlockFor(
+        session: GameSession,
+        canOverrideVoidShift: Boolean,
+        manualBackendAvailable: Boolean = ApiClient.isExactDebugLoopback(),
+    ): String? = when {
+        !online && !manualBackendAvailable ->
+            "Connect to the ERP backend to record this audited Void. The session is kept here."
+        !session.canCancelUnbilled() ->
+            "Refresh Gaming before voiding. A saved Start, Stop or POS action must finish first."
+        session.authority(activeShiftId) != GamingSessionAuthority.CURRENT_SHIFT &&
+            !canOverrideVoidShift ->
+            "Use the open shift and terminal that started this session."
+        participantCache.any { it.gamingSessionId == session.id } && session.participantRevision <= 0 ->
+            "Refresh Gaming to verify the stopped player settlement before Void."
+        !session.hasReviewedParticipantVoidEvidence() ->
+            "Refresh Gaming to verify the player billing evidence before Void."
+        packageExtensionFor(session.id) != null ->
+            "Resolve the saved paid extension before cancelling this session."
+        unresolvedSequencedActionsFor(session).isNotEmpty() ->
+            "Saved session actions must finish syncing or be reviewed before cancellation."
+        unresolvedAddonsFor(session).isNotEmpty() ->
+            "Resolve saved drink or snack actions before cancellation."
+        else -> null
+    }
 
     fun unresolvedSequencedActionsFor(session: GameSession): List<LocalGamingSessionActionEntity> {
         val localId = sessions.firstOrNull { it.id == session.id }?.id
@@ -832,6 +890,41 @@ data class PosTargetSelectionUi(
     val targets: List<PosTargetShift>,
 )
 
+data class SessionVoidReviewUi(
+    val session: GameSession,
+    val activeAddons: List<SessionAddon>,
+    val eligibleTargets: List<PosTargetShift>,
+    val scopeLease: CacheScopeLease,
+)
+
+data class LinkedGamingVoidReviewUi(
+    val session: GameSession,
+    val order: Order,
+    val activeAddons: List<SessionAddon>,
+    val claimToken: String,
+    val claimExpiresAtMillis: Long,
+    val scopeLease: CacheScopeLease,
+)
+
+internal data class SessionVoidAttempt(
+    val session: GameSession,
+    val addons: List<SessionAddon>,
+    val retainedTargetShiftId: String?,
+    val retainedTarget: PosTargetShift?,
+    val body: SessionCancelBody,
+    val idempotencyKey: String,
+    val requestHash: String,
+    val scopeLease: CacheScopeLease,
+)
+
+internal data class LinkedGamingVoidAttempt(
+    val review: LinkedGamingVoidReviewUi,
+    val body: GamingOrderVoidRequest,
+    val idempotencyKey: String,
+    val requestHash: String,
+    val scopeLease: CacheScopeLease,
+)
+
 internal fun posTargetListError(
     targets: List<PosTargetShift>,
     sourceTerminalId: String,
@@ -847,6 +940,287 @@ internal fun posTargetListError(
     targets.distinctBy(PosTargetShift::shiftId).size != targets.size ->
         "The receiving till list contained duplicate shifts. This ended bill remains saved in Gaming; refresh and try again."
     else -> null
+}
+
+internal fun retainedAddonTargetListError(targets: List<PosTargetShift>): String? = when {
+    targets.isEmpty() -> "Choose an open Cafe POS or Hybrid shift for the retained item bill."
+    targets.any {
+        it.shiftId.isBlank() || it.terminalId.isBlank() || it.terminalName.isBlank() ||
+            it.openedBy.isBlank() || it.openedByName.isBlank()
+    } -> "The retained-bill shift list could not be verified. Refresh and try again."
+    targets.distinctBy(PosTargetShift::shiftId).size != targets.size ->
+        "The retained-bill shift list contained duplicate shifts. Refresh and try again."
+    else -> null
+}
+
+internal fun GameSession.matchesVoidReviewSnapshot(reviewed: GameSession): Boolean =
+    id == reviewed.id && stationId == reviewed.stationId && shiftId == reviewed.shiftId &&
+        status == reviewed.status && orderId == reviewed.orderId &&
+        participantRevision == reviewed.participantRevision && billingRevision == reviewed.billingRevision &&
+        amountMinor == reviewed.amountMinor && billingMode == reviewed.billingMode &&
+        packageId == reviewed.packageId && packagePriceMinorSnapshot == reviewed.packagePriceMinorSnapshot
+
+internal fun GameSession.matchesCompletedSessionVoid(attempt: SessionVoidAttempt): Boolean =
+    isConfirmedCancellation(attempt.session.id, attempt.session) &&
+        cancelledBy == attempt.scopeLease.scope.userId &&
+        cancellationReceiptId?.isNotBlank() == true &&
+        cancellationIdempotencyKey == attempt.idempotencyKey &&
+        cancellationRequestHash == attempt.requestHash &&
+        ((attempt.addons.isEmpty() && retainedAddonOrderId == null) ||
+            (attempt.addons.isNotEmpty() && !retainedAddonOrderId.isNullOrBlank()))
+
+internal fun GameSession.matchesCompletedLinkedGamingVoid(attempt: LinkedGamingVoidAttempt): Boolean =
+    id == attempt.review.session.id && stationId == attempt.review.session.stationId &&
+        shiftId == attempt.review.session.shiftId && status == "cancelled" && orderId == null &&
+        amountMinor == 0L && billableMinutes == 0 && cancelReason == attempt.body.reason &&
+        cancelledBy == attempt.scopeLease.scope.userId && cancellationReceiptId?.isNotBlank() == true &&
+        cancellationIdempotencyKey == attempt.idempotencyKey &&
+        cancellationRequestHash == attempt.requestHash &&
+        ((attempt.review.activeAddons.isEmpty() && retainedAddonOrderId == null) ||
+            (attempt.review.activeAddons.isNotEmpty() &&
+                retainedAddonOrderId == attempt.review.order.id))
+
+internal fun voidActionLeaseError(
+    reviewLease: CacheScopeLease,
+    actionLease: CacheScopeLease,
+): String? = when {
+    reviewLease != actionLease ->
+        "The workspace changed after this Void review was opened. Dismiss it and review again."
+    actionLease.scope.branchId.isNullOrBlank() || actionLease.scope.terminalId.isNullOrBlank() ->
+        "Select the reviewed branch and terminal before continuing this Void."
+    else -> null
+}
+
+internal fun linkedGamingVoidReviewOrderError(order: Order, expectedOrderId: String): String? = when {
+    order.id != expectedOrderId || order.status != "held" || order.type != "session" ||
+        order.invoiceNo != null || order.invoiceIssuedAt != null || order.totalMinor <= 0L ||
+        order.paidMinor != 0L || order.dueMinor != order.totalMinor ->
+        "This bill is no longer an unpaid held Gaming order. Use the existing payment or refund flow."
+    else -> null
+}
+
+internal fun addonLineCohortError(
+    addons: List<SessionAddon>,
+    lines: List<OrderLine>,
+): String? {
+    if (lines.size != addons.size ||
+        lines.any { it.id.isNullOrBlank() || it.clientLineId.isNullOrBlank() } ||
+        lines.mapNotNull { it.id }.distinct().size != lines.size ||
+        lines.mapNotNull { it.clientLineId }.distinct().size != lines.size ||
+        addons.map(SessionAddon::clientLineId).distinct().size != addons.size
+    ) {
+        return "The consumed-item line cohort was incomplete or duplicated."
+    }
+    val linesByClientId = lines.associateBy { requireNotNull(it.clientLineId) }
+    if (addons.any { addon ->
+            val line = linesByClientId[addon.clientLineId] ?: return@any true
+            val derivedCess = runCatching {
+                Math.subtractExact(
+                    line.lineTotalMinor,
+                    Math.addExact(
+                        line.taxableValueMinor,
+                        Math.addExact(
+                            Math.addExact(line.cgstMinor, line.sgstMinor),
+                            line.igstMinor,
+                        ),
+                    ),
+                )
+            }.getOrNull()
+            line.menuItemId != addon.menuItemId || line.name != addon.menuItemName ||
+                line.variantId != addon.variantId || !line.qty.isFinite() ||
+                line.qty != addon.qty.toDouble() || line.unitPriceMinor != addon.unitPriceMinor ||
+                line.lineTotalMinor != addon.lineTotalMinor || line.discountMinor != addon.discountMinor ||
+                line.taxableValueMinor != addon.taxableValueMinor ||
+                line.cgstMinor != addon.cgstMinor || line.sgstMinor != addon.sgstMinor ||
+                line.igstMinor != addon.igstMinor || derivedCess != addon.cessMinor
+        }
+    ) {
+        return "The consumed-item lines did not match the immutable reviewed snapshots."
+    }
+    return null
+}
+
+internal fun linkedGamingVoidReviewCohortError(
+    order: Order,
+    addons: List<SessionAddon>,
+): String? {
+    if (order.manualDiscountMinor != 0L || order.pointsRedeemedMinor != 0L ||
+        order.pointsRedeemed != 0 || order.tipMinor != 0L
+    ) {
+        return "This Gaming bill contains financial adjustments that require manual review."
+    }
+    val addonIds = addons.map(SessionAddon::clientLineId).toSet()
+    val addonLines = order.lines.filter { it.clientLineId in addonIds }
+    addonLineCohortError(addons, addonLines)?.let { return it }
+    val chargeLines = order.lines.filterNot { it.clientLineId in addonIds }
+    if (chargeLines.size != 1 || chargeLines.single().id.isNullOrBlank() ||
+        chargeLines.single().clientLineId != null
+    ) {
+        return "The reviewed POS bill did not contain exactly one Gaming charge."
+    }
+    return null
+}
+
+internal fun addonOrderTotalsError(
+    addons: List<SessionAddon>,
+    order: Order,
+): String? {
+    val totals = runCatching {
+        val subtotal = addons.fold(0L) { total, addon ->
+            Math.addExact(total, addon.taxableValueMinor)
+        }
+        val discount = addons.fold(0L) { total, addon ->
+            Math.addExact(total, addon.discountMinor)
+        }
+        val tax = addons.fold(0L) { total, addon ->
+            Math.addExact(
+                total,
+                Math.addExact(
+                    Math.addExact(addon.cgstMinor, addon.sgstMinor),
+                    Math.addExact(addon.igstMinor, addon.cessMinor),
+                ),
+            )
+        }
+        val inclusive = addons.fold(0L) { total, addon ->
+            Math.addExact(total, addon.lineTotalMinor)
+        }
+        val rounded = Math.multiplyExact(Math.floorDiv(Math.addExact(inclusive, 50L), 100L), 100L)
+        listOf(subtotal, discount, tax, Math.subtractExact(rounded, inclusive), rounded)
+    }.getOrNull() ?: return "The retained consumed-item totals overflowed their financial bounds."
+    return if (order.subtotalMinor != totals[0] || order.discountMinor != totals[1] ||
+        order.taxMinor != totals[2] || order.roundOffMinor != totals[3] ||
+        order.totalMinor != totals[4]
+    ) {
+        "The retained consumed-item bill totals did not match the immutable reviewed snapshots."
+    } else {
+        null
+    }
+}
+
+internal fun linkedGamingVoidClaimError(
+    order: Order,
+    claim: CheckoutClaimResult,
+    scopeLease: CacheScopeLease,
+    nowMillis: Long,
+): String? {
+    val expiry = HeldOrderClaimPolicy.claimExpiryMillis(claim)
+        ?: return "The checkout reservation had no valid expiry."
+    return when {
+        !HeldOrderClaimPolicy.hasConfirmationWindow(expiry, nowMillis) ->
+            "The checkout reservation expires too soon. Review the bill again."
+        claim.orderId != order.id || claim.orderVersion != order.checkoutVersion ||
+            claim.orderTotalMinor != order.totalMinor || claim.paidMinor != order.paidMinor ||
+            claim.dueMinor != order.dueMinor || claim.terminalId != scopeLease.scope.terminalId ||
+            claim.claimantUserId != scopeLease.scope.userId ->
+            "The checkout reservation did not match this exact bill, employee, and terminal."
+        else -> null
+    }
+}
+
+/**
+ * Prove that the add-on-only order is the exact immutable cohort reviewed before Void.
+ * This intentionally sums only server-priced integer snapshots; it never consults the
+ * current catalogue, performs floating-point money arithmetic, or guesses tax.
+ */
+internal fun retainedAddonOrderError(
+    attempt: SessionVoidAttempt,
+    cancelled: GameSession,
+    retained: Order?,
+): String? {
+    if (!cancelled.matchesCompletedSessionVoid(attempt)) {
+        return "The server returned an inconsistent Void receipt."
+    }
+    if (attempt.addons.isEmpty()) {
+        return if (retained == null && cancelled.retainedAddonOrderId == null) null
+        else "The server retained a POS bill for a session with no consumed items."
+    }
+    val target = attempt.retainedTarget
+        ?: return "The retained-bill target was not bound to this Void attempt."
+    if (attempt.retainedTargetShiftId != target.shiftId || target.terminalId.isBlank()) {
+        return "The retained-bill shift or terminal did not match this Void attempt."
+    }
+    val order = retained ?: return "The server omitted the retained consumed-item bill."
+    if (order.id != cancelled.retainedAddonOrderId || order.status != "held" ||
+        order.type != "session" || order.paidMinor != 0L || order.dueMinor != order.totalMinor ||
+        order.invoiceNo != null || order.invoiceIssuedAt != null || order.heldAt.isNullOrBlank()
+    ) {
+        return "The retained consumed-item bill had the wrong identity, state, or type."
+    }
+    if (order.totalMinor <= 0L || order.manualDiscountMinor != 0L ||
+        order.pointsRedeemedMinor != 0L || order.pointsRedeemed != 0 || order.tipMinor != 0L
+    ) {
+        return "The retained consumed-item bill contained unsupported financial adjustments."
+    }
+    addonLineCohortError(attempt.addons, order.lines)?.let { return it }
+    return addonOrderTotalsError(attempt.addons, order)
+}
+
+internal fun linkedRetainedOrderError(
+    response: GamingOrderVoidRead,
+    attempt: LinkedGamingVoidAttempt,
+    retained: Order?,
+): String? {
+    if (response.retainedAddonCount == 0) {
+        return if (retained == null && attempt.review.activeAddons.isEmpty()) null
+        else "The server retained an unexpected consumed-item bill."
+    }
+    val order = retained ?: return "The server omitted the retained consumed-item bill."
+    if (order.id != response.sourceOrderId || order.id != response.retainedOrderId ||
+        order.status != "held" || order.type != "session" || order.invoiceNo != null ||
+        order.invoiceIssuedAt != null || order.heldAt.isNullOrBlank() ||
+        order.paidMinor != 0L || order.dueMinor != order.totalMinor ||
+        order.totalMinor != response.retainedTotalMinor || order.lines.size != response.retainedAddonCount ||
+        order.manualDiscountMinor != 0L || order.pointsRedeemedMinor != 0L ||
+        order.pointsRedeemed != 0 || order.tipMinor != 0L
+    ) {
+        return "The retained POS bill did not match the Owner Void receipt."
+    }
+    addonLineCohortError(attempt.review.activeAddons, order.lines)?.let { return it }
+    return addonOrderTotalsError(attempt.review.activeAddons, order)
+}
+
+internal fun linkedGamingVoidCanonicalError(
+    session: GameSession,
+    response: GamingOrderVoidRead,
+    attempt: LinkedGamingVoidAttempt,
+): String? = when {
+    session.id != attempt.review.session.id || session.id != response.sessionId ||
+        session.status != "cancelled" || session.orderId != null || session.amountMinor != 0L ||
+        session.billableMinutes != 0 ->
+        "The authoritative Gaming state did not match the Owner Void receipt."
+    session.retainedAddonOrderId != response.retainedOrderId ||
+        session.cancelReason != attempt.body.reason ->
+        "The authoritative Gaming cancellation did not match the reviewed result."
+    session.cancellationReceiptId != response.receiptId ||
+        session.cancellationIdempotencyKey != attempt.idempotencyKey ||
+        session.cancellationRequestHash != attempt.requestHash ->
+        "The authoritative Gaming receipt belonged to a different Owner Void request."
+    session.cancelledBy != attempt.scopeLease.scope.userId ->
+        "The authoritative Gaming receipt belonged to a different employee."
+    else -> null
+}
+
+internal fun gamingOrderVoidResponseError(
+    response: GamingOrderVoidRead,
+    attempt: LinkedGamingVoidAttempt,
+): String? {
+    voidActionLeaseError(attempt.review.scopeLease, attempt.scopeLease)?.let { return it }
+    return when {
+    response.receiptId.isBlank() -> "The server omitted the Owner Gaming Void receipt."
+    response.sessionId != attempt.review.session.id || response.sourceOrderId != attempt.review.order.id ->
+        "The Owner Gaming Void receipt identified different work."
+    response.sessionStatus != "cancelled" || response.retainedTotalMinor < 0L ||
+        response.retainedAddonCount < 0 -> "The Owner Gaming Void receipt contained an invalid final state."
+    response.retainedAddonCount == 0 &&
+        (response.retainedOrderId != null || response.retainedTotalMinor != 0L ||
+            response.sourceOrderStatus != "void") ->
+        "The empty Gaming bill was not closed by the server."
+    response.retainedAddonCount > 0 &&
+        (response.retainedOrderId != attempt.review.order.id || response.retainedTotalMinor <= 0L ||
+            response.sourceOrderStatus != "held") ->
+        "The consumed item bill was not retained on the reviewed order."
+    else -> null
+    }
 }
 
 internal fun canConfirmPosTargetSelection(
@@ -924,14 +1298,19 @@ internal fun GameSession.canSendToPos(hasActiveAddons: Boolean = false): Boolean
         localState !in setOf(GamingSessionState.SEND_PENDING, GamingSessionState.SENT)
 
 internal fun GameSession.canCancelUnbilled(): Boolean =
-    isUnbilledEnded() && amountMinor != null &&
-        localState !in setOf(GamingSessionState.SEND_PENDING, GamingSessionState.SENT)
+    orderId == null && status in setOf("active", "paused", "ended") &&
+        (status != "ended" || amountMinor != null) &&
+        localState in setOf(null, GamingSessionState.START_SYNCED,
+            GamingSessionState.ENDED_UNBILLED, GamingSessionState.SEND_REJECTED)
 
-/**
- * Backend cancellation deliberately refuses a session while any add-on still
- * contributes to its bill. Explain that constraint before staff enter a
- * whole-session void reason; the item ledger must be reason-voided first.
- */
+internal fun GameSession.matchesCancellationIdentity(expectedServerId: String, original: GameSession): Boolean =
+    id == expectedServerId && stationId == original.stationId && shiftId == original.shiftId
+
+internal fun GameSession.isConfirmedCancellation(expectedServerId: String, original: GameSession): Boolean =
+    matchesCancellationIdentity(expectedServerId, original) && status == "cancelled" && orderId == null &&
+        amountMinor == 0L && billableMinutes == 0 && !cancelReason.isNullOrBlank()
+
+/** Confirmed server add-ons are retained as a payable POS bill by Void V2. */
 internal fun sessionCancellationAddonBlockMessage(
     addons: List<GamingSessionAddonUi>,
 ): String? {
@@ -959,8 +1338,8 @@ internal fun sessionCancellationAddonBlockMessage(
                     GamingSessionAddonActionState.PENDING,
                     GamingSessionAddonActionState.AMBIGUOUS,
                 )
-        } -> "Saved items are awaiting server confirmation. After Sync, void each item with a reason before voiding the whole session."
-        else -> "Void ${active.size} active Gaming item${if (active.size == 1) "" else "s"} above with a reason before voiding the whole session."
+        } -> "Saved items are awaiting server confirmation. After Sync, reopen Void so confirmed items can be retained on the POS bill."
+        else -> null
     }
 }
 
@@ -1062,6 +1441,277 @@ internal fun GameSession.resolvedStopShiftId(
     -> null
 }
 
+internal fun participantCancellationGuidance(status: String): String =
+    if (status == "ended") "Void this stopped session here. No POS bill is required."
+    else "Player joins are recorded. Void ends and settles this session atomically; no POS bill is required."
+
+internal fun sessionVoidBody(
+    session: GameSession,
+    reason: String,
+    retainedTargetShiftId: String? = null,
+): SessionCancelBody =
+    SessionCancelBody(
+        reason = reason.trim().ifEmpty { null },
+        expectedOrderId = JsonNull,
+        retainedTargetShiftId = retainedTargetShiftId,
+        expectedParticipantRevision = session.participantRevision.takeIf { it > 0 },
+        expectedBillingRevision = session.billingRevision,
+        expectedAmountMinor = session.amountMinor.takeIf {
+            session.participantRevision > 0 &&
+                (session.status == "ended" || session.billingMode == "package")
+        },
+    )
+
+/** Compatibility helper retained for focused participant receipt tests. */
+internal fun participantVoidBody(session: GameSession, reason: String): SessionCancelBody? =
+    sessionVoidBody(session, reason).takeIf {
+        session.status == "ended" && session.participantRevision > 0 && session.amountMinor != null
+    }
+
+internal fun participantVoidKey(serverSessionId: String): String = "gaming-session-void:$serverSessionId"
+
+internal fun sessionVoidAttempt(
+    review: SessionVoidReviewUi,
+    reason: String,
+    retainedTargetShiftId: String?,
+    scopeLease: CacheScopeLease,
+): SessionVoidAttempt {
+    voidActionLeaseError(review.scopeLease, scopeLease)?.let { throw IllegalArgumentException(it) }
+    require((review.activeAddons.isEmpty() && retainedTargetShiftId == null) ||
+        (review.activeAddons.isNotEmpty() &&
+            review.eligibleTargets.any { it.shiftId == retainedTargetShiftId })) {
+        "The retained-bill target does not match this Void review."
+    }
+    val body = sessionVoidBody(review.session, reason, retainedTargetShiftId)
+    val key = participantVoidKey(review.session.id)
+    val retainedTarget = retainedTargetShiftId?.let { selectedId ->
+        review.eligibleTargets.single { it.shiftId == selectedId }
+    }
+    return SessionVoidAttempt(
+        session = review.session,
+        addons = review.activeAddons,
+        retainedTargetShiftId = retainedTargetShiftId,
+        retainedTarget = retainedTarget,
+        body = body,
+        idempotencyKey = key,
+        requestHash = gamingActionRequestHash(
+            "POST",
+            "/api/v1/gaming/sessions/${review.session.id}/cancel",
+            key,
+            ApiClient.json.encodeToString(body).toByteArray(Charsets.UTF_8),
+        ),
+        scopeLease = scopeLease,
+    )
+}
+
+internal fun retainExactSessionVoidAttempt(
+    owner: AtomicReference<SessionVoidAttempt?>,
+    proposed: SessionVoidAttempt,
+): SessionVoidAttempt {
+    while (true) {
+        val current = owner.get()
+        if (current != null) {
+            check(current.requestHash == proposed.requestHash) {
+                "An exact Void attempt is already retained. Retry the same reason and retained-bill shift, or dismiss and reopen the review."
+            }
+            return current
+        }
+        if (owner.compareAndSet(null, proposed)) return proposed
+    }
+}
+
+internal fun linkedGamingVoidAttempt(
+    review: LinkedGamingVoidReviewUi,
+    reason: String,
+    scopeLease: CacheScopeLease,
+): LinkedGamingVoidAttempt {
+    voidActionLeaseError(review.scopeLease, scopeLease)?.let { throw IllegalArgumentException(it) }
+    val body = GamingOrderVoidRequest(
+        sessionId = review.session.id,
+        reason = reason,
+        expectedOrderStatus = "held",
+        expectedCheckoutVersion = review.order.checkoutVersion,
+        expectedOrderTotalMinor = review.order.totalMinor,
+        expectedSessionStatus = "ended",
+        expectedBillingRevision = review.session.billingRevision,
+        expectedParticipantRevision = review.session.participantRevision,
+        expectedAmountMinor = requireNotNull(review.session.amountMinor),
+    )
+    val encodedBody = ApiClient.json.encodeToString(body).toByteArray(Charsets.UTF_8)
+    val bodyIdentity = MessageDigest.getInstance("SHA-256")
+        .digest(encodedBody)
+        .joinToString("") { byte -> (byte.toInt() and 0xff).toString(16).padStart(2, '0') }
+        .take(24)
+    val key = "pos-gaming-void:${review.order.id}:${review.session.id}:" +
+        "v${review.order.checkoutVersion}:$bodyIdentity"
+    return LinkedGamingVoidAttempt(
+        review = review,
+        body = body,
+        idempotencyKey = key,
+        requestHash = gamingActionRequestHash(
+            "POST",
+            "/api/v1/pos/orders/${review.order.id}/gaming-void",
+            key,
+            encodedBody,
+        ),
+        scopeLease = scopeLease,
+    )
+}
+
+internal fun retainExactLinkedGamingVoidAttempt(
+    owner: AtomicReference<LinkedGamingVoidAttempt?>,
+    proposed: LinkedGamingVoidAttempt,
+): LinkedGamingVoidAttempt {
+    while (true) {
+        val current = owner.get()
+        if (current != null) {
+            check(current.requestHash == proposed.requestHash) {
+                "An exact Owner POS Void attempt is already retained. Retry the same reason, or dismiss and reopen the review."
+            }
+            return current
+        }
+        if (owner.compareAndSet(null, proposed)) return proposed
+    }
+}
+
+/**
+ * Execute the exact retained before-POS Void attempt. A canonical completed receipt is
+ * checked before the pre-mutation snapshot so a committed write can recover after a lost
+ * response or a later retained-order read failure without issuing a second POST.
+ */
+internal suspend fun executeSessionVoidAttempt(
+    review: SessionVoidReviewUi,
+    attempt: SessionVoidAttempt,
+    currentLease: () -> CacheScopeLease?,
+    loadSession: suspend (String) -> GameSession,
+    loadAddons: suspend (String) -> List<SessionAddon>,
+    loadTargets: suspend (String) -> List<PosTargetShift>,
+    cancel: suspend (String, SessionCancelBody, String) -> GameSession,
+    nowMillis: () -> Long = System::currentTimeMillis,
+): GameSession {
+    check(currentLease() == attempt.scopeLease) { "The workspace changed before Void." }
+    val current = loadSession(review.session.id)
+    check(currentLease() == attempt.scopeLease) { "The workspace changed while checking Void." }
+    if (current.matchesCompletedSessionVoid(attempt)) return current
+    check(current.matchesVoidReviewSnapshot(review.session)) {
+        "The session changed. Refresh the Void review."
+    }
+    val addons = loadAddons(current.id).filter { it.voidedAt == null }
+    check(addons == review.activeAddons) { "Consumed items changed. Refresh the Void review." }
+    if (addons.isNotEmpty()) {
+        val targets = loadTargets(current.id)
+        check(targets == review.eligibleTargets && targets.any { it == attempt.retainedTarget }) {
+            "The retained-bill shift changed. Refresh the Void review."
+        }
+    }
+    if (attempt.body.reason.isNullOrBlank() && current.requiresVoidReason(nowMillis())) {
+        throw IllegalStateException("This session reached 30 minutes. Enter a reason and review again.")
+    }
+    check(currentLease() == attempt.scopeLease) { "The workspace changed before Void dispatch." }
+    val result = try {
+        cancel(current.id, attempt.body, attempt.idempotencyKey)
+    } catch (failure: ApiException) {
+        if (!failure.isAmbiguous) throw failure
+        val canonical = loadSession(current.id)
+        if (canonical.matchesCompletedSessionVoid(attempt)) canonical else throw failure
+    }
+    check(result.matchesCompletedSessionVoid(attempt)) {
+        "The server returned an inconsistent Void receipt."
+    }
+    return result
+}
+
+internal suspend fun loadVerifiedSessionVoidResult(
+    attempt: SessionVoidAttempt,
+    cancelled: GameSession,
+    loadOrder: suspend (String) -> Order,
+): Pair<GameSession, Order?> {
+    val retained = cancelled.retainedAddonOrderId?.let { loadOrder(it) }
+    retainedAddonOrderError(attempt, cancelled, retained)?.let { throw IllegalStateException(it) }
+    return cancelled to retained
+}
+
+/**
+ * Execute or replay the exact retained Owner POS Void attempt. An expired claim is accepted
+ * only after the canonical session proves that this same actor/body/key already committed;
+ * the original request is then replayed solely to retrieve the immutable server receipt.
+ */
+internal suspend fun executeLinkedGamingVoidAttempt(
+    attempt: LinkedGamingVoidAttempt,
+    currentLease: () -> CacheScopeLease?,
+    loadSession: suspend (String) -> GameSession,
+    hasPendingPayment: suspend (String) -> Boolean,
+    postVoid: suspend (String, GamingOrderVoidRequest, String, String) -> GamingOrderVoidRead,
+    nowMillis: () -> Long = System::currentTimeMillis,
+): GamingOrderVoidRead {
+    check(currentLease() == attempt.scopeLease) { "The workspace changed before Owner Void." }
+    val canonical = loadSession(attempt.review.session.id)
+    check(currentLease() == attempt.scopeLease) {
+        "The workspace changed while checking the Owner Void receipt."
+    }
+    val durableReplay = canonical.matchesCompletedLinkedGamingVoid(attempt)
+    if (!durableReplay) {
+        check(canonical.matchesVoidReviewSnapshot(attempt.review.session)) {
+            "The Gaming session changed. Refresh the Owner Void review."
+        }
+        check(HeldOrderClaimPolicy.hasConfirmationWindow(
+            attempt.review.claimExpiresAtMillis,
+            nowMillis(),
+        )) { "The checkout reservation expired. Open the Owner review again." }
+        check(!hasPendingPayment(attempt.review.order.id)) {
+            "A payment attempt now exists for this bill. Reconcile it in POS."
+        }
+    }
+    check(currentLease() == attempt.scopeLease) { "The workspace changed before Owner Void dispatch." }
+    val response = postVoid(
+        attempt.review.order.id,
+        attempt.body,
+        attempt.idempotencyKey,
+        attempt.review.claimToken,
+    )
+    gamingOrderVoidResponseError(response, attempt)?.let { throw IllegalStateException(it) }
+    return response
+}
+
+internal suspend fun loadVerifiedLinkedGamingVoidResult(
+    attempt: LinkedGamingVoidAttempt,
+    response: GamingOrderVoidRead,
+    loadSession: suspend (String) -> GameSession,
+    loadOrder: suspend (String) -> Order,
+): Pair<GameSession, Order?> {
+    val session = loadSession(response.sessionId)
+    linkedGamingVoidCanonicalError(session, response, attempt)?.let {
+        throw IllegalStateException(it)
+    }
+    val retained = response.retainedOrderId?.let { orderId -> loadOrder(orderId) }
+    linkedRetainedOrderError(response, attempt, retained)?.let { throw IllegalStateException(it) }
+    return session to retained
+}
+
+internal suspend fun validateAcquiredGamingVoidClaim(
+    order: Order,
+    claim: CheckoutClaimResult,
+    scopeLease: CacheScopeLease,
+    nowMillis: Long,
+    currentLease: () -> CacheScopeLease?,
+    release: suspend (String, String) -> Unit,
+): Long {
+    try {
+        linkedGamingVoidClaimError(order, claim, scopeLease, nowMillis)?.let {
+            throw IllegalStateException(it)
+        }
+        return requireNotNull(HeldOrderClaimPolicy.claimExpiryMillis(claim))
+    } catch (failure: Throwable) {
+        if (currentLease() == scopeLease) {
+            withContext(NonCancellable) {
+                runCatching { release(order.id, claim.claimToken) }
+            }
+        }
+        throw failure
+    }
+}
+
+
 /**
  * The legacy repair is best-effort startup hygiene; it must never prevent the
  * authoritative gaming pull from running. Cancellation is different: it means
@@ -1101,6 +1751,9 @@ class GamingViewModel : ViewModel() {
     private val appCtx = DCompanyApp.instance
     private val db = appCtx.db
     private val gamingApi = ApiClient.create<GamingApi>()
+    private val manualAdmission = ManualBackendRequestAdmission(
+        online = { appCtx.connectivity.online.value },
+    )
     private val customersApi = ApiClient.create<CustomersApi>()
     /** Validated, persisted purpose is part of the same terminal authority as X-Terminal-Id. */
     val activeTerminal: StateFlow<ValidatedTerminalDisplay?> =
@@ -1120,6 +1773,12 @@ class GamingViewModel : ViewModel() {
     private val customerLookupMutex = Mutex()
     private val _posTargetSelection = MutableStateFlow<PosTargetSelectionUi?>(null)
     val posTargetSelection: StateFlow<PosTargetSelectionUi?> = _posTargetSelection
+    private val _sessionVoidReview = MutableStateFlow<SessionVoidReviewUi?>(null)
+    val sessionVoidReview: StateFlow<SessionVoidReviewUi?> = _sessionVoidReview
+    private val sessionVoidAttemptOwner = AtomicReference<SessionVoidAttempt?>(null)
+    private val _linkedGamingVoidReview = MutableStateFlow<LinkedGamingVoidReviewUi?>(null)
+    val linkedGamingVoidReview: StateFlow<LinkedGamingVoidReviewUi?> = _linkedGamingVoidReview
+    private val linkedGamingVoidAttemptOwner = AtomicReference<LinkedGamingVoidAttempt?>(null)
     @Volatile private var access = GamingAccess()
 
     private data class ScreenState(
@@ -1257,6 +1916,7 @@ class GamingViewModel : ViewModel() {
                     effectivePackageVariant = cached.effectivePackageVariant,
                     effectivePackageStationType = cached.effectivePackageStationType,
                     effectivePackagePricingTier = cached.effectivePackagePricingTier,
+                    retainedAddonOrderId = cached.retainedAddonOrderId,
                 )
             } ?: cached.toGameSession()
         }
@@ -1542,12 +2202,6 @@ class GamingViewModel : ViewModel() {
             .firstOrNull { it.state == GamingSessionActionState.REJECTED } ?: return true
         error.value = rejected.lastError?.let { "$it Resolve the refused saved action before $action." }
             ?: "A saved session action was refused. Resolve it before $action."
-        return false
-    }
-
-    private fun requireNoActiveSessionAddons(session: GameSession): Boolean {
-        val message = sessionCancellationAddonBlockMessage(state.value.addonsFor(session)) ?: return true
-        error.value = message
         return false
     }
 
@@ -3366,7 +4020,7 @@ class GamingViewModel : ViewModel() {
                     return@launch
                 }
                 notice.value = if (actionType == GamingSessionActionType.PARTICIPANT_JOIN) {
-                    "Friend joined at this play-time. ₹30 per started hour will be added at Stop."
+                    "Friend joined at this play-time. 30 per started hour will be added at Stop."
                 } else {
                     "Friend leave time saved. Their controller charge stopped at this play-time."
                 }
@@ -3952,97 +4606,470 @@ class GamingViewModel : ViewModel() {
         }
     }
 
-    /**
-     * Gives staff an audited escape for mistaken stopped sessions, including the
-     * mandatory path for a zero-value session that cannot become a POS order.
-     * Cancellation is deliberately online-only: the server records who cancelled
-     * it and the required reason, and response-loss replay is naturally safe
-     * because cancelled is terminal.
-     */
-    fun cancelUnbilled(session: GameSession, reason: String) {
-        if (!requireWrite()) return
-        if (!session.canCancelUnbilled() || !requireIdle()) return
+    fun prepareSessionVoid(session: GameSession) {
+        if (!requireWrite() || !requireIdle()) return
+        if (session.orderId != null) {
+            prepareLinkedGamingVoid(session)
+            return
+        }
+        if (!session.canCancelUnbilled()) {
+            error.value = "Refresh Gaming before Void. The session is no longer in a cancellable state."
+            return
+        }
+        state.value.cancellationBlockFor(
+            session,
+            access.canVoidUnlinkedSessionsAcrossShifts,
+        )?.let { error.value = it; return }
+        if (!requireNoSequencedSessionActions(session, "voiding the session")) return
         if (!requireNoPackageExtension(session, "voiding the session")) return
         if (!requireNoSessionAddonActions(session, "voiding the whole session")) return
-        if (!requireNoActiveSessionAddons(session)) return
-        if (
-            session.authority(state.value.activeShiftId) != GamingSessionAuthority.CURRENT_SHIFT &&
-            !access.canReconcileLegacySessions
-        ) {
-            requireCurrentShiftSession(session, "voiding it")
+        if (!manualAdmission.available()) {
+            error.value = "Connect to the ERP backend before opening this audited Void review."
+            return
+        }
+        val reviewLease = scopeLeaseOrError(
+            "The workspace is unavailable. Sign in again before opening this Void review.",
+        ) ?: return
+        busyStationId.value = session.stationId
+        error.value = null
+        viewModelScope.launch {
+            try {
+                val review = manualAdmission.execute(
+                    operation = ManualBackendOperation.MANUAL_READ,
+                    normal = { loadSessionVoidReview(gamingApi, session, reviewLease) },
+                    direct = {
+                        loadSessionVoidReview(
+                            ApiClient.createManualDirectApi(GamingApi::class.java),
+                            session,
+                            reviewLease,
+                        )
+                    },
+                )
+                appCtx.cacheIsolation.commitIfCurrent(reviewLease) {
+                    sessionVoidAttemptOwner.set(null)
+                    _sessionVoidReview.value = review
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                appCtx.cacheIsolation.commitIfCurrent(reviewLease) {
+                    error.value = failure.message ?: "The server could not prepare this Void review."
+                }
+            } finally {
+                appCtx.cacheIsolation.commitIfCurrent(reviewLease) {
+                    if (busyStationId.value == session.stationId) busyStationId.value = null
+                }
+            }
+        }
+    }
+
+    private suspend fun loadSessionVoidReview(
+        api: GamingApi,
+        original: GameSession,
+        scopeLease: CacheScopeLease,
+    ): SessionVoidReviewUi {
+        val current = api.session(original.id)
+        check(current.matchesCancellationIdentity(original.id, original) && current.canCancelUnbilled()) {
+            "The session changed. Refresh Gaming before Void."
+        }
+        check(current.orderId == null) { "This session has reached POS. Use the Owner POS Void review." }
+        val addons = api.sessionAddons(current.id).filter { it.voidedAt == null }
+        val targets = if (addons.isEmpty()) emptyList() else api.voidRetentionTargets(current.id)
+        retainedAddonTargetListError(targets)?.takeIf { addons.isNotEmpty() }?.let {
+            throw IllegalStateException(it)
+        }
+        return SessionVoidReviewUi(current, addons, targets, scopeLease)
+    }
+
+    fun dismissSessionVoidReview() {
+        _sessionVoidReview.value = null
+        sessionVoidAttemptOwner.set(null)
+    }
+
+    fun confirmSessionVoid(
+        review: SessionVoidReviewUi,
+        reason: String,
+        retainedTargetShiftId: String?,
+        onRetainedOrderReady: (String) -> Unit = {},
+    ) {
+        if (!requireWrite() || !requireIdle()) return
+        if (_sessionVoidReview.value !== review) {
+            error.value = "This Void review is stale. Open it again from Gaming."
             return
         }
         val normalizedReason = reason.trim()
-        if (normalizedReason.isEmpty()) {
-            error.value = "Enter a reason before cancelling this session."
-            return
-        }
         if (normalizedReason.length > 500) {
-            error.value = "Cancellation reason must be 500 characters or fewer."
+            error.value = "Void reason must be 500 characters or fewer."
             return
         }
-        if (!appCtx.connectivity.online.value) {
-            error.value =
-                "Cancellation needs an internet connection so the reason is recorded. Reconnect, then try again."
+        if (normalizedReason.isEmpty() && review.session.requiresVoidReason(System.currentTimeMillis())) {
+            error.value = "Enter a reason before voiding this session."
             return
         }
-        val workspaceMessage = gamingWorkspaceUnavailableMessage(
-            action = "the session cancellation could start",
-            preservedState = "No cancellation request was sent and the session remains blocked in Gaming.",
-        )
-        val postRequestWorkspaceMessage = gamingServerResultWorkspaceUnavailableMessage(
-            action = "cancelling this session",
-            safeNextStep = "It may already be cancelled; do not create a replacement session before refreshing Gaming.",
-        )
-        val scopeLease = scopeLeaseOrError(workspaceMessage) ?: return
-
-        busyStationId.value = session.stationId
+        val target = retainedTargetShiftId?.let { id ->
+            review.eligibleTargets.singleOrNull { it.shiftId == id }
+        }
+        if (review.activeAddons.isNotEmpty() && target == null) {
+            error.value = "Choose the exact open shift that will retain the consumed item bill."
+            return
+        }
+        if (review.activeAddons.isEmpty() && retainedTargetShiftId != null) {
+            error.value = "This session has no consumed items to retain on a POS shift."
+            return
+        }
+        val confirmLease = appCtx.cacheIsolation.currentLease()
+        val leaseError = if (confirmLease == null) {
+            "The workspace is unavailable. Sign in again before confirming this Void."
+        } else {
+            voidActionLeaseError(review.scopeLease, confirmLease)
+        }
+        if (leaseError != null) {
+            error.value = leaseError
+            return
+        }
+        val proposedAttempt = runCatching {
+            sessionVoidAttempt(review, normalizedReason, target?.shiftId, requireNotNull(confirmLease))
+        }.getOrElse { failure ->
+            error.value = failure.message ?: "This Void review is no longer valid."
+            return
+        }
+        val attempt = runCatching {
+            retainExactSessionVoidAttempt(sessionVoidAttemptOwner, proposedAttempt)
+        }.getOrElse { failure ->
+            error.value = failure.message
+            return
+        }
+        busyStationId.value = review.session.stationId
         error.value = null
-        notice.value = null
         viewModelScope.launch {
             try {
-                val dao = db.gamingDao()
-                var serverId: String? = null
-                if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
-                        lease = scopeLease,
-                        onStale = { error.value = workspaceMessage },
-                    ) {
-                        val local = dao.localSessionByEitherId(session.id)
-                        serverId = local?.serverId ?: session.id.takeIf { local == null }
-                    }
-                ) return@launch
-                if (serverId == null) {
-                    error.value =
-                        "This session has not been confirmed by the server yet. Refresh Gaming before cancelling it."
-                    return@launch
-                }
-                val cancelled = gamingApi.cancel(
-                    id = requireNotNull(serverId),
-                    body = SessionCancelBody(normalizedReason),
+                val cancelled = manualAdmission.execute(
+                    operation = ManualBackendOperation.DIRECT_AUDITED_MUTATION,
+                    normal = { executeSessionVoid(gamingApi, review, attempt) },
+                    direct = {
+                        executeSessionVoid(
+                            ApiClient.createManualDirectApi(GamingApi::class.java),
+                            review,
+                            attempt,
+                        )
+                    },
                 )
-                if (appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
-                        lease = scopeLease,
-                        onStale = { error.value = postRequestWorkspaceMessage },
-                    ) {
-                        dao.upsertAuthoritativeSession(cancelled.toCacheEntity())
+                check(appCtx.cacheIsolation.currentLease() == attempt.scopeLease) {
+                    "The workspace changed after Void."
+                }
+                val (_, retainedOrder) = manualAdmission.execute(
+                    operation = ManualBackendOperation.MANUAL_READ,
+                    normal = {
+                        loadVerifiedSessionVoidResult(attempt, cancelled, ApiClient.api::order)
+                    },
+                    direct = {
+                        loadVerifiedSessionVoidResult(
+                            attempt,
+                            cancelled,
+                            ApiClient.createManualDirectApi(ErpApi::class.java)::order,
+                        )
+                    },
+                )
+                appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(attempt.scopeLease, onStale = {}) {
+                        db.withTransaction {
+                            db.gamingDao().upsertAuthoritativeSession(cancelled.toCacheEntity())
+                            retainedOrder?.let { db.heldOrderDao().upsertAll(listOf(it.toHeldOrderCache())) }
+                        }
                         GamingAlarmReconciler.reconcile(appCtx)
+                        _sessionVoidReview.compareAndSet(review, null)
+                        sessionVoidAttemptOwner.compareAndSet(attempt, null)
+                        notice.value = if (retainedOrder == null) {
+                            "Session voided. No POS bill was created."
+                        } else {
+                            "Session voided. Consumed items remain payable in POS for ${retainedOrder.totalMinor.asRupees()}."
+                        }
+                        retainedOrder?.id?.let(onRetainedOrderReady)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: ApiException) {
+                appCtx.cacheIsolation.commitIfCurrent(attempt.scopeLease) {
+                    error.value = if (failure.isAmbiguous) {
+                        "The Void result is uncertain. Keep this exact review open and retry only after refreshing the session."
+                    } else {
+                        "Void was refused: ${failure.message ?: "the reviewed session changed."}"
                     }
-                ) {
-                    notice.value = "Session voided with its reason preserved in the audit trail."
                 }
-            } catch (e: ApiException) {
-                error.value = if (e.isAmbiguous) {
-                    "The server response was lost, so cancellation is not confirmed. This session remains blocked " +
-                        "from POS and new play. Reconnect and try Cancel again; do not create a replacement session."
-                } else {
-                    "Cancellation was refused: ${e.message ?: "check the shift, branch, terminal, and session state."}"
+            } catch (failure: Exception) {
+                appCtx.cacheIsolation.commitIfCurrent(attempt.scopeLease) {
+                    error.value = failure.message ?: "Void was not confirmed; the review and add-ons were preserved."
                 }
-            } catch (_: Exception) {
-                error.value =
-                    "Cancellation could not be recorded. The session remains blocked; refresh and try again."
             } finally {
-                busyStationId.value = null
+                appCtx.cacheIsolation.commitIfCurrent(attempt.scopeLease) {
+                    if (busyStationId.value == review.session.stationId) busyStationId.value = null
+                }
             }
+        }
+    }
+
+    private suspend fun executeSessionVoid(
+        api: GamingApi,
+        review: SessionVoidReviewUi,
+        attempt: SessionVoidAttempt,
+    ): GameSession = executeSessionVoidAttempt(
+        review = review,
+        attempt = attempt,
+        currentLease = appCtx.cacheIsolation::currentLease,
+        loadSession = api::session,
+        loadAddons = api::sessionAddons,
+        loadTargets = api::voidRetentionTargets,
+        cancel = { id, body, key -> api.cancel(id, body, key) },
+    )
+
+    private fun prepareLinkedGamingVoid(session: GameSession) {
+        if (!access.canVoidPosLinkedSessions) {
+            error.value = "Only an Owner with Gaming write and POS void access can review a POS-linked Gaming Void."
+            return
+        }
+        if (session.status != "ended" || session.amountMinor == null || session.orderId.isNullOrBlank()) {
+            error.value = "Refresh Gaming before opening the Owner POS Void review."
+            return
+        }
+        if (!manualAdmission.available()) {
+            error.value = "Connect to the ERP backend before reserving this bill for review."
+            return
+        }
+        val reviewLease = scopeLeaseOrError(
+            "The workspace is unavailable. Sign in again before opening the Owner POS Void review.",
+        ) ?: return
+        busyStationId.value = session.stationId
+        error.value = null
+        viewModelScope.launch {
+            var claimToken: String? = null
+            try {
+                check(db.heldOrderDao().paymentForTarget(requireNotNull(session.orderId)) == null) {
+                    "A payment attempt already exists for this bill. Reconcile it in POS instead of voiding."
+                }
+                val checkoutClient = CheckoutClientInstancePolicy.requireStable(
+                    appCtx.updateTelemetry.installation.installationId(),
+                )
+                val review = manualAdmission.execute(
+                    operation = ManualBackendOperation.DIRECT_AUDITED_MUTATION,
+                    normal = {
+                        loadLinkedGamingVoidReview(
+                            gamingApi,
+                            ApiClient.api,
+                            session,
+                            checkoutClient,
+                            reviewLease,
+                        )
+                    },
+                    direct = {
+                        loadLinkedGamingVoidReview(
+                            ApiClient.createManualDirectApi(GamingApi::class.java),
+                            ApiClient.createManualDirectApi(ErpApi::class.java),
+                            session,
+                            checkoutClient,
+                            reviewLease,
+                        )
+                    },
+                )
+                claimToken = review.claimToken
+                appCtx.cacheIsolation.commitIfCurrent(reviewLease) {
+                    linkedGamingVoidAttemptOwner.set(null)
+                    _linkedGamingVoidReview.value = review
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                if (appCtx.cacheIsolation.currentLease() == reviewLease) {
+                    claimToken?.let { releaseGamingVoidClaimBestEffort(requireNotNull(session.orderId), it) }
+                    appCtx.cacheIsolation.commitIfCurrent(reviewLease) {
+                        error.value = failure.message ?: "The Owner POS Void review could not be prepared."
+                    }
+                }
+            } finally {
+                appCtx.cacheIsolation.commitIfCurrent(reviewLease) {
+                    if (busyStationId.value == session.stationId) busyStationId.value = null
+                }
+            }
+        }
+    }
+
+    private suspend fun loadLinkedGamingVoidReview(
+        gaming: GamingApi,
+        pos: ErpApi,
+        original: GameSession,
+        checkoutClient: String,
+        scopeLease: CacheScopeLease,
+    ): LinkedGamingVoidReviewUi {
+        val current = gaming.session(original.id)
+        val orderId = requireNotNull(current.orderId) { "This session is no longer linked to POS." }
+        check(current.matchesCancellationIdentity(current.id, original) && current.status == "ended") {
+            "The Gaming session changed. Refresh before Owner Void."
+        }
+        val order = pos.order(orderId)
+        linkedGamingVoidReviewOrderError(order, orderId)?.let { throw IllegalStateException(it) }
+        val addons = gaming.sessionAddons(current.id).filter { it.voidedAt == null }
+        linkedGamingVoidReviewCohortError(order, addons)?.let { throw IllegalStateException(it) }
+        val claim = pos.acquireCheckoutClaim(orderId, checkoutClient)
+        val expiry = validateAcquiredGamingVoidClaim(
+            order = order,
+            claim = claim,
+            scopeLease = scopeLease,
+            nowMillis = System.currentTimeMillis(),
+            currentLease = appCtx.cacheIsolation::currentLease,
+            release = { id, token -> pos.releaseCheckoutClaim(id, token) },
+        )
+        return LinkedGamingVoidReviewUi(current, order, addons, claim.claimToken, expiry, scopeLease)
+    }
+
+    fun dismissLinkedGamingVoidReview() {
+        val review = takeLinkedGamingVoidReview() ?: return
+        linkedGamingVoidAttemptOwner.set(null)
+        if (appCtx.cacheIsolation.currentLease() == review.scopeLease) {
+            viewModelScope.launch { releaseGamingVoidClaimBestEffort(review.order.id, review.claimToken) }
+        }
+    }
+
+    private fun takeLinkedGamingVoidReview(): LinkedGamingVoidReviewUi? {
+        while (true) {
+            val review = _linkedGamingVoidReview.value ?: return null
+            if (_linkedGamingVoidReview.compareAndSet(review, null)) return review
+        }
+    }
+
+    fun confirmLinkedGamingVoid(
+        review: LinkedGamingVoidReviewUi,
+        reason: String,
+        onRetainedOrderReady: (String) -> Unit = {},
+    ) {
+        if (!requireWrite() || !access.canVoidPosLinkedSessions || !requireIdle()) return
+        if (_linkedGamingVoidReview.value !== review) {
+            error.value = "This Owner POS Void review is stale. Open it again."
+            return
+        }
+        val normalized = reason.trim()
+        if (normalized.isEmpty() || normalized.length > 500) {
+            error.value = "Enter a Void reason of 500 characters or fewer."
+            return
+        }
+        val confirmLease = appCtx.cacheIsolation.currentLease()
+        val leaseError = if (confirmLease == null) {
+            "The workspace is unavailable. Sign in again before confirming Owner Void."
+        } else {
+            voidActionLeaseError(review.scopeLease, confirmLease)
+        }
+        if (leaseError != null) {
+            error.value = leaseError
+            return
+        }
+        val proposedAttempt = runCatching {
+            linkedGamingVoidAttempt(review, normalized, requireNotNull(confirmLease))
+        }.getOrElse { failure ->
+            error.value = failure.message ?: "The Owner POS Void review is incomplete."
+            return
+        }
+        val attempt = runCatching {
+            retainExactLinkedGamingVoidAttempt(linkedGamingVoidAttemptOwner, proposedAttempt)
+        }.getOrElse { failure ->
+            error.value = failure.message
+            return
+        }
+        busyStationId.value = review.session.stationId
+        error.value = null
+        viewModelScope.launch {
+            try {
+                val response = manualAdmission.execute(
+                    operation = ManualBackendOperation.DIRECT_AUDITED_MUTATION,
+                    normal = { executeLinkedGamingVoid(gamingApi, attempt) },
+                    direct = {
+                        executeLinkedGamingVoid(
+                            ApiClient.createManualDirectApi(GamingApi::class.java),
+                            attempt,
+                        )
+                    },
+                )
+                check(appCtx.cacheIsolation.currentLease() == attempt.scopeLease) {
+                    "The workspace changed after Owner Void."
+                }
+                val (session, retainedOrder) = manualAdmission.execute(
+                    operation = ManualBackendOperation.MANUAL_READ,
+                    normal = { loadLinkedGamingVoidResult(gamingApi, ApiClient.api, response, attempt) },
+                    direct = {
+                        loadLinkedGamingVoidResult(
+                            ApiClient.createManualDirectApi(GamingApi::class.java),
+                            ApiClient.createManualDirectApi(ErpApi::class.java),
+                            response,
+                            attempt,
+                        )
+                    },
+                )
+                appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(attempt.scopeLease, onStale = {}) {
+                        db.withTransaction {
+                            db.gamingDao().upsertAuthoritativeSession(session.toCacheEntity())
+                            if (retainedOrder == null) db.heldOrderDao().deleteById(review.order.id)
+                            else db.heldOrderDao().upsertAll(listOf(retainedOrder.toHeldOrderCache()))
+                        }
+                        GamingAlarmReconciler.reconcile(appCtx)
+                        _linkedGamingVoidReview.compareAndSet(review, null)
+                        linkedGamingVoidAttemptOwner.compareAndSet(attempt, null)
+                        notice.value = if (retainedOrder == null) {
+                            "Gaming charge voided. The empty unpaid order is closed."
+                        } else {
+                            "Gaming charge voided. ${response.retainedAddonCount} consumed item" +
+                                "${if (response.retainedAddonCount == 1) "" else "s"} remain payable " +
+                                "on the same POS bill for ${response.retainedTotalMinor.asRupees()}."
+                        }
+                        retainedOrder?.id?.let(onRetainedOrderReady)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: ApiException) {
+                appCtx.cacheIsolation.commitIfCurrent(attempt.scopeLease) {
+                    error.value = if (failure.isAmbiguous) {
+                        "The Owner Void result is uncertain. Keep this exact review open; retrying reuses the same audited request."
+                    } else {
+                        "Owner Void was refused: ${failure.message ?: "the reviewed bill changed."} Refresh or dismiss this review explicitly."
+                    }
+                }
+            } catch (failure: Exception) {
+                appCtx.cacheIsolation.commitIfCurrent(attempt.scopeLease) {
+                    error.value = failure.message ?: "Owner Void was not confirmed; the exact review was preserved."
+                }
+            } finally {
+                appCtx.cacheIsolation.commitIfCurrent(attempt.scopeLease) {
+                    if (busyStationId.value == review.session.stationId) busyStationId.value = null
+                }
+            }
+        }
+    }
+
+    private suspend fun executeLinkedGamingVoid(
+        api: GamingApi,
+        attempt: LinkedGamingVoidAttempt,
+    ): GamingOrderVoidRead = executeLinkedGamingVoidAttempt(
+        attempt = attempt,
+        currentLease = appCtx.cacheIsolation::currentLease,
+        loadSession = api::session,
+        hasPendingPayment = { orderId -> db.heldOrderDao().paymentForTarget(orderId) != null },
+        postVoid = api::voidLinkedOrder,
+    )
+
+    private suspend fun loadLinkedGamingVoidResult(
+        gaming: GamingApi,
+        pos: ErpApi,
+        response: GamingOrderVoidRead,
+        attempt: LinkedGamingVoidAttempt,
+    ): Pair<GameSession, Order?> = loadVerifiedLinkedGamingVoidResult(
+        attempt = attempt,
+        response = response,
+        loadSession = gaming::session,
+        loadOrder = pos::order,
+    )
+
+    private suspend fun releaseGamingVoidClaimBestEffort(orderId: String, token: String) {
+        runCatching {
+            manualAdmission.execute(
+                operation = ManualBackendOperation.DIRECT_AUDITED_MUTATION,
+                normal = { ApiClient.api.releaseCheckoutClaim(orderId, token) },
+                direct = { ApiClient.createManualDirectApi(ErpApi::class.java).releaseCheckoutClaim(orderId, token) },
+            )
         }
     }
 
@@ -4227,6 +5254,9 @@ internal fun GamingSessionCacheEntity.toGameSession() = GameSession(
     customerName = customerName,
     customerPhone = customerPhone,
     orderId = orderId,
+    retainedAddonOrderId = retainedAddonOrderId,
+    serverPlayElapsedMs = serverPlayElapsedMs,
+    voidReasonRequired = voidReasonRequired,
 )
 
 /** Booked package players are immutable; late attendance fills the remaining places up to four. */
@@ -4276,6 +5306,23 @@ internal fun GameSession.toCacheEntity() = GamingSessionCacheEntity(
     customerName = customerName,
     customerPhone = customerPhone,
     orderId = orderId,
+    retainedAddonOrderId = retainedAddonOrderId,
+    serverPlayElapsedMs = serverPlayElapsedMs,
+    voidReasonRequired = voidReasonRequired,
+)
+
+internal fun Order.toHeldOrderCache() = HeldOrderCacheEntity(
+    id = id,
+    invoiceNo = invoiceNo,
+    type = type,
+    sourceLabel = sourceLabel,
+    totalMinor = totalMinor,
+    paidMinor = paidMinor,
+    itemsCount = lines.size,
+    customerName = customerName,
+    createdAt = createdAt,
+    heldAt = heldAt,
+    checkoutVersion = checkoutVersion,
 )
 
 internal fun LocalGamingSessionEntity.toGameSession() = GameSession(

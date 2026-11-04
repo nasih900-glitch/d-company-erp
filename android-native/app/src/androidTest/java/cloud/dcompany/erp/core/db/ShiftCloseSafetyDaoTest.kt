@@ -5,6 +5,12 @@ import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -322,6 +328,43 @@ class ShiftCloseSafetyDaoTest {
             ShiftCloseCaptureStatus.CAPTURED,
             safety.captureExistingClose("shift-cache-held", TERMINAL, 0, 2_000).status,
         )
+    }
+
+    @Test
+    fun closeReviewObserverKeepsAttributedWorkScopedAndHeldCacheConservativelyReactive() = runBlocking {
+        db.shiftDao().insert(openShift("review-shift"))
+        db.gamingDao().upsertSessionCache(listOf(gamingCache("other-game", "other-shift", "active")))
+        db.financeDao().insertLocalExpense(cashExpense("other-cash", "other-shift"))
+        val updates = Channel<ShiftCloseBlockerCounts>(Channel.UNLIMITED)
+        val observer = launch {
+            safety.observeBlockersForExactShift("review-shift", SERVER_SHIFT, TERMINAL)
+                .distinctUntilChanged().collect { updates.send(it) }
+        }
+        try {
+            val initial = withTimeout(5_000) { updates.receive() }
+            assertEquals(0, initial.captureBlockerCount)
+            assertEquals(0, initial.pendingLocalCount)
+            assertEquals(0, initial.serverGamingSessionCount)
+            // This legacy cache has terminal provenance but no shift column.
+            // An unclaimed held bill therefore conservatively blocks review.
+            db.heldOrderDao().upsertAll(listOf(heldOrder("unattributed-held")))
+            val blocked = withTimeout(5_000) { updates.receive() }
+            assertEquals(1, blocked.serverHeldOrderCount)
+            assertEquals(1, blocked.captureBlockerCount)
+            assertEquals(0, blocked.serverGamingSessionCount)
+            assertEquals(0, blocked.pendingLocalCount)
+            assertNotNull(blocked.captureMessage())
+            assertEquals(ShiftState.OPEN_SYNCED, safety.localShift("review-shift")?.state)
+            assertNull(safety.localShift("review-shift")?.countedMinor)
+            db.heldOrderDao().replace(emptyList())
+            val cleared = withTimeout(5_000) { updates.receive() }
+            assertEquals(0, cleared.serverHeldOrderCount)
+            assertEquals(0, cleared.captureBlockerCount)
+            assertNull(cleared.captureMessage())
+        } finally {
+            observer.cancelAndJoin()
+            updates.close()
+        }
     }
 
     @Test

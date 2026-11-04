@@ -61,6 +61,7 @@ import cloud.dcompany.erp.core.db.LoyaltyActionState
 import cloud.dcompany.erp.core.net.PublishDirectCheckoutClaimRequest
 import cloud.dcompany.erp.core.net.CanonicalReceipt
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.core.net.currencyFreeLabel
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import cloud.dcompany.erp.ui.screens.settings.LoyaltyProgramRulesDto
 import kotlinx.coroutines.CancellationException
@@ -1485,7 +1486,7 @@ class PosViewModel : ViewModel() {
     ) {
         if (!requireWrite()) return
         if (manualDiscountMinor < 0L) {
-            notice.value = "Enter a discount of ₹0.00 or more."
+            notice.value = "Enter a discount of 0.00 or more."
             return
         }
         val scopeLease = scopeLeaseOrNotice(POS_CART_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
@@ -2551,7 +2552,7 @@ class PosViewModel : ViewModel() {
                 check(saved is cloud.dcompany.erp.core.auth.ScopedCommitResult.Committed && saved.value == 1) {
                     "The reward-adjusted bill could not be saved on this tablet."
                 }
-                notice.value = "${reward.label} reserved for ${reward.valueMinor.asRupees()}. New total ${updated.totalMinor.asRupees()}."
+                notice.value = "${reward.label.currencyFreeLabel()} reserved for ${reward.valueMinor.asRupees()}. New total ${updated.totalMinor.asRupees()}."
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: ApiException) {
@@ -2582,7 +2583,7 @@ class PosViewModel : ViewModel() {
         if (!requireWrite()) return
         val prepared = state.value.preparedDirectCheckout ?: return
         if (prepared.dueMinor != 0L || prepared.totalMinor != 0L) {
-            notice.value = "Only an exact ₹0.00 bill can be completed without payment."
+            notice.value = "Only an exact 0.00 bill can be completed without payment."
             return
         }
         if (!app.connectivity.online.value) {
@@ -2653,7 +2654,7 @@ class PosViewModel : ViewModel() {
                     // invoice. Keep the exact publication state so the same
                     // idempotency key can reconcile it without another bill.
                     notice.value = "The completion response could not be confirmed. Collect no money and " +
-                        "retry this same ₹0.00 completion when the connection is stable."
+                        "retry this same 0.00 completion when the connection is stable."
                     return@launch
                 }
 
@@ -2662,7 +2663,7 @@ class PosViewModel : ViewModel() {
                     result.orderStatus != "paid" || result.invoiceNo.isNullOrBlank()
                 ) {
                     notice.value = "The server returned incomplete completion evidence. Collect no money; " +
-                        "retry this same ₹0.00 completion after refreshing."
+                        "retry this same 0.00 completion after refreshing."
                     return@launch
                 }
                 val invoiceNo = requireNotNull(result.invoiceNo)
@@ -2707,9 +2708,9 @@ class PosViewModel : ViewModel() {
                     false
                 }
                 notice.value = if (receiptSaved) {
-                    "Bill completed once · $invoiceNo · ₹0.00 due. No money was collected."
+                    "Bill completed once · $invoiceNo · 0.00 due. No money was collected."
                 } else {
-                    "Bill completed once · $invoiceNo · ₹0.00 due. No money was collected. " +
+                    "Bill completed once · $invoiceNo · 0.00 due. No money was collected. " +
                         "The detailed receipt is still syncing."
                 }
                 app.sync.refresh("orders")
@@ -3762,7 +3763,7 @@ class PosViewModel : ViewModel() {
             viewModelScope.launch {
                 releaseClaimBestEffort(prepared.orderId, prepared.claimToken)
             }
-            notice.value = "Only a never-paid bill with an exact ₹0.00 total can be completed as " +
+            notice.value = "Only a never-paid bill with an exact 0.00 total can be completed as " +
                 "a member benefit. The order was refreshed; collect no money until you review it."
             refresh()
             return
@@ -3859,10 +3860,10 @@ class PosViewModel : ViewModel() {
                     false
                 }
                 notice.value = if (receiptSaved) {
-                    "Member benefit completed once · ${result.invoiceNo} · ₹0.00 due. " +
+                    "Member benefit completed once · ${result.invoiceNo} · 0.00 due. " +
                         "No money was collected."
                 } else {
-                    "Member benefit completed once · ${result.invoiceNo} · ₹0.00 due. " +
+                    "Member benefit completed once · ${result.invoiceNo} · 0.00 due. " +
                         "No money was collected. The detailed receipt is still syncing."
                 }
                 refreshHeldOrdersBestEffort()
@@ -4074,7 +4075,7 @@ internal const val POS_POINTS_WORKSPACE_UNAVAILABLE_MESSAGE =
         "reopen POS, and verify the live bill. No payment was recorded."
 
 internal const val POS_ZERO_WORKSPACE_UNAVAILABLE_MESSAGE =
-    "This tablet's verified workspace expired before the ₹0.00 completion could start. Sign in online again, " +
+    "This tablet's verified workspace expired before the 0.00 completion could start. Sign in online again, " +
         "reopen POS, and review the bill. Collect no money."
 
 internal const val POS_VOID_WORKSPACE_UNAVAILABLE_MESSAGE =

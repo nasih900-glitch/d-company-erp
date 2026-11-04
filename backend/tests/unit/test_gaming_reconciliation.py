@@ -7,6 +7,8 @@ from inspect import signature
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
+from starlette.requests import Request
+
 import pytest
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy.dialects import postgresql
@@ -826,7 +828,7 @@ async def test_normal_send_exposes_the_closed_source_recovery_code() -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_cancel_and_reconcile_fail_closed_for_missing_ended_amount() -> None:
+async def test_send_cancel_and_reconcile_fail_closed_for_missing_ended_amount(monkeypatch) -> None:
     tenant = _tenant()
     source_shift = _shift(tenant, status="closed")
     station = _station(tenant)
@@ -846,16 +848,24 @@ async def test_send_cancel_and_reconcile_fail_closed_for_missing_ended_amount() 
 
     open_shift = _shift(tenant, status="open")
     gaming_session.shift_id = open_shift.id
+    async def _reserve(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(gaming_router, "check_or_reserve", _reserve)
+    request = Request({"type": "http", "headers": []})
+    request.state.idempotency_key = f"gaming-session-void:{gaming_session.id}"
+    request.state.idempotency_request_hash = "a" * 64
     with pytest.raises(GamingBillingRepairRequiredError, match="Repair billing"):
         await gaming_router.cancel_session(
             gaming_session.id,
             gaming_router.SessionCancel(reason="Owner reviewed duplicate"),
             _Session(
                 _Result(gaming_session),
-                _Result(open_shift),
-                _Result(0),
+                _Result(rows=[open_shift]),
+                _Result(rows=[]),  # no active add-ons
                 entities={(Station, station.id): station},
             ),
+            request,
             tenant,
         )
 

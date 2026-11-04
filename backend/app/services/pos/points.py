@@ -389,7 +389,7 @@ async def reserve_catalog_reward_redemption(
     if customer is None:
         raise BusinessRuleError("attach a customer to this order before redeeming a reward")
 
-    reward_name = reward.label if program is not None else reward.name
+    reward_name = (reward.label if program is not None else reward.name).replace("\u20b9", "")
     reward_min_rank = reward.min_rank_key if program is not None else reward.min_rank.lower()
     customer_rank = awarded_rank_key or gaming_rank(customer.lifetime_gaming_points_earned).lower()
     if rank_index(customer_rank) < rank_index(reward_min_rank):

@@ -38,7 +38,7 @@ function button(text: string) {
 }
 function counted() {
   return [...document.querySelectorAll("label")]
-    .find((row) => row.textContent?.includes("Counted cash (₹)"))!
+    .find((row) => row.textContent?.includes("Counted cash"))!
     .querySelector("input")!;
 }
 async function render() {
@@ -175,7 +175,7 @@ describe("Focused Shift review and count workspace", () => {
     expect(button("Cancel").disabled).toBe(true);
     expect(document.querySelector('button[aria-label="Close"]')).toBeNull();
     expect(button("Refresh review").disabled).toBe(true);
-    await act(async () => button("Retry same ₹75.00 count").click());
+    await act(async () => button("Retry same 75.00 count").click());
     expect(vi.mocked(shifts.close).mock.calls).toEqual([
       ["shift", 7500],
       ["shift", 7500],
