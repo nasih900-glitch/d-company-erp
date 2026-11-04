@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import importlib.util
+import asyncio
 import os
 from pathlib import Path
 import subprocess
 import sys
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -76,6 +78,105 @@ def test_complete_application_import_does_not_hide_broken_child(profile, monkeyp
     monkeypatch.setitem(sys.modules, 'app', package)
     with pytest.raises(RuntimeError, match='missing native runtime dependency'):
         profile.verify_application_imports()
+
+
+@pytest.fixture
+def native_elf_fixture(profile, monkeypatch, tmp_path):
+    stdlib = tmp_path / 'lib-dynload'
+    stdlib.mkdir()
+    extension = stdlib / '_ssl.fake.so'
+    extension.write_bytes(b'\x7fELFstdlib-fixture')
+    private = tmp_path / 'site-packages/psycopg_binary.libs/libssl-private.so'
+    private.parent.mkdir(parents=True)
+    private.write_bytes(b'\x7fELFwheel-private-fixture')
+    monkeypatch.setattr(profile.sysconfig, 'get_config_var', lambda key: str(stdlib) if key == 'DESTSHARED' else None)
+    # Map the old overly broad traversal to this fixture as well, so reverting
+    # to that traversal genuinely reaches the unsupported private library.
+    monkeypatch.setattr(profile, 'Path', lambda value: tmp_path if value == '/usr/local/lib' else Path(value))
+    return extension, private
+
+
+def test_only_stdlib_entrypoints_are_directly_loaded_not_wheel_private_dependencies(profile, monkeypatch, native_elf_fixture):
+    extension, private = native_elf_fixture
+    calls = []
+    monkeypatch.setattr(profile.ctypes, 'CDLL', lambda path, **kwargs: calls.append(Path(path)))
+    profile.verify_cpython_elf()
+    assert calls == [extension]
+    assert private not in calls
+
+
+def test_broken_stdlib_elf_is_fatal(profile, monkeypatch, native_elf_fixture):
+    def broken(*args, **kwargs):
+        raise OSError('required stdlib provider missing')
+    monkeypatch.setattr(profile.ctypes, 'CDLL', broken)
+    with pytest.raises(OSError, match='required stdlib provider missing'):
+        profile.verify_cpython_elf()
+
+
+@pytest.mark.parametrize('driver', ['asyncpg', 'psycopg'])
+def test_supported_driver_import_failure_is_fatal(profile, monkeypatch, driver):
+    monkeypatch.setitem(sys.modules, 'asyncpg', ModuleType('asyncpg'))
+    psycopg = ModuleType('psycopg')
+    psycopg.pq = SimpleNamespace(__impl__='binary')
+    monkeypatch.setitem(sys.modules, 'psycopg', psycopg)
+    monkeypatch.setitem(sys.modules, driver, None)
+    with pytest.raises(ModuleNotFoundError):
+        profile.verify_postgres_drivers()
+
+
+@pytest.mark.parametrize('implementation', ['binary', 'python', 'c'])
+def test_psycopg_must_use_the_locked_binary_implementation(profile, monkeypatch, implementation):
+    monkeypatch.setitem(sys.modules, 'asyncpg', ModuleType('asyncpg'))
+    psycopg = ModuleType('psycopg')
+    psycopg.pq = SimpleNamespace(__impl__=implementation)
+    monkeypatch.setitem(sys.modules, 'psycopg', psycopg)
+    if implementation == 'binary':
+        profile.verify_postgres_drivers()
+    else:
+        with pytest.raises(RuntimeError, match='locked psycopg binary'):
+            profile.verify_postgres_drivers()
+
+
+@pytest.mark.parametrize(('driver', 'failure'), [
+    ('asyncpg', 'wrong_result'), ('asyncpg', 'query_error'),
+    ('psycopg', 'wrong_result'), ('psycopg', 'query_error'), (None, None),
+])
+def test_each_postgres_query_must_succeed_and_engines_are_disposed(profile, monkeypatch, driver, failure):
+    import sqlalchemy
+    from alembic.migration import MigrationContext
+    async_connection = SimpleNamespace(scalar=AsyncMock(return_value=1))
+    async_context = MagicMock()
+    async_context.__aenter__ = AsyncMock(return_value=async_connection)
+    async_context.__aexit__ = AsyncMock(return_value=False)
+    async_engine = SimpleNamespace(connect=lambda: async_context, dispose=AsyncMock())
+    sync_connection = SimpleNamespace(scalar=MagicMock(return_value=1))
+    sync_context = MagicMock()
+    sync_context.__enter__.return_value = sync_connection
+    sync_context.__exit__.return_value = False
+    engine = SimpleNamespace(connect=lambda: sync_context, dispose=MagicMock())
+    config = ModuleType('app.core.config')
+    config.get_settings = lambda: SimpleNamespace(database_url='postgresql+psycopg://synthetic')
+    database = ModuleType('app.core.db')
+    database.async_engine = async_engine
+    monkeypatch.setitem(sys.modules, 'app.core.config', config)
+    monkeypatch.setitem(sys.modules, 'app.core.db', database)
+    monkeypatch.setattr(sqlalchemy, 'create_engine', lambda _: engine)
+    monkeypatch.setattr(MigrationContext, 'configure', lambda _: SimpleNamespace(get_current_revision=lambda: '0094'))
+    if driver:
+        scalar = async_connection.scalar if driver == 'asyncpg' else sync_connection.scalar
+        if failure == 'wrong_result':
+            scalar.return_value = 0
+        else:
+            scalar.side_effect = RuntimeError('query failed at ' + driver)
+        with pytest.raises(RuntimeError, match=driver):
+            asyncio.run(profile.verify_postgres())
+    else:
+        asyncio.run(profile.verify_postgres())
+    async_engine.dispose.assert_awaited_once()
+    assert str(async_connection.scalar.call_args.args[0]) == 'SELECT 1'
+    if driver != 'asyncpg':
+        engine.dispose.assert_called_once()
+        assert str(sync_connection.scalar.call_args.args[0]) == 'SELECT 1'
 
 
 def test_runtime_wiring_audits_wheels_after_pruning_base_and_uses_real_stack():

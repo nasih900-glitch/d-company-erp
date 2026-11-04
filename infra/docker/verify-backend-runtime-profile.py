@@ -64,8 +64,14 @@ def verify_native_modules() -> None:
         if dbm.whichdb(filename) not in ('dbm.gnu', 'dbm.ndbm'):
             raise RuntimeError('Unexpected dbm provider')
     subprocess.run([sysconfig.get_config_var('BINDIR') + '/python', '-m', 'pip', 'check'], check=True)
+    verify_cpython_elf()
+
+
+def verify_cpython_elf() -> None:
     loaded = set()
-    for library in Path('/usr/local/lib').rglob('*.so*'):
+    # CPython extensions are direct loader entrypoints. Wheel-private libraries
+    # must instead be reached through their owning extension's RPATH/loader.
+    for library in Path(sysconfig.get_config_var('DESTSHARED')).glob('*.so'):
         # The upstream base intentionally excludes Tk from its runtime closure.
         if 'tkinter' in library.name or not library.is_file():
             continue
@@ -76,6 +82,14 @@ def verify_native_modules() -> None:
             continue
         ctypes.CDLL(str(resolved), mode=os.RTLD_NOW)
         loaded.add(resolved)
+
+
+def verify_postgres_drivers() -> None:
+    import asyncpg
+    import psycopg
+
+    if psycopg.pq.__impl__ != 'binary':
+        raise RuntimeError('Expected the locked psycopg binary implementation')
 
 
 def verify_application_imports() -> int:
@@ -92,10 +106,12 @@ async def verify_postgres() -> None:
     from app.core.config import get_settings
     from app.core.db import async_engine
 
-    async with async_engine.connect() as connection:
-        if await connection.scalar(text('SELECT 1')) != 1:
-            raise RuntimeError('asyncpg PostgreSQL probe failed')
-    await async_engine.dispose()
+    try:
+        async with async_engine.connect() as connection:
+            if await connection.scalar(text('SELECT 1')) != 1:
+                raise RuntimeError('asyncpg PostgreSQL probe failed')
+    finally:
+        await async_engine.dispose()
     url = str(get_settings().database_url).replace('+asyncpg', '+psycopg')
     if url.startswith('postgresql://'):
         url = url.replace('postgresql://', 'postgresql+psycopg://', 1)
@@ -115,6 +131,7 @@ def main() -> None:
         raise RuntimeError('Run the final image proof as its non-root user from /app')
     verify_absence()
     verify_native_modules()
+    verify_postgres_drivers()
     module_count = verify_application_imports()
     asyncio.run(verify_postgres())
     print(json.dumps({'status': 'PASS', 'profile': 'postgresql-without-sqlite',
