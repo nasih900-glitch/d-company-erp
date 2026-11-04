@@ -736,6 +736,7 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         instrumentation_start = workflow.index("  android-instrumentation:")
         coordinated_job = workflow[coordinated_start:image_start]
         image_job = workflow[image_start:instrumentation_start]
+        self.assertEqual(coordinated_job.count("    timeout-minutes: 65\n"), 1)
 
         self.assertIn(
             "python -m pip install --only-binary=:all: --require-hashes "

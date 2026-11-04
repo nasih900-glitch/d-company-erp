@@ -674,7 +674,7 @@ YAML
       exit 1
     fi
   fi
-  if grep -qx 'APP_VERSION=3.1.55' "$CANDIDATE_BUILD_ROOT/.env.production.example"; then
+  if grep -qx 'APP_VERSION=3.1.56' "$CANDIDATE_BUILD_ROOT/.env.production.example"; then
     if [ "$PRIOR_REVISION" != 5ad146ae076f5178acc2c8e4cb840ecbb0d0343a ] || \
        [ "$PRIOR_APP_VERSION" != 3.1.46 ] || [ "$PRIOR_DB_HEAD" != 0091 ] || \
        [ -n "$LEGACY_MINIO_CONTAINER" ] || [ -z "$BUILD55_ACCEPTANCE_CREDENTIAL_FILE" ]; then
@@ -1566,7 +1566,7 @@ for path in sorted((root/"backend").rglob("*"), key=lambda path: path.relative_t
 candidate_manifest=hashlib.sha256("".join(manifest_rows).encode()).hexdigest()
 attestation=json.load(open(images))
 print(json.dumps({"prior_revision":prior,"prior_version":"3.1.46","prior_database_head":"0091",
- "candidate_revision":revision,"candidate_version":"3.1.55","candidate_database_head":"0094",
+ "candidate_revision":revision,"candidate_version":"3.1.56","candidate_database_head":"0094",
  "prior_source_archive_sha256":archive,"candidate_source_archive_sha256":candidate_archive,
  "prior_backend_manifest_sha256":manifest,
  "candidate_backend_manifest_sha256":candidate_manifest,
