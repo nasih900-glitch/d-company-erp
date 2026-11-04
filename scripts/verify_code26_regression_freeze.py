@@ -2459,7 +2459,7 @@ REVIEWED_CODE30_4_BUILD63_SHA256 = {
     'infra/scripts/install-on-vm.sh': '655100855a443c0c495dd9ec88d4501fff4c98aecea320c48b7573b0f06395c0',
     'infra/scripts/verify-build55-pending-compatibility.py': 'b1d828736f4d3d0f1ecc58859f5fc2bf42815f14e0cfd18c055d574a452c681d',
     'infra/scripts/verify-production-runtime-images.sh': '79ec1e5d057d110c3b17cfd5193b41968f253c0fa3b7d647a071209187eeb624',
-    'tests/test_android_release_pipeline.py': 'd27d858ebb0c01b9465c9b00c15faf66746934b625af1d1587dfd56bfebd6eda',
+    'tests/test_android_release_pipeline.py': 'be592d4fc6cab80cdaf8d3cbe53155b83ebe8a1cd30623f2ade4d052e68df88f',
     'tests/test_build55_pending_compatibility.py': '340fe7957d53c3d2c9a57873ef6f478afb7f11d983dd8ed9ad0bb38ae6576de5',
     'tests/test_code26_physical_audit_lane.py': '288a076f9f9a409dd4a420612ee648f98e20d836afb33bafdcb453dae783a40b',
     'tests/test_verified_pip_bootstrap.py': '7e1d1356f0ffd2568f327335b2984dfe9c0717008c2bb57901f9730a3de6ffc0',
