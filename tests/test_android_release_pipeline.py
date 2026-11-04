@@ -735,6 +735,7 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         image_start = workflow.index("  production-image-gates:")
         instrumentation_start = workflow.index("  android-instrumentation:")
         coordinated_job = workflow[coordinated_start:image_start]
+        self.assertEqual(coordinated_job.count("    timeout-minutes: 65\n"), 1)
         image_job = workflow[image_start:instrumentation_start]
 
         self.assertIn(
