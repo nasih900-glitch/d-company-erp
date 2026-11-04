@@ -77,9 +77,13 @@ RUN apk add --no-cache --upgrade \
     && addgroup -S -g 1001 erp \
     && adduser -S -D -u 1001 -G erp -h /home/erp erp
 RUN python -I -B /tmp/bootstrap-verified-pip.py && rm /tmp/bootstrap-verified-pip.py
+COPY infra/docker/prune-python-sqlite.sh /tmp/prune-python-sqlite.sh
+RUN sh /tmp/prune-python-sqlite.sh
 WORKDIR /app
 COPY --from=builder /install /usr/local
+RUN sh /tmp/prune-python-sqlite.sh --after-wheels && rm /tmp/prune-python-sqlite.sh
 COPY backend/ .
+COPY infra/docker/verify-backend-runtime-profile.py /usr/local/bin/verify-backend-runtime-profile.py
 COPY infra/docker/backend-entrypoint.sh /entrypoint.sh
 COPY infra/docker/write-release-identity.sh /tmp/write-release-identity.sh
 RUN sh /tmp/write-release-identity.sh "$APP_VERSION" "$APP_REVISION" /etc/dcompany/release-identity.json \

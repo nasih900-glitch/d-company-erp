@@ -150,7 +150,7 @@ candidate_images=$(python3 ops/runtime_release_parity.py candidate \
 # Build55 proves the actual final-image trust stores and image encoders offline.
 # Bind the helper from this exact source checkout read-only; never install or
 # download while checking a runtime image, and never run a mutable image tag.
-if [ "$APP_VERSION" = 3.1.56 ]; then
+if [ "$APP_VERSION" = 3.1.57 ]; then
   TRUST_BACKEND_IMAGE_ID=$(python3 -c \
     'import json,sys; print(json.loads(sys.argv[1])["services"]["backend"]["image_id"])' \
     "$candidate_images")
@@ -282,6 +282,12 @@ printf 'redis_reference=%s\nredis_image_id=%s\nredis_health=%s\n' \
 "${compose[@]}" exec -T backend python -c \
   "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz', timeout=5).read()"
 "${compose[@]}" exec -T backend alembic current
+# This new final-image profile is mandatory for Build64. Historical migration
+# images have neither this helper nor its 0094 application contract.
+if [ "$APP_VERSION" = 3.1.57 ]; then
+  "${compose[@]}" exec -T backend python -B -c \
+    "import runpy; runpy.run_path('/usr/local/bin/verify-backend-runtime-profile.py', run_name='__main__')"
+fi
 python3 ops/runtime_release_parity.py running \
   --root "$ROOT" --env-file "$CANDIDATE_ENV" \
   --version-name "$APP_VERSION" --source-git-sha "$APP_REVISION" \
