@@ -170,7 +170,7 @@ jobs:
           ./gradlew --no-daemon --max-workers=1 --stacktrace
           '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8'
           -Pkotlin.compiler.execution.strategy=in-process
-          :app:testDebugUnitTest
+          :buildSrc:test :app:testDebugUnitTest
       - name: Compile isolated physical-audit driver (secretless)
         working-directory: android-native
         run: >-
