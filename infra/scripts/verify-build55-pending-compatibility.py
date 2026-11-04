@@ -23,7 +23,7 @@ from uuid import UUID
 PRIOR_REVISION = "5ad146ae076f5178acc2c8e4cb840ecbb0d0343a"
 PRIOR_VERSION = "3.1.46"
 PRIOR_DATABASE_HEAD = "0091"
-CANDIDATE_VERSION = "3.1.56"
+CANDIDATE_VERSION = "3.1.57"
 CANDIDATE_DATABASE_HEAD = "0094"
 PRIOR_SOURCE_ARCHIVE_SHA256 = (
     "7ded1fbc0afb2fb0dc93421bd6fc9b9e9ecef677e69b28ec1a4830d8252f6db5"
@@ -90,8 +90,8 @@ BACKEND_UVICORN_ENTRYPOINT = [
 # Independent review fills these final closure values; the helper cannot hash
 # its own enclosing archive. Historical release maps remain immutable.
 CANDIDATE_RELEASE_FROZEN = True
-CANDIDATE_BACKEND_MANIFEST_SHA256: str | None = "c2c6a543ad81af1def62666841c02a37f64fa2ecf3d55479efaf50de92a751bf"
-CANDIDATE_PROTECTED_SOURCE_SHA256: str | None = "2ff58f42e91baa8cae0dc934412ee05d37068b277720a58ae701025657b08dca"
+CANDIDATE_BACKEND_MANIFEST_SHA256: str | None = '84b2d874e027e44f0737e8ee39d5f2c86c8f333569d2fb211e06476e9424fe8e'
+CANDIDATE_PROTECTED_SOURCE_SHA256: str | None = '8b948023ee1c35fe5efd03549313964c38ec217d99bedebad28bcea1f650f88c'
 EXPECTED_POLICY_SCHEMA_ROWS: tuple[str, ...] = (
     "column|android_update_policy|1|id|integer|NO||||32|2|0||||||||||pg_catalog|int4|NO||||||NO|NEVER||YES",
     "column|android_update_policy|2|mode|character varying|NO||20|80|||||||||||||pg_catalog|varchar|NO||||||NO|NEVER||YES",

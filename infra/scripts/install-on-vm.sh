@@ -674,7 +674,7 @@ YAML
       exit 1
     fi
   fi
-  if grep -qx 'APP_VERSION=3.1.56' "$CANDIDATE_BUILD_ROOT/.env.production.example"; then
+  if grep -qx 'APP_VERSION=3.1.57' "$CANDIDATE_BUILD_ROOT/.env.production.example"; then
     if [ "$PRIOR_REVISION" != 5ad146ae076f5178acc2c8e4cb840ecbb0d0343a ] || \
        [ "$PRIOR_APP_VERSION" != 3.1.46 ] || [ "$PRIOR_DB_HEAD" != 0091 ] || \
        [ -n "$LEGACY_MINIO_CONTAINER" ] || [ -z "$BUILD55_ACCEPTANCE_CREDENTIAL_FILE" ]; then
@@ -787,9 +787,19 @@ fi
 # Oracle Linux/Ubuntu images ship with an iptables INPUT REJECT rule that
 # blocks ports the Oracle Security List opens. Fix:
 echo "==> Opening ports 80 + 443 in iptables (Oracle Cloud fix)…"
-iptables -I INPUT 6 -p tcp -m state --state NEW -m tcp --dport 80  -j ACCEPT  || true
-iptables -I INPUT 6 -p tcp -m state --state NEW -m tcp --dport 443 -j ACCEPT  || true
-iptables -I INPUT 6 -p udp -m udp --dport 443 -j ACCEPT                       || true
+ensure_input_accept() {
+  local check_status=0
+  iptables -C INPUT "$@" || check_status=$?
+  case "$check_status" in
+    0) return 0 ;;
+    1) iptables -I INPUT 6 "$@" ;;
+    *) echo "Cannot inspect the exact required INPUT rule (iptables exit $check_status)." >&2
+       return "$check_status" ;;
+  esac
+}
+ensure_input_accept -p tcp -m state --state NEW -m tcp --dport 80 -j ACCEPT
+ensure_input_accept -p tcp -m state --state NEW -m tcp --dport 443 -j ACCEPT
+ensure_input_accept -p udp -m udp --dport 443 -j ACCEPT
 # Persist iptables rules across reboots.
 apt-get install -y -qq iptables-persistent
 netfilter-persistent save || true
@@ -1566,7 +1576,7 @@ for path in sorted((root/"backend").rglob("*"), key=lambda path: path.relative_t
 candidate_manifest=hashlib.sha256("".join(manifest_rows).encode()).hexdigest()
 attestation=json.load(open(images))
 print(json.dumps({"prior_revision":prior,"prior_version":"3.1.46","prior_database_head":"0091",
- "candidate_revision":revision,"candidate_version":"3.1.56","candidate_database_head":"0094",
+ "candidate_revision":revision,"candidate_version":"3.1.57","candidate_database_head":"0094",
  "prior_source_archive_sha256":archive,"candidate_source_archive_sha256":candidate_archive,
  "prior_backend_manifest_sha256":manifest,
  "candidate_backend_manifest_sha256":candidate_manifest,
