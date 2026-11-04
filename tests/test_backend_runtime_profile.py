@@ -220,10 +220,10 @@ def test_scanner_child_failure_propagates_through_actual_find(tmp_path, before_w
     assert 'UNREACHABLE' not in completed.stdout
 
 
-@pytest.mark.parametrize('version,expected', [('3.1.57', 7), ('3.1.44', 0), ('3.1.45', 0), ('3.1.46', 0)])
+@pytest.mark.parametrize('version,expected', [('3.1.57', 7), ('3.1.58', 7), ('3.1.44', 0), ('3.1.45', 0), ('3.1.46', 0)])
 def test_new_profile_is_mandatory_only_for_current_runtime(version, expected, tmp_path):
     source = (ROOT / 'infra/scripts/verify-production-runtime-images.sh').read_text()
-    marker = '# This new final-image profile is mandatory for Build64.'
+    marker = '# This new final-image profile is mandatory for Build64 and Build65.'
     block = source[source.index(marker):].split('\nfi\n', 1)[0] + '\nfi\n'
     fake = tmp_path / 'compose'
     fake.write_text('#!/bin/sh\nexit 7\n')

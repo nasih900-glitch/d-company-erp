@@ -1,7 +1,7 @@
 {
   "name": "d-company-erp-frontend",
   "private": true,
-  "version": "3.1.57",
+  "version": "3.1.58",
   "type": "module",
   "scripts": {
     "dev": "vite",

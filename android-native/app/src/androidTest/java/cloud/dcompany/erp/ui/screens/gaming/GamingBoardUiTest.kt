@@ -9,6 +9,8 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Process
 import android.provider.Settings
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivityResultRegistryOwner
 import androidx.activity.result.ActivityResult
@@ -40,9 +42,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getAllSemanticsNodes
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsNodeInteraction
@@ -80,6 +85,7 @@ import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.printToLog
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.DpRect
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
 import cloud.dcompany.erp.core.auth.GamingAccess
@@ -682,11 +688,12 @@ class GamingBoardUiTest {
     ) {
         val footerNode = compose.onNodeWithTag("gaming-drinks-inline-confirm")
             .performScrollTo()
-        val footer = footerNode.getUnclippedBoundsInRoot()
-        val editor = compose.onNodeWithTag("gaming-drinks-inline").getUnclippedBoundsInRoot()
-        val pane = compose.onNodeWithTag("gaming-control-pane").getUnclippedBoundsInRoot()
-        val detail = compose.onNodeWithTag("gaming-detail-viewport").getUnclippedBoundsInRoot()
-        val root = compose.onNodeWithTag(rootTag).getUnclippedBoundsInRoot()
+        val sample = awaitIntegratedDrinksGeometry(rootTag, filenameStem)
+        val footer = sample.bounds.getValue("footer")
+        val editor = sample.bounds.getValue("editor")
+        val pane = sample.bounds.getValue("pane")
+        val detail = sample.bounds.getValue("detail_viewport")
+        val root = sample.bounds.getValue("root")
         val visibleLeft = maxOf(root.left, detail.left, pane.left, editor.left)
         val visibleTop = maxOf(root.top, detail.top, pane.top, editor.top)
         val visibleRight = minOf(root.right, detail.right, pane.right, editor.right)
@@ -700,6 +707,8 @@ class GamingBoardUiTest {
                 "pane" to pane,
                 "editor" to editor,
                 "footer" to footer,
+                "atomic_native_and_scroll_state" to sample.state,
+                "current_semantics_ids" to sample.ids,
                 "visible_intersection" to
                     "[$visibleLeft,$visibleTop,$visibleRight,$visibleBottom]",
             ),
@@ -714,6 +723,90 @@ class GamingBoardUiTest {
                 footer.top >= visibleTop && footer.bottom <= visibleBottom &&
                 footer.bottom - footer.top >= 48.dp,
         )
+    }
+
+    private data class DrinksGeometrySample(
+        val bounds: Map<String, DpRect>,
+        val ids: Map<String, Int>,
+        val state: String,
+        val ready: Boolean,
+    )
+
+    private fun awaitIntegratedDrinksGeometry(rootTag: String, filenameStem: String): DrinksGeometrySample {
+        val owner = compose.onNodeWithTag(rootTag).fetchSemanticsNode().root as ViewRootForTest
+        val tags = linkedMapOf("root" to rootTag, "detail_viewport" to "gaming-detail-viewport",
+            "pane" to "gaming-control-pane", "editor" to "gaming-drinks-inline",
+            "footer" to "gaming-drinks-inline-confirm")
+        var previous: DrinksGeometrySample? = null
+        var last: DrinksGeometrySample? = null
+        var stableFrames = 0
+        try {
+            compose.waitUntil(5_000L) {
+                awaitGeometryAndroidFrame()
+                val current = compose.runOnIdle {
+                    // Resolve the live tree here: five test interactions can observe five frames.
+                    val nodes = owner.semanticsOwner.getAllSemanticsNodes(mergingEnabled = true)
+                    val selected = tags.mapValues { (_, tag) -> nodes.filter {
+                        it.config.getOrNull(SemanticsProperties.TestTag) == tag
+                    } }
+                    val view = owner.view
+                    val frame = android.graphics.Rect().also(view::getWindowVisibleDisplayFrame)
+                    val insets = ViewCompat.getRootWindowInsets(view)
+                    val origin = IntArray(2).also(view::getLocationOnScreen)
+                    val state = org.json.JSONObject()
+                        .put("visibleFrame", frame.toShortString()).put("origin", origin.toList())
+                        .put("width", view.width).put("height", view.height)
+                        .put("attached", view.isAttachedToWindow).put("windowFocus", view.hasWindowFocus())
+                        .put("layoutRequested", view.isLayoutRequested)
+                        .put("pendingComposeLayout", owner.hasPendingMeasureOrLayout)
+                        .put("imeVisible", insets?.isVisible(WindowInsetsCompat.Type.ime()))
+                        .put("imeBottom", insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom)
+                        .put("focusedNodes", nodes.filter { it.config.getOrNull(SemanticsProperties.Focused) == true }.map { it.id })
+                        .put("counts", selected.mapValues { it.value.size })
+                        .put("scroll", nodes.mapNotNull { node ->
+                            node.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange)?.let {
+                                "${node.id}:${it.value()}:${it.maxValue()}:${it.reverseScrolling}"
+                            }
+                        }).toString()
+                    val live = selected.values.all { rows -> rows.size == 1 && rows.single().let {
+                        it.layoutInfo.isAttached && it.layoutInfo.isPlaced && it.root === owner
+                    } }
+                    val bounds = if (!live) emptyMap() else selected.mapValues { (_, rows) ->
+                        val node = rows.single()
+                        with(node.layoutInfo.density) {
+                            val originInRoot = node.positionInRoot
+                            DpRect(originInRoot.x.toDp(), originInRoot.y.toDp(),
+                                (originInRoot.x + node.size.width).toDp(), (originInRoot.y + node.size.height).toDp())
+                        }
+                    }
+                    DrinksGeometrySample(bounds, selected.filterValues { it.size == 1 }.mapValues { it.value.single().id },
+                        state, live && view.isAttachedToWindow && view.hasWindowFocus() && insets != null &&
+                            !frame.isEmpty && view.width > 0 && view.height > 0 && !view.isLayoutRequested &&
+                            !owner.hasPendingMeasureOrLayout)
+                }
+                last = current
+                stableFrames = if (current.ready && current == previous) stableFrames + 1 else 0
+                previous = current
+                stableFrames >= 2
+            }
+        } catch (failure: Throwable) {
+            runCatching { captureDiagnostic(filenameStem + "-readiness-timeout", rootTag,
+                mapOf("last_atomic_sample" to last.toString())) }.onFailure(failure::addSuppressed)
+            throw failure
+        }
+        return checkNotNull(last)
+    }
+
+    private fun awaitGeometryAndroidFrame() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val frame = java.util.concurrent.CountDownLatch(1)
+        val callback = android.view.Choreographer.FrameCallback { frame.countDown() }
+        try {
+            instrumentation.runOnMainSync { android.view.Choreographer.getInstance().postFrameCallback(callback) }
+            check(frame.await(2, java.util.concurrent.TimeUnit.SECONDS)) { "Android frame was not delivered" }
+        } finally {
+            instrumentation.runOnMainSync { android.view.Choreographer.getInstance().removeFrameCallback(callback) }
+        }
     }
 
     @OptIn(ExperimentalTestApi::class)
@@ -3420,7 +3513,14 @@ class GamingBoardUiTest {
         bounds: Map<String, Any>,
     ): File {
         val filename = "$filenameStem-${Process.myPid()}-${System.nanoTime()}.png"
-        val output = File(requireNotNull(compose.activity.getExternalFilesDir(null)), filename)
+        val directory = InstrumentationRegistry.getArguments().getString("additionalTestOutputDir")
+            ?.let(::File) ?: requireNotNull(compose.activity.getExternalFilesDir(null))
+        check(directory.isDirectory || directory.mkdirs())
+        val output = File(directory, filename)
+        val json = File(directory, filename.removeSuffix(".png") + ".json")
+        json.writeText(org.json.JSONObject(bounds.mapValues { it.value.toString() })
+            .put("screenshotTiming", "after atomic sample; not same-frame pixel evidence").toString(2))
+        publishDiagnostic(json, bounds)
         val bitmap = compose.onNodeWithTag(rootTag).captureToImage().asAndroidBitmap()
         try {
             output.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }

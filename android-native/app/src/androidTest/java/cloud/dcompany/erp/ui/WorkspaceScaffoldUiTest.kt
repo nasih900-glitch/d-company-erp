@@ -48,6 +48,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getAllSemanticsNodes
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -643,24 +646,18 @@ class WorkspaceScaffoldUiTest {
             compose.waitUntil(5_000L) {
                 compose.onAllNodesWithTag("workspace-navigation-rail").fetchSemanticsNodes().isEmpty()
             }
-            val gestureNode = compose.onNodeWithTag("workspace-wide-gesture-host").fetchSemanticsNode()
-            val rootView = (gestureNode.root as ViewRootForTest).view
-            val rootLocation = IntArray(2)
-            lateinit var gestureScreenBounds: Rect
+            val rootOwner = compose.onNodeWithTag("workspace-wide-gesture-host")
+                .fetchSemanticsNode().root as ViewRootForTest
+            val edgeSample = awaitPhysicalEdgeReadiness(rootOwner)
+            val rootView = rootOwner.view
+            val rootLocation = edgeSample.origin
+            val gestureScreenBounds = edgeSample.bounds
             instrumentation.runOnMainSync {
-                rootView.getLocationOnScreen(rootLocation)
-                val bounds = gestureNode.boundsInRoot
-                gestureScreenBounds = Rect(
-                    (rootLocation[0] + bounds.left).roundToInt(),
-                    (rootLocation[1] + bounds.top).roundToInt(),
-                    (rootLocation[0] + bounds.right).roundToInt(),
-                    (rootLocation[1] + bounds.bottom).roundToInt(),
-                )
                 assertEquals("Reveal host must reach the physical left edge", 0, gestureScreenBounds.left)
                 assertEquals("Reveal host must span the physical display width", host.modeWidthPx, gestureScreenBounds.right)
                 assertTrue(
                     "Android must report an edge-gesture inset for this geometry check",
-                    checkNotNull(rootView.rootWindowInsets).getInsets(WindowInsets.Type.systemGestures()).left > 0,
+                    edgeSample.gestureLeft > 0,
                 )
             }
             val startX = 5f // Physical display pixels, deliberately outside the decorative16px frame.
@@ -738,6 +735,89 @@ class WorkspaceScaffoldUiTest {
         } finally {
             instrumentation.runOnMainSync { backObserver.remove() }
         }
+    }
+
+    private data class EdgeReadinessSample(
+        val bounds: Rect,
+        val origin: List<Int>,
+        val gestureLeft: Int,
+        val state: String,
+        val ready: Boolean,
+    )
+
+    private fun awaitPhysicalEdgeReadiness(owner: ViewRootForTest): EdgeReadinessSample {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        var previous: EdgeReadinessSample? = null
+        var last: EdgeReadinessSample? = null
+        var stableFrames = 0
+        try {
+            compose.waitUntil(5_000L) {
+                val frame = java.util.concurrent.CountDownLatch(1)
+                val callback = android.view.Choreographer.FrameCallback { frame.countDown() }
+                try {
+                    instrumentation.runOnMainSync { android.view.Choreographer.getInstance().postFrameCallback(callback) }
+                    check(frame.await(2, java.util.concurrent.TimeUnit.SECONDS)) { "Android frame was not delivered" }
+                } finally {
+                    instrumentation.runOnMainSync { android.view.Choreographer.getInstance().removeFrameCallback(callback) }
+                }
+                val current = compose.runOnIdle {
+                    val view = owner.view
+                    val nodes = owner.semanticsOwner.getAllSemanticsNodes(mergingEnabled = true)
+                        .filter { it.config.getOrNull(SemanticsProperties.TestTag) == "workspace-wide-gesture-host" }
+                    val live = nodes.singleOrNull()?.takeIf {
+                        it.layoutInfo.isAttached && it.layoutInfo.isPlaced && it.root === owner
+                    }
+                    val origin = IntArray(2).also(view::getLocationOnScreen)
+                    val nativeFrame = Rect().also(view::getWindowVisibleDisplayFrame)
+                    val insets = view.rootWindowInsets
+                    val left = insets?.getInsets(WindowInsets.Type.systemGestures())?.left ?: 0
+                    val bounds = live?.boundsInRoot?.let {
+                        Rect((origin[0] + it.left).roundToInt(), (origin[1] + it.top).roundToInt(),
+                            (origin[0] + it.right).roundToInt(), (origin[1] + it.bottom).roundToInt())
+                    } ?: Rect()
+                    val state = org.json.JSONObject().put("nodeCount", nodes.size).put("nodeId", live?.id)
+                        .put("attached", view.isAttachedToWindow).put("windowFocus", view.hasWindowFocus())
+                        .put("visibleFrame", nativeFrame.toShortString()).put("width", view.width).put("height", view.height)
+                        .put("layoutRequested", view.isLayoutRequested).put("pendingComposeLayout", owner.hasPendingMeasureOrLayout)
+                        .put("systemGestures", insets?.getInsets(WindowInsets.Type.systemGestures()).toString())
+                        .put("imeVisible", insets?.isVisible(WindowInsets.Type.ime()))
+                        .put("imeBottom", insets?.getInsets(WindowInsets.Type.ime())?.bottom).toString()
+                    EdgeReadinessSample(bounds, origin.toList(), left, state,
+                        live != null && view.isAttachedToWindow && view.hasWindowFocus() && left > 0 &&
+                            !view.isLayoutRequested && !owner.hasPendingMeasureOrLayout && !nativeFrame.isEmpty)
+                }
+                last = current
+                stableFrames = if (current.ready && current == previous) stableFrames + 1 else 0
+                previous = current
+                stableFrames >= 2
+            }
+        } catch (failure: Throwable) {
+            runCatching { captureEdgeReadinessDiagnostic(last) }.onFailure(failure::addSuppressed)
+            throw failure
+        }
+        captureEdgeReadinessDiagnostic(last)
+        return checkNotNull(last)
+    }
+
+    private fun captureEdgeReadinessDiagnostic(sample: EdgeReadinessSample?) {
+        val directory = InstrumentationRegistry.getArguments().getString("additionalTestOutputDir")
+            ?.let(::File) ?: outputDirectory()
+        check(directory.isDirectory || directory.mkdirs())
+        val stem = "workspace-edge-readiness-${android.os.Process.myPid()}-${System.nanoTime()}"
+        val json = File(directory, "$stem.json")
+        json.writeText(org.json.JSONObject().put("atomicRootSample", sample.toString())
+            .put("navigationMode", android.provider.Settings.Secure.getString(compose.activity.contentResolver, "navigation_mode"))
+            .put("overlays", boundedAndroidShellOutput("cmd overlay list --user 0", 16_384))
+            .put("screenshotTiming", "after atomic sample; not same-frame pixel evidence").toString(2))
+        InstrumentationRegistry.getInstrumentation().sendStatus(2, android.os.Bundle().apply {
+            putString("dcompany.workspace.diagnostic.path", json.absolutePath)
+        })
+        val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()
+        try {
+            File(directory, "$stem.png").outputStream().use {
+                check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
+            }
+        } finally { bitmap.recycle() }
     }
 
     private fun injectPhysicalDisplaySwipe(startX: Float, startY: Float, endX: Float, endY: Float) {
