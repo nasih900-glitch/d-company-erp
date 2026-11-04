@@ -1119,7 +1119,7 @@ def test_build51_exact_guard_refuses_changed_removed_linked_or_extra_source(
     else:
         path = "backend/app/services/finance/unreviewed_build51_source.py"
         (candidate / path).write_text("UNREVIEWED = True\n", encoding="utf-8")
-        expected = f"unreviewed path entered the Code30.4 build-63 delta: {path}"
+        expected = f"unreviewed path entered the Code30.4 build-64 delta: {path}"
     errors: list[str] = []
     _verify_code30_4_exact_delta(candidate, errors)
     assert expected in errors
@@ -1237,7 +1237,7 @@ def test_build53_exact_guard_refuses_source_mutations_after_positive_baseline(tm
     else:
         path = "infra/scripts/unreviewed_build53_source.py"
         (candidate / path).write_text("UNREVIEWED = True\n")
-        expected = f"unreviewed path entered the Code30.4 build-63 delta: {path}"
+        expected = f"unreviewed path entered the Code30.4 build-64 delta: {path}"
     errors: list[str] = []
     _verify_code30_4_exact_delta(candidate, errors)
     assert expected in errors
@@ -1410,7 +1410,7 @@ def test_build56_exact_guard_refuses_mutations_after_positive_baseline(
     else:
         path = "backend/app/services/client_updates/unreviewed_build56_source.py"
         (candidate / path).write_text("UNREVIEWED = True\n", encoding="utf-8")
-        expected = f"unreviewed path entered the Code30.4 build-63 delta: {path}"
+        expected = f"unreviewed path entered the Code30.4 build-64 delta: {path}"
     errors: list[str] = []
     _verify_code30_4_exact_delta(candidate, errors)
     assert expected in errors
@@ -1548,7 +1548,7 @@ def test_build57_exact_guard_refuses_mutations_after_positive_baseline(tmp_path:
     else:
         path = "infra/scripts/unreviewed_build57_source.py"
         (candidate / path).write_text("UNREVIEWED = True\n", encoding="utf-8")
-        expected = f"unreviewed path entered the Code30.4 build-63 delta: {path}"
+        expected = f"unreviewed path entered the Code30.4 build-64 delta: {path}"
     errors: list[str] = []
     _verify_code30_4_exact_delta(candidate, errors)
     assert expected in errors
@@ -1634,7 +1634,7 @@ def test_build58_exact_guard_refuses_mutations_after_positive_baseline(tmp_path:
     else:
         path = "infra/scripts/unreviewed_build58_source.py"
         (candidate / path).write_text("UNREVIEWED = True\n", encoding="utf-8")
-        expected = f"unreviewed path entered the Code30.4 build-63 delta: {path}"
+        expected = f"unreviewed path entered the Code30.4 build-64 delta: {path}"
     errors: list[str] = []
     _verify_code30_4_exact_delta(candidate, errors)
     assert expected in errors
@@ -1717,7 +1717,7 @@ def test_build59_exact_guard_refuses_mutations_after_positive_baseline(tmp_path:
     else:
         path = "infra/scripts/unreviewed_build59_source.py"
         (candidate / path).write_text("UNREVIEWED = True\n", encoding="utf-8")
-        expected = f"unreviewed path entered the Code30.4 build-63 delta: {path}"
+        expected = f"unreviewed path entered the Code30.4 build-64 delta: {path}"
     errors: list[str] = []
     _verify_code30_4_exact_delta(candidate, errors)
     assert expected in errors
@@ -1799,7 +1799,7 @@ def test_build60_exact_guard_refuses_mutations_after_positive_baseline(tmp_path:
     else:
         path = "backend/app/services/unreviewed_staff_pay.py"
         (candidate / path).write_text("UNREVIEWED = True\n", encoding="utf-8")
-        expected = f"unreviewed path entered the Code30.4 build-63 delta: {path}"
+        expected = f"unreviewed path entered the Code30.4 build-64 delta: {path}"
     errors: list[str] = []
     _verify_code30_4_exact_delta(candidate, errors)
     assert expected in errors
@@ -1836,7 +1836,7 @@ def test_build61_exact_guard_refuses_mutations_after_positive_baseline(tmp_path:
     else:
         path = "backend/app/services/unreviewed_staff_pay.py"
         (candidate / path).write_text("UNREVIEWED = True\n", encoding="utf-8")
-        expected = f"unreviewed path entered the Code30.4 build-63 delta: {path}"
+        expected = f"unreviewed path entered the Code30.4 build-64 delta: {path}"
     errors: list[str] = []
     _verify_code30_4_exact_delta(candidate, errors)
     assert expected in errors

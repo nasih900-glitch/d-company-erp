@@ -542,6 +542,18 @@ def test_backend_image_changes_only_reviewed_openssl_runtime_controls() -> None:
         "    && sh /tmp/verify-patched-zlib.sh \\\n"
         + "    && printf '%s\\n' \"$installed_packages\" | grep -Fx 'zlib-1.3.2-r1' \\\n",
     )
+    # Build64 removes only the optional SQLite production profile. Retain all
+    # historical transforms above and the complete exact-file comparison.
+    expected = _replace_once(
+        expected,
+        "WORKDIR /app\nCOPY --from=builder /install /usr/local\nCOPY backend/ .\n",
+        "COPY infra/docker/prune-python-sqlite.sh /tmp/prune-python-sqlite.sh\n"
+        "RUN sh /tmp/prune-python-sqlite.sh\n"
+        "WORKDIR /app\nCOPY --from=builder /install /usr/local\n"
+        "RUN sh /tmp/prune-python-sqlite.sh --after-wheels && rm /tmp/prune-python-sqlite.sh\n"
+        "COPY backend/ .\n"
+        "COPY infra/docker/verify-backend-runtime-profile.py /usr/local/bin/verify-backend-runtime-profile.py\n",
+    )
     assert BACKEND_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
