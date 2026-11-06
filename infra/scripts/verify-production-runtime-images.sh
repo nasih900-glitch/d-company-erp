@@ -150,7 +150,7 @@ candidate_images=$(python3 ops/runtime_release_parity.py candidate \
 # Build55 proves the actual final-image trust stores and image encoders offline.
 # Bind the helper from this exact source checkout read-only; never install or
 # download while checking a runtime image, and never run a mutable image tag.
-if [ "$APP_VERSION" = 3.1.57 ] || [ "$APP_VERSION" = 3.1.58 ] || [ "$APP_VERSION" = 3.1.59 ] || [ "$APP_VERSION" = 3.1.60 ] || [ "$APP_VERSION" = 3.1.61 ] || [ "$APP_VERSION" = 3.1.62 ] || [ "$APP_VERSION" = 3.1.63 ]; then
+if [ "$APP_VERSION" = 3.1.57 ] || [ "$APP_VERSION" = 3.1.58 ] || [ "$APP_VERSION" = 3.1.59 ] || [ "$APP_VERSION" = 3.1.60 ] || [ "$APP_VERSION" = 3.1.61 ] || [ "$APP_VERSION" = 3.1.62 ] || [ "$APP_VERSION" = 3.1.63 ] || [ "$APP_VERSION" = 3.1.64 ]; then
   TRUST_BACKEND_IMAGE_ID=$(python3 -c \
     'import json,sys; print(json.loads(sys.argv[1])["services"]["backend"]["image_id"])' \
     "$candidate_images")
@@ -282,9 +282,9 @@ printf 'redis_reference=%s\nredis_image_id=%s\nredis_health=%s\n' \
 "${compose[@]}" exec -T backend python -c \
   "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz', timeout=5).read()"
 "${compose[@]}" exec -T backend alembic current
-# The final-image profile is mandatory for Builds 64 through 70. The installed
+# The final-image profile is mandatory for Builds 64 through 71. The installed
 # app identity determines the exact migration revision required by the proof.
-if [ "$APP_VERSION" = 3.1.57 ] || [ "$APP_VERSION" = 3.1.58 ] || [ "$APP_VERSION" = 3.1.59 ] || [ "$APP_VERSION" = 3.1.60 ] || [ "$APP_VERSION" = 3.1.61 ] || [ "$APP_VERSION" = 3.1.62 ] || [ "$APP_VERSION" = 3.1.63 ]; then
+if [ "$APP_VERSION" = 3.1.57 ] || [ "$APP_VERSION" = 3.1.58 ] || [ "$APP_VERSION" = 3.1.59 ] || [ "$APP_VERSION" = 3.1.60 ] || [ "$APP_VERSION" = 3.1.61 ] || [ "$APP_VERSION" = 3.1.62 ] || [ "$APP_VERSION" = 3.1.63 ] || [ "$APP_VERSION" = 3.1.64 ]; then
   "${compose[@]}" exec -T backend python -B -c \
     "import runpy; runpy.run_path('/usr/local/bin/verify-backend-runtime-profile.py', run_name='__main__')"
 fi

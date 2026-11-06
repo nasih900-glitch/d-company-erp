@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
+import android.os.Looper
 import android.os.Process
 import android.view.ViewConfiguration
 import androidx.activity.ComponentActivity
@@ -36,6 +37,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertHeightIsAtLeast
@@ -100,8 +102,11 @@ import java.io.File
 import java.security.MessageDigest
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.AfterClass
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -109,6 +114,7 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TestRule
 import org.junit.runner.RunWith
 
 private const val GamingGlassDisplayArgument = "dcompany.testDisplayId"
@@ -140,7 +146,10 @@ private fun <A : ComponentActivity> ActivityScenarioRule<A>.gamingGlassActivity(
     }
 }
 
-private fun createGamingGlassRule(): AndroidComposeTestRule<ActivityScenarioRule<ComponentActivity>, ComponentActivity> {
+@OptIn(ExperimentalTestApi::class)
+private fun createGamingGlassRule(
+    effectContext: CoroutineContext,
+): AndroidComposeTestRule<ActivityScenarioRule<ComponentActivity>, ComponentActivity> {
     val rule = if (RequestedGamingGlassDisplay == null) {
         ActivityScenarioRule(ComponentActivity::class.java)
     } else {
@@ -149,12 +158,23 @@ private fun createGamingGlassRule(): AndroidComposeTestRule<ActivityScenarioRule
             ActivityOptions.makeBasic().setLaunchDisplayId(RequestedGamingGlassDisplay!!).toBundle(),
         )
     }
-    return AndroidComposeTestRule(rule) { it.gamingGlassActivity() }
+    return AndroidComposeTestRule(rule, effectContext = effectContext) { it.gamingGlassActivity() }
 }
 
 @RunWith(AndroidJUnit4::class)
 class GamingGlassUiTest {
-    @get:Rule val compose = createGamingGlassRule()
+    private lateinit var compose: AndroidComposeTestRule<ActivityScenarioRule<ComponentActivity>, ComponentActivity>
+
+    @get:Rule
+    val fixtureRule = TestRule { base, description ->
+        // This test swaps async bitmaps and inserts new layout nodes. Queue its
+        // recomposer on Compose's UI-driven clock instead of a bitmap worker.
+        val effectContext = if (
+            description.methodName == ::defaultSectionCardAndTransparentOptInUseSceneMaterialWhileFallbackStaysSolid.name
+        ) StandardTestDispatcher() else EmptyCoroutineContext
+        compose = createGamingGlassRule(effectContext)
+        compose.apply(base, description)
+    }
 
     @Test
     fun deniedPreciseAlarmLongFeedbackUsesActualBoundedScrollOwnerAtCompactFontScale() {
@@ -939,6 +959,9 @@ class GamingGlassUiTest {
             CompositionLocalProvider(LocalDensity provides Density(density, 1f)) {
                 DCompanyTheme(AppearancePreference.Night) {
                     WorkspaceBackgroundRenderer(image = image.value, modifier = Modifier.width(640.dp).height(440.dp)) {
+                        SideEffect {
+                            assertTrue("SectionCard recomposition must stay on main", Looper.myLooper() === Looper.getMainLooper())
+                        }
                         Column(Modifier.fillMaxSize().padding(32.dp)) {
                             SectionCard(
                                 modifier = Modifier.width(300.dp).height(100.dp).testTag("section-standard"),
