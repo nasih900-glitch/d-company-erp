@@ -207,6 +207,7 @@ data class PreparedHeldCheckout(
     /** Prevents a claim prepared under one drawer shift being paid after a shift rollover. */
     val shiftIdAtClaim: String,
     val sourceLabel: String?,
+    val type: String,
     val subtotalMinor: Long,
     val discountMinor: Long,
     val manualDiscountMinor: Long,
@@ -221,7 +222,10 @@ data class PreparedHeldCheckout(
     val claimToken: String,
     val claimExpiresAtMillis: Long,
     val claimOrderVersion: Long,
-)
+) {
+    val allowsGenericVoid: Boolean
+        get() = type == "dine_in" || type == "takeaway" || type == "delivery"
+}
 
 /** Full server bill shown before a short-lived checkout claim is acquired. */
 data class HeldOrderReview(
@@ -2736,6 +2740,9 @@ class PosViewModel : ViewModel() {
     }
 
     fun voidOrder(orderId: String, reason: String) {
+        val direct = state.value.preparedDirectCheckout?.takeIf { it.orderId == orderId }
+        val held = preparedHeldCheckout.value?.takeIf { it.orderId == orderId }
+        if (held?.allowsGenericVoid == false || (held == null && direct == null)) return
         if (!requireVoid()) return
         val cleanReason = reason.trim()
         if (cleanReason.isEmpty()) {
@@ -2747,8 +2754,6 @@ class PosViewModel : ViewModel() {
             return
         }
         if (checkoutBusy.value) return
-        val direct = state.value.preparedDirectCheckout?.takeIf { it.orderId == orderId }
-        val held = preparedHeldCheckout.value?.takeIf { it.orderId == orderId }
         val scopeLease = scopeLeaseOrNotice(POS_VOID_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
         checkoutBusy.value = true
         operations.launch(viewModelScope, onRejected = { checkoutBusy.value = false; notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
@@ -3429,6 +3434,7 @@ class PosViewModel : ViewModel() {
                     orderId = claim.orderId,
                     shiftIdAtClaim = shiftIdAtClaim,
                     sourceLabel = review.sourceLabel ?: review.invoiceNo,
+                    type = review.type,
                     subtotalMinor = review.subtotalMinor,
                     discountMinor = review.discountMinor,
                     manualDiscountMinor = review.manualDiscountMinor,

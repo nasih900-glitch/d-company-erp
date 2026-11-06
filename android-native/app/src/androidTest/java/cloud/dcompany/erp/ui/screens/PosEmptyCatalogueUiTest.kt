@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.screens
 
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
@@ -10,11 +11,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -972,6 +975,69 @@ class PosEmptyCatalogueUiTest {
     }
 
     @Test
+    fun heldGamingInlinePaymentAndZeroCompletionHideGenericVoid() {
+        verifyHeldGenericVoidEligibility(screenWidthDp = 1024, inline = true)
+    }
+
+    @Test
+    fun heldGamingDialogPaymentAndZeroCompletionHideGenericVoid() {
+        verifyHeldGenericVoidEligibility(screenWidthDp = 600, inline = false)
+    }
+
+    private fun verifyHeldGenericVoidEligibility(screenWidthDp: Int, inline: Boolean) {
+        val state = mutableStateOf(
+            PosUiState(
+                online = true,
+                activeShiftId = "shift-1",
+                canCollectPayment = true,
+                preparedHeldCheckout = preparedHeldCheckout("session-positive"),
+            ),
+        )
+        renderDynamic(
+            state = state,
+            viewportSize = mutableStateOf(screenWidthDp to 640),
+            screenWidthDpOverride = screenWidthDp,
+        )
+        fun checkout(type: String, zero: Boolean) {
+            compose.runOnIdle {
+                state.value = state.value.copy(
+                    preparedHeldCheckout = if (zero) {
+                        preparedHeldCheckout(
+                            claimToken = "$type-zero",
+                            discountMinor = 12_000L,
+                            totalMinor = 0L,
+                            dueMinor = 0L,
+                            type = type,
+                        )
+                    } else {
+                        preparedHeldCheckout(claimToken = "$type-positive", type = type)
+                    },
+                )
+            }
+            if (inline) {
+                val tag = if (zero) "pos-benefit-confirmation-inline" else "pos-payment-confirmation-inline"
+                compose.onNodeWithTag(tag).assertIsDisplayed()
+                compose.onNode(isDialog()).assertDoesNotExist()
+            } else {
+                compose.onNode(isDialog()).assertExists()
+            }
+            if (zero) {
+                compose.onNodeWithText("COMPLETE BENEFIT · 0 DUE").assertIsEnabled()
+            } else {
+                compose.onNodeWithText("Enter cash received").assertExists()
+            }
+        }
+
+        for (zero in listOf(false, true)) {
+            checkout(type = "session", zero = zero)
+            compose.onNodeWithText("Void bill").assertDoesNotExist()
+
+            checkout(type = "dine_in", zero = zero)
+            compose.onNodeWithText("Void bill").assertIsEnabled()
+        }
+    }
+
+    @Test
     fun namedRewardRequiresReviewAndDispatchesItsStableKeyOnce() {
         val dispatched = mutableListOf<String>()
         render(
@@ -1093,6 +1159,7 @@ class PosEmptyCatalogueUiTest {
         onClearCart: () -> Unit = {},
         viewportSize: State<Pair<Int, Int>>? = null,
         workspaceDestination: MutableState<Destination>? = null,
+        screenWidthDpOverride: Int? = null,
     ) {
         compose.setContent {
             DCompanyTheme {
@@ -1108,7 +1175,7 @@ class PosEmptyCatalogueUiTest {
                         viewportModifier.background(MaterialTheme.colorScheme.background)
                             .testTag("pos-layout-root"),
                     ) {
-                        val posScreen: @Composable () -> Unit = {
+                        val posContent: @Composable () -> Unit = {
                         PosScreen(
                             state = state.value,
                             recentReceipts = emptyList(),
@@ -1163,6 +1230,16 @@ class PosEmptyCatalogueUiTest {
                             eligibleRewardCatalog = eligibleRewardCatalog,
                             presentation = presentation,
                         )
+                        }
+                        val posScreen: @Composable () -> Unit = {
+                            if (screenWidthDpOverride == null) {
+                                posContent()
+                            } else {
+                                val configuration = Configuration(LocalConfiguration.current).apply {
+                                    screenWidthDp = screenWidthDpOverride
+                                }
+                                CompositionLocalProvider(LocalConfiguration provides configuration, content = posContent)
+                            }
                         }
                         val activeDestination = workspaceDestination
                         if (activeDestination == null) {
@@ -1335,10 +1412,12 @@ class PosEmptyCatalogueUiTest {
         discountMinor: Long = 0L,
         totalMinor: Long = 12_000L,
         dueMinor: Long = 12_000L,
+        type: String = "session",
     ) = PreparedHeldCheckout(
         orderId = "held-1",
         shiftIdAtClaim = "shift-1",
         sourceLabel = "PS5 Station 1",
+        type = type,
         subtotalMinor = subtotalMinor,
         discountMinor = discountMinor,
         manualDiscountMinor = 0L,

@@ -261,6 +261,22 @@ class WorkspaceLeaseFeedbackContractTest {
         assertTrue("Post-removal API failure must use outcome-aware wording", "posVoidFailureNotice(" in afterPost)
     }
 
+    @Test
+    fun `generic void refuses an ineligible or stale held checkout before any side effect`() {
+        val source = read("src/main/java/cloud/dcompany/erp/ui/screens/PosViewModel.kt")
+        val preparation = source.substringAfter("val prepared = PreparedHeldCheckout(")
+            .substringBefore("preparedHeldCheckout.value = prepared")
+        assertTrue("The held claim must preserve the authoritative review type", "type = review.type" in preparation)
+
+        val void = source.between("    fun voidOrder(", "    fun captureSale(")
+        val gate = "if (held?.allowsGenericVoid == false || (held == null && direct == null)) return"
+        val gateIndex = void.indexOf(gate)
+        assertTrue("The refusal must precede permission notices, lease checks and checkout changes", gateIndex > 0)
+        for (effect in listOf("requireVoid()", "notice.value", "scopeLeaseOrNotice(", "checkoutBusy.value =", "operations.launch(", "clearPreparedHeldCheckout(", "ApiClient.api.voidOrder(")) {
+            assertTrue("The refusal must precede $effect", void.indexOf(effect) > gateIndex)
+        }
+    }
+
     private fun assertRetryCleanup(source: String, setName: String) {
         val beforeLaunch = source.substringBefore("viewModelScope.launch")
         val launchBody = source.substringAfter("viewModelScope.launch")

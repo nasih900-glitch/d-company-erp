@@ -634,7 +634,7 @@ fun PosScreen(
                                     online = state.online,
                                     confirmEnabled = state.canCollectPayment && !state.checkoutBusy,
                                     onDismiss = onDismissHeldOrder,
-                                    onVoid = if (access.canVoid) ({
+                                    onVoid = if (access.canVoid && checkout.allowsGenericVoid) ({
                                         voidTarget = PosVoidTarget(
                                             checkout.orderId,
                                             checkout.sourceLabel ?: "Held bill ${checkout.orderId.take(8)}",
@@ -666,7 +666,7 @@ fun PosScreen(
                                     inline = true,
                                     modifier = paneModifier,
                                     onDismiss = onDismissHeldOrder,
-                                    onVoid = if (access.canVoid) ({
+                                    onVoid = if (access.canVoid && checkout.allowsGenericVoid) ({
                                         voidTarget = PosVoidTarget(
                                             checkout.orderId,
                                             checkout.sourceLabel ?: "Held bill ${checkout.orderId.take(8)}",
@@ -1002,7 +1002,7 @@ fun PosScreen(
                     online = state.online,
                     confirmEnabled = state.canCollectPayment && !state.checkoutBusy,
                     onDismiss = onDismissHeldOrder,
-                    onVoid = if (access.canVoid) {
+                    onVoid = if (access.canVoid && checkout.allowsGenericVoid) {
                         {
                             voidTarget = PosVoidTarget(
                                 checkout.orderId,
@@ -1032,7 +1032,7 @@ fun PosScreen(
                     pointsRedeemedMinor = checkout.pointsRedeemedMinor,
                     showCustomerBenefits = presentation.showsCustomers,
                     onDismiss = onDismissHeldOrder,
-                    onVoid = if (access.canVoid) {
+                    onVoid = if (access.canVoid && checkout.allowsGenericVoid) {
                         {
                             voidTarget = PosVoidTarget(
                                 checkout.orderId,
