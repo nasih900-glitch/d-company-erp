@@ -894,7 +894,7 @@ def test_main_installer_orders_preservation_before_any_writer_and_never_reopens_
     assert 'sha256sum "$BUILD55_ACCEPTANCE_CREDENTIAL_FILE"' not in source
 
 
-@pytest.mark.parametrize("version", ["3.1.46", "3.1.47", "3.1.48", "3.1.49", "3.1.50", "3.1.51", "3.1.52", "3.1.53", "3.1.54", "3.1.55", "3.1.56", "3.1.57", "3.1.59"])
+@pytest.mark.parametrize("version", ["3.1.46", "3.1.47", "3.1.48", "3.1.49", "3.1.50", "3.1.51", "3.1.52", "3.1.53", "3.1.54", "3.1.55", "3.1.56", "3.1.57", "3.1.59", "3.1.60"])
 def test_current_profile_rejects_withheld_or_other_release_identity(verifier, monkeypatch, version):
     from types import SimpleNamespace
 
@@ -969,10 +969,11 @@ def test_installer_backend_manifest_uses_verifier_posix_name_order(tmp_path, ver
     assert verifier.sha(old_component_order.encode()) != namespace["candidate_manifest"]
 
 
-def test_frozen_candidate_backend_manifest_matches_current_git_archive_wire(tmp_path, verifier):
-    # Use actual committed source bytes, excluding local test caches, and do not
-    # replace the reviewed constant as the synthetic privileged-I/O fixtures do.
-    archive = subprocess.check_output(["git", "archive", "HEAD"], cwd=ROOT)
+def test_frozen_candidate_backend_manifest_matches_released65_git_archive_wire(tmp_path, verifier):
+    # This verifier's candidate constants describe released Build65, even
+    # when this contract runs on a later checkout.
+    released65 = "9e31d0daaa5fbf8b46647a213f6e7beab1ca087a"
+    archive = subprocess.check_output(["git", "archive", released65], cwd=ROOT)
     with tarfile.open(fileobj=io.BytesIO(archive)) as source:
         source.extractall(tmp_path, filter="data")
     installer = (tmp_path / "infra/scripts/install-on-vm.sh").read_text()

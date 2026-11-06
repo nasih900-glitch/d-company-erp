@@ -8,6 +8,7 @@ import cloud.dcompany.erp.core.auth.SessionRefreshLease
 import cloud.dcompany.erp.core.auth.ValidatedTerminalDisplay
 import cloud.dcompany.erp.core.net.MeResponse
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
@@ -15,6 +16,16 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+
+internal enum class StartupShiftAuthorityFailure {
+    ORIGIN, STORAGE_UNAVAILABLE, FENCE_CLOSED, INITIALIZATION, INITIALIZATION_TIMEOUT,
+}
+
+internal class StartupShiftAuthorityException(
+    val stage: StartupShiftAuthorityFailure,
+    cause: Exception? = null,
+) : IllegalStateException("The verified login and till could not open the workspace.", cause)
 
 /** Process-owned bridge. Every provider is explicit; absent startup/authority never means permission. */
 internal class HandoverOperations(
@@ -73,6 +84,43 @@ internal class HandoverOperations(
     /** Call at caller construction with its actual profile/lease, never with freshly-read B in an old callback. */
     fun captureOriginal(profile: MeResponse?, lease: CacheScopeLease?): OriginalOperationBinding? = captureCurrent(profile, lease, null)
 
+    /** Wait for an in-flight bind, then prove and bind only the original startup scope. */
+    suspend fun captureStartupShiftAuthority(
+        profile: MeResponse,
+        lease: CacheScopeLease,
+        loginLineage: Any,
+    ): OriginalOperationBinding = withTimeoutOrNull(15_000) {
+        bindMutex.withLock {
+            // Coordinator initialization deliberately closes readiness during
+            // the durable read. Treat its final state, not that transient
+            // closed interval, as the verdict for this startup attempt.
+            requireStartupShiftFenceOpen()
+            val original = lease.takeIf { it.scope.terminalId != null }?.let {
+                captureCurrent(profile, it, recovery = null, expectedLoginLineage = loginLineage)
+            } ?: throw StartupShiftAuthorityException(StartupShiftAuthorityFailure.ORIGIN)
+            try {
+                bindLocked(original)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                throw StartupShiftAuthorityException(StartupShiftAuthorityFailure.INITIALIZATION, failure)
+            }
+            requireStartupShiftFenceOpen()
+            if (!original.isCurrent()) throw StartupShiftAuthorityException(StartupShiftAuthorityFailure.ORIGIN)
+            original
+        }
+    } ?: throw StartupShiftAuthorityException(StartupShiftAuthorityFailure.INITIALIZATION_TIMEOUT)
+
+    private fun requireStartupShiftFenceOpen() {
+        when (status()) {
+            HandoverStartupStatus.Open -> Unit
+            HandoverStartupStatus.Loading, HandoverStartupStatus.Unavailable ->
+                throw StartupShiftAuthorityException(StartupShiftAuthorityFailure.STORAGE_UNAVAILABLE)
+            HandoverStartupStatus.Preparing, is HandoverStartupStatus.RecoveryRequired ->
+                throw StartupShiftAuthorityException(StartupShiftAuthorityFailure.FENCE_CLOSED)
+        }
+    }
+
     /** Only the immutable origin can enter exact-intent observation/cleanup, never ordinary work. */
     fun captureForRecovery(profile: MeResponse?, lease: CacheScopeLease?, expected: HandoverIntent): OriginalOperationBinding? =
         captureCurrent(profile, lease, expected)
@@ -82,12 +130,14 @@ internal class HandoverOperations(
         captureCurrent(profile, lease, expected, HandoverStage.SENT_UNKNOWN)
 
     private fun captureCurrent(profile: MeResponse?, lease: CacheScopeLease?, recovery: HandoverIntent?,
-        recoveryStage: HandoverStage = HandoverStage.NOT_SENT): OriginalOperationBinding? = synchronized(captures) {
+        recoveryStage: HandoverStage = HandoverStage.NOT_SENT,
+        expectedLoginLineage: Any? = null): OriginalOperationBinding? = synchronized(captures) {
         val status = status()
         val permitted = if (recovery == null) status == HandoverStartupStatus.Open else
             status == HandoverStartupStatus.RecoveryRequired(recovery) && recovery.stage == recoveryStage
         if (profile == null || lease == null || !permitted) return@synchronized null
         val session = currentSession() ?: return@synchronized null
+        if (expectedLoginLineage != null && session.session.lineage !== expectedLoginLineage) return@synchronized null
         if (currentCache() != lease || profile.userId != lease.scope.userId || profile.companyId != lease.scope.companyId ||
             AccessTokenIdentityParser.parse(session.accessToken) != OutboxOwnerIdentity.from(profile)) return@synchronized null
         val scope = runCatching { effectiveOperationScope(lease.scope, currentTerminal()) }.getOrNull() ?: return@synchronized null
@@ -105,7 +155,9 @@ internal class HandoverOperations(
         observed = binding; observedSignature = expectedSignature
         binding
     }
-    private suspend fun bind(binding: OriginalOperationBinding) = bindMutex.withLock {
+    private suspend fun bind(binding: OriginalOperationBinding) = bindMutex.withLock { bindLocked(binding) }
+
+    private suspend fun bindLocked(binding: OriginalOperationBinding) {
         check(binding.isCurrent()) { "The originating account or workspace changed." }
         if (boundAuthority != binding.authority) {
             check(coordinator.awaitOwnerSupportIdle(15_000) && binding.isCurrent()) { "The original support delivery is still finishing." }

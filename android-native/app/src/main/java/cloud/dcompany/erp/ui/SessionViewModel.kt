@@ -11,6 +11,7 @@ import cloud.dcompany.erp.PersistedStartupStateResult
 import cloud.dcompany.erp.core.alarm.OperationalAlarmRegistry
 import cloud.dcompany.erp.core.auth.AccessTokenIdentityParser
 import cloud.dcompany.erp.core.auth.CacheScope
+import cloud.dcompany.erp.core.auth.CacheScopeLease
 import cloud.dcompany.erp.core.auth.CachedScopeLeaseAdoption
 import cloud.dcompany.erp.core.auth.CacheScopeActivation
 import cloud.dcompany.erp.core.auth.CacheScopeException
@@ -36,6 +37,8 @@ import cloud.dcompany.erp.core.handover.HandoverIntent
 import cloud.dcompany.erp.core.handover.HandoverStage
 import cloud.dcompany.erp.core.handover.HandoverStartupStatus
 import cloud.dcompany.erp.core.handover.OriginalOperationBinding
+import cloud.dcompany.erp.core.handover.StartupShiftAuthorityException
+import cloud.dcompany.erp.core.handover.StartupShiftAuthorityFailure
 import cloud.dcompany.erp.core.handover.TillPreparationBlocked
 import cloud.dcompany.erp.core.handover.WorkspaceExitAuthority
 import cloud.dcompany.erp.core.handover.WorkspaceExitKind
@@ -95,7 +98,9 @@ private fun logRestoreFailure(stage: RestoreStage, error: Exception) {
     }
     val frameName = frame?.className?.substringAfterLast('.')?.substringBefore('$') ?: "UNKNOWN"
     val line = frame?.lineNumber?.takeIf { it > 0 } ?: 0
-    Log.i("DCompanyRestore", "stage=${stage.name} kind=$kind frame=$frameName line=$line")
+    val startupAuthority = (error as? StartupShiftAuthorityException)?.stage?.name
+    Log.i("DCompanyRestore", "stage=${stage.name} kind=$kind frame=$frameName line=$line" +
+        if (startupAuthority == null) "" else " startupAuthority=$startupAuthority")
 }
 
 sealed interface AuthState {
@@ -181,6 +186,26 @@ internal fun authorityRefreshMayPublish(
     current: AuthState,
     refreshLeaseCurrent: Boolean,
 ): Boolean = refreshLeaseCurrent && current === expected
+
+/** Called synchronously under the exact cache and login ownership checks. */
+internal fun publishVerifiedStartupState(
+    ownsAttempt: Boolean,
+    original: OriginalOperationBinding?,
+    lease: CacheScopeLease,
+    login: SessionRefreshLease,
+    requireOrdinaryReadiness: () -> Unit,
+    publish: () -> Unit,
+): Boolean {
+    if (!ownsAttempt) return false
+    check(original == null || (
+        original.cacheLease == lease &&
+            original.loginLease.session.lineage === login.session.lineage &&
+            original.isCurrent()
+        )) { "The verified login and till changed before opening the workspace." }
+    requireOrdinaryReadiness()
+    publish()
+    return true
+}
 
 internal enum class RestoreFailureAction {
     KEEP_CACHED_SESSION,
@@ -947,6 +972,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         restoreLease: SessionRefreshLease,
         cachedProfile: MeResponse?,
     ) {
+        val expectedState = _state.value
         var liveProfileVerified = false
         var stage = RestoreStage.SERVER_PROFILE
         try {
@@ -980,18 +1006,21 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     restoredSession = restoreLease,
                 )
             ) return
+            val verifiedCache = cacheIsolation.currentLease()
             stage = RestoreStage.OUTBOX_BIND
             if (!acceptAuthenticated(me, restoredSession = restoreLease)) return
             if (tokens.currentAccessFor(restoreLease) == null) return
             stage = RestoreStage.SAVE_PROFILE
             cache.rememberProfile(json.encodeToString(MeResponse.serializer(), me))
-            if (EffectivePermissions.from(me).has(ErpPermission.PosRead)) {
+            val original = if (EffectivePermissions.from(me).has(ErpPermission.PosRead)) {
                 stage = RestoreStage.SHIFT_AUTHORITY
-                refreshShiftAuthorityAtLogin()
-            }
-            if (tokens.currentAccessFor(restoreLease) == null) return
+                refreshShiftAuthorityAtLogin(me, restoreLease.session.lineage, verifiedCache)
+            } else null
             stage = RestoreStage.PUBLISH_WORKSPACE
-            _state.value = AuthState.SignedIn(me)
+            if (!publishStartupWorkspace(restoreLease, verifiedCache, original, AuthState.SignedIn(me)) {
+                    _state.value === expectedState
+                }
+            ) return
             stage = RestoreStage.START_SYNC
             sync.requestSync()
             stage = RestoreStage.START_REALTIME
@@ -1069,6 +1098,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     fun signIn(email: String, password: String) {
         if (_signingIn.value) return
+        val expectedState = _state.value
         authorityRefresh.pauseForLogin()
         // A pricing re-auth belongs to one login lineage, not merely a user id.
         // Relogging as the same owner must require the password again.
@@ -1123,16 +1153,23 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                         installedLogin = installedLogin,
                     )
                 ) return@launch
+                val verifiedCache = cacheIsolation.currentLease()
                 if (!acceptAuthenticated(me, installedLogin)) return@launch
                 cache.rememberProfile(json.encodeToString(MeResponse.serializer(), me))
                 // Alarm readers require token + cached profile + Room lease to
                 // agree. Explicit login installs the profile only here, so
                 // re-arm any retained unresolved reminders after that commit.
                 reconcileOperationalAlarms()
-                if (EffectivePermissions.from(me).has(ErpPermission.PosRead)) {
-                    refreshShiftAuthorityAtLogin()
-                }
-                _state.value = freshLoginState(me, installedLogin)
+                val original = if (EffectivePermissions.from(me).has(ErpPermission.PosRead)) {
+                    refreshShiftAuthorityAtLogin(me, installedLogin.lineage, verifiedCache)
+                } else null
+                val publicationLogin = tokens.refreshLease()
+                    ?.takeIf { it.session.lineage === installedLogin.lineage } ?: return@launch
+                val signedIn = freshLoginState(me, installedLogin)
+                if (!publishStartupWorkspace(publicationLogin, verifiedCache, original, signedIn) {
+                        _state.value === expectedState && tokens.isCurrent(installedLogin)
+                    }
+                ) return@launch
                 sync.requestSync()
                 realtime.connect()
                 refreshReceiptHistoryAfterLogin(me)
@@ -1602,7 +1639,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = visible.copy(error = "That till is no longer available. Choose one shown here.")
             return
         }
-        _state.value = visible.copy(choosing = true, error = null)
+        val choosingState = visible.copy(choosing = true, error = null)
+        _state.value = choosingState
 
         viewModelScope.launch {
             try {
@@ -1643,6 +1681,9 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     remember = { terminals.rememberValidated(chosen) },
                 )
                 if (!pending.isTokenCurrent()) return@launch
+                val verifiedCache = cacheIsolation.currentLease()
+                val loginLineage = pending.installedLogin?.lineage
+                    ?: requireNotNull(pending.restoredSession).session.lineage
                 val authenticated = acceptAuthenticated(
                     pending.me,
                     installedLogin = pending.installedLogin,
@@ -1652,16 +1693,23 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 if (!pending.isTokenCurrent()) return@launch
 
                 cache.rememberProfile(json.encodeToString(MeResponse.serializer(), pending.me))
-                refreshShiftAuthorityAtLogin()
+                val original = if (EffectivePermissions.from(pending.me).has(ErpPermission.PosRead)) {
+                    refreshShiftAuthorityAtLogin(pending.me, loginLineage, verifiedCache)
+                } else null
                 if (!pending.isTokenCurrent()) return@launch
+                val publicationLogin = pending.restoredSession ?: tokens.refreshLease()
+                    ?.takeIf { it.session.lineage === loginLineage } ?: return@launch
                 val signedIn = if (pending.installedLogin != null && pending.previousTerminal == null) {
                     freshLoginState(pending.me, pending.installedLogin)
                 } else {
                     freshLoginHandoff.clear()
                     AuthState.SignedIn(pending.me)
                 }
+                if (!publishStartupWorkspace(publicationLogin, verifiedCache, original, signedIn) {
+                        pendingTerminalSession === pending && _state.value === choosingState && pending.isTokenCurrent()
+                    }
+                ) return@launch
                 pendingTerminalSession = null
-                _state.value = signedIn
                 reconcileOperationalAlarms()
                 sync.requestSync()
                 realtime.connect()
@@ -1979,19 +2027,44 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         terminals.deactivateValidatedDisplay()
     }
 
-    /**
-     * Do not expose an Activity-scoped POS ViewModel with another account's
-     * stale adopted cache. A successful sign-in is online, so clear only the
-     * replaceable server read cache and await one terminal-scoped pull before
-     * rendering the workspace. Local open/close outbox legs are untouched.
-     */
-    private suspend fun refreshShiftAuthorityAtLogin() {
-        if (terminals.terminalId() == null) return
-        // SyncEngine orders the clear and authoritative pull behind the same
-        // shift-resource lock used by realtime refresh and shift recovery.
-        // An older GET therefore cannot repopulate stale authority between
-        // this login reset and its replacement read.
-        sync.refreshShiftAuthorityAtLogin()
+    /** Do not expose the POS workspace until this verified login has read its own till. */
+    private suspend fun refreshShiftAuthorityAtLogin(
+        profile: MeResponse,
+        loginLineage: Any,
+        verifiedCache: CacheScopeLease?,
+    ): OriginalOperationBinding {
+        val lease = verifiedCache ?: throw StartupShiftAuthorityException(StartupShiftAuthorityFailure.ORIGIN)
+        val original = dCompanyApp.handoverOperations.captureStartupShiftAuthority(profile, lease, loginLineage)
+        sync.refreshShiftAuthorityAtLogin(original)
+        return original
+    }
+
+    /** Acquiring the cache lock may suspend. The final checks and UI commit do not. */
+    private suspend fun publishStartupWorkspace(
+        login: SessionRefreshLease,
+        verifiedCache: CacheScopeLease?,
+        original: OriginalOperationBinding?,
+        signedIn: AuthState.SignedIn,
+        ownsAttempt: () -> Boolean,
+    ): Boolean {
+        if (!ownsAttempt() || tokens.currentAccessFor(login) == null) return false
+        val lease = checkNotNull(verifiedCache) { "The verified workspace is unavailable." }
+        var published = false
+        val committed = cacheIsolation.commitIfCurrent(lease) {
+            tokens.commitIfOriginalLoginCurrent(login) {
+                published = publishVerifiedStartupState(
+                    ownsAttempt(),
+                    original,
+                    lease,
+                    login,
+                    dCompanyApp.handoverOperations::requireOperationalReadiness,
+                ) { _state.value = signedIn }
+            }
+        }
+        if (!committed && ownsAttempt() && tokens.currentAccessFor(login) != null) {
+            error("The verified workspace changed before it could open.")
+        }
+        return published
     }
 
     /** Receipt history is useful at login, but never belongs on the sign-in critical path. */

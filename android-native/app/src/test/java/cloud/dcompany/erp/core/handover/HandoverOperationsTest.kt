@@ -7,9 +7,14 @@ import cloud.dcompany.erp.core.auth.SessionRefreshLease
 import cloud.dcompany.erp.core.auth.StoredSession
 import cloud.dcompany.erp.core.auth.ValidatedTerminalDisplay
 import cloud.dcompany.erp.core.net.MeResponse
+import java.io.IOException
 import java.util.Base64
 import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -22,7 +27,8 @@ import org.junit.Test
 class HandoverOperationsTest {
     private class Store : HandoverIntentStore {
         var value: HandoverIntent? = null
-        override suspend fun read() = value
+        var beforeRead: suspend () -> Unit = {}
+        override suspend fun read(): HandoverIntent? { beforeRead(); return value }
         override suspend fun begin(intent: HandoverIntent) { check(value == null); value = intent }
         override suspend fun compareAndSet(expected: HandoverIntent, next: HandoverIntent) { check(value == expected); value = next }
         override suspend fun cancelNotSent(expected: HandoverIntent) { check(value == expected); value = null }
@@ -127,6 +133,140 @@ class HandoverOperationsTest {
         assertTrue(f.manager.coordinator.awaitDrained(intent.action.key, 100) is HandoverDrainResult.Drained)
         assertNull(f.capture())
     }
+    @Test fun startupShiftReadUsesItsVerifiedLeaseDespiteAStalePhysicalThreadBinding() = runBlocking {
+        val f = Fixture(); f.start()
+        val terminal = id()
+        f.terminal = ValidatedTerminalDisplay(terminal, "Synthetic Till", requireNotNull(f.profile.branchId), "hybrid")
+        f.cache = f.cache.copy(scope = f.cache.scope.copy(terminalId = terminal))
+        val previous = requireNotNull(f.capture())
+        val external = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            f.cache = f.cache.copy(generation = 2)
+            var startup: OriginalOperationBinding? = null
+            withContext(OperationDispatchContext(previous, permit = null).asCoroutineContext()) {
+                external.launch(start = CoroutineStart.UNDISPATCHED) {
+                    // Build66's default capture followed this physical thread
+                    // binding and lost the startup attempt's exact lease.
+                    val inherited = requireNotNull(OperationDispatchContext.captured()?.binding)
+                    assertSame(previous, inherited)
+                    assertNull(inherited.takeIf { it.isCurrent() && it.cacheLease == f.cache })
+                    startup = f.manager.captureStartupShiftAuthority(f.profile, f.cache, f.session.session.lineage)
+                }.join()
+            }
+            val exact = requireNotNull(startup)
+            assertEquals(f.cache, exact.cacheLease)
+            assertEquals(terminal, exact.authority.scope.terminalId)
+            f.manager.run(exact) { OperationResult(Unit, OperationOutcome.NO_WRITE_SENT) }
+        } finally { external.cancel() }
+    }
+
+    private suspend fun Fixture.startupFailure(
+        expected: StartupShiftAuthorityFailure,
+        profile: MeResponse = this.profile,
+        lease: CacheScopeLease = cache,
+        lineage: Any = session.session.lineage,
+    ) {
+        val failure = runCatching { manager.captureStartupShiftAuthority(profile, lease, lineage) }.exceptionOrNull()
+        assertEquals(expected, (failure as? StartupShiftAuthorityException)?.stage)
+    }
+
+    @Test fun startupShiftReadRequiresCurrentLoginProfileCacheAndValidatedTill() = runBlocking {
+        val f = Fixture(); f.start()
+        val profile = f.profile
+        val lineage = f.session.session.lineage
+        f.startupFailure(StartupShiftAuthorityFailure.ORIGIN)
+        val terminal = id()
+        f.cache = f.cache.copy(scope = f.cache.scope.copy(terminalId = terminal))
+        val lease = f.cache
+        f.startupFailure(StartupShiftAuthorityFailure.ORIGIN)
+        f.terminal = ValidatedTerminalDisplay(id(), "Different Till", requireNotNull(profile.branchId), "hybrid")
+        f.startupFailure(StartupShiftAuthorityFailure.ORIGIN)
+        f.terminal = requireNotNull(f.terminal).copy(terminalId = terminal)
+        val binding = f.manager.captureStartupShiftAuthority(profile, lease, lineage)
+        f.session = SessionRefreshLease(StoredSession(token(profile), "synthetic-rotated", lineage), 2)
+        assertSame(binding, f.manager.captureStartupShiftAuthority(profile, lease, lineage))
+        f.profile = profile.copy(effectivePermissions = emptyList())
+        f.startupFailure(StartupShiftAuthorityFailure.ORIGIN, profile)
+        f.profile = profile
+        f.startupFailure(StartupShiftAuthorityFailure.ORIGIN, lease = lease.copy(generation = 2))
+        f.session = SessionRefreshLease(StoredSession(token(profile), "synthetic-relogin"), 3)
+        f.startupFailure(StartupShiftAuthorityFailure.ORIGIN, lineage = lineage)
+    }
+
+    @Test fun startupShiftReadCannotCaptureThroughRetainedHandover() = runBlocking {
+        val f = Fixture(); f.start()
+        val terminal = id()
+        f.terminal = ValidatedTerminalDisplay(terminal, "Synthetic Till", requireNotNull(f.profile.branchId), "hybrid")
+        f.cache = f.cache.copy(scope = f.cache.scope.copy(terminalId = terminal))
+        val original = requireNotNull(f.capture())
+        f.manager.run(original) {
+            f.manager.coordinator.freeze(original.authority, HandoverAction(id(), original.authority, id(), id(), 0))
+            f.startupFailure(StartupShiftAuthorityFailure.FENCE_CLOSED)
+            OperationResult(Unit, OperationOutcome.NO_WRITE_SENT)
+        }
+    }
+
+    private enum class DurableReadOutcome { EMPTY, FAILED, RETAINED, STALE_LOGIN }
+
+    private fun verifyStartupWhileAnotherBindReadsDurableFence(outcome: DurableReadOutcome) = runBlocking {
+        val f = Fixture(); f.start()
+        val terminal = id()
+        f.terminal = ValidatedTerminalDisplay(terminal, "Synthetic Till", requireNotNull(f.profile.branchId), "hybrid")
+        f.cache = f.cache.copy(scope = f.cache.scope.copy(terminalId = terminal))
+        val original = requireNotNull(f.capture())
+        val readStarted = CompletableDeferred<Unit>()
+        val releaseRead = CompletableDeferred<Unit>()
+        var reads = 0
+        f.store.beforeRead = {
+            reads++
+            readStarted.complete(Unit)
+            releaseRead.await()
+            if (outcome == DurableReadOutcome.FAILED) throw IOException("Synthetic durable read failure")
+        }
+        val background = async {
+            runCatching { f.manager.run(original) { OperationResult(Unit, OperationOutcome.NO_WRITE_SENT) } }
+        }
+        withTimeout(2_000) { readStarted.await() }
+        assertEquals(HandoverStartupStatus.Unavailable, f.manager.status())
+        val startup = async(start = CoroutineStart.UNDISPATCHED) {
+            runCatching {
+                f.manager.captureStartupShiftAuthority(f.profile, f.cache, original.loginLease.session.lineage)
+            }
+        }
+        try {
+            assertFalse(startup.isCompleted)
+            when (outcome) {
+                DurableReadOutcome.RETAINED -> f.store.value =
+                    HandoverIntent(HandoverAction(id(), original.authority, id(), id(), 0))
+                DurableReadOutcome.STALE_LOGIN -> f.session =
+                    SessionRefreshLease(StoredSession(token(f.profile), "synthetic-relogin"), 2)
+                else -> Unit
+            }
+        } finally {
+            releaseRead.complete(Unit)
+        }
+        val startupResult = startup.await()
+        background.await()
+        assertEquals(1, reads)
+        val expected = when (outcome) {
+            DurableReadOutcome.EMPTY -> null
+            DurableReadOutcome.FAILED -> StartupShiftAuthorityFailure.STORAGE_UNAVAILABLE
+            DurableReadOutcome.RETAINED -> StartupShiftAuthorityFailure.FENCE_CLOSED
+            DurableReadOutcome.STALE_LOGIN -> StartupShiftAuthorityFailure.ORIGIN
+        }
+        if (expected == null) assertSame(original, startupResult.getOrThrow())
+        else assertEquals(expected, (startupResult.exceptionOrNull() as? StartupShiftAuthorityException)?.stage)
+    }
+
+    @Test fun startupWaitsForExistingBindAndUsesTheSameAuthority() =
+        verifyStartupWhileAnotherBindReadsDurableFence(DurableReadOutcome.EMPTY)
+    @Test fun startupDoesNotTreatAFailedDurableReadAsAnEmptyFence() =
+        verifyStartupWhileAnotherBindReadsDurableFence(DurableReadOutcome.FAILED)
+    @Test fun startupDoesNotBypassARetainedFenceRevealedByTheRead() =
+        verifyStartupWhileAnotherBindReadsDurableFence(DurableReadOutcome.RETAINED)
+    @Test fun startupRejectsAStaleLoginAfterWaitingForBind() =
+        verifyStartupWhileAnotherBindReadsDurableFence(DurableReadOutcome.STALE_LOGIN)
+
     @Test fun independentUndispatchedCallbackOnTheSameThreadCannotBorrowItsCallersPermit() = runBlocking {
         val f = Fixture(); f.start()
         f.terminal = ValidatedTerminalDisplay(id(), "Synthetic Till", requireNotNull(f.profile.branchId), "hybrid")

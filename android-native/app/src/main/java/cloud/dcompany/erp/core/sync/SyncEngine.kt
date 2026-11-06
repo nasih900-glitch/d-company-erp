@@ -1650,20 +1650,18 @@ class SyncEngine private constructor(
     }
 
     /**
-     * Login must not clear the terminal's replaceable shift authority cache
-     * while an older shift GET is still able to commit. Clear and repopulate
-     * it as one ordered shift-resource operation.
+     * Read authoritative open-shift state under the exact verified login.
+     * A failed or stale read cannot replace the cache or publish a workspace.
      */
-    suspend fun refreshShiftAuthorityAtLogin(): ResourceRefreshResult =
-        withResourceSerialisation("shifts") {
-            val terminalId = DCompanyApp.instance.terminalStore.terminalId()
-                ?: return@withResourceSerialisation ResourceRefreshResult.Skipped("shifts")
-            val lease = cacheIsolation.currentLease()
-                ?: return@withResourceSerialisation ResourceRefreshResult.Skipped("shifts")
-            if (!commitToCurrentScope(lease) { db.shiftDao().deleteServerOpen(terminalId) }) {
-                return@withResourceSerialisation ResourceRefreshResult.Skipped("shifts")
+    internal suspend fun refreshShiftAuthorityAtLogin(original: OriginalOperationBinding) =
+        withOriginalOperation(original) {
+            resourceRefreshSerialiser.run("shifts") {
+                check(original.isCurrent()) { "The verified till changed before reading the current shift." }
+                check(pullOpenShift(original)) { "The current shift could not be verified for this till." }
+                runAndRecordRefreshAlreadyLocked("shifts", { pullShiftHistory() }, original.cacheLease)
+                check(original.isCurrent()) { "The verified till changed while reading the current shift." }
+                DCompanyApp.instance.handoverOperations.requireOperationalReadiness()
             }
-            refreshAlreadyLocked("shifts", lease)
         }
 
     /** Rebuild just the verified incoming shift and board while ordinary operation admission is closed. */
@@ -2763,23 +2761,32 @@ class SyncEngine private constructor(
      * enforces one open shift per terminal, so retaining a formerly valid row
      * would incorrectly leave money actions enabled after an authority error.
      */
-    private suspend fun pullOpenShift() {
-        val lease = cacheIsolation.currentLease() ?: return
-        val terminalId = DCompanyApp.instance.terminalStore.terminalId() ?: return
+    private suspend fun pullOpenShift(original: OriginalOperationBinding? = null): Boolean {
+        val lease = original?.cacheLease ?: cacheIsolation.currentLease() ?: return false
+        val terminalId = if (original != null) original.authority.scope.terminalId
+            else DCompanyApp.instance.terminalStore.terminalId()
+        if (terminalId == null) return false
+
+        suspend fun reject(message: String): Boolean {
+            if (original == null) {
+                commitToCurrentScope(lease) {
+                    db.shiftDao().deleteServerOpen(terminalId)
+                    sessionAwareLastError = message
+                }
+            }
+            return false
+        }
+
         val rows = shiftApi.shifts(
             onlyOpen = true,
             installationId = checkoutClientInstance(),
         )
-        if (rows.size > 1) {
-            commitToCurrentScope(lease) {
-                db.shiftDao().deleteServerOpen(terminalId)
-                sessionAwareLastError =
-                    "The server returned multiple open shifts for this terminal. POS money actions are locked until an owner reconciles them."
-            }
-            return
-        }
-        val detail = rows.firstOrNull()
-        val profileBranchId = DCompanyApp.instance.shiftCache.profile.value?.branchId
+        if (rows.size > 1) return reject(
+            "The server returned multiple open shifts for this terminal. POS money actions are locked until an owner reconciles them.",
+        )
+        val detail = rows.singleOrNull()
+        val profileBranchId = if (original != null) original.authority.scope.branchId
+            else DCompanyApp.instance.shiftCache.profile.value?.branchId
         if (
             detail != null && (
                 detail.terminalId != terminalId ||
@@ -2787,34 +2794,22 @@ class SyncEngine private constructor(
                     detail.branchId != profileBranchId ||
                     detail.status != "open"
             )
-        ) {
-            commitToCurrentScope(lease) {
-                db.shiftDao().deleteServerOpen(terminalId)
-                sessionAwareLastError =
-                    "The server shift did not match this signed-in branch and terminal. POS money actions are locked."
-            }
-            return
-        }
+        ) return reject(
+            "The server shift did not match this signed-in branch and terminal. POS money actions are locked.",
+        )
         val observedAt = System.currentTimeMillis()
         val cached = if (detail == null) {
             null
         } else {
             val openedAt = runCatching { Instant.parse(detail.openedAt).toEpochMilli() }.getOrNull()
-            if (openedAt == null) {
-                commitToCurrentScope(lease) {
-                    db.shiftDao().deleteServerOpen(terminalId)
-                    sessionAwareLastError =
-                        "The server shift opening time was invalid. POS money actions are locked."
-                }
-                return
-            }
+                ?: return reject("The server shift opening time was invalid. POS money actions are locked.")
             detail.toServerOpenShiftCache(
                 terminalId = terminalId,
                 openedAtMillis = openedAt,
                 verifiedAtMillis = observedAt,
             )
         }
-        commitToCurrentScope(lease) {
+        return commitToCurrentScope(lease) {
             db.withTransaction {
                 db.shiftDao().reconcileServerOpen(terminalId, cached, observedAt)
                 db.syncMetaDao().put(SyncMetaEntity("shifts", observedAt))

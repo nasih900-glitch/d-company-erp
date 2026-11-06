@@ -117,7 +117,7 @@ def test_restore_allows_a_new_database_oid_but_checks_every_row(verifier, report
 
 def test_pin_all_five_images_without_changing_any_other_compose_field(verifier):
     attestation = {
-        "version_name": "3.1.59",
+        "version_name": "3.1.60",
         "services": {name: {"image_id": "sha256:" + "a" * 64} for name in verifier.IMAGE_SERVICES},
     }
     base = {"services": {name: {"image": f"{name}:candidate", "command": ["normal"]}
@@ -129,6 +129,8 @@ def test_pin_all_five_images_without_changing_any_other_compose_field(verifier):
     pinned["services"]["backend"]["command"] = ["different"]
     with pytest.raises(ValueError, match="pinned Compose"):
         verifier.verify_compose(attestation, base, pinned)
+    with pytest.raises(ValueError, match="candidate version"):
+        verifier.image_override({**attestation, "version_name": "3.1.59"})
     del attestation["services"]["redis"]
     with pytest.raises(ValueError, match="service inventory"):
         verifier.image_override(attestation)

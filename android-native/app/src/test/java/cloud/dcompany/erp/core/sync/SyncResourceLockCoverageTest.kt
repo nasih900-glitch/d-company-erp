@@ -180,6 +180,24 @@ class SyncResourceLockCoverageTest {
     }
 
     @Test
+    fun `startup shift replacement requires the explicit original operation and a verified open read`() {
+        val source = readSource(mainSourceRoot().resolve(SYNC_ENGINE_PATH))
+        val startup = source.substringAfter("internal suspend fun refreshShiftAuthorityAtLogin(")
+            .substringBefore("/** Rebuild just the verified incoming shift")
+        assertTrue("withOriginalOperation(original)" in startup)
+        assertTrue("resourceRefreshSerialiser.run(\"shifts\")" in startup)
+        assertTrue("check(pullOpenShift(original))" in startup)
+        assertTrue(startup.indexOf("check(pullOpenShift(original))") in
+            0 until startup.indexOf("requireOperationalReadiness()"))
+        assertFalse("deleteServerOpen" in startup)
+        assertFalse("refreshAlreadyLocked" in startup)
+        val pull = source.bracedBlockAfter("private suspend fun pullOpenShift(")
+        assertTrue("original?.cacheLease" in pull)
+        assertTrue("if (original == null)" in pull)
+        assertTrue(pull.indexOf("shiftApi.shifts(") in 0 until pull.indexOf("reconcileServerOpen("))
+    }
+
+    @Test
     fun `ui layer cannot replace server projections outside sync boundary`() {
         val uiRoot = mainSourceRoot().resolve("cloud/dcompany/erp/ui")
         val forbiddenMutations = listOf(
