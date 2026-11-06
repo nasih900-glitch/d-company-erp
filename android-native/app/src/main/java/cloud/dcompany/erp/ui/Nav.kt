@@ -291,9 +291,14 @@ internal fun WorkspaceScaffold(
     remoteSupportRequestWaiting: Boolean = false,
     remoteSupportActive: Boolean = false,
     remoteSupportOnline: Boolean = true,
+    remoteSupportSharingConfirmed: Boolean = false,
+    remoteSupportTarget: cloud.dcompany.erp.core.remote.RemoteUiTarget? = null,
+    remoteSupportResumeAvailable: Boolean = false,
+    onResumeRemoteSupport: () -> Unit = {},
     remoteSupportPrivacyProtected: Boolean = true,
     remoteSupportLastCommandLabel: String? = null,
     canChangeTill: Boolean,
+    staffAttendanceOnly: Boolean = false,
     appearancePreference: AppearancePreference = AppearancePreference.System,
     onAppearancePreferenceChanged: (AppearancePreference) -> Unit = {},
     onOpenSupport: () -> Unit,
@@ -346,6 +351,7 @@ internal fun WorkspaceScaffold(
                 destinations
             }
             DestinationCommandDialog(
+                staffAttendanceOnly = staffAttendanceOnly,
                 destinations = commandDestinations,
                 searchEnabled = mode == "search",
                 query = commandQuery,
@@ -394,6 +400,10 @@ internal fun WorkspaceScaffold(
                 )
                 RemoteAssistanceActiveBanner(
                     active = remoteSupportActive,
+                    sharingConfirmed = remoteSupportSharingConfirmed,
+                    resumeTarget = remoteSupportTarget,
+                    resumeAvailable = remoteSupportResumeAvailable,
+                    onResume = onResumeRemoteSupport,
                     online = remoteSupportOnline,
                     privacyProtected = remoteSupportPrivacyProtected,
                     lastCommandLabel = remoteSupportLastCommandLabel,
@@ -499,6 +509,10 @@ internal fun WorkspaceScaffold(
                                 )
                                 RemoteAssistanceActiveBanner(
                                     active = remoteSupportActive,
+                                    sharingConfirmed = remoteSupportSharingConfirmed,
+                                    resumeTarget = remoteSupportTarget,
+                                    resumeAvailable = remoteSupportResumeAvailable,
+                                    onResume = onResumeRemoteSupport,
                                     online = remoteSupportOnline,
                                     privacyProtected = remoteSupportPrivacyProtected,
                                     lastCommandLabel = remoteSupportLastCommandLabel,
@@ -2158,8 +2172,12 @@ private fun OutboxWorkStatusPill(
     }
 }
 
+internal fun workspaceDestinationDescription(destination: Destination, staffAttendanceOnly: Boolean): String =
+    if (destination == Destination.Staff && staffAttendanceOnly) "Clock in/out and view attendance" else destination.description
+
 @Composable
 private fun DestinationCommandDialog(
+    staffAttendanceOnly: Boolean,
     destinations: List<Destination>,
     searchEnabled: Boolean,
     query: String,
@@ -2170,11 +2188,11 @@ private fun DestinationCommandDialog(
 ) {
     val glass = LocalWorkspaceGlassScene.current != null
     val normalized = query.trim()
-    val matches = remember(destinations, normalized) {
+    val matches = remember(destinations, normalized, staffAttendanceOnly) {
         if (normalized.isEmpty()) destinations
         else destinations.filter {
             it.label.contains(normalized, ignoreCase = true) ||
-                it.description.contains(normalized, ignoreCase = true)
+                workspaceDestinationDescription(it, staffAttendanceOnly).contains(normalized, ignoreCase = true)
         }
     }
 
@@ -2239,7 +2257,7 @@ private fun DestinationCommandDialog(
                                 Column(Modifier.weight(1f)) {
                                     Text(destination.label, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.labelLarge)
                                     Text(
-                                        destination.description,
+                                        workspaceDestinationDescription(destination, staffAttendanceOnly),
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         style = MaterialTheme.typography.labelSmall,
                                     )

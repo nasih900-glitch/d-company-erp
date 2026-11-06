@@ -233,6 +233,7 @@ class StaffViewModel(
 ) : ViewModel() {
 
     private val appCtx = DCompanyApp.instance
+    private val operations = appCtx.handoverOperations.caller(appCtx.shiftCache.profile.value, appCtx.cacheIsolation.currentLease())
     private val db = appCtx.db
     private val api = ApiClient.create<StaffApi>()
     private val loadPlan = access.loadPlan()
@@ -398,7 +399,7 @@ class StaffViewModel(
         if (!access.canManageDirectory) return
         val localId = row.localWriteId ?: return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(notice = "Resolve the original till handover before changing this workspace.") } }) {
             var queued = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     db.staffDao().getLocal(localId)?.let { existing ->
@@ -427,7 +428,7 @@ class StaffViewModel(
         val localId = row.localWriteId ?: return
         val expectedVersion = row.localWriteVersion ?: return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(notice = "Resolve the original till handover before changing this workspace.") } }) {
             var discarded = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     val current = db.staffDao().getLocal(localId)
@@ -502,7 +503,7 @@ class StaffViewModel(
         }
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         editing.update { it.copy(savingEdit = true, editError = null) }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(savingEdit = false, editError = "Resolve the original till handover before changing this workspace.") } }) {
             try {
                 val dao = db.staffDao()
                 if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
@@ -583,7 +584,7 @@ class StaffViewModel(
         }
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         editing.update { it.copy(deleteConfirmFor = null) }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(deleteConfirmFor = row, notice = "Resolve the original till handover before changing this workspace.") } }) {
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     val dao = db.staffDao()
                     val existingPending = dao.pendingLocalForServerId(row.id)
@@ -619,7 +620,7 @@ class StaffViewModel(
         if (!access.canManageDirectory) return
         val localId = row.localWriteId ?: return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(notice = "Resolve the original till handover before changing this workspace.") } }) {
             var changed = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     val dao = db.staffDao()
@@ -684,7 +685,7 @@ class StaffViewModel(
             return
         }
         editing.update { it.copy(creating = true, createError = null) }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(creating = false, createError = "Resolve the original till handover before changing this workspace.") } }) {
             try {
                 val challenge = api.requestRegistration(
                     RegistrationRequestBody(
@@ -698,6 +699,7 @@ class StaffViewModel(
                 // challenge — matters for "Resend code" specifically (see
                 // CreateLoginDialog), not just the first request.
                 editing.update { it.copy(creating = false, createChallenge = challenge, createCode = "") }
+                reconciled()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -735,7 +737,7 @@ class StaffViewModel(
             return
         }
         editing.update { it.copy(creating = true, createError = null) }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(creating = false, createError = "Resolve the original till handover before changing this workspace.") } }) {
             try {
                 api.confirmRegistration(RegistrationConfirmBody(challenge.challengeId, code))
                 editing.update {
@@ -745,6 +747,7 @@ class StaffViewModel(
                     )
                 }
                 retry()
+                reconciled()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -793,12 +796,13 @@ class StaffViewModel(
             return
         }
         editing.update { it.copy(resettingPassword = true, passwordResetError = null) }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(resettingPassword = false, passwordResetError = "Resolve the original till handover before changing this workspace.") } }) {
             try {
                 val challenge = api.requestPasswordReset(PasswordResetRequestBody(draft.email))
                 editing.update {
                     it.copy(resettingPassword = false, passwordResetChallenge = challenge, passwordResetCode = "")
                 }
+                reconciled()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -837,7 +841,7 @@ class StaffViewModel(
             return
         }
         editing.update { it.copy(resettingPassword = true, passwordResetError = null) }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(resettingPassword = false, passwordResetError = "Resolve the original till handover before changing this workspace.") } }) {
             try {
                 api.confirmPasswordReset(PasswordResetConfirmBody(challenge.challengeId, code, draft.newPassword))
                 editing.update {
@@ -846,6 +850,7 @@ class StaffViewModel(
                         resettingPassword = false, notice = "Password reset for ${draft.forName}.",
                     )
                 }
+                reconciled()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -895,7 +900,7 @@ class StaffViewModel(
             return
         }
         editing.update { it.copy(clockingInOut = true, attendanceError = null) }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(clockingInOut = false, attendanceError = "Resolve the original till handover before changing this workspace.") } }) {
             try {
                 api.clockIn(ClockInBody(branchId))
                 when (val refresh = appCtx.sync.refresh("attendance")) {
@@ -917,6 +922,7 @@ class StaffViewModel(
                         )
                     }
                 }
+                reconciled()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -953,7 +959,7 @@ class StaffViewModel(
             return
         }
         editing.update { it.copy(clockingInOut = true, attendanceError = null) }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(clockingInOut = false, attendanceError = "Resolve the original till handover before changing this workspace.") } }) {
             try {
                 api.clockOut()
                 when (val refresh = appCtx.sync.refresh("attendance")) {
@@ -975,6 +981,7 @@ class StaffViewModel(
                         )
                     }
                 }
+                reconciled()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

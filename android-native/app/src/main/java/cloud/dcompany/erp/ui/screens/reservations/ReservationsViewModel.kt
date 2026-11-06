@@ -78,6 +78,7 @@ private data class ReservationLoad(
  */
 class ReservationsViewModel : ViewModel() {
     private val app = DCompanyApp.instance
+    private val operations = app.handoverOperations.caller(app.shiftCache.profile.value, app.cacheIsolation.currentLease())
     private val api = ApiClient.create<ReservationsApi>()
     private val _state = MutableStateFlow(ReservationsUiState())
     val state: StateFlow<ReservationsUiState> = _state.asStateFlow()
@@ -389,10 +390,13 @@ class ReservationsViewModel : ViewModel() {
         onSuccess: (T) -> Unit,
     ) {
         _state.update { it.copy(busy = true, formError = null) }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = {
+            _state.update { it.copy(busy = false, formError = "Resolve the original till handover before changing a reservation.") }
+        }) {
             try {
                 val result = request()
                 onSuccess(result)
+                reconciled()
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {

@@ -20,6 +20,8 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.net.MeResponse
+import cloud.dcompany.erp.core.auth.EffectivePermissions
+import cloud.dcompany.erp.core.auth.ErpPermission
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.ActionIntent
 import cloud.dcompany.erp.ui.components.ErpButton
@@ -39,9 +41,17 @@ internal fun StaffTimeScreen(profile: MeResponse) {
     val factory = remember(profile, lease) { viewModelFactory { initializer { StaffTimeViewModel(profile, lease) } } }
     val vm: StaffTimeViewModel = viewModel(key = "staff-time:${profile.userId}:${lease?.generation}:${profile.hashCode()}", factory = factory)
     val state by vm.state.collectAsStateWithLifecycle()
-    LaunchedEffect(vm, online) { if (!online) vm.offline() else vm.refresh() }
+    val shared by vm.sharedState.collectAsStateWithLifecycle()
+    val canClockShared = EffectivePermissions.from(profile).has(ErpPermission.StaffAttendanceWrite)
+    LaunchedEffect(vm, online) {
+        if (!online) vm.offline() else { vm.refresh(); if (canClockShared) vm.refreshShared() }
+    }
     StaffTimeContent(state, vm::refresh, vm::person, vm::month, vm::morePeople, vm::olderPolicies,
-        vm::clock, vm::correction, vm::policy, vm::edit, vm::closeDraft, vm::confirm, vm::retryExact, vm::acknowledgeRejected)
+        vm::clock, vm::correction, vm::policy, vm::edit, vm::closeDraft, vm::confirm, vm::retryExact, vm::acknowledgeRejected,
+        sharedAttendance = if (canClockShared) ({
+            SharedAttendanceCard(shared, online, { vm.refreshShared() }, { vm.refreshShared(true) },
+                vm::selectShared, vm::dismissShared, vm::confirmShared, vm::retryShared, vm::acknowledgeShared)
+        }) else null, onAttendancePeriod = vm::attendancePeriod, onMoreAttendance = vm::moreAttendance)
 }
 
 @Composable
@@ -60,6 +70,9 @@ internal fun StaffTimeContent(
     onConfirm: () -> Unit,
     onRetryExact: () -> Unit,
     onAcknowledgeRejected: () -> Unit,
+    sharedAttendance: (@Composable () -> Unit)? = null,
+    onAttendancePeriod: (String, String?) -> Unit = { _, _ -> },
+    onMoreAttendance: () -> Unit = {},
 ) {
     var peopleOpen by remember(state.actorId) { mutableStateOf(false) }
     var retryReview by remember(state.actorId) { mutableStateOf(false) }
@@ -68,16 +81,16 @@ internal fun StaffTimeContent(
     var monthText by remember(state.month) { mutableStateOf(state.month) }
     val blocked = state.busy || state.loading || state.draft != null
     val canWrite = state.fresh && state.storageReady && state.pending == null && !blocked
-    val summary = state.summary
+    val summary = state.summary.takeIf { state.canManage }
     Column(Modifier.fillMaxSize().workspaceContentCanvas().padding(16.dp).testTag("staff-time-screen"), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Column(Modifier.weight(1f)) {
-                Text(if (state.canManage) "Staff time & draft pay" else "My working time", style = MaterialTheme.typography.headlineSmall)
-                Text("Attendance is recorded by the server. Pay and overtime remain drafts.", style = MaterialTheme.typography.bodySmall)
+                Text(if (state.canManage) "Attendance & private records" else "Attendance", style = MaterialTheme.typography.headlineSmall)
+                Text("Clock-in days and dated arrivals / departures. Attendance is separate from till shifts.", style = MaterialTheme.typography.bodySmall)
             }
             ErpButton("Refresh", onRefresh, enabled = !blocked, busy = state.loading, intent = ActionIntent.Secondary)
         }
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (state.canManage) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (state.canManage) ErpButton(summary?.name ?: "Choose a person", { peopleOpen = true },
                 enabled = !blocked && state.pending == null, intent = ActionIntent.Secondary, modifier = Modifier.testTag("staff-time-choose-person"))
             TextButton(onClick = { onMonth(YearMonth.parse(state.month).minusMonths(1).toString()) }, enabled = !blocked, modifier = Modifier.heightIn(min = 48.dp)) { Text("Previous") }
@@ -86,12 +99,38 @@ internal fun StaffTimeContent(
             ErpButton("Load month", { onMonth(monthText) }, enabled = !blocked, intent = ActionIntent.Secondary)
             TextButton(onClick = { onMonth(YearMonth.parse(state.month).plusMonths(1).toString()) }, enabled = !blocked, modifier = Modifier.heightIn(min = 48.dp)) { Text("Next") }
         }
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (state.canManage) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("time" to "Time", "history" to "History").plus(if (state.canManage) listOf("pay" to "Draft pay") else emptyList()).forEach { (id, name) ->
                 FilterChip(section == id, { section = id }, label = { Text(name) }, modifier = Modifier.heightIn(min = 48.dp))
             }
         }
         LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("staff-time-content-list"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            sharedAttendance?.let { item { it() } }
+            item {
+                AttendancePeriodControls(state.attendancePeriod, state.attendanceStart, blocked, onAttendancePeriod)
+            }
+            state.cards?.let { cards ->
+                item { Text("Times in ${cards.timezone} · ${timeStamp(cards.asOf, cards.timezone)}", style = MaterialTheme.typography.bodySmall) }
+                if (cards.items.isEmpty()) item { SectionCard(Modifier.fillMaxWidth()) { Text("No clock-ins in this period.") } }
+                items(cards.items, key = { "clock-card-${it.userId}" }) { person ->
+                    SectionCard(Modifier.fillMaxWidth(), title = person.name) {
+                        Text("Clock-in days: ${person.clockInDayCount}")
+                        person.entries.forEach { fact ->
+                            Text("In ${timeStamp(fact.clockInAt, cards.timezone)}")
+                            Text(fact.clockOutAt?.let { "Out ${timeStamp(it, cards.timezone)}" } ?: "Still clocked in")
+                        }
+                        if (person.entriesContinued) Text("More clock-in records are available below.", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                if (cards.nextCursor != null) item { ErpButton("Load more clock-in records", onMoreAttendance,
+                    enabled = !blocked, intent = ActionIntent.Secondary) }
+                if (!state.canManage) item { SectionCard(Modifier.fillMaxWidth(), title = "My clock in / out") {
+                    val open = cards.currentOpenAttendance
+                    Text(open?.let { "Arrived ${timeStamp(it.clockInAt, cards.timezone)}" } ?: "Not clocked in")
+                    ErpButton(if (open == null) "Review clock-in" else "Review clock-out", { onClock(open != null) },
+                        enabled = canWrite, modifier = Modifier.fillMaxWidth().testTag("staff-time-clock"))
+                } }
+            } ?: item { Text(if (state.loading) "Loading clock-in records…" else "Connect and refresh clock-in records.") }
             state.error?.let { item { SectionCard(Modifier.fillMaxWidth()) { Text(it, color = MaterialTheme.colorScheme.error) } } }
             state.notice?.let { item { SectionCard(Modifier.fillMaxWidth()) { Text(it) } } }
             if (state.pending != null) item {
@@ -108,8 +147,8 @@ internal fun StaffTimeContent(
                     }
                 }
             }
-            if (summary == null) item { SectionCard(Modifier.fillMaxWidth()) { Text(if (state.loading) "Loading verified time…" else "No verified time is available. Connect and refresh.") } }
-            else {
+            if (state.canManage && summary == null) item { SectionCard(Modifier.fillMaxWidth()) { Text(if (state.loading) "Loading verified time…" else "No verified time is available. Connect and refresh.") } }
+            else if (summary != null) {
                 item {
                     Text("${summary.name} · ${summary.month} · ${summary.timezone}", style = MaterialTheme.typography.titleMedium)
                     Text("${if (state.fresh) "Verified" else "Last verified snapshot"} ${timeStamp(summary.asOf, summary.timezone)}", style = MaterialTheme.typography.bodySmall)
@@ -128,11 +167,13 @@ internal fun StaffTimeContent(
                             Text("A plan does not record an actual break or activate pay.", style = MaterialTheme.typography.bodySmall)
                         } } }
                         item { SectionCard(Modifier.fillMaxWidth(), title = "Clock in / out") {
-                            val open = state.openAttendance
-                            Text(if (open == null) "No open clock-in in this verified month." else "Arrived ${timeStamp(open.clockInAt, summary.timezone)}")
-                            if (!state.currentMonth) Text("Open the current company month to clock in or out.")
-                            ErpButton(if (open == null) "Review clock-in" else "Review clock-out", { onClock(open != null) },
-                                enabled = canWrite && state.currentMonth, modifier = Modifier.fillMaxWidth().testTag("staff-time-clock"))
+                            val own = state.selectedId == state.actorId
+                            val openId = if (own) state.cards?.currentOpenAttendance?.id else state.openAttendance?.id
+                            val arrived = if (own) state.cards?.currentOpenAttendance?.clockInAt else state.openAttendance?.clockInAt
+                            Text(arrived?.let { "Arrived ${timeStamp(it, summary.timezone)}" } ?: "Not clocked in")
+                            if (!own && !state.currentMonth) Text("Open the current company month to manage another person's time.")
+                            ErpButton(if (openId == null) "Review clock-in" else "Review clock-out", { onClock(openId != null) },
+                                enabled = canWrite && (own || state.currentMonth), modifier = Modifier.fillMaxWidth().testTag("staff-time-clock"))
                         } }
                     }
                     "history" -> {
@@ -207,9 +248,9 @@ private fun TimeDraftDialog(draft: TimeEditDraft, busy: Boolean, error: String?,
             Text(draft.targetName, style = MaterialTheme.typography.titleMedium)
             Text("Verified person ${draft.targetId}", style = MaterialTheme.typography.bodySmall)
             when (draft.kind) {
-                TimeWriteKind.SELF_IN, TimeWriteKind.OWNER_IN -> Text("The server records arrival when this request is confirmed.")
-                TimeWriteKind.SELF_OUT, TimeWriteKind.OWNER_OUT -> {
-                    Text("Arrival UTC ${draft.attendance?.clockInAt}")
+                TimeWriteKind.SELF_IN, TimeWriteKind.OWNER_IN, TimeWriteKind.SHARED_IN -> Text("The server records arrival when this request is confirmed.")
+                TimeWriteKind.SELF_OUT, TimeWriteKind.OWNER_OUT, TimeWriteKind.SHARED_OUT -> {
+                    Text("Arrival UTC ${draft.clockFact?.clockInAt ?: draft.attendance?.clockInAt}")
                     TimeField("Actual break in minutes — enter 0 if none", draft.breakText, busy, KeyboardType.Number) { v -> onEdit { it.copy(breakText = v) } }
                     Text("The planned break is not an actual break.", style = MaterialTheme.typography.bodySmall)
                 }
@@ -247,8 +288,8 @@ private fun TimeDraftDialog(draft: TimeEditDraft, busy: Boolean, error: String?,
         keyboardOptions = KeyboardOptions(keyboardType = keyboard), modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp))
 }
 private fun timeAction(kind: TimeWriteKind): String = when (kind) {
-    TimeWriteKind.SELF_IN, TimeWriteKind.OWNER_IN -> "Clock-in"
-    TimeWriteKind.SELF_OUT, TimeWriteKind.OWNER_OUT -> "Clock-out"
+    TimeWriteKind.SELF_IN, TimeWriteKind.OWNER_IN, TimeWriteKind.SHARED_IN -> "Clock-in"
+    TimeWriteKind.SELF_OUT, TimeWriteKind.OWNER_OUT, TimeWriteKind.SHARED_OUT -> "Clock-out"
     TimeWriteKind.CORRECTION -> "Attendance correction"
     TimeWriteKind.POLICY -> "Draft pay terms"
 }
@@ -258,3 +299,30 @@ private fun timeStamp(value: String, timezone: String): String = runCatching {
 }.getOrElse { "Needs Owner time review" }
 private fun weekdays(mask: Int): String = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
     .filterIndexed { i, _ -> mask and (1 shl i) != 0 }.joinToString(", ")
+
+@Composable
+private fun AttendancePeriodControls(period: String, start: String, blocked: Boolean,
+    onPeriod: (String, String?) -> Unit) {
+    var text by remember(start) { mutableStateOf(start) }
+    SectionCard(Modifier.fillMaxWidth(), title = "Shared clock-in records") {
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("week" to "Week", "month" to "Month").forEach { (id, label) ->
+                FilterChip(period == id, { onPeriod(id, null) }, enabled = !blocked,
+                    label = { Text(label) }, modifier = Modifier.heightIn(min = 48.dp))
+            }
+            TextButton({ onPeriod(period, java.time.LocalDate.parse(start).let {
+                if (period == "week") it.minusWeeks(1) else it.minusMonths(1)
+            }.toString()) }, enabled = !blocked, modifier = Modifier.heightIn(min = 48.dp)) { Text("Earlier period") }
+            TextButton({ onPeriod(period, java.time.LocalDate.parse(start).let {
+                if (period == "week") it.plusWeeks(1) else it.plusMonths(1)
+            }.toString()) }, enabled = !blocked, modifier = Modifier.heightIn(min = 48.dp)) { Text("Later period") }
+        }
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(text, { text = it }, label = { Text("Period date YYYY-MM-DD") }, singleLine = true,
+                enabled = !blocked, modifier = Modifier.width(240.dp).testTag("attendance-period-date"))
+            ErpButton("Load period", { onPeriod(period, text) }, enabled = !blocked, intent = ActionIntent.Secondary)
+            ErpButton("Current period", { onPeriod(period, null) }, enabled = !blocked, intent = ActionIntent.Secondary)
+        }
+        Text(if (period == "week") "Monday–Sunday · $start" else "Calendar month · $start")
+    }
+}

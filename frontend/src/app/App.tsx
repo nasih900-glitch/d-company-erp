@@ -23,6 +23,7 @@ const Login = lazy(() => import('@/modules/auth/Login'));
 const POSScreen = lazy(() => import('@/modules/pos/POSScreen'));
 const LivePOSScreen = lazy(() => import('@/modules/pos/LivePOSScreen'));
 const OrdersAndShiftsScreen = lazy(() => import('@/modules/pos/OrdersAndShiftsScreen'));
+const OperatorRecoveryScreen = lazy(() => import('@/modules/pos/OperatorRecoveryScreen'));
 const CustomersScreen = lazy(() => import('@/modules/customers/CustomersScreen'));
 const PublicMenuScreen = lazy(() => import('@/modules/public/PublicMenuScreen'));
 const KitchenScreen = lazy(() => import('@/modules/kitchen/KitchenScreen'));
@@ -206,6 +207,7 @@ export default function App() {
         <Route path="/operations" element={
           <FeatureOnly feature="shifts"><ModuleAccessOnly module="pos"><Screen><OrdersAndShiftsScreen /></Screen></ModuleAccessOnly></FeatureOnly>
         } />
+        <Route path="/operations/operator-recovery/:shiftId" element={<Screen><OperatorRecoveryScreen /></Screen>} />
         <Route path="/tables" element={
           <FeatureOnly feature="tables"><ModuleAccessOnly module="tables"><Screen><TablesScreen /></Screen></ModuleAccessOnly></FeatureOnly>
         } />

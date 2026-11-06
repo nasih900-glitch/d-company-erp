@@ -2,7 +2,14 @@ package cloud.dcompany.erp.ui
 
 import cloud.dcompany.erp.core.auth.ValidatedTerminalDisplay
 import cloud.dcompany.erp.core.auth.TerminalPurpose
+import cloud.dcompany.erp.ui.screens.shift.ShiftDetail
 import java.util.concurrent.atomic.AtomicBoolean
+import cloud.dcompany.erp.core.auth.CacheIsolationCoordinator
+import cloud.dcompany.erp.core.auth.CacheScope
+import cloud.dcompany.erp.core.auth.CacheScopeLease
+import cloud.dcompany.erp.core.auth.CachedScopeLeaseAdoption
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 internal data class TerminalReassignmentFacts(
     val protectedOwner: Boolean,
@@ -81,6 +88,15 @@ internal class TerminalReassignmentRequestGate {
     }
 }
 
+internal const val TERMINAL_SHIFT_RESPONSE_LIMIT_MESSAGE =
+    "The shift response reached its limit, so this till cannot be verified safely. Review open shifts and refresh. No till was changed."
+
+/** Null is an incomplete response, never an invented shift count or evidence of an idle till. */
+internal fun terminalReassignmentShiftBlockers(rows: List<ShiftDetail>, branchId: String, terminalId: String): Int? {
+    if (rows.size >= 200) return null
+    return rows.count { it.branchId != branchId || it.status != "open" || it.terminalId == null || it.terminalId == terminalId }
+}
+
 internal fun gamingBlocksTillReassignment(status: String, orderId: String?): Boolean =
     status.lowercase() in setOf("active", "paused") ||
         (status.equals("ended", ignoreCase = true) && orderId.isNullOrBlank())
@@ -117,3 +133,36 @@ internal fun workspaceLocationLabel(
 
 internal fun usesAdvancedTerminalWorkflow(activeTerminal: ValidatedTerminalDisplay?): Boolean =
     activeTerminal?.purpose in setOf(TerminalPurpose.CAFE_POS, TerminalPurpose.GAMING)
+
+
+/** Resume only the lease this attempt adopts; publication remains bound to the original login. */
+internal suspend fun resumeOriginalCachedTerminal(
+    cache: CacheIsolationCoordinator,
+    scope: CacheScope,
+    inactiveGeneration: Long,
+    originalSelectionCurrent: () -> Boolean,
+    commitOriginalLogin: (() -> Unit) -> Boolean,
+    publish: () -> Unit,
+    cleanup: () -> Unit,
+    adopt: suspend (CacheScope) -> CachedScopeLeaseAdoption = cache::adoptCachedOnlyIfInactive,
+): CacheScopeLease? {
+    if (!originalSelectionCurrent() || cache.currentLease() != null || cache.currentGeneration() != inactiveGeneration) return null
+    val result = adopt(scope) as? CachedScopeLeaseAdoption.Ready ?: return null
+    // A borrowed or replacement lease never belongs to this attempt's cleanup.
+    val owned = result.adoptedLease ?: return null
+    var published = false
+    try {
+        cache.commitResultIfCurrent(owned) {
+            if (owned.scope == scope && owned.generation == inactiveGeneration + 1) {
+                commitOriginalLogin {
+                    if (originalSelectionCurrent()) { publish(); published = true }
+                }
+            }
+        }
+        return owned.takeIf { published }
+    } finally {
+        if (!published) withContext(NonCancellable) {
+            cache.deactivateIfCurrentWithCleanup(owned) { commitOriginalLogin(cleanup) }
+        }
+    }
+}

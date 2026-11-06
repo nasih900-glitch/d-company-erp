@@ -129,3 +129,13 @@ it('pages only the minimal people endpoint with a bounded limit and exact cursor
     signal: undefined
   });
 });
+
+it('uses the separate minimal cards endpoint with exact period and opaque continuation', async () => {
+  mocks.get.mockResolvedValueOnce({ data: { items: [], next_cursor: null } });
+  const controller = new AbortController();
+  await staffTime.cards('week', '2026-11-02', 'opaqueCursor', controller.signal);
+  expect(mocks.get).toHaveBeenCalledWith('/staff/attendance-cards', {
+    params: { period: 'week', start: '2026-11-02', limit: 100, after: 'opaqueCursor' }, signal: controller.signal
+  });
+  expect(mocks.post).not.toHaveBeenCalled(); expect(mocks.patch).not.toHaveBeenCalled();
+});

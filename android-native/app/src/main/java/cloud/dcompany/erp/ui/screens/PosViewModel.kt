@@ -677,6 +677,8 @@ data class PosUiState(
 class PosViewModel : ViewModel() {
 
     private val app = DCompanyApp.instance
+    private val originalOperation = app.handoverOperations.captureOriginal(app.shiftCache.profile.value, app.cacheIsolation.currentLease())
+    private val operations = cloud.dcompany.erp.core.handover.CallerOperations(app.handoverOperations, originalOperation)
     private val db = app.db
 
     private val selectedCategory = MutableStateFlow<String?>(null)
@@ -1216,7 +1218,7 @@ class PosViewModel : ViewModel() {
                 }
                 val prepared = preparedHeldCheckout.value ?: return@collect
                 if (prepared.orderId != selectedOrderId) return@collect
-                if (!preparedHeldCheckout.compareAndSet(prepared, null)) return@collect
+                if (!clearPreparedHeldCheckout(prepared)) return@collect
                 if (action == PreparedHeldCheckoutAction.CLOSE_AND_RELEASE_CLAIM) {
                     releaseClaimBestEffort(prepared.orderId, prepared.claimToken)
                     notice.value = "The selected held order is no longer available. Its payment " +
@@ -1243,7 +1245,7 @@ class PosViewModel : ViewModel() {
     fun refresh() {
         refreshEligibleRewards()
         app.sync.requestSync()
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             app.sync.refresh("menu")
             if (db.syncMetaDao().observe("menu").first() == null) {
                 notice.value = app.sync.lastError.value
@@ -1266,7 +1268,7 @@ class PosViewModel : ViewModel() {
 
     fun refreshReceiptHistory() {
         if (_receiptHistoryLoading.value) return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             _receiptHistoryLoading.value = true
             try {
                 app.sync.refresh("receipts")
@@ -1278,7 +1280,7 @@ class PosViewModel : ViewModel() {
 
     fun loadMoreReceiptHistory() {
         if (_receiptHistoryLoading.value || receiptHistorySyncState.value?.hasMore != true) return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             _receiptHistoryLoading.value = true
             try {
                 app.sync.loadMoreReceiptHistory()
@@ -1295,7 +1297,7 @@ class PosViewModel : ViewModel() {
             return
         }
         if (_receiptHistoryLoading.value) return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             _receiptHistoryLoading.value = true
             try {
                 app.sync.refreshReceiptHistoryDetail(orderId)
@@ -1461,7 +1463,7 @@ class PosViewModel : ViewModel() {
         if (!requireWrite()) return
         if (checkoutBusy.value) return
         val scopeLease = scopeLeaseOrNotice(POS_CART_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             cartMutationMutex.withLock {
                 val current = db.orderDao().activeDraft() ?: return@withLock
                 if (current.order.syncState != SyncState.DRAFT) {
@@ -1490,7 +1492,7 @@ class PosViewModel : ViewModel() {
             return
         }
         val scopeLease = scopeLeaseOrNotice(POS_CART_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             cartMutationMutex.withLock {
                 val current = db.orderDao().activeDraft()
                 if (current == null || current.order.syncState != SyncState.DRAFT) {
@@ -1541,7 +1543,7 @@ class PosViewModel : ViewModel() {
         if (checkoutBusy.value) return
         val shiftId = authorisedShiftId() ?: return
         val scopeLease = scopeLeaseOrNotice(POS_CART_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             cartMutationMutex.withLock {
                 val current = db.orderDao().activeDraft()
                 if (current != null && current.order.syncState != SyncState.DRAFT) {
@@ -1608,7 +1610,7 @@ class PosViewModel : ViewModel() {
 
     fun acknowledgeReceipt(receiptId: String) {
         val scopeLease = scopeLeaseOrNotice(POS_RECEIPT_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             app.cacheIsolation.commitIfCurrentOrNotifyStale(
                 lease = scopeLease,
                 onStale = { notice.value = POS_RECEIPT_WORKSPACE_UNAVAILABLE_MESSAGE },
@@ -1652,7 +1654,7 @@ class PosViewModel : ViewModel() {
         ) return
         val scopeLease = scopeLeaseOrNotice(POS_CHECKOUT_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
         checkoutBusy.value = true
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { checkoutBusy.value = false; notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             var checkoutLocalId: String? = null
             try {
                 cartMutationMutex.withLock {
@@ -1925,6 +1927,7 @@ class PosViewModel : ViewModel() {
                         expectedVersion = priced.checkoutVersion,
                     )
                 }
+                reconciled()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (e: Exception) {
@@ -2219,7 +2222,7 @@ class PosViewModel : ViewModel() {
         }
         val prepared = state.value.preparedDirectCheckout ?: return
         val scopeLease = scopeLeaseOrNotice(POS_CHECKOUT_CLOSE_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             // Remove the local collectible state first. Releasing the server
             // lease before this commit would leave a crash window where the
             // payment dialog still renders a stale, no-longer-owned bearer.
@@ -2297,7 +2300,7 @@ class PosViewModel : ViewModel() {
 
         val scopeLease = scopeLeaseOrNotice(POS_POINTS_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
         checkoutBusy.value = true
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { checkoutBusy.value = false; notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             var action: LocalPointsRedemptionActionEntity? = null
             try {
                 val existing = db.loyaltyDao().unresolvedForOrder(review.orderId)
@@ -2400,6 +2403,7 @@ class PosViewModel : ViewModel() {
                 } else {
                     "Loyalty points removed. New total ${updated.totalMinor.asRupees()}."
                 }
+                reconciled()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: ApiException) {
@@ -2473,7 +2477,7 @@ class PosViewModel : ViewModel() {
         }
         val lease = scopeLeaseOrNotice(POS_POINTS_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
         checkoutBusy.value = true
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { checkoutBusy.value = false; notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             var action: LocalPointsRedemptionActionEntity? = null
             try {
                 val requested = LocalPointsRedemptionActionEntity(
@@ -2553,6 +2557,7 @@ class PosViewModel : ViewModel() {
                     "The reward-adjusted bill could not be saved on this tablet."
                 }
                 notice.value = "${reward.label.currencyFreeLabel()} reserved for ${reward.valueMinor.asRupees()}. New total ${updated.totalMinor.asRupees()}."
+                reconciled()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: ApiException) {
@@ -2593,7 +2598,7 @@ class PosViewModel : ViewModel() {
         if (checkoutBusy.value) return
         val scopeLease = scopeLeaseOrNotice(POS_ZERO_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
         checkoutBusy.value = true
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { checkoutBusy.value = false; notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             var acceptedInvoiceNo: String? = null
             try {
                 check(db.loyaltyDao().unresolvedForOrder(prepared.orderId) == null) {
@@ -2715,6 +2720,7 @@ class PosViewModel : ViewModel() {
                 }
                 app.sync.refresh("orders")
                 app.sync.refresh("receipts")
+                reconciled()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -2745,7 +2751,7 @@ class PosViewModel : ViewModel() {
         val held = preparedHeldCheckout.value?.takeIf { it.orderId == orderId }
         val scopeLease = scopeLeaseOrNotice(POS_VOID_WORKSPACE_UNAVAILABLE_MESSAGE) ?: return
         checkoutBusy.value = true
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { checkoutBusy.value = false; notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             var checkoutClosedSafely = false
             try {
                 if (!app.cacheIsolation.commitIfCurrentOrNotifyStale(
@@ -2781,7 +2787,7 @@ class PosViewModel : ViewModel() {
                     checkoutClosedSafely = true
                 }
                 if (held != null) {
-                    if (!preparedHeldCheckout.compareAndSet(held, null)) {
+                    if (!clearPreparedHeldCheckout(held)) {
                         notice.value =
                             "The selected bill changed before its checkout could be closed. " +
                                 "No void request was sent; reload the payment queue and review the bill."
@@ -2796,6 +2802,7 @@ class PosViewModel : ViewModel() {
                 )
                 notice.value = "Bill voided with reason: $cleanReason. The audit and linked cancellation are retained."
                 app.sync.refresh("orders")
+                reconciled()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (e: Exception) {
@@ -2936,7 +2943,7 @@ class PosViewModel : ViewModel() {
             terminalId = terminalId,
             createdAtMillis = System.currentTimeMillis(),
         )
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { checkoutBusy.value = false; confirmingHeldOrderId.value = null; heldSelectionGuardJob?.cancel(); heldSelectionBlocked.value = false; notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             try {
                 var inserted = -1L
                 var existing: LocalHeldOrderPaymentEntity? = null
@@ -3004,7 +3011,7 @@ class PosViewModel : ViewModel() {
             return false
         }
         checkoutBusy.value = true
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { checkoutBusy.value = false; notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             try {
                 cartMutationMutex.withLock {
                     val current = db.orderDao().withLines(confirmation.localId)
@@ -3097,7 +3104,7 @@ class PosViewModel : ViewModel() {
             successEligible = !hasPreparedCheckout(),
         )
         retryingRejectedSaleIds.update { it + localId }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { retryingRejectedSaleIds.update { it - localId }; notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             try {
                 var moved = 0
                 val committed = try {
@@ -3175,7 +3182,7 @@ class PosViewModel : ViewModel() {
         localId: String,
         ticket: PosSuccessfulOutcomeNoticeOwner.Ticket,
     ): Job {
-        return viewModelScope.launch {
+        return operations.launch(viewModelScope, onRejected = { notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             val outcome = db.orderDao().observeByLocalId(localId)
                 .filterNotNull()
                 .first { row -> row.syncState == SyncState.SYNCED || row.syncState == SyncState.REJECTED }
@@ -3205,7 +3212,7 @@ class PosViewModel : ViewModel() {
         val generation = ++heldReviewGeneration
         checkoutBusy.value = true
         preparingHeldOrderId.value = order.id
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { checkoutBusy.value = false; preparingHeldOrderId.value = null; notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             try {
                 val liveOrder = ApiClient.api.order(order.id)
                 check(liveOrder.id == order.id) { "The server returned a different held bill." }
@@ -3220,6 +3227,7 @@ class PosViewModel : ViewModel() {
                     shiftIdAtReview = shiftIdAtReview,
                     fallbackSourceLabel = order.sourceLabel ?: order.invoiceNo,
                 )
+                reconciled()
             } catch (e: ApiException) {
                 notice.value = e.message
                     ?: "The live held bill could not be loaded. No checkout or payment was started."
@@ -3274,7 +3282,7 @@ class PosViewModel : ViewModel() {
         }
 
         checkoutBusy.value = true
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { checkoutBusy.value = false; notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             try {
                 val updated = ApiClient.api.updateOrderDiscount(
                     id = review.orderId,
@@ -3303,6 +3311,7 @@ class PosViewModel : ViewModel() {
                         "Review the refreshed total before payment."
                 }
                 refreshHeldOrdersBestEffort()
+                reconciled()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: ApiException) {
@@ -3351,7 +3360,7 @@ class PosViewModel : ViewModel() {
         heldClaimRequestInFlight = true
         checkoutBusy.value = true
         preparingHeldOrderId.value = orderId
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { checkoutBusy.value = false; preparingHeldOrderId.value = null; notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             var acquiredToken: String? = null
             try {
                 check(db.loyaltyDao().unresolvedForOrder(orderId) == null) {
@@ -3413,6 +3422,9 @@ class PosViewModel : ViewModel() {
                     }
                     return@launch
                 }
+                val original = requireNotNull(kotlinx.coroutines.currentCoroutineContext()[cloud.dcompany.erp.core.handover.OperationDispatchContext]?.binding)
+                check(claim.claimantUserId == original.authority.scope.actorId && claim.terminalId == original.authority.scope.terminalId)
+                app.idleCheckoutClaims.remember(original, claim.orderId, claim.claimToken)
                 val prepared = PreparedHeldCheckout(
                     orderId = claim.orderId,
                     shiftIdAtClaim = shiftIdAtClaim,
@@ -3439,6 +3451,7 @@ class PosViewModel : ViewModel() {
                 }
                 preparedHeldCheckout.value = prepared
                 successfulOutcomeNoticeOwner.beginCheckout(notice)
+                reconciled()
             } catch (e: ApiException) {
                 acquiredToken?.let { releaseClaimBestEffort(orderId, it) }
                 notice.value = when (e.code) {
@@ -3511,8 +3524,8 @@ class PosViewModel : ViewModel() {
         // the SyncEngine; success/failure below owns cleanup from that point.
         if (checkoutBusy.value) return
         val prepared = preparedHeldCheckout.value ?: return
-        preparedHeldCheckout.value = null
-        viewModelScope.launch { releaseClaimBestEffort(prepared.orderId, prepared.claimToken) }
+        clearPreparedHeldCheckout(preparedHeldCheckout.value)
+        operations.launch(viewModelScope, onRejected = { notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) { releaseClaimBestEffort(prepared.orderId, prepared.claimToken) }
     }
 
     /**
@@ -3553,8 +3566,8 @@ class PosViewModel : ViewModel() {
         val prepared = preparedHeldCheckout.value ?: return false
         if (checkoutBusy.value) return false
         if (!HeldCheckoutInteractionPolicy.confirmationTargetsPreparedOrder(orderId, prepared.orderId)) {
-            if (preparedHeldCheckout.compareAndSet(prepared, null)) {
-                viewModelScope.launch {
+            if (clearPreparedHeldCheckout(prepared)) {
+                operations.launch(viewModelScope, onRejected = { notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
                     releaseClaimBestEffort(prepared.orderId, prepared.claimToken)
                 }
             }
@@ -3564,8 +3577,8 @@ class PosViewModel : ViewModel() {
         }
         val currentShiftId = authorisedShiftId()
         if (currentShiftId == null || currentShiftId != prepared.shiftIdAtClaim) {
-            preparedHeldCheckout.value = null
-            viewModelScope.launch {
+            clearPreparedHeldCheckout(preparedHeldCheckout.value)
+            operations.launch(viewModelScope, onRejected = { notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
                 releaseClaimBestEffort(prepared.orderId, prepared.claimToken)
             }
             if (currentShiftId != null) {
@@ -3576,8 +3589,8 @@ class PosViewModel : ViewModel() {
         }
         val terminalIdAtConfirmation = app.terminalStore.confirmedTerminalId()
         if (terminalIdAtConfirmation == null) {
-            preparedHeldCheckout.value = null
-            viewModelScope.launch {
+            clearPreparedHeldCheckout(preparedHeldCheckout.value)
+            operations.launch(viewModelScope, onRejected = { notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
                 releaseClaimBestEffort(prepared.orderId, prepared.claimToken)
             }
             notice.value = "This tablet's workspace is no longer verified. Nothing was saved; " +
@@ -3588,7 +3601,7 @@ class PosViewModel : ViewModel() {
             // The dialog's atomic one-shot gate has already been consumed.
             // Close this preparation so a connection race cannot leave an
             // undismissable payment dialog on screen.
-            preparedHeldCheckout.compareAndSet(prepared, null)
+            clearPreparedHeldCheckout(prepared)
             notice.value = "Connection was lost before confirmation. Do not collect yet; reconnect first."
             return false
         }
@@ -3597,7 +3610,7 @@ class PosViewModel : ViewModel() {
                 System.currentTimeMillis(),
             )
         ) {
-            preparedHeldCheckout.value = null
+            clearPreparedHeldCheckout(preparedHeldCheckout.value)
             notice.value = "The checkout hold expired before confirmation. It is being refreshed; " +
                 "review the amount again before collecting."
             val current = state.value.heldOrders.firstOrNull { it.id == prepared.orderId }
@@ -3653,7 +3666,7 @@ class PosViewModel : ViewModel() {
             createdAtMillis = System.currentTimeMillis(),
             syncState = HeldOrderPaymentState.PENDING,
         )
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { checkoutBusy.value = false; confirmingHeldOrderId.value = null; heldSelectionGuardJob?.cancel(); heldSelectionBlocked.value = false; notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             try {
                 var inserted = -1L
                 var existing: LocalHeldOrderPaymentEntity? = null
@@ -3673,7 +3686,7 @@ class PosViewModel : ViewModel() {
                         }
                     }
                 ) return@launch
-                preparedHeldCheckout.value = null
+                clearPreparedHeldCheckout(preparedHeldCheckout.value)
                 if (inserted == -1L) {
                     releaseClaimBestEffort(prepared.orderId, prepared.claimToken)
                     notice.value = duplicateHeldPaymentNotice(existing)
@@ -3686,7 +3699,7 @@ class PosViewModel : ViewModel() {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (e: Exception) {
-                preparedHeldCheckout.value = null
+                clearPreparedHeldCheckout(preparedHeldCheckout.value)
                 releaseClaimBestEffort(prepared.orderId, prepared.claimToken)
                 notice.value = e.shiftClosingMessageOr(
                     "The tablet could not save this confirmation. Do not retry or " +
@@ -3711,8 +3724,8 @@ class PosViewModel : ViewModel() {
         val prepared = preparedHeldCheckout.value ?: return
         if (checkoutBusy.value) return
         if (!HeldCheckoutInteractionPolicy.confirmationTargetsPreparedOrder(orderId, prepared.orderId)) {
-            if (preparedHeldCheckout.compareAndSet(prepared, null)) {
-                viewModelScope.launch {
+            if (clearPreparedHeldCheckout(prepared)) {
+                operations.launch(viewModelScope, onRejected = { notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
                     releaseClaimBestEffort(prepared.orderId, prepared.claimToken)
                 }
             }
@@ -3722,8 +3735,8 @@ class PosViewModel : ViewModel() {
         }
         val currentShiftId = authorisedShiftId()
         if (currentShiftId == null || currentShiftId != prepared.shiftIdAtClaim) {
-            preparedHeldCheckout.value = null
-            viewModelScope.launch {
+            clearPreparedHeldCheckout(preparedHeldCheckout.value)
+            operations.launch(viewModelScope, onRejected = { notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
                 releaseClaimBestEffort(prepared.orderId, prepared.claimToken)
             }
             if (currentShiftId != null) {
@@ -3736,7 +3749,7 @@ class PosViewModel : ViewModel() {
             // The UI one-shot gate is already consumed. Close this exact
             // preparation rather than trapping staff in a disabled dialog;
             // no finalization request has been sent at this point.
-            preparedHeldCheckout.compareAndSet(prepared, null)
+            clearPreparedHeldCheckout(prepared)
             notice.value = "Connection was lost. Reconnect before completing this member benefit; " +
                 "it must be confirmed by the server."
             return
@@ -3746,7 +3759,7 @@ class PosViewModel : ViewModel() {
                 System.currentTimeMillis(),
             )
         ) {
-            preparedHeldCheckout.value = null
+            clearPreparedHeldCheckout(preparedHeldCheckout.value)
             notice.value = "The checkout hold expired before completion. The bill is being " +
                 "refreshed; review the member benefit again."
             val current = state.value.heldOrders.firstOrNull { it.id == prepared.orderId }
@@ -3759,8 +3772,8 @@ class PosViewModel : ViewModel() {
                 dueMinor = prepared.dueMinor,
             )
         ) {
-            preparedHeldCheckout.value = null
-            viewModelScope.launch {
+            clearPreparedHeldCheckout(preparedHeldCheckout.value)
+            operations.launch(viewModelScope, onRejected = { notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
                 releaseClaimBestEffort(prepared.orderId, prepared.claimToken)
             }
             notice.value = "Only a never-paid bill with an exact 0.00 total can be completed as " +
@@ -3780,7 +3793,7 @@ class PosViewModel : ViewModel() {
             prepared.orderId,
             prepared.claimOrderVersion,
         )
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { checkoutBusy.value = false; confirmingHeldOrderId.value = null; heldSelectionGuardJob?.cancel(); heldSelectionBlocked.value = false; notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             var acceptedInvoiceNo: String? = null
             try {
                 if (!app.cacheIsolation.commitIfCurrentOrNotifyStale(
@@ -3801,7 +3814,7 @@ class PosViewModel : ViewModel() {
                     // Close the in-memory payable state before releasing a
                     // definitively refused claim. Ambiguous POST outcomes keep
                     // the server bearer for safe idempotent reconciliation.
-                    preparedHeldCheckout.compareAndSet(prepared, null)
+                    clearPreparedHeldCheckout(prepared)
                     if (!e.isAmbiguous) {
                         releaseClaimBestEffort(prepared.orderId, prepared.claimToken)
                     }
@@ -3818,7 +3831,7 @@ class PosViewModel : ViewModel() {
                 } catch (_: Exception) {
                     // A transport/decoding failure may follow a committed
                     // invoice. Never release the claim or assert failure.
-                    preparedHeldCheckout.compareAndSet(prepared, null)
+                    clearPreparedHeldCheckout(prepared)
                     notice.value = "Completion could not be confirmed on this tablet. Collect no " +
                         "money and do not create another bill. Reconnect and refresh the POS queue."
                     refreshHeldOrdersBestEffort()
@@ -3829,7 +3842,7 @@ class PosViewModel : ViewModel() {
                     result.orderId != prepared.orderId || result.amountMinor != 0L ||
                     result.orderStatus != "paid" || result.invoiceNo.isNullOrBlank()
                 ) {
-                    preparedHeldCheckout.compareAndSet(prepared, null)
+                    clearPreparedHeldCheckout(prepared)
                     notice.value = "The server returned incomplete completion evidence. Collect no " +
                         "money; refresh the POS queue before taking another action."
                     refreshHeldOrdersBestEffort()
@@ -3840,7 +3853,7 @@ class PosViewModel : ViewModel() {
                 // the payment UI before the optional detail GET so a later read
                 // failure cannot misclassify the accepted invoice as refused.
                 acceptedInvoiceNo = result.invoiceNo
-                preparedHeldCheckout.compareAndSet(prepared, null)
+                clearPreparedHeldCheckout(prepared)
                 val receiptSaved = try {
                     val finalOrder = ApiClient.api.order(prepared.orderId)
                     app.cacheIsolation.commitIfCurrent(scopeLease) {
@@ -3868,10 +3881,11 @@ class PosViewModel : ViewModel() {
                 }
                 refreshHeldOrdersBestEffort()
                 app.sync.refresh("receipts")
+                reconciled()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                preparedHeldCheckout.compareAndSet(prepared, null)
+                clearPreparedHeldCheckout(prepared)
                 notice.value = acceptedInvoiceNo?.let { invoiceNo ->
                     "Member benefit $invoiceNo was completed on the server. No money was collected. " +
                         "The detailed receipt is still syncing."
@@ -3925,7 +3939,7 @@ class PosViewModel : ViewModel() {
             successEligible = !hasPreparedCheckout(),
         )
         retryingHeldPaymentIds.update { it + localId }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { retryingHeldPaymentIds.update { it - localId }; notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             try {
                 var moved = 0
                 val committed = try {
@@ -3978,7 +3992,7 @@ class PosViewModel : ViewModel() {
         localId: String,
         ticket: PosSuccessfulOutcomeNoticeOwner.Ticket,
     ): Job {
-        return viewModelScope.launch {
+        return operations.launch(viewModelScope, onRejected = { notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             val outcome = db.heldOrderDao().observePayment(localId)
                 .filterNotNull()
                 .first { row ->
@@ -3995,7 +4009,7 @@ class PosViewModel : ViewModel() {
     }
 
     private fun requestHeldPaymentSyncAfterActivePass() {
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { notice.value = "Resolve the original till handover before continuing this bill. Saved work is retained." }) {
             try {
                 // If capture completed during an existing pass, wait until its
                 // single-flight lock is released so this new durable row is not
@@ -4011,9 +4025,19 @@ class PosViewModel : ViewModel() {
         }
     }
 
+    private fun clearPreparedHeldCheckout(expected: PreparedHeldCheckout?): Boolean {
+        if (expected == null || !preparedHeldCheckout.compareAndSet(expected, null)) return false
+        originalOperation?.let { app.idleCheckoutClaims.markAbandoned(it.authority.scope, expected.orderId, expected.claimToken) }
+        return true
+    }
+
     private suspend fun releaseClaimBestEffort(orderId: String, token: String) {
+        originalOperation?.let { app.idleCheckoutClaims.markAbandoned(it.authority.scope, orderId, token) }
         try {
             ApiClient.api.releaseCheckoutClaim(orderId, token)
+            kotlinx.coroutines.currentCoroutineContext()[cloud.dcompany.erp.core.handover.OperationDispatchContext]?.binding?.let { original ->
+                app.idleCheckoutClaims.forgetExact(original.authority.scope, orderId, token)
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {

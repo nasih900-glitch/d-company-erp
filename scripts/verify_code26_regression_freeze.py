@@ -228,6 +228,7 @@ CODE30_4_BUILD61_BASE = "21b162e39737fca27f85176523c717c798ca8ac1"
 CODE30_4_BUILD62_BASE = "c0a81380fa104f843f7857d0c95d1b705b1f1d1d"
 CODE30_4_BUILD63_BASE = "83cfea900df093f2af3406ca93eb179c0da29390"
 CODE30_4_BUILD64_BASE = "6e783ababf508cac7758de1f7411b47dedd5d66e"
+CODE30_4_BUILD65_BASE = "9e31d0daaa5fbf8b46647a213f6e7beab1ca087a"
 CODE30_2_FREEZE_CONTROL_PATHS = frozenset({
     "scripts/verify_code26_regression_freeze.py",
     "tests/test_code26_regression_freeze.py",
@@ -2523,6 +2524,227 @@ REVIEWED_CODE30_4_BUILD65_SHA256 = {
     'tests/test_verified_pip_bootstrap.py': 'f2ba21264516e14dea3bb7ce7408d88d74ad1581d2739cf344420957db8f8351',
 }
 
+REVIEWED_CODE30_4_BUILD66_SHA256 = {
+    '.env.production.example': '1c4504d2c9464612b8bd4baea84b426b99dc6e9f3a79233201f317ed46a0f5ee',
+    'README.md': '2b21b89c3741b7d2d8b18a13dd64c7297b2a2eae5c02decbce0832e9b1c2f08e',
+    'android-native/app/build.gradle.kts': '09337e2d2831b5c446283e366670d28e2cd496e6be23272bb0d3ace9a399a55f',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/core/auth/WorkspaceLogoutStoreUiTest.kt': 'baef9f4060946479837fc71ec9ea366e72ddbd205999513c500fd48585232945',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/core/handover/AtomicHandoverIntentStoreUiTest.kt': 'da9404ab6d82556205a8030e85fe5f7e9292dbf845cc1f4bfc4287616fe92bd9',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/core/remote/RemoteAssistanceStoreDeviceTest.kt': '7d6946ca89055d84d58b160a7f755c1a87853e234e195cb20a252cc6a5101056',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/core/remote/RemoteDeviceIdentityStoreDeviceTest.kt': '16b3f727884ae2e08b216c47fab03400ef884d2e9aae29082dfee07ab2ce84ec',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/core/remote/RemotePendingCheckpointDeviceTest.kt': '3cdaee61fe6429073bea1a5f9135ef5fc7ef7c6af680f25d099c084a6f299b71',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/remote/RemoteAssistanceDeviceUiTest.kt': 'cbebb0b0d2e83cce78980eefe4cccb5b24951e961cc60d452c55eb12ff153cce',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/finance/FinanceRecoveryStoreUiTest.kt': '33f5eb9e4c9a9614746a0615b5665defb7c44e6a25322ba863a14515ffc0ef4f',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/settings/BugReportDeliveryRunnerTest.kt': '56cf41d2ab19b29c1f81cd47c730324dd45f360c9de6353100b3b64331e29e42',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/staff/time/SharedAttendanceUiTest.kt': '47de41df9853a40242445edbe72bf9ef6bdf61e98259aa6ef421be5c477bafca',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimePendingStoreUiTest.kt': '383ca6f921c512df3d09212d747065a85cd6c4d36e68bff9ee46089d18a52d70',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeScreenUiTest.kt': '20f37d2b6ec06d5a599773616d057cb966ccf59fea45a20ef94b547c75eeab18',
+    'android-native/app/src/main/java/cloud/dcompany/erp/DCompanyApp.kt': 'c05342ead71207edbc55b3445f64ece050d921f5a9f625e175873b3b6af99c2e',
+    'android-native/app/src/main/java/cloud/dcompany/erp/MainActivity.kt': '3f548a704f28c6c0403929d58fd294c383ed7d63154cdff70affbbea04722574',
+    'android-native/app/src/main/java/cloud/dcompany/erp/PersistedStartupState.kt': '66ecc0b6e48f475f9526b6d94976ebc03ee72aa8bc81791922f18d091e16c112',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/auth/CacheScope.kt': '0067da564bff7ba3cfcd8f023d7fcc7c8f4beec00c89abbf84ada436e4c37992',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/auth/ShiftCache.kt': 'b4cad088957245d96db6e62f6e257cb9de4d1b6b62bfa170d13c41a2ea9aa184',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/auth/TokenStore.kt': '3889901a4f7dcf2aa6256c4599cedab43531915e7b52073c5a92c4fab97a1f2f',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/diagnostics/DiagnosticOutbox.kt': 'ec35bb8a11356929116f672378d353ab227eb1460c25ecfab673b888f7e0e347',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/AcceptedTillReads.kt': '0449957ebf2f94d41dd0f361b11e440c8f2efdc7944fd3301972141651bc33a7',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/AtomicHandoverIntentStore.kt': '1694195f43a0349ead3db4c77d8ee99bf4a526711c776d67d7348006539f6f45',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/CallerOperations.kt': '64bfccfb46d4facd89afc589d72fd3ca053c9bf240d5046748aeeb0fc2ea5207',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/HandoverCoordinator.kt': '1943c478db0479728e72165ad08e7a526b6e88cd4125c72d7e3097596838c435',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/HandoverIntent.kt': 'c3aa73be24936c622c0adbe7feba2e4c9fcb9c6b6c76ec4963a0580df307375b',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/HandoverOperations.kt': '1f181d3dd959d1cbb4914b3b617c7ad7cac19bce6e5c9e22efc8f2163abe3712',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/HandoverStartupFence.kt': '3fa24f3f3a11649979f131f35836e5156828fbff1ede8e10d165efd2ed09235e',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/HandoverStateApi.kt': 'e533ac1095ade8992f49e456a1d3ea17c8f0ad120fc0899670aeecbfcdaadb11',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/IdleCheckoutClaims.kt': 'fdd51f79d8a587c8bb05101288c1119705a845f41d6ee3ea0898a4492b22b94f',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/KnownJournalAttempt.kt': 'a5572cafc7c20a677916c8192f71b30d24b3ed217d78a2777a84c62992a972a9',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/LocalHandoverWork.kt': '274727cdc2e3fff02b19b933ba046494b22c44155c1bf82e2ac38955baee9922',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/OperationDispatch.kt': 'c589ec4129bf0e7609d2697df1994e02113baac81cb89aa29608f49c8f7f8267',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/OriginalHandoverDomains.kt': '4c5b4531a6b0943bbe46d20e250752414ea1a9237094c7d6648a27f0a53f26dd',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/OriginalOperationBinding.kt': 'e2813b36fc6d9999ed5ff9dbc51c1aa747bd581f2d6a408917542a103b1a3e30',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/OwnerSupportDelivery.kt': '65cc6ca9d0c6a2b38db66b1fc7fd8a58dda8a2f4763e47ba33d55ed03757d927',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/TillHandoverTransport.kt': '2868877370859db2d875e2476351569edad44f7f6a0e5cb2a8b2d5cfc6b44043',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/TillPreparationTrace.kt': '6686d5cd12bdd5f02f44dc66dd0e61602322a8a243e812bb85d49a0665a2b35a',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/WorkspaceExit.kt': 'cb184d5d4da0018071e7ed3913b5f9ee595205a1f9a952d81ecfcb8212861ba4',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/WorkspaceSelector.kt': 'e72aac715fbd6003c0a50a9188949282506747b94ef6b3e1e70b9fd54caa10c2',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/net/AnonymousPasswordRecoveryApi.kt': 'ebff0d879dc556a7df3011035b5c0d04506dd6593e6c8c3261502abff2badd41',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/net/ApiClient.kt': '39568a2dd804ff76dbfa35f34bdb2c2a123815adbaaf6bf475e9d56fcb2c5bb4',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemoteActionTargets.kt': '795927d5156a3251ae3dab73ea2e58fa0de0493e46dada9f4d08e80a0080746c',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemoteAssistanceApi.kt': '81ce325a18ff84671c46d1b01c0de772dff098048999f8383fa9a77e42a53605',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemoteAssistanceCoordinator.kt': '7d999982607ea157412ceaf554aec230e254a5e7c1a0a696d03fe8ef4ba9be5e',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemoteAssistanceNotification.kt': '5f264de8bd7df83cebbbfdb6dc26defca6034d5992b872d8ea50f42c8cda6cd8',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemoteAssistanceStore.kt': '8ddab8d5d618f609a29b5d2bf5e5fe21a6681a24b7729ec6fb0a25dd6a3af710',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemoteDeviceIdentityStore.kt': '064afb0de2aeec8fe021a7b495fcb5b168e72679a1e13750487a7217fc609fb0',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemoteEnrollmentAttempt.kt': '2e49c42a30fbce8b6dea3ff5c5af455212a05e8bcae3c203b24ac39566e02b13',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemoteJobSlot.kt': 'e5d67388a231b7ac2fca98f4b2417315aa89d602a06533a3f828f3bb567656c3',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemoteLocalSharingGuard.kt': '99fc66e1ada0307357c507ca1f0f0289a643b9c5e1dab902f68f8e29883942a0',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemoteOriginalCommit.kt': 'ec2a39cefaa16bbe902afe54d9e8db0d0f82391ed149e6293dfc8339ad240185',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemotePendingRecovery.kt': '674821c8441d9113207b7b0b8383d2b1ddfe54fec5dc9be800c81361c5229677',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemoteUiCommandGateway.kt': 'cc2fa6ada0c76533270cd488bbeb96e3b86285ea0bd242e4e1f35db984219b8c',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/sync/OriginalSyncWorkerJoin.kt': '515652a8def7a7b679c1a89e9a739b5880e1f3a4732e585797dd038d1caeee41',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/sync/RealtimeClient.kt': '3b705267db067e1af80db63e287a4fa44e0545a8053ac21e41c0f889f5aba34d',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/sync/SyncEngine.kt': 'cdedad5de53e2a7135a6e9c4307cf283f43e9c32dbc121f7a2fc9a97cb70b834',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/update/UpdateTelemetry.kt': 'e59996b0a0106a5b0c183fdfb5b5b71a6f685f3b44c3247b672bef70c100736b',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/Nav.kt': '5faf312bb1f1d58cc5a8d1d05914a99c6b26ddd881e971acda780c8467fadd23',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/SessionViewModel.kt': '57b1f81aa7e674572031c70a68b337c0f1e630a2decbf19557324fccec6a0973',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/TerminalReassignmentPolicy.kt': '28cfc2fec8da1848a9d6152d1c8fe2e7af1bfb9c62d20dd3bf6a7701b70c9675',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/TillTakeoverUi.kt': '5e12d726506ed2c74e2571b7abb7934a423c4e74f7c4ea8e9cc0d3ab164b5431',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/components/PricingUnlockDialog.kt': '1beffba23fa20aa44cde043c204285bc930d19e9a1cf51aa25446ee8eabf084b',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/remote/RemoteAssistanceUi.kt': '5e4ff235f8b4824d8391c329eaef6c31503b81dd8d34018d48b05dda3d189a20',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PasswordRecoveryViewModel.kt': '5879434b1d9f9147494aa3ef42c231fcedc64ff3d1984bf167cf58dcc933a48e',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosViewModel.kt': '6f18f1b2d6efc7bfaf24acb4402d7e9dbc22610d0a013f83cfec6da2ac64bd3c',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/accesscontrol/AccessControlViewModel.kt': '751d3213594c39ac0fa1ba14c3aeeeef95ee0905cd1e5cf85d4987941805b7a0',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/audit/AuditLogViewModel.kt': 'ff1f9019fcc46ac017cf63047d7509978473447d0c5f0d357d199c4bc5bc5a52',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/customers/CustomersViewModel.kt': 'f495b93c569cb8bcaa3a408e8b0e5262af06bdaf11ab558d607c029ff3b3b73a',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/events/EventsViewModel.kt': 'b09ebaacc1e764cc2162d6645450b314a85b1a22f4e402ef18f1a4d7dd28d643',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/FinanceOnlineWrites.kt': '6672325de5d73045f79540ac1a49879c99792e872baa8b39029f6c29b0f2db02',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/FinanceViewModel.kt': 'f070c6d3019a5702dfbed7d2bc7ab2bc6f109accd276e064cf69ce64e9b4c362',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/TenderWorkspaceViewModel.kt': 'ef06e6620e60005eee48721478b80cd0b9c1c4027eb50f1f590054c252cf0105',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt': '55048a1d9171f7c8f2b78ffe532f005404356d44a41a4566abb97e66cbf2f3b7',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/inventory/InventoryViewModel.kt': 'c1ee9eadb71053edab6e517fa73e75bffee86578b663cfa6665b8d6f9b1d52a7',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/kitchen/KitchenViewModel.kt': '430fd2c408f67a94a4f1e1fc81c1b0e35846facec16f268847964efd41f238e0',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/memberships/MembershipsViewModel.kt': '5be4f667c8398937bb99c72facc318089c69b07780e791a9cbf4ca67a5cea50c',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/menu/MenuViewModel.kt': 'cbd8c2456590fd5a7f5ff440a998d1582cf662c358d9adb21fbb73efed05ffab',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reservations/ReservationsViewModel.kt': 'ed395c7692bd5fcc433a196a4a09440768e8e07e91251236661a2425ecd6bdf1',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/AndroidUpdatePolicy.kt': '4edaf36e854a6383c265a48dbc0a6928eaa6d48f173882c40ff7334b0da9abc7',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/BugReportDialog.kt': '5e51ec8656c539fd3443f3093473e4f24b845fd4e95dbe4ccec34a196ec69f8d',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/BugReportOutbox.kt': '9bba7f93ad46735ef1672d9c828ecb3f37a5f0172b2aba4c9f770587fa53c6fb',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/BugReportOwnerHistory.kt': '69e4821198025c620247fabaef832ac6c8aecdb6b40321fe7a677233fbddd12d',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/BugReportViewModel.kt': 'df65549378e974cee09051541fbb135c5bedb39e515ed410832b7488d99a7041',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/SettingsViewModel.kt': 'e0739ca6300878e2b03cdc962665c89a44c9ec48c7d39c043ed133c660c8a8e8',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftScreen.kt': 'da40e5b25f0655e29fc2235fdc716350b3edf314a85ca7711c2a8f825b9a998f',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftViewModel.kt': 'a7d1e33f9bdf739b884750bccd2090f2c4fe072047cc665bd1659986b232b0ba',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/StaffScreen.kt': '13d1c5aa395f40c15bd94b34bdbf636643bc7ba08b0494d8d50299f5d605156e',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/StaffViewModel.kt': 'b7b31a992c54f9ef08927d6fa88af9b1fef49c49e0ab5d08ee48b91a0ddf848f',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/AttendanceCards.kt': 'ac6074d8425c19fee00776282abf2fd5d0eb25ed9226ea8270df618dd9adc74c',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/SharedAttendanceApi.kt': 'ca67148e29ae87385708a1b26d8631fe59aa24ec1be22fff9ec17365a3b08aba',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/SharedAttendanceCard.kt': '6532863fce55b4c8b29c525756b29867f75c46b66c9dee8ddf9121a530e2004f',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/SharedAttendanceController.kt': '2168d097959f5f447323d517374999ce83acdf16746e3db254eefa21f8ba5105',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeApi.kt': '898e2ae309f4e5ce8a638b34e8362cf0481a3d5e41fdfc565f7e211409884eea',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeController.kt': '44bf281afcfa4d9e1f9ad0a5e4bb004bdf696becdba4c7a7e5b29942cbce8b4e',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimePendingStore.kt': '09fdd326c30994d105fb7efd3f96efb3488fc751eb2e6b38358f6979d9a07f99',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimePolicy.kt': 'f3e9db6700e22440187ce6396bf81549c9a87e5aacb15d3f93924343683d2851',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeScreen.kt': '965d8307dac57f86a77d93fc69badd49a243cf8a0c516fd5d7ff8185b3a336cf',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeViewModel.kt': '7615b431f0a4042dda9cfcfa8da39b3898197a7da055e153044f4d9f61c56f58',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/tables/TablesViewModel.kt': 'c401ac6a32a108ede2673d4faabea9c770ebc47e5d020e317e3841b1d1d1cf97',
+    'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': 'e0aadef5e25811e2daa880c5918066fc17aac2e93c5685afcf38824b0d2a5b85',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/auth/CacheScopeTest.kt': '3004e76a94ed6fe2b90a3e61796fb16fac1f93724da8dfc0827413c1097048d4',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/CallerOperationsTest.kt': 'c1d75935bd3683471833001cd432993caab3e4f161968b1ea1f6d36be4f7ee44',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/HandoverAttemptLinkageTest.kt': '3dbb3a93dd36a7e7c8fb688d59bdbede14c0e814bb00a00cbd65a90cb28ec5ac',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/HandoverCoordinatorTest.kt': 'f33b7fefa8e1e7970b8c4abc3f7c193f9796c52b49445bb89e2155b2a74a8f33',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/HandoverObservationTest.kt': 'dea8467cedd82a08401eb1e07ccbd5c594104f51cf526fbe3f3ada918420397c',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/HandoverOperationsTest.kt': '3964b0a5e89fd135e703097e740c24911b9673a8edf910b55e1062ff3461959e',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/HandoverPreparationTest.kt': 'ba0f2538f20255187a77a39ae6f2957580f90ae5f6fdb1f37e451601c46a6476',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/HandoverStartupFenceTest.kt': '5f21325f695e354469f1ed59e7f431f9e2119b2fb78f58bd751b7b6f8fe6164b',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/KnownJournalAttemptTest.kt': 'a4448f6f3419742dbe08fec1281587df27eb3294ff1076f69f84d7a5d6910c48',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/OperationDispatchTest.kt': 'dc2e6c00fafa40a5273798949d295e19e0d31bded3a6053972c4a90973388757',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/OperationScopeTest.kt': '28a66547ef266395fa872b1cfabb5e4bb3ea8cfc4e1e0639a610440db002a8a3',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/OriginalHandoverDomainsTest.kt': '0b8b0a7e26a7987fe3d086fef5f5b1fc0d946f3c08d44be05b631e5140e5b06d',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/OriginalOperationRoomFenceTest.kt': '41094f31c38310edad00ef678fe47b34a3f39a6f964ed1a954f1fec1b244c5e5',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/OwnerSupportDeliveryTest.kt': '05c5105c829e1ca70d0c9425bc2089179a40cad6357094e48a83e1518044445b',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/PriorMutationUncertaintyTest.kt': 'b99c737d0994dd979e72cc25a1c0c4a1b47bd620435852d7b3d5a6e3e78b8c69',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/RemoteHeartbeatLifetimeTest.kt': '6d6d7d55ff3ed39804230708cf0e8e5febfca5adcfd811491549b7a52ec875aa',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/StandaloneOperationCaller.kt': 'e7cef037d40e3efcb5c9ac3840e8031a7dd2d9b60bd73d96e1781d3c0f56db0e',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/TillHandoverTransportTest.kt': '4eb88297644d74149a919a23f4f9fdb19cd60537e3f59c1fbf6871a470eec75b',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/WorkspaceExitTest.kt': '0b18666d4a3bf2f3b56b118b1d321a15a8e3662b45f11af1f4f4317f6f2ab4f5',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/WorkspaceSelectorTest.kt': 'ed17e58a2118a54bc612a9cabd89c5efd8988bc49ffb5f89020f28742e0ff67d',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteActionTargetsTest.kt': '52f6b66dbeea9ff01d2af60acca11f2bfb1bf9c0e536081f6d54d777300377e3',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteAssistanceApiContractTest.kt': 'bba6b2d4c69c3448dc524c343a9af53dadbc9860fccc5e44b1d552a04757e4f7',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteAssistanceSecurityContractTest.kt': 'aff84f8358e9d9baa709a1c51f1a68a8238f161ce3b0d7bc37e5fa9d4acdf7e2',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteEnrollmentAttemptTest.kt': '09f4add322221680df1a19207f214afa930861b77936c9560685d5cb2e692840',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteEnrollmentTransportTest.kt': 'c17397f5903597cac6712302fe3fb30427f6472119c1df7b6277a31dbf3f7048',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteHandoverReadinessTest.kt': '18f5827d622ad105ac8f673c3cf27bc24465ad2abc054b5f7d5cb9fb3ec1b115',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteIdentityCheckpointTest.kt': '4d971e167cfe1dcfe60b6b9b20c219ad0a06ad54fa44e8d068cee5c6464db233',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteJobSlotTest.kt': '1a86f712ef4db42fb044ef3481e2e66e446ad14b5a77d1682c8d673a4862f8c5',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteLocalSharingGuardTest.kt': '3c114a95f4f9a6c59c2a75d6612090ce3fc3ae83de202ab646578662b2969a8f',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemotePendingRecoveryTest.kt': '890a2256a06e1d685904dd07842f549a484fb8ebcb85f666b408bca97cb535d4',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemotePendingStoreDurabilityTest.kt': '478551e7bf570f3d61c854014e16d18674177bb2041c838aaf40d17449a71fea',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteSharingLockOrderTest.kt': '464b4a946a82a3c114780fff4aeced5fc1575e660352778e21297219bf0e373b',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteUiCommandGatewayTest.kt': '7188f6c2a1438778df91a7c8e861fa3ef6346f73f0a39b9d78f9bee8899e7f07',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/sync/OriginalSyncWorkerJoinTest.kt': 'e4aabde85ee777eea52b4327fd4e3006ebab9792af7abd03d585297324c50bfd',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/sync/RegisteredSessionWorkerTest.kt': 'd63da79ebae979893d4d1fa0d85bb77264b7663ab4efae489a133eff488b2e86',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/sync/SyncWorkerAdmissionTest.kt': '9b36ca5af058b3e7a21b65b22dabb63f9eb02038f3321037516c029293c89ca0',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/StaffNavigationCaptionTest.kt': '2070c507620a960d8757dc34455ffa0add723feca7361a3f938de7043279e7e7',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/TerminalReassignmentPolicyTest.kt': '5b8290e034d640916d9095a0484a58ec61156c653ff5dfb67d2cf9ccf9585d25',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/TerminalReassignmentResumeTest.kt': '8f44b83d687dc2c483cae84a31039c108bc1d818067640a7fc18855ef5a6f52f',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/audit/AuditSnapshotStateTest.kt': '4ff4afbd6758111631a59e8f61e354171980d0f078c86192f4ef5a0d74e69d3f',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/finance/FinanceRetainedExecutorTest.kt': 'ca59668fcc3f6268ad3a2e5b56c28f56ce0fd097083cb1a134869184221dfd83',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/finance/FinanceSingleAttemptTransportTest.kt': '94fe52e1681caddc11a0abf97132e655d91b7d5cc3c0a50a903eae2448085ebf',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/finance/TenderWorkspaceStateTest.kt': 'a821fe2c152e8581cf9a17714cb5dbf999860d51b7fe1de5b4e81f04f7355ce3',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/settings/AndroidUpdatePolicyViewModelTest.kt': '781fea51e5e2197958f74d431a945c9937e1ff09436e695a48f4e6d83d5b8fc3',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/settings/BugReportOwnerHistoryTest.kt': 'ce17c82cfa79b32efd7a801d480e5f32ed4ed786e3fd5f93ff5a5b27916b512f',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/settings/BugReportViewModelTest.kt': '61588f548e7a3b7d08cc4039d36a6e92e6f4e64435394635fa11224d93dc187e',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/AttendanceCardsApiTest.kt': '90ca328b963d381f9760a820123959487b07d3437bc1934bd9754ebb4e87cbb5',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/AttendanceCardsTest.kt': 'd64702e598e7d8a2e4725f37ff3ffd6e39f640306aa1fe9f69175d78764c5206',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/SharedAttendanceApiTest.kt': '6f04f17893ae0668a2fdf413e4d3cd0d89b153232506760336c2e56ebed81c30',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/SharedAttendanceControllerTest.kt': 'a4e6610fbc19d6a7499ff139ca689a3e4e8a9fa34e73eee885438a427fcef2fe',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeControllerTest.kt': '39f568148c04e2be141be171af2234ff39c9e4414b2bc733b7f4e875294f5a7a',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeHistoryReadinessTest.kt': 'd6b5c687945ce004c65c087c4af1a740cee58957ce19368d1e79d77d7ddeb494',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeWireFenceTest.kt': 'b362d287f561f6083b91ee91dc92159217582e3f1df1fdd6a4c55d225ffc7049',
+    'backend/alembic/versions/0095_shift_operator_handovers.py': '80c40a150a23969c04814c89344908a143f9480bffe73db24d7b93b699a85fee',
+    'backend/app/__init__.py': '80889895a3a3283e8d27d2f85ea3d6d3d49ae2ea8649578fe6152f213be722d0',
+    'backend/app/api/v1/auth/router.py': '5e900e44875044d54cd7401715ea238ca6321f4a7ce5141e2a987fa64b075be5',
+    'backend/app/api/v1/gaming/router.py': '4ab18b60c82d8f13f32cca6ee4c28cebd2eb0cf9b9a618a09682ad2b46e7d86e',
+    'backend/app/api/v1/pos/operator_handover.py': '72a0e54a1c5ff621ddb7fff0b04e54e8b682525f31bf10fcfc881b4860f5c8c1',
+    'backend/app/api/v1/remote_assistance/router.py': '3054e440d724b4e2cd72416fbc12e72358200d2e46fa771d5c2a3bd424f209d6',
+    'backend/app/api/v1/router.py': '0ca0f560481fc5e154a99149b4412ede88f27a5bfca67606da157c575da9d22d',
+    'backend/app/api/v1/staff/attendance_cards.py': '8802295970e93b914cdb5c089f833b5f2d2b51f8217bc5d9af076df4833fba23',
+    'backend/app/api/v1/staff/shared_attendance.py': 'f34bd4dd59f42827b6c7bd830d312672c87911f79a0ccdfeecd23052acf6ad44',
+    'backend/app/api/v1/staff/work_time.py': '0d0f42154a86cffbdab13827e1ea13eb1434c5cd4165460c59a05eeae7f24843',
+    'backend/app/core/permissions.py': '308e96834345901f3850bd751af62e739dccea4908848b7dfa157b103c601301',
+    'backend/app/models/__init__.py': '7f12ddfa88660a132737707adc90690655f6f72d707a99e65d153359b4ed73d8',
+    'backend/app/models/pos.py': '3e16648ef94530fc589d2696c2682dd9d45b8f2262f795e9412613fa99f77486',
+    'backend/app/models/shift_operator.py': 'f845e3d578cfc63712255c214441bc54fcb834d8b4ca7e45602ddc6fffa06b9b',
+    'backend/app/services/audit/recorder.py': '7cb58ace507e41428fb18e04794f439fb62a6a7b03d31ab2f6960dce3b725c32',
+    'backend/app/services/auth/credentials.py': '74088a392a3c2a47e4abbb2b9a381f4bedaa8f3409b8567b1ee57f61eaf905ba',
+    'backend/pyproject.toml': '7bc8936065d76484ea426ebe8e2e991bdd9b41ae0716d8424decce9743806769',
+    'backend/tests/integration/test_build51_history_bridge.py': 'a04a4f279b405e900bb47610d1d9469338842e54d22cecb4b513820ff6c36fdd',
+    'backend/tests/integration/test_build55_transition_state_query.py': '2afb1ac02a5238f6659687c00055e42ede54f1d787c3338d193f8125fa212d57',
+    'backend/tests/integration/test_gaming_handover_void.py': '00299bd7cf3cb542a5a7a7e42f02c43f43f7cb5c024a3c82e787fd19cffcdb56',
+    'backend/tests/integration/test_gaming_pause_lifecycle.py': '105b794e268d7c99a3f58432b62b4ddd7e5a60d6a1fbf1a09ccbb002bd2e995d',
+    'backend/tests/integration/test_gaming_session_addons.py': '2b5544211f1afe50dde1f2c7a3b271b728e981aa2e639858fdb521b9aaea8d93',
+    'backend/tests/integration/test_remote_device_terminal_status.py': 'b9bd10d263c77e3f28107db2cc1a985fac37fe38b2159fc96f439e136e9bceaf',
+    'backend/tests/integration/test_shared_terminal_attendance.py': 'e69e7d161f2f672a06a89be5ee35cccaeb7f0897e86e37c6e8c781d0ff471590',
+    'backend/tests/integration/test_shift_operator_handover.py': '61da2fc2b8578594a31246dca599d09501025a565b49153be03803e8dc73913a',
+    'backend/tests/integration/test_staff_attendance_cards.py': 'f5c70c680dd783fe007ca9281e0986cdeac69fcb1c0f3c98767acdd971cd1d48',
+    'backend/tests/integration/test_staff_work_time_api.py': '230d25adfd68c70d8fb3aac13e42f791bb3551aee459bc8d024b265305037f38',
+    'backend/tests/unit/test_gaming_reconciliation.py': 'fcdbe7549cadea48bbf7f4911661c5dbf20d77956708e85c5fbafcf1e9a39e0f',
+    'backend/tests/unit/test_gaming_void_policy.py': '9b23ce8a8e750e991c3f9c9073b29d6bf9208aec88b0b6cee26f39c6054fc0eb',
+    'backend/tests/unit/test_operational_route_integrity.py': 'df15c2a72faae374e256939387fc6fb4ad936f40f113097a1864e3f695340d57',
+    'backend/tests/unit/test_operator_recovery_permissions.py': 'ee9fe13712a9dd3f3f2c057850fdfca228cbd88ffb24dabe3e632b6c07bd5868',
+    'backend/tests/unit/test_permissions.py': '5f17462503e4233eab090bdbbf9748f32e4955e51094c4b1daf6e1ca3f12ef2b',
+    'backend/tests/unit/test_release_contracts.py': '0390f4967d49d4469d1022745490e128efe71593c2f7ae64378d6c5382c5978f',
+    'backend/tests/unit/test_remote_assistance_contract.py': '85e9dbd816d22c193d9d836f8ff8dadf718e930f721be2831303f13e189dd51d',
+    'backend/tests/unit/test_shared_attendance.py': 'ada2ca29fff4313fbb87b57598948832522f679b8441243e3ad1dc04d7c4d444',
+    'docker-compose.prod.yml': '310f2b72f00a16f5988b364728e96b1d8cd394ab0477365be296a82ade2d2b9e',
+    'docs/BUILD66_GUARDED_DEPLOYMENT.md': '48284ad96a9386b1d4fca935981e526828be2e6f7488bf10527e51b9aaa7968d',
+    'docs/V3_1_59_RELEASE_CANDIDATE.md': 'd38d1308711d42a559d8e23bb020165f78f526c48c728b9fa0f7a0f3a49aeb6f',
+    'frontend/.env.example': 'ac22b23cd782c1cffa6d7d962ea29d04ddbb00b57a7b66c628c1c4ecc0a8a4a1',
+    'frontend/package-lock.json': '7135f2ec2e98824dfd0cfdeeecf3241d3e6e1cc9a630652356635bfbdcaee365',
+    'frontend/package.json': 'fe208bd05e3dd7d847e4a9c58324c14b4bc70c3b26b7ce1a8368bab66dc7f3e6',
+    'frontend/src/app/App.tsx': 'c5f07ee359bbaf9f253ebdd83a664e26c804e3340bb346e1dda62d1c8dd4b952',
+    'frontend/src/lib/operator-recovery-api.test.ts': 'd79da6830aa5bb7c787f87848c3406e202924a0be8b0156576c5de7b07e1c0c8',
+    'frontend/src/lib/operator-recovery-api.ts': 'a2617662d5ce975299613c7ddbaf7681d6345a6bd593e3c7dd356fcec3138361',
+    'frontend/src/lib/staff-time-api.test.ts': '9b77472c1315501c9f77ed45515755cc32000a4adea1a16e6598e6e6c1894053',
+    'frontend/src/lib/staff-time-api.ts': '32eaf8ab8fa6bad42339146cba66235e842b02e030d2df9b58ee50d77f2f84ac',
+    'frontend/src/modules/pos/OperatorRecoveryScreen.tsx': '367544f39747ead46b9eed039f6bc0c8925f1efc121d1b414e391aa812de1d9a',
+    'frontend/src/modules/pos/OrdersAndShiftsScreen.tsx': '2f3a0720a608c655fd8d69e99a82e80326d6d93c33a85da739d5b7907990a35e',
+    'frontend/src/modules/staff/StaffTimeScreen.test.tsx': '9fab693cd1c2851f46c0e82d7b6ccc64626c42fd65b035896a9f8499de3f8443',
+    'frontend/src/modules/staff/StaffTimeScreen.tsx': '84b0660dcc2df55a5be0850477b2c07a7dbb212d0daa7e7dbcc998119f52f79b',
+    'frontend/src/modules/staff/attendance-cards.test.ts': '40cb84b4833b611e5c8243859d670cd246ffdc8f80d2aedd4ec693528536e927',
+    'frontend/src/modules/staff/attendance-cards.ts': '0da3cd8e23b8fca876453c2c3c7a500839f263557577ebc3e2295f8e3cf8ff1b',
+    'infra/docker/verify-backend-runtime-profile.py': '161be5940e67050007ebfe6e5185f9d53adea8139d580bbee4f2914ae63adc6a',
+    'infra/scripts/install-on-vm.sh': 'd4a54cc02e479b2609d6693cdb1d6afdcb9e8876e34909ad5676c027610c259c',
+    'infra/scripts/verify-build55-authenticated-acceptance.py': '5dc03888d4cf5884d857ff0ed5aeeb6b237bdcaf8225a8443aa1e45d35df8901',
+    'infra/scripts/verify-build66-shift-projection.sql': 'f0e71e1dc557df740d1ae06aa1b9ba40eea63038c82ba54787fd44b10c9fc4f7',
+    'infra/scripts/verify-build66-transition.py': '141296169f0a15886b45195f62af85eab0b55e54119b29dde5d2f26c8a214d87',
+    'infra/scripts/verify-production-runtime-images.sh': 'c8857bb365176c2ded6c0b4ec01f415eab078ded8f5a16a49e72da6b02af4912',
+    'tests/test_backend_runtime_profile.py': 'e9dd8cc91e7c32a8e55b70a4a060b3873292d589835313d106ab700d58ef945f',
+    'tests/test_build55_authenticated_acceptance.py': '4cbb38e154cd085cdf656ca7ac50bf9c4dfc6b574492fa2ef2b1cc76c356ba6c',
+    'tests/test_build55_pending_compatibility.py': '0eb973ad6ff93cb66d85ccfe3e9b665f0cfbff6fba6d7299a5746c4032f5a5c9',
+    'tests/test_build66_transition.py': 'edd7fe9eed360d8f106f9d75a99fc0a128d81fa2228b12bda364d8cf14ec4c0f',
+    'tests/test_code26_physical_audit_lane.py': 'c1b74fa137b580a6fcbfc1de9adf9ccaf743213d128cb9f17a4155ee1607ee51',
+    'tests/test_verified_pip_bootstrap.py': '34ba32ba469521f3f699ed24bb80f8c7340751f73bcdc3900e727be55262761f',
+}
+
 REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
     path
     for path in (
@@ -2553,13 +2775,14 @@ REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
         | REVIEWED_CODE30_4_BUILD63_SHA256
         | REVIEWED_CODE30_4_BUILD64_SHA256
         | REVIEWED_CODE30_4_BUILD65_SHA256
+        | REVIEWED_CODE30_4_BUILD66_SHA256
     )
     if path.startswith(("backend/app/", "frontend/src/", "android-native/app/src/main/"))
 )
 
 
 def _current_code30_4_sha256(path: str, fallback: str | None = None) -> str | None:
-    return REVIEWED_CODE30_4_BUILD65_SHA256.get(path) or REVIEWED_CODE30_4_BUILD64_SHA256.get(path) or REVIEWED_CODE30_4_BUILD63_SHA256.get(path) or REVIEWED_CODE30_4_BUILD62_SHA256.get(path) or REVIEWED_CODE30_4_BUILD61_SHA256.get(path) or REVIEWED_CODE30_4_BUILD60_SHA256.get(path) or REVIEWED_CODE30_4_BUILD59_SHA256.get(path) or REVIEWED_CODE30_4_BUILD58_SHA256.get(path) or REVIEWED_CODE30_4_BUILD57_SHA256.get(path) or REVIEWED_CODE30_4_BUILD56_SHA256.get(path) or REVIEWED_CODE30_4_BUILD55_SHA256.get(path) or REVIEWED_CODE30_4_BUILD54_SHA256.get(path) or REVIEWED_CODE30_4_BUILD53_SHA256.get(path) or REVIEWED_CODE30_4_BUILD52_SHA256.get(path) or REVIEWED_CODE30_4_BUILD51_SHA256.get(path) or REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
+    return REVIEWED_CODE30_4_BUILD66_SHA256.get(path) or REVIEWED_CODE30_4_BUILD65_SHA256.get(path) or REVIEWED_CODE30_4_BUILD64_SHA256.get(path) or REVIEWED_CODE30_4_BUILD63_SHA256.get(path) or REVIEWED_CODE30_4_BUILD62_SHA256.get(path) or REVIEWED_CODE30_4_BUILD61_SHA256.get(path) or REVIEWED_CODE30_4_BUILD60_SHA256.get(path) or REVIEWED_CODE30_4_BUILD59_SHA256.get(path) or REVIEWED_CODE30_4_BUILD58_SHA256.get(path) or REVIEWED_CODE30_4_BUILD57_SHA256.get(path) or REVIEWED_CODE30_4_BUILD56_SHA256.get(path) or REVIEWED_CODE30_4_BUILD55_SHA256.get(path) or REVIEWED_CODE30_4_BUILD54_SHA256.get(path) or REVIEWED_CODE30_4_BUILD53_SHA256.get(path) or REVIEWED_CODE30_4_BUILD52_SHA256.get(path) or REVIEWED_CODE30_4_BUILD51_SHA256.get(path) or REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
         path,
         REVIEWED_CODE30_4_BUILD41_SHA256.get(
             path,
@@ -2774,6 +2997,7 @@ def _normalise_release_identity(path: str, text: str) -> str:
         return text
     normalised = text
     for current, baseline in (
+        ("3.1.59", "3.1.14"),
         ("3.1.58", "3.1.14"),
         ("3.1.57", "3.1.14"),
         ("3.1.56", "3.1.14"),
@@ -2876,10 +3100,10 @@ def _normalise_release_identity(path: str, text: str) -> str:
     ):
         normalised = normalised.replace(current, baseline)
     normalised = re.sub(
-        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65)\b", "version_code=25", normalised
+        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66)\b", "version_code=25", normalised
     )
     normalised = re.sub(
-        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65),\s*BuildConfig\.VERSION_CODE\)",
+        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66),\s*BuildConfig\.VERSION_CODE\)",
         "assertEquals(25, BuildConfig.VERSION_CODE)",
         normalised,
     )
@@ -3110,7 +3334,11 @@ def _code30_4_build64_delta_paths(root: Path) -> set[str]:
 
 
 def _code30_4_build65_delta_paths(root: Path) -> set[str]:
-    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD64_BASE).splitlines())
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD64_BASE, CODE30_4_BUILD65_BASE).splitlines())
+
+
+def _code30_4_build66_delta_paths(root: Path) -> set[str]:
+    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD65_BASE).splitlines())
     changed.update(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
     return {path for path in changed if path}
 
@@ -3522,6 +3750,15 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
             errors.append(f"Code30.4 build-64 file differs from reviewed bytes: {path}")
 
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD65_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD65_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-65 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-65 file differs from reviewed bytes: {path}")
+
     expected_build42_paths = set(REVIEWED_CODE30_4_BUILD42_SHA256) | set(
         CODE30_4_FREEZE_CONTROL_PATHS
     )
@@ -3692,6 +3929,13 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
     for path in sorted(current_build65_paths - expected_build65_paths):
         errors.append(f"unreviewed path entered the Code30.4 build-65 delta: {path}")
 
+    expected_build66_paths = set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build66_paths = _code30_4_build66_delta_paths(root)
+    for path in sorted(expected_build66_paths - current_build66_paths):
+        errors.append(f"reviewed Code30.4 build-66 delta path disappeared: {path}")
+    for path in sorted(current_build66_paths - expected_build66_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-66 delta: {path}")
+
     # Post-release Code30.3 maintenance tools are pinned by their own map.
     expected_paths = set(REVIEWED_CODE30_4_SHA256) | set(
         CODE30_4_FREEZE_CONTROL_PATHS
@@ -3701,7 +3945,7 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         REVIEWED_CODE30_4_BUILD41_SHA256
     ) | set(
         REVIEWED_CODE30_4_BUILD42_SHA256
-    ) | set(REVIEWED_CODE30_4_BUILD43_SHA256) | set(REVIEWED_CODE30_4_BUILD44_SHA256) | set(REVIEWED_CODE30_4_BUILD45_SHA256) | set(REVIEWED_CODE30_4_BUILD46_SHA256) | set(REVIEWED_CODE30_4_BUILD47_SHA256) | set(REVIEWED_CODE30_4_BUILD48_SHA256) | set(REVIEWED_CODE30_4_BUILD49_SHA256) | set(REVIEWED_CODE30_4_BUILD50_SHA256) | set(REVIEWED_CODE30_4_BUILD51_SHA256) | set(REVIEWED_CODE30_4_BUILD52_SHA256) | set(REVIEWED_CODE30_4_BUILD53_SHA256) | set(REVIEWED_CODE30_4_BUILD54_SHA256) | set(REVIEWED_CODE30_4_BUILD55_SHA256) | set(REVIEWED_CODE30_4_BUILD56_SHA256) | set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256)
+    ) | set(REVIEWED_CODE30_4_BUILD43_SHA256) | set(REVIEWED_CODE30_4_BUILD44_SHA256) | set(REVIEWED_CODE30_4_BUILD45_SHA256) | set(REVIEWED_CODE30_4_BUILD46_SHA256) | set(REVIEWED_CODE30_4_BUILD47_SHA256) | set(REVIEWED_CODE30_4_BUILD48_SHA256) | set(REVIEWED_CODE30_4_BUILD49_SHA256) | set(REVIEWED_CODE30_4_BUILD50_SHA256) | set(REVIEWED_CODE30_4_BUILD51_SHA256) | set(REVIEWED_CODE30_4_BUILD52_SHA256) | set(REVIEWED_CODE30_4_BUILD53_SHA256) | set(REVIEWED_CODE30_4_BUILD54_SHA256) | set(REVIEWED_CODE30_4_BUILD55_SHA256) | set(REVIEWED_CODE30_4_BUILD56_SHA256) | set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256)
     current_paths = _code30_4_delta_paths(root)
     for path in sorted(expected_paths - current_paths):
         errors.append(f"reviewed Code30.4 delta path disappeared: {path}")
@@ -3736,6 +3980,7 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         | REVIEWED_CODE30_4_BUILD63_SHA256
         | REVIEWED_CODE30_4_BUILD64_SHA256
         | REVIEWED_CODE30_4_BUILD65_SHA256
+        | REVIEWED_CODE30_4_BUILD66_SHA256
     )
     for path, expected_sha256 in current_hashes.items():
         # These files define the freeze itself and cannot carry a current-tree
@@ -3813,6 +4058,7 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD62_BASE}^{{commit}}")
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD63_BASE}^{{commit}}")
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD64_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD65_BASE}^{{commit}}")
     _verify_code30_2_exact_delta(root, errors)
     _verify_code30_3_exact_delta(root, errors)
     _verify_code30_4_exact_delta(root, errors)
@@ -3837,7 +4083,8 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
             path, candidate_normalised
         )
         reviewed_test_sha256 = (
-            REVIEWED_CODE30_4_BUILD65_SHA256.get(path)
+            REVIEWED_CODE30_4_BUILD66_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD65_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD64_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD63_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD62_SHA256.get(path)

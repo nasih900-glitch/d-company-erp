@@ -167,9 +167,9 @@ class RemoteAssistanceApiContractTest {
     }
 
     @Test
-    fun `only exact absent or terminal responses retire a durable mutation`() {
-        assertTrue(remoteMutationStatusIsTerminal(404))
-        assertTrue(remoteMutationStatusIsTerminal(410))
+    fun `generic absent and terminal errors never identify or retire a durable mutation`() {
+        assertFalse(remoteMutationStatusIsTerminal(404))
+        assertFalse(remoteMutationStatusIsTerminal(410))
         assertFalse(remoteMutationStatusIsTerminal(401))
         assertFalse(remoteMutationStatusIsTerminal(409))
         assertFalse(remoteMutationStatusIsTerminal(500))

@@ -137,11 +137,34 @@ def test_psycopg_must_use_the_locked_binary_implementation(profile, monkeypatch,
             profile.verify_postgres_drivers()
 
 
-@pytest.mark.parametrize(('driver', 'failure'), [
-    ('asyncpg', 'wrong_result'), ('asyncpg', 'query_error'),
-    ('psycopg', 'wrong_result'), ('psycopg', 'query_error'), (None, None),
+@pytest.mark.parametrize(('installed', 'configured', 'expected'), [
+    ('3.1.57', '3.1.57', '0094'),
+    ('3.1.58', '3.1.58', '0094'),
+    ('3.1.59', '3.1.59', '0095'),
+    ('3.1.58', '3.1.59', None),
+    ('3.1.59', '3.1.58', None),
+    ('3.1.59', None, None),
+    ('3.1.60', '3.1.60', None),
 ])
-def test_each_postgres_query_must_succeed_and_engines_are_disposed(profile, monkeypatch, driver, failure):
+def test_runtime_revision_is_bound_to_installed_and_configured_identity(profile, installed, configured, expected):
+    if expected is None:
+        with pytest.raises(RuntimeError):
+            profile.expected_runtime_revision(installed, configured)
+    else:
+        assert profile.expected_runtime_revision(installed, configured) == expected
+
+
+@pytest.mark.parametrize(('driver', 'failure', 'version', 'actual_revision'), [
+    ('asyncpg', 'wrong_result', '3.1.58', '0094'),
+    ('asyncpg', 'query_error', '3.1.58', '0094'),
+    ('psycopg', 'wrong_result', '3.1.58', '0094'),
+    ('psycopg', 'query_error', '3.1.58', '0094'),
+    (None, None, '3.1.58', '0094'), (None, None, '3.1.59', '0095'),
+    (None, 'revision', '3.1.58', '0095'), (None, 'revision', '3.1.59', '0094'),
+])
+def test_each_postgres_query_must_succeed_and_engines_are_disposed(
+    profile, monkeypatch, driver, failure, version, actual_revision
+):
     import sqlalchemy
     from alembic.migration import MigrationContext
     async_connection = SimpleNamespace(scalar=AsyncMock(return_value=1))
@@ -161,7 +184,8 @@ def test_each_postgres_query_must_succeed_and_engines_are_disposed(profile, monk
     monkeypatch.setitem(sys.modules, 'app.core.config', config)
     monkeypatch.setitem(sys.modules, 'app.core.db', database)
     monkeypatch.setattr(sqlalchemy, 'create_engine', lambda _: engine)
-    monkeypatch.setattr(MigrationContext, 'configure', lambda _: SimpleNamespace(get_current_revision=lambda: '0094'))
+    monkeypatch.setattr(MigrationContext, 'configure', lambda _: SimpleNamespace(get_current_revision=lambda: actual_revision))
+    expected_revision = profile.expected_runtime_revision(version, version)
     if driver:
         scalar = async_connection.scalar if driver == 'asyncpg' else sync_connection.scalar
         if failure == 'wrong_result':
@@ -169,9 +193,12 @@ def test_each_postgres_query_must_succeed_and_engines_are_disposed(profile, monk
         else:
             scalar.side_effect = RuntimeError('query failed at ' + driver)
         with pytest.raises(RuntimeError, match=driver):
-            asyncio.run(profile.verify_postgres())
+            asyncio.run(profile.verify_postgres(expected_revision))
+    elif failure == 'revision':
+        with pytest.raises(RuntimeError, match='Unexpected production migration revision'):
+            asyncio.run(profile.verify_postgres(expected_revision))
     else:
-        asyncio.run(profile.verify_postgres())
+        asyncio.run(profile.verify_postgres(expected_revision))
     async_engine.dispose.assert_awaited_once()
     assert str(async_connection.scalar.call_args.args[0]) == 'SELECT 1'
     if driver != 'asyncpg':
@@ -220,10 +247,10 @@ def test_scanner_child_failure_propagates_through_actual_find(tmp_path, before_w
     assert 'UNREACHABLE' not in completed.stdout
 
 
-@pytest.mark.parametrize('version,expected', [('3.1.57', 7), ('3.1.58', 7), ('3.1.44', 0), ('3.1.45', 0), ('3.1.46', 0)])
+@pytest.mark.parametrize('version,expected', [('3.1.57', 7), ('3.1.58', 7), ('3.1.59', 7), ('3.1.44', 0), ('3.1.45', 0), ('3.1.46', 0)])
 def test_new_profile_is_mandatory_only_for_current_runtime(version, expected, tmp_path):
     source = (ROOT / 'infra/scripts/verify-production-runtime-images.sh').read_text()
-    marker = '# This new final-image profile is mandatory for Build64 and Build65.'
+    marker = '# The final-image profile is mandatory for Builds 64, 65 and 66.'
     block = source[source.index(marker):].split('\nfi\n', 1)[0] + '\nfi\n'
     fake = tmp_path / 'compose'
     fake.write_text('#!/bin/sh\nexit 7\n')

@@ -179,10 +179,9 @@ async def test_staff_cannot_read_another_person_or_salary_or_write_owner_actions
     own = await client.get(
         "/api/v1/staff/time-summary", headers=headers, params={"month": "2026-11"}
     )
-    assert own.status_code == 200
-    assert own.json()["user_id"] == str(first.id)
-    assert own.json()["policy"] is None
-    assert own.json()["pay_estimate"] is None
+    assert own.status_code == 403
+    assert "closed_gross_seconds" not in own.json()
+    assert "schedule" not in own.json()
     assert "monthly_salary_minor" not in own.text
     for method, url, body in (
         ("GET", f"/api/v1/staff/time-summary?month=2026-11&user_id={second.id}", None),
@@ -473,7 +472,18 @@ async def test_self_clock_records_explicit_break_and_replays_without_second_entr
     replay = await client.post("/api/v1/staff/my-attendance/clock-out", headers=headers, json=body)
     assert closed.status_code == replay.status_code == 200
     assert closed.json() == replay.json()
-    summary = await client.get("/api/v1/staff/time-summary", headers=h, params={"month": "2026-11"})
+    summary = await client.get("/api/v1/staff/time-summary", headers=w["owner_headers"],
+        params={"month": "2026-11", "user_id": str(first.id)})
+    assert summary.status_code == 200
+    staff_private = await client.get("/api/v1/staff/time-summary", headers=h, params={"month": "2026-11"})
+    assert staff_private.status_code == 403
+    cards = await client.get("/api/v1/staff/attendance-cards", headers=h,
+        params={"period": "month", "start": "2026-11-01"})
+    assert cards.status_code == 200
+    own_fact = cards.json()["items"][0]["entries"][0]
+    assert own_fact["id"] == a.json()["id"]
+    assert own_fact["clock_out_at"] == closed.json()["clock_out_at"]
+    assert "break_minutes" not in own_fact
     assert summary.json()["closed_work_seconds"] == 39600
     assert summary.json()["payable_minor"] is None
     other = await client.post(
@@ -525,11 +535,14 @@ async def test_self_clock_concurrency_has_one_open_entry(client, session, staff_
         ]
     )
     assert sorted(r.status_code for r in results) == [201, 409]
-    summary = await client.get("/api/v1/staff/time-summary", headers=h, params={"month": "2026-11"})
-    assert len(summary.json()["entries"]) == 1
+    cards = await client.get("/api/v1/staff/attendance-cards", headers=h,
+        params={"period": "month", "start": "2026-11-01"})
+    assert cards.status_code == 200
+    receipt = next(r.json() for r in results if r.status_code == 201)
+    assert cards.json()["current_open_attendance"]["id"] == receipt["id"]
 
 
-async def test_own_schedule_projection_never_exposes_salary_or_owner_reason(
+async def test_staff_private_schedule_denied_but_clock_fact_projection_available(
     client, session, staff_world
 ):
     w = staff_world
@@ -543,17 +556,22 @@ async def test_own_schedule_projection_never_exposes_salary_or_owner_reason(
         headers=await _login(client, user),
         params={"month": "2026-11"},
     )
-    assert own.status_code == 200
-    assert own.json()["schedule"] == {
-        "effective_from": "2026-11-01",
-        "daily_presence_minutes": 720,
-        "daily_break_minutes": 60,
-        "working_weekday_mask": 127,
-    }
-    assert own.json()["policy"] is None
+    assert own.status_code == 403
+    assert "schedule" not in own.json()
     assert "monthly_salary_minor" not in own.text
     assert "Owner recorded" not in own.text
-    assert own.json()["closed_work_seconds"] == 0
+    headers = await _login(client, user)
+    opened = await client.post("/api/v1/staff/my-attendance/clock-in", headers=_write(headers),
+        json={"branch_id": str(w["branch"].id)})
+    assert opened.status_code == 201
+    cards = await client.get("/api/v1/staff/attendance-cards", headers=headers,
+        params={"period": "month", "start": "2026-11-01"})
+    assert cards.status_code == 200
+    assert cards.json()["current_open_attendance"]["id"] == opened.json()["id"]
+    assert cards.json()["current_open_attendance"]["clock_in_at"] == opened.json()["clock_in_at"]
+    assert "schedule" not in cards.json()
+    assert "closed_work_seconds" not in cards.json()
+    assert "monthly_salary_minor" not in cards.text
 
 
 async def test_owner_correction_audits_original_values_replays_and_refuses_stale_edit(
@@ -709,13 +727,13 @@ async def test_legacy_and_new_self_clock_share_one_parent_lock(client, session, 
     )
     assert 201 in (old.status_code, new.status_code)
     assert sorted([old.status_code, new.status_code]) in ([201, 409], [201, 422])
-    summary = await client.get(
-        "/api/v1/staff/time-summary",
-        headers=h,
-        params={"month": datetime.now(UTC).strftime("%Y-%m")},
+    cards = await client.get(
+        "/api/v1/staff/attendance-cards", headers=h,
+        params={"period": "month", "start": "2026-11-01"},
     )
-    assert summary.status_code == 200
-    assert len(summary.json()["entries"]) == 1
+    assert cards.status_code == 200
+    receipt = old.json() if old.status_code == 201 else new.json()
+    assert cards.json()["current_open_attendance"]["id"] == receipt["id"]
 
 
 async def test_time_people_is_owner_scoped_minimal_paginated_and_keeps_departed_history(

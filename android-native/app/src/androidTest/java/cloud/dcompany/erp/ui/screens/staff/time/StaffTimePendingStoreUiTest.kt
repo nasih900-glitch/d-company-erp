@@ -119,4 +119,87 @@ class StaffTimePendingStoreUiTest {
             assertTrue(target.listFiles().isNullOrEmpty())
         } finally { check(dir.delete()); check(target.delete()) }
     }
+    @Test fun rejectedRetryTransitionIsDurableUnknownAndRefusesArchiveAfterRecreation() = runBlocking {
+        val original = attempt(); store.save(scope, original)
+        val rejected = store.reject(scope, original.intent.key, 401)
+        val unknown = store.prepareForDispatch(scope, rejected)
+        assertEquals(original.intent, unknown.intent); assertNull(unknown.rejectedStatus)
+        val restarted = AtomicStaffTimePendingStore(dir)
+        assertEquals(unknown, restarted.read(scope))
+        mustRefuse { restarted.acknowledgeRejected(scope, original.intent.key) }
+        assertEquals(unknown, restarted.read(scope))
+        // A genuine new definitive response can make only this exact request reviewable again.
+        val deniedAgain = restarted.reject(scope, original.intent.key, 401)
+        assertEquals(401, deniedAgain.rejectedStatus)
+    }
+    @Test fun prepareDispatchRefusesChangedIntentAndCannotAlterStoredRejection() = runBlocking {
+        val original = attempt(); store.save(scope, original)
+        val rejected = store.reject(scope, original.intent.key, 401)
+        mustRefuse { store.prepareForDispatch(scope, rejected.copy(intent = rejected.intent.copy(targetName = "Different fields"))) }
+        mustRefuse { store.prepareForDispatch(scope, attempt()) }
+        assertEquals(rejected, AtomicStaffTimePendingStore(dir).read(scope))
+    }
+
+    @Test fun handoverPresenceIncludesOtherScopesAndMalformedAtomicVariantsWithoutChangingBytes() = runBlocking {
+        assertTrue(store.inspectRetainedWork(StaffTimePendingPurpose.PERSONAL_AND_OWNER).isClear)
+        assertFalse(dir.exists())
+        check(dir.mkdir()); Os.chmod(dir.path, 0x1c0)
+        val retained = File(dir, "${"c".repeat(64)}.json.bak")
+        retained.writeText("private malformed evidence"); Os.chmod(retained.path, 0x180)
+        assertTrue(store.inspectRetainedWork(StaffTimePendingPurpose.PERSONAL_AND_OWNER).verified)
+        assertTrue(store.inspectRetainedWork(StaffTimePendingPurpose.PERSONAL_AND_OWNER).pending)
+        assertFalse(store.inspectRetainedWork(StaffTimePendingPurpose.PERSONAL_AND_OWNER).isClear)
+        assertEquals("private malformed evidence", retained.readText())
+    }
+    @Test fun handoverPresenceRefusesAliasedOrNonprivateDirectories() = runBlocking {
+        check(dir.mkdir()); Os.chmod(dir.path, 0x1ed)
+        try { assertFalse(store.inspectRetainedWork(StaffTimePendingPurpose.PERSONAL_AND_OWNER).verified); assertFalse(store.inspectRetainedWork(StaffTimePendingPurpose.PERSONAL_AND_OWNER).isClear) }
+        finally { Os.chmod(dir.path, 0x1c0) }
+        check(dir.delete())
+        val target = File(dir.parentFile, dir.name + "-presence-target")
+        check(target.mkdir()); Os.chmod(target.path, 0x1c0)
+        try {
+            Os.symlink(target.path, dir.path)
+            assertFalse(store.inspectRetainedWork(StaffTimePendingPurpose.PERSONAL_AND_OWNER).verified)
+            assertFalse(store.inspectRetainedWork(StaffTimePendingPurpose.PERSONAL_AND_OWNER).isClear)
+            assertTrue(target.listFiles().isNullOrEmpty())
+        } finally { check(dir.delete()); check(target.delete()) }
+    }
+
+    @Test fun acknowledgedHistoryOnlyIsClearButActiveOrForgedArchivesRemainBlockingInBothNamespaces() = runBlocking {
+        for (purpose in StaffTimePendingPurpose.entries) {
+            val original = attempt()
+            val entry = if (purpose == StaffTimePendingPurpose.SHARED) original.copy(intent = original.intent.copy(
+                terminalId = "44444444-4444-4444-8444-444444444444", kind = TimeWriteKind.SHARED_IN,
+                payload = StaffTimeJson.encodeToString(SharedTimeFields(uid)))) else original
+            val actualScope = timeDigest(listOf(uid, company, branch, entry.intent.terminalId.orEmpty()).joinToString("|"))
+            store.save(actualScope, entry); store.reject(actualScope, entry.intent.key, 422)
+            store.acknowledgeRejected(actualScope, entry.intent.key)
+            val history = File(dir, "$actualScope-rejected-${entry.intent.key}.json")
+            val bytes = history.readBytes()
+            assertTrue(store.inspectRetainedWork(purpose).isClear)
+            assertArrayEquals(bytes, history.readBytes())
+            // A valid archive in the other namespace is not proof of this namespace's protocol.
+            val other = StaffTimePendingPurpose.entries.single { it != purpose }
+            assertFalse(store.inspectRetainedWork(other).isClear)
+            val active = entry.copy(intent = entry.intent.copy(key = UUID.randomUUID().toString()))
+            store.save(actualScope, active)
+            assertFalse(store.inspectRetainedWork(purpose).isClear)
+            store.complete(actualScope, active.intent.key)
+            assertTrue(store.inspectRetainedWork(purpose).isClear)
+            val forged = File(dir, "${"f".repeat(64)}-rejected-${entry.intent.key}.json")
+            forged.writeBytes(bytes); Os.chmod(forged.path, 0x180)
+            assertFalse(store.inspectRetainedWork(purpose).isClear)
+            assertArrayEquals(bytes, forged.readBytes()); check(forged.delete())
+            history.writeText("malformed private history")
+            assertFalse(store.inspectRetainedWork(purpose).isClear)
+            assertEquals("malformed private history", history.readText())
+            check(history.delete())
+            val unknown = File(dir, "unknown-rejected-history.json")
+            unknown.writeBytes(bytes); Os.chmod(unknown.path, 0x180)
+            assertFalse(store.inspectRetainedWork(purpose).isClear)
+            assertArrayEquals(bytes, unknown.readBytes()); check(unknown.delete())
+        }
+    }
+
 }

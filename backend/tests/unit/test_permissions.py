@@ -138,6 +138,7 @@ def test_auditor_role_is_read_only() -> None:
         "pos.discount.large",
         "pos.shift.open",
         "pos.shift.close",
+        "pos.shift.handover.recover",
         "tables.write",
         "tables.reservations.write",
         "menu.write",

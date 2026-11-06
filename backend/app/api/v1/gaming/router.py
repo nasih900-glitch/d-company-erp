@@ -6600,7 +6600,7 @@ async def void_session_addon(
 def _require_void_source_authority(
     shift: Shift | None, *, station: Station, tenant: TenantContext,
 ) -> Shift:
-    """Share only existing Void source authority; mutation/replay rules stay at the caller."""
+    """Scoped Gaming authority; linked POS and mutation/replay rules stay at the caller."""
     owner_void = has_owner_role(tenant.roles)
     if shift is None or shift.company_id != tenant.company_id:
         raise NotFoundError("Shift not found for this company.")
@@ -6616,6 +6616,18 @@ def _require_void_source_authority(
             resource_branch_id=station.branch_id,
             resource_name="gaming station",
         )
+    if (
+        shift.status == "open"
+        and (
+            (shift.operator_user_id is None and shift.operator_revision is None)
+            or (
+                shift.operator_revision is not None
+                and shift.operator_revision >= 1
+                and shift.operator_user_id == tenant.user_id
+            )
+        )
+    ):
+        return shift
     require_shift_opener(
         shift,
         user_id=tenant.user_id,

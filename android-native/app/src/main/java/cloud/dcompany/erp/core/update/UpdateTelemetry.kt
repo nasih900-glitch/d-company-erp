@@ -585,9 +585,23 @@ internal class UpdateTelemetryCoordinator(
         installation.clearInstallerAttempt(pending.targetVersionCode)
     }
 
-    suspend fun heartbeat() = heartbeatMutex.withLock {
-        val cacheLease = cacheIsolation.currentLease() ?: return@withLock
-        val tokenLease = tokens.refreshLease() ?: return@withLock
+    suspend fun heartbeat(original: cloud.dcompany.erp.core.handover.OriginalOperationBinding?) {
+        if (original == null) return
+        val app = cloud.dcompany.erp.DCompanyApp.instance
+        try {
+            cloud.dcompany.erp.core.handover.CallerOperations(app.handoverOperations, original).run {
+                heartbeatOriginal(original)
+                // Immutable scoped events remain durably queued until an exact acknowledgement.
+                reconciled()
+            }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { /* Optional reporting never activates or borrows another workspace. */ }
+    }
+
+    private suspend fun heartbeatOriginal(original: cloud.dcompany.erp.core.handover.OriginalOperationBinding) = heartbeatMutex.withLock {
+        if (!original.isCurrent()) return@withLock
+        val cacheLease = original.cacheLease
+        val tokenLease = tokens.refreshLeaseFor(original.loginLease) ?: return@withLock
         val binding = UpdateTelemetryBinding.from(cacheLease.scope)
         promotePendingUpgrade(binding)
         val events = queue.selectAndDropForeign(binding)
@@ -639,8 +653,11 @@ internal class UpdateTelemetryCoordinator(
             val api = ApiClient.createEphemeralAuthorityApi<ClientInstallationApi>(
                 accessToken = access,
                 terminalId = binding.terminalId,
+                beforeDispatch = { check(original.isCurrent()) },
+                singleAttempt = true,
             )
             val response = api.heartbeat(request)
+            if (!original.isCurrent()) return@withLock
             if (response.installationId != request.installationId) return@withLock
             val handled = response.acceptedEventCount + response.duplicateEventCount
             if (handled == events.size) {

@@ -1,6 +1,8 @@
 package cloud.dcompany.erp.core.remote
 
 import android.content.Context
+import android.content.SharedPreferences
+import java.util.UUID
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.After
@@ -14,16 +16,18 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class RemoteDeviceIdentityStoreDeviceTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
+    private val fixtureName = "remote_device_identity_fixture_${UUID.randomUUID()}"
+    private val fixturePreferences: SharedPreferences = context.getSharedPreferences(fixtureName, Context.MODE_PRIVATE)
 
     @Before
-    fun clearBefore() = clear()
+    fun clearBefore() = assertTrue(fixturePreferences.all.isEmpty())
 
     @After
     fun clearAfter() = clear()
 
     @Test
     fun activeAndPendingRemainSeparateUntilAtomicPromotion() {
-        val store = RemoteDeviceIdentityStore(context)
+        val store = RemoteDeviceIdentityStore(fixturePreferences)
         val active = identity(KEY_ACTIVE, ENROLLMENT_ACTIVE, RemoteDeviceKeyStatus.ACTIVE)
         val pending = identity(KEY_PENDING, ENROLLMENT_PENDING, RemoteDeviceKeyStatus.PENDING)
 
@@ -50,6 +54,55 @@ class RemoteDeviceIdentityStoreDeviceTest {
         assertTrue(store.retiredKeyIds().isEmpty())
     }
 
+    @Test
+    fun expectedCheckpointPromotesOnlyUnchangedOwnedCandidateOnDisk() {
+        val store = RemoteDeviceIdentityStore(fixturePreferences)
+        val pending = identity(KEY_PENDING, ENROLLMENT_PENDING, RemoteDeviceKeyStatus.PENDING)
+        assertTrue(store.put(pending))
+        val expected = requireNotNull(store.expectedState(pending))
+        val active = pending.copy(status = "active", pairingCode = null, approvedAt = "2026-08-30T10:00:30Z")
+        assertTrue(store.compareAndSet(expected, active))
+        assertEquals(active, RemoteDeviceIdentityStore(fixturePreferences).activeIdentity(COMPANY_ID, INSTALLATION_ID))
+        org.junit.Assert.assertFalse(store.compareAndSet(expected, active))
+    }
+
+    @Test
+    fun replacementCandidateRetainedBytesCannotBeReplacedByOldCheckpoint() {
+        val store = RemoteDeviceIdentityStore(fixturePreferences)
+        val pending = identity(KEY_PENDING, ENROLLMENT_PENDING, RemoteDeviceKeyStatus.PENDING)
+        assertTrue(store.put(pending))
+        val expected = requireNotNull(store.expectedState(pending))
+        assertTrue(RemoteDeviceIdentityStore(fixturePreferences).put(pending.copy(enrollmentId = ENROLLMENT_ACTIVE)))
+        val prefs = fixturePreferences
+        val before = prefs.getString("state", null)
+        org.junit.Assert.assertFalse(store.compareAndSet(expected, pending.copy(status = "active", pairingCode = null, approvedAt = "2026-08-30T10:00:30Z")))
+        assertEquals(before, prefs.getString("state", null))
+    }
+
+    @Test
+    fun malformedRetainedBytesCannotBeAnEnrollmentCheckpoint() {
+        val store = RemoteDeviceIdentityStore(fixturePreferences)
+        val pending = identity(KEY_PENDING, ENROLLMENT_PENDING, RemoteDeviceKeyStatus.PENDING)
+        assertTrue(store.put(pending)); val expected = requireNotNull(store.expectedState(pending))
+        val prefs = fixturePreferences
+        assertTrue(prefs.edit().putString("state", "{malformed").commit())
+        org.junit.Assert.assertFalse(store.compareAndSet(expected, pending))
+        org.junit.Assert.assertThrows(RemoteDeviceIdentityUnavailable::class.java) { store.expectedState(pending) }; assertEquals("{malformed", prefs.getString("state", null))
+    }
+
+    @Test
+    fun invalidPresentIdentityCannotBeReplacedByOrdinaryEnrollmentCreation() {
+        val store = RemoteDeviceIdentityStore(fixturePreferences)
+        val pending = identity(KEY_PENDING, ENROLLMENT_PENDING, RemoteDeviceKeyStatus.PENDING)
+        val prefs = fixturePreferences
+        for (invalid in listOf("", " ", "{malformed")) {
+            assertTrue(prefs.edit().putString("state", invalid).commit())
+            org.junit.Assert.assertThrows(RemoteDeviceIdentityUnavailable::class.java) { store.enrollmentCandidate(COMPANY_ID, INSTALLATION_ID) }
+            org.junit.Assert.assertThrows(RemoteDeviceIdentityUnavailable::class.java) { store.put(pending) }
+            assertEquals(invalid, prefs.getString("state", null))
+        }
+    }
+
     private fun identity(
         keyId: String,
         enrollmentId: String,
@@ -69,8 +122,7 @@ class RemoteDeviceIdentityStoreDeviceTest {
     )
 
     private fun clear() {
-        context.getSharedPreferences("dcompany_remote_device_identity", Context.MODE_PRIVATE)
-            .edit().clear().commit()
+        assertTrue(context.deleteSharedPreferences(fixtureName))
     }
 
     private companion object {

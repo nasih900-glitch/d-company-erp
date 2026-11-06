@@ -267,3 +267,34 @@ def test_linked_private_input_is_refused_without_reading_its_target(
     linked.symlink_to(target)
     with pytest.raises(tool.AcceptanceError):
         tool.private_input(linked)
+
+
+def test_owner_required_is_opt_in_and_uses_live_profile(tool, credential):
+    opener = Opener(credential)
+    opener.responses[0]["roles"] = ["gaming_cashier"]
+    with pytest.raises(tool.AcceptanceError, match="not an Owner"):
+        tool.verify(credential, "https://erp.synthetic.invalid", opener=opener, require_owner=True)
+    assert len(opener.requests) == 1
+
+    opener = Opener(credential)
+    opener.responses[0]["roles"] = ["owner"]
+    result = tool.verify(credential, "https://erp.synthetic.invalid", opener=opener, require_owner=True)
+    assert result["owner_verified"] is True
+    assert len(opener.requests) == 3
+
+
+def test_internal_probe_owner_option_requires_child_owner_receipt(tool, credential, monkeypatch):
+    raw = json.dumps(credential).encode()
+    digest = hashlib.sha256(raw).hexdigest()
+    receipt = _receipt(credential)
+
+    def run(argv, **kwargs):
+        assert argv[-2:] == ["internal", "--require-owner"]
+        assert kwargs["input"] == raw
+        return SimpleNamespace(returncode=0, stdout=json.dumps(receipt).encode())
+
+    monkeypatch.setattr(tool.subprocess, "run", run)
+    with pytest.raises(tool.AcceptanceError, match="does not match"):
+        tool.internal_probe(raw, digest, "a" * 64, require_owner=True)
+    receipt["owner_verified"] = True
+    assert tool.internal_probe(raw, digest, "a" * 64, require_owner=True)["owner_verified"] is True

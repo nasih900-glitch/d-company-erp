@@ -433,6 +433,44 @@ class SessionRead(BaseModel):
     next_sequence: int
 
 
+class DeviceGrantStatusRead(BaseModel):
+    """Exact device-owned evidence, separate from the Owner support projection."""
+
+    server_time: datetime
+    company_id: UUID
+    installation_id: UUID
+    id: UUID
+    kind: GrantKind
+    status: GrantStatus
+    requested_for_user_id: UUID
+    responded_by_user_id: UUID | None
+    requested_at: datetime
+    expires_at: datetime
+    responded_at: datetime | None
+    decision_id: UUID | None
+    revoked_at: datetime | None
+    revocation_id: UUID | None
+    consumed_at: datetime | None
+
+
+class DeviceSessionStatusRead(BaseModel):
+    server_time: datetime
+    company_id: UUID
+    installation_id: UUID
+    id: UUID
+    grant_id: UUID
+    status: SessionStatus
+    requested_for_user_id: UUID
+    responded_by_user_id: UUID | None
+    requested_at: datetime
+    request_expires_at: datetime
+    started_at: datetime | None
+    expires_at: datetime | None
+    ended_at: datetime | None
+    end_id: UUID | None
+    end_reason: str | None
+
+
 class CommandRead(BaseModel):
     command_id: UUID
     session_id: UUID
@@ -3184,6 +3222,146 @@ async def device_state(
             else None
         ),
         commands=[_command_read(command) for command in commands],
+    )
+
+
+def _require_status_consent_evidence(
+    grant: RemoteAssistanceGrant, *, user_id: UUID,
+) -> None:
+    # An unanswered request may legitimately expire without a response actor.
+    # A missing target, however, must never be inferred from installation history.
+    if grant.requested_for_user_id != user_id:
+        raise ForbiddenError("This support object belongs to a different tablet user.")
+    evidence = (grant.responded_by_user_id, grant.responded_at, grant.decision_id)
+    if not (
+        all(value is None for value in evidence) or all(value is not None for value in evidence)
+    ):
+        raise ConflictError("Support consent evidence is unavailable.")
+    if grant.responded_by_user_id is not None and grant.responded_by_user_id != user_id:
+        raise ForbiddenError("This support object belongs to a different tablet user.")
+    if grant.status in {"active", "declined", "consumed"} and grant.decision_id is None:
+        raise ConflictError("Support consent evidence is unavailable.")
+
+
+async def _device_status_installation(
+    request: Request,
+    response: Response,
+    *,
+    session: AsyncSession,
+    tenant: TenantContext,
+    installation_id: UUID,
+    now: datetime,
+) -> tuple[ClientInstallation, UUID]:
+    _require_android_request(request)
+    if list(request.query_params.multi_items()) != [("installation_id", str(installation_id))]:
+        raise ValidationError("An exact installation_id query is required.")
+    async for chunk in request.stream():
+        if chunk:
+            raise ValidationError("Support status requests must have an empty body.")
+    response.headers["Cache-Control"] = "private, no-store"
+    installation = await _installation_by_public_id(
+        session, company_id=tenant.company_id, installation_id=installation_id,
+    )
+    await _lock_device(session, tenant.company_id, installation.id)
+    installation = await _installation_by_public_id(
+        session, company_id=tenant.company_id, installation_id=installation_id, for_update=True,
+    )
+    _require_device_actor(installation, tenant)
+    proof = await authenticate_device_request(
+        request=request, session=session, company_id=tenant.company_id,
+        client_installation_id=installation.id, actual_content=b"", now=now,
+    )
+    await _expire_stale(
+        session, company_id=tenant.company_id, now=now, client_installation_id=installation.id,
+    )
+    await _reconcile_consent_user(
+        session, installation=installation, now=now, device_actor=tenant,
+    )
+    return installation, proof.device_key.id
+
+
+@router.get("/device/grants/{grant_id}/status", response_model=DeviceGrantStatusRead)
+async def device_grant_status(
+    request: Request,
+    response: Response,
+    grant_id: UUID,
+    session: SessionDep,
+    tenant: TenantDep,
+    installation_id: Annotated[UUID, Query()],
+) -> DeviceGrantStatusRead:
+    now = datetime.now(UTC)
+    installation, key_id = await _device_status_installation(
+        request, response, session=session, tenant=tenant, installation_id=installation_id, now=now,
+    )
+    grant = (
+        await session.execute(
+            select(RemoteAssistanceGrant).where(
+                RemoteAssistanceGrant.company_id == tenant.company_id,
+                RemoteAssistanceGrant.client_installation_id == installation.id,
+                RemoteAssistanceGrant.id == grant_id,
+                RemoteAssistanceGrant.requested_for_user_id == tenant.user_id,
+            ).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if grant is None:
+        raise NotFoundError("Support grant not found for this device user.")
+    _require_status_consent_evidence(grant, user_id=tenant.user_id)
+    await _require_exact_active_device_key(session, installation=installation, key_id=key_id)
+    return DeviceGrantStatusRead(
+        server_time=now, company_id=tenant.company_id, installation_id=installation.installation_id,
+        id=grant.id, kind=grant.kind, status=grant.status,
+        requested_for_user_id=grant.requested_for_user_id,
+        responded_by_user_id=grant.responded_by_user_id,
+        requested_at=grant.requested_at, expires_at=grant.expires_at,
+        responded_at=grant.responded_at, decision_id=grant.decision_id,
+        revoked_at=grant.revoked_at, revocation_id=grant.revocation_id,
+        consumed_at=grant.consumed_at,
+    )
+
+
+@router.get("/device/sessions/{session_id}/status", response_model=DeviceSessionStatusRead)
+async def device_session_status(
+    request: Request,
+    response: Response,
+    session_id: UUID,
+    session: SessionDep,
+    tenant: TenantDep,
+    installation_id: Annotated[UUID, Query()],
+) -> DeviceSessionStatusRead:
+    now = datetime.now(UTC)
+    installation, key_id = await _device_status_installation(
+        request, response, session=session, tenant=tenant, installation_id=installation_id, now=now,
+    )
+    row = (
+        await session.execute(
+            select(RemoteAssistanceSession, RemoteAssistanceGrant).join(
+                RemoteAssistanceGrant,
+                RemoteAssistanceGrant.id == RemoteAssistanceSession.grant_id,
+            ).where(
+                RemoteAssistanceSession.company_id == tenant.company_id,
+                RemoteAssistanceSession.client_installation_id == installation.id,
+                RemoteAssistanceSession.id == session_id,
+                RemoteAssistanceGrant.company_id == tenant.company_id,
+                RemoteAssistanceGrant.client_installation_id == installation.id,
+                RemoteAssistanceGrant.requested_for_user_id == tenant.user_id,
+            ).with_for_update(of=(RemoteAssistanceGrant, RemoteAssistanceSession))
+        )
+    ).one_or_none()
+    if row is None:
+        raise NotFoundError("Support session not found for this device user.")
+    support_session, grant = row
+    _require_status_consent_evidence(grant, user_id=tenant.user_id)
+    await _require_exact_active_device_key(session, installation=installation, key_id=key_id)
+    return DeviceSessionStatusRead(
+        server_time=now, company_id=tenant.company_id, installation_id=installation.installation_id,
+        id=support_session.id, grant_id=grant.id, status=support_session.status,
+        requested_for_user_id=grant.requested_for_user_id,
+        responded_by_user_id=grant.responded_by_user_id,
+        requested_at=support_session.requested_at,
+        request_expires_at=support_session.request_expires_at,
+        started_at=support_session.started_at, expires_at=support_session.expires_at,
+        ended_at=support_session.ended_at, end_id=support_session.end_id,
+        end_reason=support_session.end_reason,
     )
 
 

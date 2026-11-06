@@ -3,13 +3,14 @@ import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Me } from '@/modules/auth/AuthContext';
-import type { StaffTimeSummary, StaffAttendance, StaffPayEstimate } from '@/lib/staff-time-api';
+import type { AttendanceCardsPage, StaffTimeSummary, StaffAttendance, StaffPayEstimate } from '@/lib/staff-time-api';
 import { clearOwnerWorkspaces } from '@/lib/owner-workspace';
 const mocks = vi.hoisted(() => ({
   me: null as Me | null,
   generation: 1,
   people: vi.fn(),
   summary: vi.fn(),
+  cards: vi.fn(),
   policies: vi.fn(),
   submit: vi.fn()
 }));
@@ -19,7 +20,7 @@ vi.mock('@/modules/auth/AuthContext', () => ({
     terminalId: 'terminal-a',
     terminalOptions: [{
       id: 'terminal-a',
-      branch_id: 'branch-a'
+      branch_id: '33333333-3333-4333-8333-333333333333'
     }]
   })
 }));
@@ -32,6 +33,7 @@ vi.mock('@/lib/operational-context', () => ({
 vi.mock('@/lib/staff-time-api', () => ({
   staffTime: {
     summary: mocks.summary,
+    cards: mocks.cards,
     people: mocks.people,
     policies: mocks.policies,
     submit: mocks.submit
@@ -39,9 +41,9 @@ vi.mock('@/lib/staff-time-api', () => ({
 }));
 import StaffTimeScreen from './StaffTimeScreen';
 const employee = {
-  user_id: 'employee-a',
-  company_id: 'company-a',
-  branch_id: 'branch-a',
+  user_id: '11111111-1111-4111-8111-111111111111',
+  company_id: '22222222-2222-4222-8222-222222222222',
+  branch_id: '33333333-3333-4333-8333-333333333333',
   name: 'Synthetic Alpha',
   roles: ['gaming_cashier'],
   effective_permissions: ['staff.attendance.write'],
@@ -50,9 +52,9 @@ const employee = {
   audit_access: false
 } as Me;
 const entry = {
-  id: 'entry-a',
-  user_id: 'employee-a',
-  branch_id: 'branch-a',
+  id: '44444444-4444-4444-8444-444444444444',
+  user_id: '11111111-1111-4111-8111-111111111111',
+  branch_id: '33333333-3333-4333-8333-333333333333',
   clock_in_at: '2026-10-02T04:00:00.123456+00:00',
   clock_out_at: '2026-10-02T16:00:00.654321+00:00',
   break_minutes: 60,
@@ -106,6 +108,16 @@ function estimatedSummary(month: string, id?: string): StaffTimeSummary {
     reason: 'Synthetic monthly terms', created_at: `${month}-01T00:00:00Z`
   }, pay_estimate: payEstimate };
 }
+function cards(period: 'week' | 'month', start: string, timezone = 'UTC', asOf = new Date().toISOString()): AttendanceCardsPage {
+  const day = attendanceDate(asOf, timezone);
+  const inPeriod = day >= start && day < attendanceEnd(period, start);
+  return { period, period_start: start, period_end_exclusive: attendanceEnd(period, start), timezone, as_of: asOf,
+    scope_branch_id: employee.branch_id, current_open_attendance: null, next_cursor: null,
+    items: inPeriod ? [{ user_id: '55555555-5555-4555-8555-555555555555', name: 'Synthetic Beta', clock_in_day_count: 1,
+      entries: [{ id: '88888888-8888-4888-8888-888888888888', user_id: '55555555-5555-4555-8555-555555555555', branch_id: employee.branch_id!,
+        local_date: day, clock_in_at: asOf, clock_out_at: asOf, is_open: false }], continued_from_previous: false, entries_continued: false }] : [] };
+}
+import { attendanceDate, attendanceEnd } from './attendance-cards';
 let host: HTMLDivElement, root: Root;
 const environment = globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT?: boolean;
@@ -117,10 +129,11 @@ beforeEach(() => {
   mocks.generation = 1;
   mocks.me = employee;
   mocks.summary.mockImplementation(async (month: string, id?: string) => summary(month, id));
+  mocks.cards.mockImplementation(async (period, start) => cards(period, start));
   mocks.policies.mockResolvedValue([]);
   mocks.people.mockResolvedValue({
     items: [{
-      id: 'employee-b',
+      id: '55555555-5555-4555-8555-555555555555',
       name: 'Synthetic Beta',
       status: 'active',
       departed: false
@@ -181,7 +194,7 @@ it('shows separate hours/base pay/optional overtime and resets the preview on pe
   await click('1.25× overtime');
   expect(host.textContent).toContain('Optional overtime amount: 83.33');
   expect(host.textContent).toContain('Total estimate: 483.33');
-  await fill('select', 'employee-b');
+  await fill('select', '55555555-5555-4555-8555-555555555555');
   expect(findButton('No overtime').getAttribute('aria-pressed')).toBe('true');
   expect(host.textContent).toContain('Total estimate: 400.00');
   await click('1.5× overtime');
@@ -194,21 +207,24 @@ it('shows separate hours/base pay/optional overtime and resets the preview on pe
   expect(mocks.submit).not.toHaveBeenCalled();
 });
 
-it('rejects salary estimates unexpectedly returned to ordinary staff', async () => {
+it('never requests private salary summaries for ordinary staff', async () => {
   mocks.summary.mockImplementation(async (month: string, id?: string) => estimatedSummary(month, id));
   await render();
-  expect(host.textContent).toContain('The pay estimate could not be verified.');
+  expect(mocks.summary).not.toHaveBeenCalled();
+  expect(host.textContent).toContain('Synthetic Beta');
   expect(host.textContent).not.toContain('400.00');
   expect(host.textContent).not.toContain('Hours & pay estimate');
 });
-it('allows ordinary staff own facts without fetching directory, admin roles or salary history', async () => {
+it('shows shared dated cards without private hours schedule directory or salary history', async () => {
   await render();
-  expect(host.textContent).toContain('11h 0m');
-  expect(host.textContent).toContain('720 min presence');
+  expect(host.textContent).toContain('Clock-in days: 1');
+  expect(host.textContent).toContain('Synthetic Beta');
+  expect(host.textContent).not.toContain('11h 0m');
+  expect(host.textContent).not.toContain('720 min presence');
   expect(mocks.people).not.toHaveBeenCalled();
   expect(mocks.policies).not.toHaveBeenCalled();
   expect(host.textContent).not.toContain('Salary proposals');
-  expect(mocks.summary.mock.calls.every(c => c[1] === undefined)).toBe(true);
+  expect(mocks.summary).not.toHaveBeenCalled();
 });
 it('does not grant manager payroll controls from a permission without Owner identity', async () => {
   mocks.me = {
@@ -222,13 +238,10 @@ it('does not grant manager payroll controls from a permission without Owner iden
   expect(host.textContent).not.toContain('New draft revision');
 });
 it('captures an explicit actual break for self clock-out, never substituting the planned hour', async () => {
-  mocks.summary.mockImplementation(async (m: string) => ({
-    ...summary(m),
-    entries: [{
-      ...entry,
-      clock_in_at: new Date(Date.now() - 12 * 3600000).toISOString(),
-      clock_out_at: null
-    }]
+  mocks.cards.mockImplementation(async (period, start) => ({ ...cards(period, start),
+    current_open_attendance: { id: entry.id, user_id: employee.user_id, branch_id: employee.branch_id!,
+      local_date: attendanceDate(new Date(Date.now() - 12 * 3600000).toISOString(), 'UTC'),
+      clock_in_at: new Date(Date.now() - 12 * 3600000).toISOString(), clock_out_at: null, is_open: true }
   }));
   await render();
   await click('Record actual break');
@@ -239,7 +252,7 @@ it('captures an explicit actual break for self clock-out, never substituting the
   expect(mocks.submit.mock.calls[0][0]).toEqual({
     kind: 'self-out',
     body: {
-      attendance_id: 'entry-a',
+      attendance_id: '44444444-4444-4444-8444-444444444444',
       break_minutes: 35
     }
   });
@@ -260,6 +273,7 @@ it('holds an ambiguous request across remount and retries the same key and froze
   expect(host.textContent).not.toContain('Keep this request together');
 });
 it('ignores an old month response after a newer selection', async () => {
+  mocks.me = { ...employee, roles: ['owner'], effective_permissions: ['staff.payroll.write'] };
   await render();
   let old!: (s: StaffTimeSummary) => void;
   const firstMonth = '2025-10';
@@ -282,7 +296,7 @@ it('requires an Owner reason and submits only a draft proposal with the actual t
     effective_permissions: ['staff.payroll.write', 'staff.read']
   };
   await render();
-  await fill('select', 'employee-b');
+  await fill('select', '55555555-5555-4555-8555-555555555555');
   await click('New draft revision');
   expect(document.querySelector<HTMLInputElement>('input[inputmode="decimal"]')!.value).toBe('');
   await fill('input[inputmode="decimal"]', '12000');
@@ -293,7 +307,7 @@ it('requires an Owner reason and submits only a draft proposal with the actual t
   await saveForm();
   expect(mocks.submit.mock.calls[0][0]).toMatchObject({
     kind: 'policy',
-    userId: 'employee-b',
+    userId: '55555555-5555-4555-8555-555555555555',
     body: {
       expected_revision: 0,
       monthly_salary_minor: 1200000,
@@ -365,12 +379,12 @@ it('pages the minimal Owner people list and keeps departed history reachable wit
   };
   mocks.people.mockResolvedValueOnce({
     items: [{
-      id: 'employee-b',
+      id: '55555555-5555-4555-8555-555555555555',
       name: 'Synthetic Beta',
       status: 'active',
       departed: false
     }],
-    next_cursor: 'employee-b'
+    next_cursor: '55555555-5555-4555-8555-555555555555'
   }).mockResolvedValueOnce({
     items: [{
       id: 'departed-person',
@@ -382,7 +396,7 @@ it('pages the minimal Owner people list and keeps departed history reachable wit
   });
   await act(async () => root.render(<StaffTimeScreen />));
   await click('Load more people');
-  expect(mocks.people.mock.calls[1][0]).toBe('employee-b');
+  expect(mocks.people.mock.calls[1][0]).toBe('55555555-5555-4555-8555-555555555555');
   await fill('select', 'departed-person');
   expect(host.textContent).toContain('Departed or suspended staff');
   expect(findButton('Clock in').disabled).toBe(true);
@@ -403,6 +417,8 @@ it('keeps actual attendance available when draft policy history fails', async ()
   expect(host.textContent).toContain('Draft revision history is unavailable');
 });
 it('chooses the current company month at a UTC boundary before publishing the initial view', async () => {
+  mocks.me = { ...employee, roles: ['owner'], effective_permissions: ['staff.payroll.write'] };
+  mocks.cards.mockImplementation(async (p, start) => cards(p, start, 'Asia/Kolkata'));
   vi.useFakeTimers({
     toFake: ['Date']
   });
@@ -416,6 +432,8 @@ it('chooses the current company month at a UTC boundary before publishing the in
   expect(mocks.summary.mock.calls.some(c => c[0] === '2026-11')).toBe(true);
 });
 it('preserves an explicitly chosen remembered month instead of following the current company month', async () => {
+  mocks.me = { ...employee, roles: ['owner'], effective_permissions: ['staff.payroll.write'] };
+  mocks.cards.mockImplementation(async (p, start) => cards(p, start, 'Asia/Kolkata'));
   vi.useFakeTimers({
     toFake: ['Date']
   });
@@ -444,7 +462,7 @@ it('lets a payroll-authorized Owner record their own time under the backend self
 });
 it('distinguishes a confirmed save from a failed subsequent refresh', async () => {
   await render();
-  mocks.summary.mockRejectedValue(new Error('refresh failed'));
+  mocks.cards.mockRejectedValue(new Error('refresh failed'));
   await click('Clock in');
   expect(host.textContent).toContain('Saved. Refresh records to review the confirmed write.');
   expect(host.textContent).not.toContain('Records refreshed.');
@@ -469,6 +487,7 @@ it('refuses a nonzero actual break on an open correction before sending a reques
 });
 
 it.each([false, undefined])('withholds an unconfirmed closed break instead of presenting a legacy default as actual (%s)', async confirmed => {
+  mocks.me = { ...employee, roles: ['owner'], effective_permissions: ['staff.payroll.write'] };
   mocks.summary.mockImplementation(async (month: string, id?: string) => ({
     ...summary(month, id),
     entries: [{ ...entry, break_minutes: 0, break_confirmed: confirmed as boolean }],
@@ -483,6 +502,7 @@ it.each([false, undefined])('withholds an unconfirmed closed break instead of pr
 });
 
 it('shows an explicitly confirmed zero as recorded and leaves an open break provisional', async () => {
+  mocks.me = { ...employee, roles: ['owner'], effective_permissions: ['staff.payroll.write'] };
   mocks.summary.mockImplementation(async (month: string, id?: string) => ({
     ...summary(month, id),
     entries: [{ ...entry, break_minutes: 0, break_confirmed: true }]
@@ -526,7 +546,7 @@ it.each([403, 404])('retains an earlier unknown action after retry %s and clears
   mocks.submit.mockRejectedValueOnce(new Error('Response lost'))
     .mockRejectedValueOnce(Object.assign(new Error('Access refused on retry'), { status }));
   await render();
-  await fill('select', 'employee-b');
+  await fill('select', '55555555-5555-4555-8555-555555555555');
   await click('New draft revision');
   await fill('input[inputmode="decimal"]', '12000');
   await fill('textarea', 'Original draft proposal remains unconfirmed');
@@ -591,7 +611,7 @@ it('does not republish a delayed people response after an unknown retry loses au
   await click('Refresh records');
   await click('Retry same request');
   await act(async () => releasePeople({
-    items: [{ id: 'employee-b', name: 'Synthetic Beta private directory name', status: 'active', departed: false }],
+    items: [{ id: '55555555-5555-4555-8555-555555555555', name: 'Synthetic Beta private directory name', status: 'active', departed: false }],
     next_cursor: null
   }));
   expect(host.textContent).not.toContain('Synthetic Beta');
@@ -601,7 +621,7 @@ it('does not republish a delayed people response after an unknown retry loses au
 
 it('clears private people and fences a late page after a refresh loses scoped read access', async () => {
   mocks.me = { ...employee, roles: ['owner'], effective_permissions: ['staff.payroll.write'] };
-  mocks.people.mockResolvedValue({ items: [{ id: 'employee-b', name: 'Synthetic Beta', status: 'active', departed: false }], next_cursor: 'employee-b' });
+  mocks.people.mockResolvedValue({ items: [{ id: '55555555-5555-4555-8555-555555555555', name: 'Synthetic Beta', status: 'active', departed: false }], next_cursor: '55555555-5555-4555-8555-555555555555' });
   await render();
   expect(host.textContent).toContain('Synthetic Beta');
   let releasePage!: (value: unknown) => void;
@@ -655,4 +675,65 @@ it('does not treat a refresh network timeout as revocation of the already-author
   expect(host.textContent).toContain('Synthetic Beta');
   expect(host.textContent).toContain('Network timeout');
   expect(host.textContent).not.toContain('Access changed. Owner review');
+});
+
+it('keeps cards visible to Owner while removing private data immediately on role downgrade', async () => {
+  mocks.me = { ...employee, roles: ['owner'], effective_permissions: ['staff.payroll.write'] };
+  mocks.summary.mockImplementation(async (m, id) => estimatedSummary(m, id));
+  await render(); expect(host.textContent).toContain('Synthetic Beta'); expect(host.textContent).toContain('Base-pay estimate');
+  mocks.me = employee; mocks.summary.mockClear(); await render();
+  expect(host.textContent).toContain('Clock-in days: 1'); expect(host.textContent).not.toContain('Base-pay estimate');
+  expect(host.textContent).not.toContain('Planned schedule'); expect(mocks.summary).not.toHaveBeenCalled();
+});
+it('pages split person records without replacing full-period day count or replaying prior page', async () => {
+  const now = new Date().toISOString();
+  mocks.cards.mockImplementation(async (p, start, after) => {
+    const first = cards(p, start); const person = first.items[0];
+    return { ...first, next_cursor: after ? null : 'nextCursor', items: [{ ...person, clock_in_day_count: 5,
+      continued_from_previous: Boolean(after), entries_continued: !after,
+      entries: [{ ...person.entries[0], id: after ? '99999999-9999-4999-8999-999999999999' : person.entries[0].id,
+        clock_in_at: now, clock_out_at: now }] }] };
+  });
+  await render(); await click('Load more clock-in records');
+  expect(host.textContent?.match(/Clock-in days: 5/g)).toHaveLength(1);
+  expect(document.querySelectorAll('[aria-label="Shared attendance cards"] li')).toHaveLength(2);
+  expect(mocks.cards.mock.calls.at(-1)?.[2]).toBe('nextCursor');
+  expect(host.textContent).not.toContain('Load more clock-in records');
+});
+it('retains a failed cursor page and rejects a forged duplicate rather than hiding prior cards', async () => {
+  mocks.cards.mockImplementation(async (p, start, after) => ({ ...cards(p, start), next_cursor: after ? null : 'nextCursor' }));
+  await render(); await click('Load more clock-in records');
+  expect(host.textContent).toContain('could not be verified');
+  expect(host.textContent).toContain('Synthetic Beta');
+  expect(findButton('Load more clock-in records').disabled).toBe(false);
+  expect(document.querySelectorAll('[aria-label="Shared attendance cards"] li')).toHaveLength(1);
+});
+it('aligns week defaults with company Monday and keeps explicit earlier period on refresh', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-11-01T21:00:00Z'));
+  mocks.cards.mockImplementation(async (p, start) => cards(p, start, 'Asia/Dubai'));
+  await render(); expect(host.textContent).toContain('Monday–Sunday · 2026-11-02');
+  await click('Earlier period'); expect(host.textContent).toContain('Monday–Sunday · 2026-10-26');
+  vi.setSystemTime(new Date('2026-11-09T21:00:00Z')); await click('Refresh records');
+  expect(host.textContent).toContain('Monday–Sunday · 2026-10-26');
+  await click('Current period'); expect(host.textContent).toContain('Monday–Sunday · 2026-11-09');
+  await click('Current period'); expect(document.querySelector('[aria-label="Shared attendance cards"]')).not.toBeNull();
+});
+it('aligns month defaults to company new month and own open remains actionable in an earlier period', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-11-30T21:00:00Z'));
+  mocks.cards.mockImplementation(async (p, start) => ({ ...cards(p, start, 'Asia/Dubai'), current_open_attendance: {
+    id: entry.id, user_id: employee.user_id, branch_id: employee.branch_id!, local_date: '2026-11-02',
+    clock_in_at: '2026-11-02T00:00:00Z', clock_out_at: null, is_open: true } }));
+  await render();
+  expect(findButton('Week').classList.contains('btn-primary')).toBe(true);
+  expect(findButton('Week').getAttribute('aria-pressed')).toBe('true');
+  expect(findButton('Month').classList.contains('btn-ghost')).toBe(true);
+  await click('Month'); expect(host.textContent).toContain('Calendar month · 2026-12-01');
+  expect(findButton('Month').classList.contains('btn-primary')).toBe(true);
+  expect(findButton('Month').getAttribute('aria-pressed')).toBe('true');
+  expect(findButton('Week').classList.contains('btn-ghost')).toBe(true);
+  expect(findButton('Week').getAttribute('aria-pressed')).toBe('false');
+  await click('Earlier period'); expect(host.textContent).toContain('Calendar month · 2026-11-01');
+  await click('Record actual break'); await fill('form input[type="number"]', '0'); await saveForm();
+  expect(mocks.submit.mock.calls[0][0]).toEqual({ kind: 'self-out', body: { attendance_id: entry.id, break_minutes: 0 } });
+  expect(mocks.summary).not.toHaveBeenCalled();
 });

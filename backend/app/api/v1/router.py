@@ -23,13 +23,16 @@ from app.api.v1.kitchen.router import router as kitchen_router
 from app.api.v1.memberships.router import router as memberships_router
 from app.api.v1.menu.router import router as menu_router
 from app.api.v1.ocr.router import router as ocr_router
+from app.api.v1.pos.operator_handover import router as operator_handover_router
 from app.api.v1.pos.router import router as pos_router
 from app.api.v1.public.router import router as public_router
 from app.api.v1.remote_assistance.router import router as remote_assistance_router
 from app.api.v1.reports.router import router as reports_router
-from app.api.v1.settings.router import router as settings_router
 from app.api.v1.settings.google_sheets import router as google_sheets_settings_router
+from app.api.v1.settings.router import router as settings_router
+from app.api.v1.staff.attendance_cards import router as staff_attendance_cards_router
 from app.api.v1.staff.router import router as staff_router
+from app.api.v1.staff.shared_attendance import router as shared_attendance_router
 from app.api.v1.staff.work_time import router as staff_work_time_router
 from app.api.v1.tables.router import router as tables_router
 from app.api.v1.ws.router import router as ws_router
@@ -53,6 +56,7 @@ api_router.include_router(
     tags=["client-diagnostics"],
 )
 api_router.include_router(pos_router, prefix="/pos", tags=["pos"])
+api_router.include_router(operator_handover_router, prefix="/pos", tags=["pos"])
 api_router.include_router(tables_router, prefix="/tables", tags=["tables"])
 api_router.include_router(menu_router, prefix="/menu", tags=["menu"])
 api_router.include_router(inventory_router, prefix="/inventory", tags=["inventory"])
@@ -62,7 +66,9 @@ api_router.include_router(finance_router, prefix="/finance", tags=["finance"])
 api_router.include_router(tender_router, prefix="/finance/tender-corrections", tags=["finance"])
 api_router.include_router(ocr_router, prefix="/ocr", tags=["ocr"])
 api_router.include_router(staff_router, prefix="/staff", tags=["staff"])
+api_router.include_router(staff_attendance_cards_router, prefix="/staff", tags=["staff"])
 api_router.include_router(staff_work_time_router, prefix="/staff", tags=["staff"])
+api_router.include_router(shared_attendance_router, prefix="/staff", tags=["staff"])
 api_router.include_router(analytics_router, prefix="/analytics", tags=["analytics"])
 api_router.include_router(reports_router, prefix="/reports", tags=["reports"])
 api_router.include_router(

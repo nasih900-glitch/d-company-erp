@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -50,6 +51,7 @@ class RemoteAssistanceDeviceUiTest {
             DCompanyTheme {
                 Column {
                     RemoteAssistanceActiveBanner(
+                        sharingConfirmed = true,
                         active = active,
                         online = true,
                         privacyProtected = true,
@@ -121,11 +123,114 @@ class RemoteAssistanceDeviceUiTest {
     }
 
     @Test
+    fun revokeConfirmationCannotCarryAcrossAReplacementGrant() = revokeTargetReplacement(false)
+
+    @Test
+    fun revokeConfirmationCannotCarryAcrossAReplacementAuthority() = revokeTargetReplacement(true)
+
+    private fun revokeTargetReplacement(changeAuthority: Boolean) {
+        val authority = cloud.dcompany.erp.core.handover.HandoverAuthority(
+            cloud.dcompany.erp.core.handover.HandoverScope(
+                "11111111-1111-4111-8111-111111111111",
+                "22222222-2222-4222-8222-222222222222", null, null,
+            ), 1,
+        )
+        val original = RemoteAssistanceUiState(
+            consent = RemoteConsentChoice.ALLOWED, actionAuthority = authority,
+            consentGrantId = "33333333-3333-4333-8333-333333333333",
+        )
+        var displayed by mutableStateOf(original)
+        var revokeCalls = 0
+        compose.setContent {
+            DCompanyTheme {
+                RemoteAssistanceSettingsCard(
+                    state = displayed, onStop = {}, onEnableNotifications = {},
+                    onRevoke = { revokeCalls++ },
+                )
+            }
+        }
+        compose.onNodeWithTag("remote-assistance-revoke").performClick()
+        compose.onNodeWithTag("remote-assistance-confirm-revoke").assertExists()
+        compose.runOnIdle {
+            displayed = if (changeAuthority) original.copy(actionAuthority = authority.copy(epoch = 2))
+                else original.copy(consentGrantId = "44444444-4444-4444-8444-444444444444")
+        }
+        compose.onNodeWithTag("remote-assistance-confirm-revoke").assertDoesNotExist()
+        compose.runOnIdle { org.junit.Assert.assertEquals(0, revokeCalls) }
+        compose.onNodeWithTag("remote-assistance-revoke").performClick()
+        compose.onNodeWithTag("remote-assistance-confirm-revoke").performClick()
+        compose.runOnIdle { org.junit.Assert.assertEquals(1, revokeCalls) }
+    }
+
+    @Test
+    fun pausedSessionShowsResumeAndStopWithoutClaimingActiveSharing() {
+        var resumed = 0
+        var stopped = 0
+        var revoked = 0
+        var state by mutableStateOf(RemoteAssistanceUiState(consent = RemoteConsentChoice.ALLOWED,
+            activeSession = activeSession(), sharingConfirmed = false, canResumeSharing = false))
+        compose.setContent {
+            DCompanyTheme {
+                RemoteAssistanceSettingsCard(state, onStop = { stopped++ }, onRevoke = { revoked++ },
+                    onEnableNotifications = {}, onResume = { resumed++ })
+            }
+        }
+        compose.onNodeWithTag("remote-assistance-paused").assertExists()
+        compose.onNodeWithTag("remote-assistance-resume").assertIsNotEnabled()
+        compose.runOnIdle { state = state.copy(canResumeSharing = true) }
+        compose.onNodeWithTag("remote-assistance-resume").performClick()
+        compose.onNodeWithTag("remote-assistance-settings-stop").performClick()
+        compose.runOnIdle {
+            org.junit.Assert.assertEquals(1, resumed); org.junit.Assert.assertEquals(1, stopped)
+            state = state.copy(consent = RemoteConsentChoice.REVOKED, revokeSaveRetryRequired = true)
+        }
+        compose.onNodeWithText("Retry saving revoke").assertExists()
+        compose.onNodeWithTag("remote-assistance-revoke").performClick()
+        compose.onNodeWithTag("remote-assistance-confirm-revoke").performClick()
+        compose.runOnIdle { org.junit.Assert.assertEquals(1, revoked) }
+    }
+
+    @Test
+    fun staleResumeClickRetainsItsDisplayedTargetAndCannotRenewReplacementSession() {
+        val authority = cloud.dcompany.erp.core.handover.HandoverAuthority(
+            cloud.dcompany.erp.core.handover.HandoverScope("11111111-1111-4111-8111-111111111111",
+                "22222222-2222-4222-8222-222222222222", null, null), 1)
+        val original = cloud.dcompany.erp.core.handover.OriginalOperationBinding(authority,
+            cloud.dcompany.erp.core.auth.CacheScopeLease(cloud.dcompany.erp.core.auth.CacheScope(authority.scope.actorId, authority.scope.companyId, null, null), 1),
+            cloud.dcompany.erp.core.auth.SessionRefreshLease(cloud.dcompany.erp.core.auth.StoredSession("synthetic", "synthetic"), 1)) { true }
+        val first = activeSession()
+        var displayed by mutableStateOf(RemoteAssistanceUiState(consent = RemoteConsentChoice.ALLOWED,
+            actionAuthority = authority, activeSession = first, consentGrantId = first.grantId,
+            displayedSessionId = first.sessionId, canResumeSharing = true))
+        var renewed = 0
+        fun target(s: RemoteAssistanceUiState) = cloud.dcompany.erp.core.remote.RemoteUiTarget(authority, null,
+            s.activeSession, null, s.consentGrantId, s.displayedSessionId)
+        compose.setContent {
+            val captured = requireNotNull(cloud.dcompany.erp.core.remote.captureRemoteUiAction(original, target(displayed), target(displayed)))
+            DCompanyTheme {
+                RemoteAssistanceSettingsCard(displayed, onStop = {}, onRevoke = {}, onEnableNotifications = {},
+                    onResume = { if (captured.matches(original, target(displayed))) renewed++ })
+            }
+        }
+        val oldClick = compose.onNodeWithTag("remote-assistance-resume").fetchSemanticsNode()
+            .config[androidx.compose.ui.semantics.SemanticsActions.OnClick].action
+        compose.runOnIdle {
+            val replacement = first.copy(sessionId = "99999999-9999-4999-8999-999999999999")
+            displayed = displayed.copy(activeSession = replacement, displayedSessionId = replacement.sessionId)
+            oldClick?.invoke()
+            org.junit.Assert.assertEquals(0, renewed)
+        }
+        compose.onNodeWithTag("remote-assistance-resume").performClick()
+        compose.runOnIdle { org.junit.Assert.assertEquals(1, renewed) }
+    }
+
+    @Test
     fun activeOfflineBannerExplainsPausedSharingAndKeepsStopAvailable() {
         var stopped = false
         compose.setContent {
             DCompanyTheme {
                 RemoteAssistanceActiveBanner(
+                    sharingConfirmed = true,
                     active = true,
                     online = false,
                     privacyProtected = true,

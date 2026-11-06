@@ -54,6 +54,7 @@ fun PricingUnlockDialog(onDismiss: () -> Unit, onUnlocked: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val api = remember { ApiClient.create<PricingApi>() }
+    val operations = remember { cloud.dcompany.erp.core.handover.applicationCallerOperations() }
     val tokens = DCompanyApp.instance.tokens
 
     RemoteSensitiveContent {
@@ -98,7 +99,10 @@ fun PricingUnlockDialog(onDismiss: () -> Unit, onUnlocked: () -> Unit) {
                         }
                         loading = true
                         error = null
-                        scope.launch {
+                        operations.launch(scope, onRejected = {
+                            loading = false
+                            error = "Resolve the original till handover before unlocking pricing."
+                        }) {
                             try {
                                 val result = api.unlock(PricingUnlockRequest(password))
                                 if (!tokens.isCurrent(session)) {
@@ -108,6 +112,7 @@ fun PricingUnlockDialog(onDismiss: () -> Unit, onUnlocked: () -> Unit) {
                                     return@launch
                                 }
                                 PricingLock.unlock(result.pricingToken, result.expiresIn, session)
+                                reconciled()
                                 loading = false
                                 onUnlocked()
                             } catch (e: CancellationException) {

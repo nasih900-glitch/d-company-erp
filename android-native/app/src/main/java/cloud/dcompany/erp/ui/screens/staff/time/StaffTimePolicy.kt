@@ -149,7 +149,7 @@ internal fun staffTimeAuthBinding(access: String, refresh: String, profile: MeRe
     timeDigest(listOf(profile.userId, profile.companyId, version.toString(), family, roles, permissions).joinToString("\u0001"))
 }.getOrNull()
 
-@Serializable internal enum class TimeWriteKind { SELF_IN, SELF_OUT, OWNER_IN, OWNER_OUT, CORRECTION, POLICY }
+@Serializable internal enum class TimeWriteKind { SELF_IN, SELF_OUT, OWNER_IN, OWNER_OUT, CORRECTION, POLICY, SHARED_IN, SHARED_OUT }
 @Serializable internal data class StaffTimeIntent(
     val key: String,
     val actorId: String,
@@ -170,6 +170,14 @@ internal fun staffTimeAuthBinding(access: String, refresh: String, profile: MeRe
         require(authBinding.matches(Regex("[0-9a-f]{64}"))) { "Sign in to verify the staff-time session." }
         require(targetName.length in 1..200 && payload.length in 1..16_384)
         when (kind) {
+            TimeWriteKind.SHARED_IN, TimeWriteKind.SHARED_OUT -> {
+                require(terminalId != null)
+                val b = StaffTimeJson.decodeFromString<SharedTimeFields>(payload)
+                require(b.userId == targetId && b.attendanceId == attendanceId)
+                if (kind == TimeWriteKind.SHARED_OUT) {
+                    timeUuid(requireNotNull(b.attendanceId)); require(b.breakMinutes in 0..1440)
+                } else require(b.attendanceId == null && b.breakMinutes == null)
+            }
             TimeWriteKind.SELF_IN -> {
                 require(targetId == actorId)
                 require(StaffTimeJson.decodeFromString<TimeSelfClockIn>(payload).branchId == branchId)

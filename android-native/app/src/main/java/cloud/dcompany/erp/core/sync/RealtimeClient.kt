@@ -327,6 +327,11 @@ class RealtimeClient internal constructor(
         connect(expectedReconnectTicket = null)
     }
 
+    /** A delayed original-A resume must not open a socket for a newer login. */
+    internal fun connectForOriginal(login: SessionRefreshLease) {
+        connect(expectedReconnectTicket = null, expectedLogin = login)
+    }
+
     private fun connect(
         expectedReconnectTicket: Long?,
         expectedLogin: SessionRefreshLease? = null,

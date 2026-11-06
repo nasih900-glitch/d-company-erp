@@ -34,6 +34,7 @@ import {
 import Modal from '@/components/ui/Modal';
 import TenderCorrections from '@/modules/finance/TenderCorrections';
 import { Link } from 'react-router-dom';
+import { canRecoverOperator } from '@/lib/operator-recovery-api';
 import { ownerScope, ownerWorkspaceGeneration, readOwnerWorkspace, rememberOwnerWorkspace } from '@/lib/owner-workspace';
 import { emptyReceiptFilters, receiptSearchParams, receiptSearchScope, taxPercentage, type ReceiptFilterInputs } from './receipt-search';
 import { useNotifications } from '@/components/ui/Notifications';
@@ -2025,6 +2026,12 @@ function ShiftsTab() {
             workspaceName: shiftWorkspaceLabel(openShift, terminalOptions),
           })}
         />
+      )}
+
+      {openShift && canRecoverOperator(me) && (
+        <Link className="btn btn-ghost" to={`/operations/operator-recovery/${openShift.id}`}>
+          Recover till operator
+        </Link>
       )}
 
       {!rows.length ? (

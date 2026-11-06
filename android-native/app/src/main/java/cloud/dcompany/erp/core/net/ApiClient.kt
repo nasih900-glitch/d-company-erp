@@ -11,6 +11,13 @@ import cloud.dcompany.erp.core.auth.TokenStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import cloud.dcompany.erp.core.handover.OperationDispatchGate
+import cloud.dcompany.erp.core.handover.OperationDispatchInterceptor
+import cloud.dcompany.erp.core.handover.OperationDispatchContext
+import cloud.dcompany.erp.core.handover.OperationTaggedCallFactory
+import cloud.dcompany.erp.core.handover.OriginalOperationBinding
+import cloud.dcompany.erp.core.handover.BootstrapDispatchLease
+import cloud.dcompany.erp.core.handover.UnconfiguredOperationDispatchGate
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
@@ -197,11 +204,23 @@ object ApiClient {
      * ErpApi — that keeps unrelated features from colliding in the same file.
      */
     private lateinit var retrofit: Retrofit
+    @Volatile private var operationGate: OperationDispatchGate = UnconfiguredOperationDispatchGate
+    private var captureOriginalRead: () -> OriginalOperationBinding? = { null }
+    private fun tagged(client: okhttp3.Call.Factory, binding: OriginalOperationBinding? = OperationDispatchContext.captured()?.binding ?: captureOriginalRead()): okhttp3.Call.Factory =
+        OperationTaggedCallFactory(client, binding) { if (::authenticatedSession.isInitialized) authenticatedSession.tokenStore.refreshLease() else null }
 
     /** `val api = ApiClient.create<GamingApi>()` */
     inline fun <reified T> create(): T = createApi(T::class.java)
 
-    fun <T> createApi(service: Class<T>): T = retrofit.create(service)
+    fun <T> createApi(service: Class<T>): T = retrofit.newBuilder().callFactory(tagged(retrofit.callFactory())).build().create(service)
+
+    internal fun anonymousPasswordRecoveryApi(): AnonymousPasswordRecoveryApi {
+        val client = baseClientBuilder().retryOnConnectionFailure(false)
+            .followRedirects(false).followSslRedirects(false)
+            .addInterceptor(ClientIdentityInterceptor()).build()
+        val calls = cloud.dcompany.erp.core.handover.AnonymousPasswordRecoveryCallFactory(client)
+        return retrofit.newBuilder().callFactory(calls).build().create(AnonymousPasswordRecoveryApi::class.java)
+    }
 
     internal fun isExactDebugLoopback(): Boolean =
         isExactManualLoopbackOrigin(BuildConfig.DEBUG, BuildConfig.API_BASE_URL)
@@ -232,7 +251,7 @@ object ApiClient {
             .build()
         return Retrofit.Builder()
             .baseUrl(BuildConfig.API_BASE_URL)
-            .client(client)
+            .callFactory(tagged(client))
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
             .create(service)
@@ -293,7 +312,7 @@ object ApiClient {
     ): T {
         return Retrofit.Builder()
             .baseUrl(BuildConfig.API_BASE_URL)
-            .client(ephemeralAuthorityClient(accessToken, terminalId, beforeDispatch, singleAttempt))
+            .callFactory(tagged(ephemeralAuthorityClient(accessToken, terminalId, beforeDispatch, singleAttempt)))
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
             .create(service)
@@ -304,8 +323,9 @@ object ApiClient {
         terminalId: String? = null,
         beforeDispatch: () -> Unit = {},
         singleAttempt: Boolean = false,
+        operationGate: OperationDispatchGate = this.operationGate,
     ): OkHttpClient {
-        val builder = baseClientBuilder()
+        val builder = baseClientBuilder(operationGate)
             .retryOnConnectionFailure(!singleAttempt)
             .followRedirects(!singleAttempt)
             .followSslRedirects(!singleAttempt)
@@ -355,7 +375,10 @@ object ApiClient {
     @Volatile
     var onUpdateRequired: ((ClientUpdateNotice) -> Unit)? = null
 
-    fun init(tokenStore: TokenStore, @Suppress("UNUSED_PARAMETER") terminalStore: TerminalStore) {
+    internal fun init(tokenStore: TokenStore, @Suppress("UNUSED_PARAMETER") terminalStore: TerminalStore,
+        operationGate: OperationDispatchGate, captureOriginalRead: () -> OriginalOperationBinding?) {
+        this.operationGate = operationGate
+        this.captureOriginalRead = captureOriginalRead
         backendReachability.reset()
         // A value in TerminalStore is a login-resolution candidate, never
         // proof that this process currently owns that terminal.
@@ -372,7 +395,7 @@ object ApiClient {
             .build()
         val sessionRefreshApi = Retrofit.Builder()
             .baseUrl(BuildConfig.API_BASE_URL)
-            .client(refreshClient)
+            .callFactory(tagged(refreshClient, binding = null))
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
             .create(ErpApi::class.java)
@@ -410,7 +433,7 @@ object ApiClient {
             .client(client)
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
-        api = retrofit.create(ErpApi::class.java)
+        api = retrofit.newBuilder().callFactory(tagged(client, binding = null)).build().create(ErpApi::class.java)
     }
 
     internal fun activateTerminalScope(terminalId: String?) {
@@ -431,19 +454,10 @@ object ApiClient {
         service: Class<T>,
         proofInterceptor: Interceptor,
     ): T {
-        val client = remoteAuthenticatedClientBuilder()
-            // Enrollment proof lives in the JSON body, so an opaque transport
-            // retry would reuse its nonce. The coordinator owns retries and
-            // rebuilds every proof; exact device endpoints never follow a
-            // redirect to a different request target.
-            .retryOnConnectionFailure(false)
-            .followRedirects(false)
-            .followSslRedirects(false)
-            .addNetworkInterceptor(proofInterceptor)
-            .build()
+        val client = remoteProofClientBuilder(proofInterceptor, operationGate, remoteAuthenticationInterceptors()).build()
         return Retrofit.Builder()
             .baseUrl(BuildConfig.API_BASE_URL)
-            .client(client)
+            .callFactory(tagged(client, binding = null))
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
             .create(service)
@@ -469,24 +483,26 @@ object ApiClient {
     }
 
     /** Remote support never receives the short-lived authority to mutate prices. */
-    private fun remoteAuthenticatedClientBuilder(): OkHttpClient.Builder {
+    private fun remoteAuthenticationInterceptors(): List<Interceptor> {
         val session = authenticatedSession
-        return baseClientBuilder()
-            .addInterceptor(ClientIdentityInterceptor())
-            .addInterceptor(TerminalInterceptor())
-            .addInterceptor(
-                PricingTokenInterceptor(allowPricingAuthority = false) {
-                    PricingLock.currentToken(session.tokenStore.currentPricingSession())
-                },
-            )
-            .addInterceptor(ErrorInterceptor(json))
-            .addInterceptor(
-                AuthInterceptor(
-                    tokenStore = session.tokenStore,
-                    refreshCoordinator = session.refreshCoordinator,
-                ),
-            )
+        return listOf(
+            ClientIdentityInterceptor(),
+            TerminalInterceptor(),
+            PricingTokenInterceptor(allowPricingAuthority = false) { PricingLock.currentToken(session.tokenStore.currentPricingSession()) },
+            ErrorInterceptor(json),
+            AuthInterceptor(tokenStore = session.tokenStore, refreshCoordinator = session.refreshCoordinator),
+        )
     }
+
+    /** Shared production composition: one physical boundary AFTER the fresh proof signer. */
+    internal fun remoteProofClientBuilder(proof: Interceptor, gate: OperationDispatchGate,
+        authentication: List<Interceptor>): OkHttpClient.Builder = baseClientBuilder(gate, physicalDispatch = false)
+        .apply { authentication.forEach { addInterceptor(it) } }
+        .retryOnConnectionFailure(false)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .addNetworkInterceptor(proof)
+        .addNetworkInterceptor(OperationDispatchInterceptor(gate, physicalAttempt = true))
 
     private class AuthenticatedSession(
         val tokenStore: TokenStore,
@@ -499,7 +515,9 @@ object ApiClient {
             authenticatedSession.refreshCoordinator.refresh(lease)
         }
 
-    private fun baseClientBuilder(): OkHttpClient.Builder = OkHttpClient.Builder()
+    private fun baseClientBuilder(gate: OperationDispatchGate = operationGate, physicalDispatch: Boolean = true): OkHttpClient.Builder = OkHttpClient.Builder()
+        .addInterceptor(OperationDispatchInterceptor(gate))
+        .apply { if (physicalDispatch) addNetworkInterceptor(OperationDispatchInterceptor(gate, physicalAttempt = true)) }
         // Cafe wifi is congested, not dead. These are deliberately generous:
         // a slow reply that eventually succeeds beats a fast failure that
         // sends a cashier back to the login screen with a customer waiting.
@@ -511,6 +529,12 @@ object ApiClient {
     /** Attach a till to operational calls, never to identity/bootstrap calls. */
     private class TerminalInterceptor : Interceptor {
         override fun intercept(chain: Interceptor.Chain): Response {
+            val original = chain.request().tag(OperationDispatchContext::class.java)?.binding
+            if (original != null) {
+                val builder = chain.request().newBuilder().removeHeader("X-Terminal-Id")
+                original.authority.scope.terminalId?.let { builder.header("X-Terminal-Id", it) }
+                return chain.proceed(builder.build())
+            }
             return chain.proceed(activeTerminalHeaders.apply(chain.request()))
         }
     }
@@ -526,7 +550,12 @@ object ApiClient {
 
         override fun intercept(chain: Interceptor.Chain): Response {
             val original = chain.request()
-            val lease = tokenStore.refreshLease()
+            val binding = original.tag(OperationDispatchContext::class.java)?.binding
+            val boot = original.tag(BootstrapDispatchLease::class.java)
+            val captured = binding?.loginLease ?: boot?.lease
+            val lease = if (captured != null) tokenStore.refreshLeaseFor(captured)
+                ?: throw IOException("The original sign-in changed before dispatch.")
+                else if (boot != null) null else tokenStore.refreshLease()
             val response = chain.proceed(signed(original, lease?.accessToken))
 
             val isAuthRoute = original.url.encodedPath.let {

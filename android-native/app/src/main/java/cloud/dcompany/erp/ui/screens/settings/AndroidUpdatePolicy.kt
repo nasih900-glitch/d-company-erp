@@ -75,6 +75,7 @@ internal class AndroidUpdatePolicyViewModel(
     private val commit: suspend (CacheScopeLease, () -> Unit) -> Boolean = { captured, change ->
         DCompanyApp.instance.cacheIsolation.commitIfCurrent(captured, change)
     },
+    private val operations: cloud.dcompany.erp.core.handover.CallerOperations = cloud.dcompany.erp.core.handover.applicationCallerOperations(),
 ) : ViewModel() {
     private val mutable = MutableStateFlow(AndroidUpdatePolicyState())
     val state = mutable.asStateFlow()
@@ -109,16 +110,19 @@ internal class AndroidUpdatePolicyViewModel(
         val operation = ++generation
         request?.cancel()
         mutable.value = before.copy(busy=true, error=null, notice=null, reviewed=false)
-        request = scope.launch {
+        request = operations.launch(scope, onRejected = {
+            if (operation == generation) mutable.value = mutable.value.copy(busy = false, error = "Resolve the original till handover before changing update policy.")
+        }) {
             try {
                 // A lost PUT response is not guessed or replayed with a different revision.
                 // Refresh exposes the committed global state for another explicit review.
                 val policy = if (body == null) api.androidUpdatePolicy() else api.setAndroidUpdatePolicy(body)
-                commit(captured) {
+                val committed = commit(captured) {
                     if (operation == generation && mutable.value.authority == authority) mutable.value = mutable.value.copy(
                         policy=policy, mode=if (policy.mode == "required") "required" else "optional",
                         reason="", busy=false, notice=if(body!=null) "Policy saved at revision ${policy.revision}. Saved tablet work is unchanged." else null)
                 }
+                if (committed) reconciled()
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
                 commit(captured) { if (operation == generation && mutable.value.authority == authority) mutable.value = mutable.value.copy(

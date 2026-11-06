@@ -1,10 +1,13 @@
 package cloud.dcompany.erp.core.remote
 
 import android.content.Context
+import android.content.SharedPreferences
 import java.time.Duration
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+
+internal class RemoteDeviceIdentityUnavailable : java.io.IOException("Remote support device identity could not be read safely. Remote support is paused; ask an Owner to review the saved identity.")
 
 internal enum class RemoteDeviceKeyStatus(val storedValue: String) {
     CREATED("created"),
@@ -107,10 +110,42 @@ internal fun remotePendingDeviceKeyDeadline(
 }
 
 /** Tenant-scoped public key metadata; private material never leaves AndroidKeyStore. */
-internal class RemoteDeviceIdentityStore(context: Context) {
-    private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+internal class RemoteDeviceIdentityStore(private val prefs: SharedPreferences) {
+    constructor(context: Context) : this(context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE))
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
-    private val lock = Any()
+
+    internal class ExpectedState internal constructor(internal val raw: String, val identity: PersistedRemoteDeviceIdentity) {
+        override fun toString() = "ExpectedRemoteDeviceState(<redacted>)"
+    }
+    /** A malformed/missing record cannot be checkpointed as though it were an empty store. */
+    fun expectedState(identity: PersistedRemoteDeviceIdentity): ExpectedState? = synchronized(lock) {
+        val raw = readRawLocked() ?: return@synchronized null
+        if (readLocked().identities.firstOrNull { it.keyId == identity.keyId } != identity) return@synchronized null
+        ExpectedState(raw, identity)
+    }
+    fun isCurrent(expected: ExpectedState): Boolean = synchronized(lock) {
+        readRawLocked() == expected.raw && readLocked().identities.firstOrNull { it.keyId == expected.identity.keyId } == expected.identity
+    }
+    fun compareAndSet(expected: ExpectedState, updated: PersistedRemoteDeviceIdentity): Boolean = synchronized(lock) {
+        val previous = expected.identity
+        val valid = validRemoteDeviceIdentity(updated) ?: return@synchronized false
+        if (readRawLocked() != expected.raw ||
+            previous.companyId != valid.companyId || previous.installationId != valid.installationId ||
+            previous.keyId != valid.keyId || previous.enrollmentId != valid.enrollmentId ||
+            previous.fingerprintSha256 != valid.fingerprintSha256) return@synchronized false
+        val current = readLocked()
+        if (current.identities.firstOrNull { it.keyId == previous.keyId } != previous) return@synchronized false
+        val promoting = valid.keyStatus == RemoteDeviceKeyStatus.ACTIVE && previous.keyStatus != RemoteDeviceKeyStatus.ACTIVE
+        val superseded = if (promoting) current.identities.filter {
+            it.companyId == valid.companyId && it.installationId == valid.installationId && it.keyId != valid.keyId
+        }.map { it.keyId } else emptyList()
+        val retained = current.identities.filterNot {
+            it.keyId == valid.keyId || (promoting && it.companyId == valid.companyId && it.installationId == valid.installationId)
+        }
+        val next = current.copy(identities = retained + valid, retiredKeyIds = (current.retiredKeyIds + superseded).distinct())
+        if (next.identities.size > MAX_DEVICE_IDENTITIES || next.retiredKeyIds.size > MAX_RETIRED_DEVICE_KEYS || !validIdentitySet(next.identities)) return@synchronized false
+        writeLocked(next)
+    }
 
     fun identities(companyId: String, installationId: String): List<PersistedRemoteDeviceIdentity> =
         synchronized(lock) {
@@ -191,11 +226,14 @@ internal class RemoteDeviceIdentityStore(context: Context) {
             writeLocked(current.copy(identities = retained))
         }
 
+    private fun readRawLocked(): String? = try { prefs.getString(KEY_STATE, null) }
+        catch (_: Exception) { throw RemoteDeviceIdentityUnavailable() }
+
     private fun readLocked(): PersistedRemoteDeviceIdentityState {
-        val raw = prefs.getString(KEY_STATE, null) ?: return PersistedRemoteDeviceIdentityState()
+        val raw = readRawLocked() ?: return PersistedRemoteDeviceIdentityState()
         val decoded = runCatching {
             json.decodeFromString<PersistedRemoteDeviceIdentityState>(raw)
-        }.getOrNull() ?: return PersistedRemoteDeviceIdentityState()
+        }.getOrElse { throw RemoteDeviceIdentityUnavailable() }
         if (
             decoded.format != DEVICE_IDENTITY_STORE_FORMAT ||
             decoded.identities.size > MAX_DEVICE_IDENTITIES ||
@@ -208,7 +246,7 @@ internal class RemoteDeviceIdentityStore(context: Context) {
             decoded.identities.size ||
             decoded.identities.any { validRemoteDeviceIdentity(it) == null } ||
             !validIdentitySet(decoded.identities)
-        ) return PersistedRemoteDeviceIdentityState()
+        ) throw RemoteDeviceIdentityUnavailable()
         return decoded
     }
 
@@ -217,6 +255,7 @@ internal class RemoteDeviceIdentityStore(context: Context) {
         .commit()
 
     private companion object {
+        val lock = Any()
         const val PREFS_NAME = "dcompany_remote_device_identity"
         const val KEY_STATE = "state"
     }

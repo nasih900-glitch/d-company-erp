@@ -181,6 +181,7 @@ internal fun sharedShiftViewModel(): ShiftViewModel = viewModel()
 fun ShiftScreen(
     access: ShiftAccess = ShiftAccess(),
     vm: ShiftViewModel = sharedShiftViewModel(),
+    onHandover: ((String) -> Unit)? = null,
     presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
@@ -237,6 +238,13 @@ fun ShiftScreen(
                         ViewOnlyNotice(
                             "Shift closing is view only for this account. Ask a staff member with Shift close access.",
                         )
+                    }
+                    val confirmedShift = state.open?.takeIf { it.server != null || it.local?.serverShiftId != null }
+                    if (onHandover != null && state.online && confirmedShift != null) {
+                        TextButton(onClick = { onHandover(confirmedShift.shiftId) }, enabled = !state.busy,
+                            modifier = Modifier.heightIn(min = 48.dp).testTag("open-till-takeover")) {
+                            Text("Hand over till")
+                        }
                     }
                     BoxWithConstraints(Modifier.fillMaxWidth().testTag("shift-open-workspace")) {
                         val overview: @Composable (Modifier) -> Unit = { modifier ->

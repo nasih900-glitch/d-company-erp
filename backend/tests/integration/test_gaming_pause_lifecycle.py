@@ -23,6 +23,7 @@ from app.models import (
     User,
 )
 from app.models.gaming import GamingPauseEvent, GamingSessionExtension
+from app.models.shift_operator import ShiftOperatorHandover
 
 
 async def fixture(session, seed_owner, monkeypatch, *, package=False, opened_by=None):
@@ -285,7 +286,7 @@ async def test_live_void_uses_server_playtime_for_optional_and_required_reason(
 
 
 @pytest.mark.asyncio
-async def test_open_shift_void_requires_shift_opener_for_non_owner(
+async def test_open_shift_void_rejects_noncurrent_staff_and_preserves_opener_authority(
     client,
     session,
     seed_owner,
@@ -300,6 +301,18 @@ async def test_open_shift_void_requires_shift_opener_for_non_owner(
     _staff, staff_headers = await _actor_headers(
         session, seed_owner, role="gaming_supervisor",
     )
+    source_shift = await session.get(Shift, denied_game.shift_id)
+    session.add(ShiftOperatorHandover(
+        company_id=source_shift.company_id, shift_id=source_shift.id,
+        branch_id=source_shift.branch_id, terminal_id=source_shift.terminal_id,
+        initiated_by_user_id=seed_owner["owner"].id,
+        previous_operator_user_id=None, incoming_user_id=opener.id,
+        from_revision=0, to_revision=1,
+        action_key=f"recorded-void-fixture:{uuid4()}", request_hash="0" * 64,
+    ))
+    await session.commit()
+    await session.refresh(source_shift)
+    assert source_shift.operator_user_id == opener.id and source_shift.operator_revision == 1
     denied = await client.post(
         f'/api/v1/gaming/sessions/{denied_game.id}/cancel',
         json={'reason': 'Wrong station selected', 'expected_billing_revision': 0},

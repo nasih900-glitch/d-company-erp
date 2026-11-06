@@ -135,10 +135,11 @@ from app.models.remote_assistance import (
     RemoteAssistanceGrant,
     RemoteAssistanceSession,
 )
+from app.models.shift_operator import ShiftOperatorHandover
+from app.models.staff_work import StaffWorkPolicy
 from app.models.tables import Floor, Reservation, Table
 from app.models.tenant import Branch, Company, Terminal
 from app.models.tender_correction import DailyTenderReconciliation, PaymentTenderCorrection
-from app.models.staff_work import StaffWorkPolicy
 from app.models.user import Attendance, PayrollEntry, Role, User, UserRole
 
 __all__ = [
@@ -261,6 +262,7 @@ __all__ = [
     "RolePermissionOverride",
     "SacCode",
     "Shift",
+    "ShiftOperatorHandover",
     "SoftDeleteMixin",
     "StateCode",
     "Station",

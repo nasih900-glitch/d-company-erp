@@ -3,6 +3,9 @@ package cloud.dcompany.erp.ui.screens.finance
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.core.handover.OperationDispatchContext
+import cloud.dcompany.erp.core.net.ApiException
+import kotlinx.coroutines.currentCoroutineContext
 import cloud.dcompany.erp.core.auth.FinanceAccess
 import cloud.dcompany.erp.core.auth.EffectivePermissions
 import cloud.dcompany.erp.core.auth.OutboxOwnerIdentity
@@ -349,10 +352,29 @@ internal fun financeLoadFailureAfterSummaryDelivery(
 class FinanceViewModel : ViewModel() {
 
     private val appCtx = DCompanyApp.instance
+    private val operations = appCtx.handoverOperations.caller(appCtx.shiftCache.profile.value, appCtx.cacheIsolation.currentLease())
     private val db = appCtx.db
     private val financeApi = ApiClient.create<FinanceApi>()
-    private val onlineWriteExecutor: FinanceOnlineWriteExecutor =
-        RetrofitFinanceOnlineWriteExecutor()
+    private val onlineWriteExecutor = object : FinanceOnlineWriteExecutor {
+        override suspend fun execute(write: PendingFinanceOnlineWrite): FinanceOnlineWriteResult {
+            // The operation wrapper captured this screen's A, never the latest signed-in cashier.
+            val binding = currentCoroutineContext()[OperationDispatchContext]?.binding
+                ?: throw ApiException("The original Finance workspace is unavailable.")
+            val scope = binding.cacheLease.scope
+            fun requireOriginalAuthority() {
+                if (!binding.isCurrent() || scope.userId != write.scope.userId ||
+                    scope.companyId != write.scope.companyId || scope.branchId != write.scope.branchId ||
+                    !appCtx.connectivity.online.value) {
+                    throw ApiException("The original Finance workspace changed. Retain the saved request for recovery.")
+                }
+            }
+            requireOriginalAuthority()
+            val bearer = appCtx.tokens.currentAccessFor(binding.loginLease)
+                ?: throw ApiException("The original Finance login is unavailable. Retain the saved request for recovery.")
+            return singleAttemptFinanceWriteExecutor(bearer, binding.authority.scope.terminalId,
+                beforeDispatch = ::requireOriginalAuthority).execute(write)
+        }
+    }
     private val writeRecoveryStore: FinanceWriteRecoveryStore =
         SharedPreferencesFinanceWriteRecoveryStore(appCtx)
     @Volatile private var access = FinanceAccess()
@@ -370,6 +392,7 @@ class FinanceViewModel : ViewModel() {
     private val tipPayouts = MutableStateFlow<List<TipPayout>>(emptyList())
     private val trialBalance = MutableStateFlow<TrialBalance?>(null)
     private val pendingOnlineWrite = MutableStateFlow<PendingFinanceOnlineWrite?>(null)
+    private var onlineRecoveryBlocked = false
     private val loading = MutableStateFlow(true)
     private val loadFailure = MutableStateFlow<FinanceLoadFailure?>(null)
     private val activeScope = MutableStateFlow<FinanceCacheScope?>(null)
@@ -629,7 +652,14 @@ class FinanceViewModel : ViewModel() {
                     rowCacheScopeVerified.value = false
                     clearSensitiveReadState()
                 }
-                pendingOnlineWrite.value = profile?.financeWriteScope()?.let(writeRecoveryStore::load)
+                try {
+                    pendingOnlineWrite.value = profile?.financeWriteScope()?.let(writeRecoveryStore::load)
+                    onlineRecoveryBlocked = false
+                } catch (_: FinanceRecoveryUnavailable) {
+                    pendingOnlineWrite.value = null
+                    onlineRecoveryBlocked = true
+                    notice.value = FINANCE_RECOVERY_BLOCKED_MESSAGE
+                }
                 // Auth refresh can change branch or protected-owner scope while
                 // this ViewModel remains alive. Cancel the obsolete load and
                 // start one for the new exact scope instead of leaving the new
@@ -844,6 +874,10 @@ class FinanceViewModel : ViewModel() {
     }
 
     private fun requireNoPendingOnlineWrite(): Boolean {
+        if (onlineRecoveryBlocked) {
+            notice.value = FINANCE_RECOVERY_BLOCKED_MESSAGE
+            return false
+        }
         if (pendingOnlineWrite.value == null) return true
         notice.value =
             "Resolve the exact saved Finance request before starting another manual collection or tip payout."
@@ -1077,6 +1111,7 @@ class FinanceViewModel : ViewModel() {
     }
 
     fun retryPendingOnlineWrite() {
+        if (onlineRecoveryBlocked) { notice.value = FINANCE_RECOVERY_BLOCKED_MESSAGE; return }
         if (!requireOperationalMoneyWrite() || !requireOnlineFinancialWrite() || busy.value) return
         val write = pendingOnlineWrite.value ?: return
         if (currentWriteScope() != write.scope) {
@@ -1103,9 +1138,11 @@ class FinanceViewModel : ViewModel() {
     private fun executeOnlineWrite(write: PendingFinanceOnlineWrite, alreadyStored: Boolean) {
         busy.value = true
         formError.value = null
-        viewModelScope.launch {
-            val stored = alreadyStored || withContext(Dispatchers.IO) {
-                writeRecoveryStore.save(write)
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing Finance." }) {
+            val stored = withContext(Dispatchers.IO) {
+                try {
+                    if (alreadyStored) writeRecoveryStore.load(write.scope) == write else writeRecoveryStore.save(write)
+                } catch (_: FinanceRecoveryUnavailable) { false }
             }
             if (!stored) {
                 busy.value = false
@@ -1147,11 +1184,12 @@ class FinanceViewModel : ViewModel() {
                     FinanceOnlineWriteKind.TIP_PAYOUT_VOID ->
                         "Tip payout voided. The original record remains visible for audit."
                 }
+                reconciled()
                 appCtx.sync.refresh("finance")
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
-                val preserve = preserveFinanceWriteForRetry(error)
+                val preserve = preserveFinanceWriteForRetry(error, retainedBeforeAttempt = alreadyStored)
                 if (appCtx.shiftCache.profile.value?.financeWriteScope() != write.scope) {
                     if (!preserve) {
                         withContext(Dispatchers.IO) { writeRecoveryStore.clear(write) }
@@ -1277,7 +1315,7 @@ class FinanceViewModel : ViewModel() {
     fun retryExpense(localId: String) {
         if (!requireExpenseWrite()) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { formError.value = "Resolve the original till handover before changing Finance. Saved work is retained." }) {
             var retried = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     retried = db.financeDao().retryExpense(localId) == 1
@@ -1297,7 +1335,7 @@ class FinanceViewModel : ViewModel() {
     fun retryExpenseReceipt(localId: String) {
         if (!requireExpenseWrite()) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { formError.value = "Resolve the original till handover before changing Finance. Saved work is retained." }) {
             var retried = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     retried = db.financeDao().retryExpenseReceipt(localId) == 1
@@ -1346,7 +1384,7 @@ class FinanceViewModel : ViewModel() {
 
         busy.value = true
         formError.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing Finance." }) {
             try {
                 val capturedExpense = db.financeDao().expenseByLocalId(row.localId)
                 val capturedReceipts = db.financeDao().expenseReceiptsForExpense(row.localId)
@@ -1513,7 +1551,7 @@ class FinanceViewModel : ViewModel() {
 
         busy.value = true
         formError.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing Finance. Saved work is retained." }) {
             try {
                 val serverReceipts = withTimeout(EXPENSE_RECEIPT_RECONCILIATION_TIMEOUT_MILLIS) {
                     financeApi.expenseReceipts(expenseServerId)
@@ -1655,7 +1693,7 @@ class FinanceViewModel : ViewModel() {
     fun retryAsset(localId: String) {
         if (!requireAssetWrite()) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { formError.value = "Resolve the original till handover before changing Finance. Saved work is retained." }) {
             var retried = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     retried = db.financeDao().retryAsset(localId) == 1
@@ -1701,7 +1739,7 @@ class FinanceViewModel : ViewModel() {
     fun retryCapitalEntry(localId: String) {
         if (!requireCapitalWrite()) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { formError.value = "Resolve the original till handover before changing Finance. Saved work is retained." }) {
             var retried = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     retried = db.financeDao().retryCapitalEntry(localId) == 1
@@ -1735,7 +1773,7 @@ class FinanceViewModel : ViewModel() {
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         busy.value = true
         formError.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing Finance." }) {
             try {
                 var message = ""
                 if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {

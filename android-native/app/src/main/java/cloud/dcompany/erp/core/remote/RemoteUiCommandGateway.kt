@@ -24,11 +24,11 @@ internal class RemoteUiCommandHost(
     val availableModules: () -> Set<RemoteErpModule>,
     val semanticActionsAllowed: () -> Boolean = { true },
     val navigate: (RemoteErpModule) -> Unit,
-    val refreshCurrent: () -> Boolean,
+    val refreshCurrent: suspend () -> Boolean,
 )
 
 /** Activity/Compose state stays out of the process coordinator and is never retained after disposal. */
-internal class RemoteUiCommandGateway {
+internal class RemoteUiCommandGateway(private val mainDispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.Main.immediate) {
     private val activeHost = AtomicReference<RemoteUiCommandHost?>(null)
     private val routeLock = Any()
     private var lastObservedHost: RemoteUiCommandHost? = null
@@ -44,14 +44,16 @@ internal class RemoteUiCommandGateway {
         }
     }
 
-    fun detach(host: RemoteUiCommandHost) {
+    fun detach(host: RemoteUiCommandHost): Boolean {
         if (activeHost.compareAndSet(host, null)) {
             synchronized(routeLock) {
                 lastObservedHost = null
                 lastObservedKey = null
                 routeRevision += 1L
             }
+            return true
         }
+        return false
     }
 
     fun hasVisibleHost(): Boolean = activeHost.get() != null
@@ -67,7 +69,7 @@ internal class RemoteUiCommandGateway {
         observeRouteLocked(host, routeKey)
     }
 
-    suspend fun routeSnapshot(): RemoteUiRouteSnapshot = withContext(Dispatchers.Main.immediate) {
+    suspend fun routeSnapshot(): RemoteUiRouteSnapshot = withContext(mainDispatcher) {
         val host = activeHost.get()
         val key = host?.currentRouteKey?.invoke()
         synchronized(routeLock) {
@@ -81,7 +83,7 @@ internal class RemoteUiCommandGateway {
     /** A main-thread snapshot proving the same host gate used by navigate/refresh. */
     suspend fun semanticAdmission(
         executionStillAllowed: () -> Boolean,
-    ): RemoteUiSemanticAdmission = withContext(Dispatchers.Main.immediate) {
+    ): RemoteUiSemanticAdmission = withContext(mainDispatcher) {
         val host = activeHost.get()
             ?: return@withContext RemoteUiSemanticAdmission(reasonCode = "not_in_foreground")
         if (!executionStillAllowed()) {
@@ -102,7 +104,7 @@ internal class RemoteUiCommandGateway {
         module: RemoteErpModule,
         executionStillAllowed: () -> Boolean,
     ): RemoteUiCommandResult =
-        withContext(Dispatchers.Main.immediate) {
+        withContext(mainDispatcher) {
             val host = activeHost.get()
                 ?: return@withContext RemoteUiCommandResult(false, "not_in_foreground")
             if (!executionStillAllowed()) {
@@ -120,7 +122,7 @@ internal class RemoteUiCommandGateway {
 
     suspend fun refreshCurrent(
         executionStillAllowed: () -> Boolean,
-    ): RemoteUiCommandResult = withContext(Dispatchers.Main.immediate) {
+    ): RemoteUiCommandResult = withContext(mainDispatcher) {
         val host = activeHost.get()
             ?: return@withContext RemoteUiCommandResult(false, "not_in_foreground")
         if (!executionStillAllowed()) {
@@ -129,10 +131,13 @@ internal class RemoteUiCommandGateway {
         if (!host.semanticActionsAllowed()) {
             return@withContext RemoteUiCommandResult(false, "permission_denied")
         }
-        if (host.refreshCurrent()) {
-            RemoteUiCommandResult(true)
-        } else {
-            RemoteUiCommandResult(false, "module_unavailable")
+        val refreshed = host.refreshCurrent()
+        when {
+            activeHost.get() !== host -> RemoteUiCommandResult(false, "not_in_foreground")
+            !executionStillAllowed() -> RemoteUiCommandResult(false, "session_inactive")
+            !host.semanticActionsAllowed() -> RemoteUiCommandResult(false, "permission_denied")
+            refreshed -> RemoteUiCommandResult(true)
+            else -> RemoteUiCommandResult(false, "module_unavailable")
         }
     }
 

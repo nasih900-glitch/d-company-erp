@@ -8,7 +8,8 @@ import { inr } from '@/lib/inr';
 import { parseRupeesToMinor, minorToRupeesInput } from '@/lib/money-input';
 import { ownerScope, readOwnerWorkspace, rememberOwnerWorkspace } from '@/lib/owner-workspace';
 import { StableMutationIntent } from '@/lib/stable-mutation-intent';
-import { staffTime, type StaffTimePerson, type StaffAttendance, type StaffTimeAction, type StaffTimeSummary, type StaffWorkPolicy } from '@/lib/staff-time-api';
+import { staffTime, type AttendanceCardsPage, type StaffTimePerson, type StaffAttendance, type StaffTimeAction, type StaffTimeSummary, type StaffWorkPolicy } from '@/lib/staff-time-api';
+import { adjacentAttendance, attendanceDate, attendanceStart, mergeAttendanceCards, validateAttendanceCards } from './attendance-cards';
 import Modal from '@/components/ui/Modal';
 import StaffPayEstimateCard from './StaffPayEstimateCard';
 import { validatePayEstimate } from './staff-pay-estimate';
@@ -73,6 +74,11 @@ function StaffTimeWorkspace({
   canManage: boolean;
   canList: boolean;
 }) {
+  const [period, setPeriod] = useState<'week' | 'month'>('week');
+  const [periodStart, setPeriodStart] = useState(() => attendanceStart('week', new Date().toISOString().slice(0, 10)));
+  const periodChosen = useRef(false);
+  const [cards, setCards] = useState<AttendanceCardsPage | null>(null);
+  const [cardsBusy, setCardsBusy] = useState(false);
   const [target, setTarget] = useState(() => canManage ? readOwnerWorkspace<{
     target: string;
   }>(scope, 'staff-time-view')?.target ?? me.user_id : me.user_id);
@@ -116,14 +122,16 @@ function StaffTimeWorkspace({
   const requests = useRef(0);
   const authorityEpoch = useRef(0);
   const abort = useRef<AbortController | null>(null);
-  const timezone = summary?.timezone ?? 'UTC';
-  const thisMonth = currentMonth(timezone);
+  const timezone = cards?.timezone ?? summary?.timezone ?? 'UTC';
+  const thisMonth = cards ? attendanceDate(cards.as_of, timezone).slice(0, 7) : currentMonth(timezone);
   const currentScope = useCallback(() => readSessionGeneration() === generation && readStoredTerminalId() === terminalId, [generation, terminalId]);
   const clearPrivateProjection = useCallback(() => {
     ++authorityEpoch.current;
     abort.current?.abort();
     ++requests.current;
     setLoading(false);
+    setCards(null);
+    setCardsBusy(false);
     setSummary(null);
     setCurrent(null);
     setPolicies([]);
@@ -188,24 +196,39 @@ function StaffTimeWorkspace({
     const controller = new AbortController();
     abort.current = controller;
     setLoading(true);
+    setCardsBusy(false);
     setError(null);
     try {
-      const [view, live, history] = await Promise.all([staffTime.summary(month, target === me.user_id ? undefined : target, controller.signal), month === thisMonth ? Promise.resolve(null) : staffTime.summary(thisMonth, target === me.user_id ? undefined : target, controller.signal), canManage ? staffTime.policies(target, undefined, controller.signal).catch(e => {
-        if (isAccessRefusal(e)) throw e;
-        return null;
-      }) : Promise.resolve([])]);
+      const [page, view, live, history] = await Promise.all([
+        staffTime.cards(period, periodStart, undefined, controller.signal),
+        canManage ? staffTime.summary(month, target === me.user_id ? undefined : target, controller.signal) : Promise.resolve(null),
+        canManage && month !== thisMonth ? staffTime.summary(thisMonth, target === me.user_id ? undefined : target, controller.signal) : Promise.resolve(null),
+        canManage ? staffTime.policies(target, undefined, controller.signal).catch(e => {
+          if (isAccessRefusal(e)) throw e;
+          return null;
+        }) : Promise.resolve([])
+      ]);
       if (!mounted.current || sequence !== requests.current || !currentScope()) return;
-      validatePayEstimate(view, canManage);
-      if (live) validatePayEstimate(live, canManage);
-      const companyMonth = currentMonth(view.timezone);
-      if (!monthChosen.current && month !== companyMonth) {
+      validateAttendanceCards(page, period, periodStart, me.user_id, branchId);
+      const companyDay = attendanceDate(page.as_of, page.timezone);
+      const companyStart = attendanceStart(period, companyDay);
+      if (!periodChosen.current && periodStart !== companyStart) {
+        setPeriodStart(companyStart);
+        return;
+      }
+      const companyMonth = companyDay.slice(0, 7);
+      if (canManage && !monthChosen.current && month !== companyMonth) {
         setMonth(companyMonth);
         return;
       }
-      const actualCurrent = month === companyMonth ? view : companyMonth === thisMonth ? live : await staffTime.summary(companyMonth, target === me.user_id ? undefined : target, controller.signal);
+      if (view) validatePayEstimate(view, true);
+      if (live) validatePayEstimate(live, true);
+      const actualCurrent = !canManage ? null : month === companyMonth ? view : companyMonth === thisMonth ? live :
+        await staffTime.summary(companyMonth, target === me.user_id ? undefined : target, controller.signal);
       if (!mounted.current || sequence !== requests.current || !currentScope()) return;
-      setSummary(view);
-      setCurrent(actualCurrent ?? view);
+      setCards(page);
+      setSummary(canManage ? view : null);
+      setCurrent(canManage ? actualCurrent ?? view : null);
       setPolicies(history ?? []);
       setPoliciesReady(history !== null);
       setPolicyError(history === null ? 'Draft revision history is unavailable. Refresh before creating a new revision.' : null);
@@ -219,6 +242,7 @@ function StaffTimeWorkspace({
           clearPrivateProjection();
           setError('Access changed. Owner review and a successful refresh are required before continuing.');
         } else {
+          setCards(null);
           setSummary(null);
           setCurrent(null);
           setPolicies([]);
@@ -229,7 +253,7 @@ function StaffTimeWorkspace({
     } finally {
       if (mounted.current && sequence === requests.current) setLoading(false);
     }
-  }, [month, target, me.user_id, thisMonth, canManage, currentScope, intent, clearPrivateProjection]);
+  }, [month, target, me.user_id, thisMonth, canManage, period, periodStart, branchId, currentScope, intent, clearPrivateProjection]);
   useEffect(() => {
     void load();
     return () => {
@@ -288,7 +312,7 @@ function StaffTimeWorkspace({
   const valid = summary?.user_id === target && summary.month === month;
   const view = valid ? summary : null;
   const live = current?.user_id === target ? current : null;
-  const open = live?.entries.find(row => row.clock_out_at === null);
+  const open = target === me.user_id ? cards?.current_open_attendance ?? undefined : live?.entries.find(row => row.clock_out_at === null);
   const selectedPerson = users.find(u => u.id === target);
   const inactive = target !== me.user_id && Boolean(selectedPerson?.departed || selectedPerson && selectedPerson.status !== 'active');
   const selectedName = target === me.user_id ? me.name : users.find(u => u.id === target)?.name ?? view?.name ?? 'Selected staff member';
@@ -341,14 +365,65 @@ function StaffTimeWorkspace({
       if (mounted.current && sequence === requests.current) setLoading(false);
     }
   }
+  function choosePeriod(value: 'week' | 'month', start?: string) {
+    if (busy || cardsBusy) return;
+    periodChosen.current = start !== undefined;
+    const chosen = start ?? attendanceStart(value, cards ? attendanceDate(cards.as_of, cards.timezone) : new Date().toISOString().slice(0, 10));
+    if (period === value && periodStart === chosen) { void load(); return; }
+    setCards(null);
+    setPeriod(value);
+    setPeriodStart(chosen);
+  }
+  async function moreCards() {
+    const previous = cards;
+    if (!previous?.next_cursor || cardsBusy || busy || loading) return;
+    const sequence = requests.current;
+    const epoch = authorityEpoch.current;
+    setCardsBusy(true);
+    try {
+      const page = await staffTime.cards(period, periodStart, previous.next_cursor, abort.current?.signal);
+      validateAttendanceCards(page, period, periodStart, me.user_id, branchId, true);
+      const combined = mergeAttendanceCards(previous, page);
+      if (mounted.current && sequence === requests.current && epoch === authorityEpoch.current && currentScope()) setCards(combined);
+    } catch (e) {
+      if (mounted.current && sequence === requests.current && epoch === authorityEpoch.current && currentScope()) {
+        if (isAccessRefusal(e)) clearPrivateProjection();
+        setError(e instanceof Error ? e.message : 'More clock-in records could not be loaded. Retry this page.');
+      }
+    } finally {
+      if (mounted.current && sequence === requests.current) setCardsBusy(false);
+    }
+  }
   return <div className="mx-auto max-w-6xl space-y-5 pb-8">
     <header className="flex flex-wrap items-end justify-between gap-4">
       <div><p className="mb-1 text-xs font-semibold uppercase tracking-[0.18em] text-accent">Staff workspace</p>
         <h1 className="text-2xl font-bold">Time & attendance</h1>
-        <p className="mt-1 text-sm text-fg-muted">Individual records. Actual breaks. Clear monthly history.</p></div>
+        <p className="mt-1 text-sm text-fg-muted">Shared clock-in days and dated arrivals / departures. Private Owner records are separate.</p></div>
       <button className="btn btn-ghost" disabled={busy || loading} onClick={() => void load()}><RefreshCw size={16} /> Refresh records</button>
     </header>
-    <section className={GLASS} aria-label="Choose attendance history">
+    <section className={GLASS} aria-label="Choose shared attendance period">
+      <h2 className="font-semibold">Shared clock-in records</h2>
+      <div className="mt-3 flex flex-wrap gap-3">
+        <button className={`btn ${period === 'week' ? 'btn-primary' : 'btn-ghost'}`} aria-pressed={period === 'week'} disabled={busy || cardsBusy} onClick={() => choosePeriod('week')}>Week</button>
+        <button className={`btn ${period === 'month' ? 'btn-primary' : 'btn-ghost'}`} aria-pressed={period === 'month'} disabled={busy || cardsBusy} onClick={() => choosePeriod('month')}>Month</button>
+        <button className="btn btn-ghost" disabled={busy || loading || cardsBusy} onClick={() => choosePeriod(period, adjacentAttendance(period, periodStart, -1))}>Earlier period</button>
+        <button className="btn btn-ghost" disabled={busy || loading || cardsBusy} onClick={() => choosePeriod(period, adjacentAttendance(period, periodStart, 1))}>Later period</button>
+        <button className="btn btn-ghost" disabled={busy || cardsBusy} onClick={() => choosePeriod(period)}>Current period</button>
+      </div>
+      <p className="mt-2 text-sm text-fg-muted">{period === 'week' ? 'Monday–Sunday' : 'Calendar month'} · {periodStart}</p>
+    </section>
+    {cards && <section className="space-y-3" aria-label="Shared attendance cards">
+      <p className="text-xs text-fg-muted">Times in {cards.timezone} · snapshot {timestamp(cards.as_of, cards.timezone)}</p>
+      {cards.items.length === 0 ? <p>No clock-ins in this period.</p> : cards.items.map(person => <article className={GLASS} key={person.user_id}>
+        <h2 className="font-semibold">{person.name}</h2><p className="mt-1 text-sm">Clock-in days: {person.clock_in_day_count}</p>
+        <ol className="mt-3 space-y-3">{person.entries.map(row => <li key={row.id} className="text-sm">
+          <p>In {timestamp(row.clock_in_at, cards.timezone)}</p><p className="text-fg-muted">{row.clock_out_at ? `Out ${timestamp(row.clock_out_at, cards.timezone)}` : 'Still clocked in'}</p>
+        </li>)}</ol>
+        {person.entries_continued && <p className="mt-3 text-xs text-fg-muted">More clock-in records are available below.</p>}
+      </article>)}
+      {cards.next_cursor && <button className="btn btn-ghost" disabled={busy || loading || cardsBusy} onClick={() => void moreCards()}>{cardsBusy ? 'Loading clock-in records…' : 'Load more clock-in records'}</button>}
+    </section>}
+    {canManage && <section className={GLASS} aria-label="Choose private attendance history">
       <div className="grid gap-4 sm:grid-cols-2">
         {canList ? <Label title="Person"><select className="input" value={target} disabled={locked} onChange={e => {
             setTarget(e.target.value);
@@ -368,7 +443,7 @@ function StaffTimeWorkspace({
       {canList && <p className="mt-3 text-xs text-fg-muted">{users.length} people loaded{peopleCursor ? ' · more history is available below' : ''}</p>}
       {canList && peopleCursor && <button className="btn btn-ghost mt-3" disabled={peopleBusy || locked} onClick={() => void morePeople()}>{peopleBusy ? 'Loading people…' : 'Load more people'}</button>}
       {directoryError && <p className="mt-3 text-sm text-accent-warn">{directoryError}</p>}
-    </section>
+    </section>}
     {error && <ErrorText>{error}</ErrorText>}
     {pending && <section className={`${GLASS} border-accent-warn/50`} aria-label="Unconfirmed staff action">
       <h2 className="font-semibold">Keep this request together</h2><p className="mt-2 text-sm text-fg-muted">The response is unconfirmed. Refresh records, then retry the exact request if needed. A new request is blocked until this one is resolved. Keep this signed-in browser session open.</p>
@@ -376,7 +451,14 @@ function StaffTimeWorkspace({
     </section>}
     {notice && <p role="status" className="text-sm text-accent-good">{notice}</p>}
     {loading && !view && <p role="status" className="text-sm text-fg-muted">Loading working-time records…</p>}
-    {view && <>
+    {!canManage && cards && <section className={GLASS} aria-label="My attendance action">
+      <h2 className="font-semibold">{me.name} · {open ? 'clocked in' : 'not clocked in'}</h2>
+      <p className="mt-1 text-sm text-fg-muted">{open ? `Started ${timestamp(open.clock_in_at, cards.timezone)}` : 'New clock-ins use the current validated branch.'}</p>
+      <button className="btn btn-primary mt-3" disabled={locked || loading || !reconciled || !canRecord || !open && !branchId} onClick={() => {
+        if (open) setDialog('clock'); else if (branchId) void submit({ kind: 'self-in', body: { branch_id: branchId } });
+      }}>{open ? 'Record actual break & clock out' : 'Clock in'}<ArrowRight size={16} /></button>
+    </section>}
+    {canManage && view && <>
       <section className="grid gap-3 sm:grid-cols-3" aria-label="Monthly attendance totals">
         <Metric title="Recorded presence · closed" value={duration(view.closed_gross_seconds)} icon={<Clock size={18} />} />
         <Metric title="Recorded work · after breaks" value={duration(view.closed_work_seconds)} icon={<ShieldCheck size={18} />} />
@@ -477,7 +559,7 @@ function ClockDialog({
   onSave
 }: {
   remoteError: string | null;
-  open?: StaffAttendance;
+  open?: Pick<StaffAttendance, 'id' | 'clock_in_at'>;
   owner: boolean;
   disabled: boolean;
   onClose: () => void;

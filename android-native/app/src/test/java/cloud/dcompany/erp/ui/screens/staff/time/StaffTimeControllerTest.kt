@@ -23,11 +23,24 @@ class StaffTimeControllerTest {
             entries, 0, 0, 0, emptyList(), "draft")
     private open inner class Api : StaffTimeApi {
         var reads = 0; var peopleCalls = 0; var policyCalls = 0
+        var cardsHook: (suspend (String, String, String?) -> AttendanceCardsPage)? = null
         val writes = mutableListOf<Pair<String, String>>()
         var rows = emptyList<TimeAttendance>()
         var summaryHook: (suspend (String, String?) -> StaffTimeSummary)? = null
         var inHook: (suspend (TimeSelfClockIn, String) -> TimeAttendance)? = null
         var outHook: (suspend (TimeSelfClockOut, String) -> TimeAttendance)? = null
+        override suspend fun attendanceCards(period: String, start: String, after: String?, limit: Int): AttendanceCardsPage {
+            return cardsHook?.invoke(period, start, after) ?: run {
+                val zone = java.time.ZoneId.of("Asia/Kolkata")
+                fun fact(row: TimeAttendance) = AttendanceClockFact(row.id, row.userId, row.branchId,
+                    java.time.Instant.parse(row.clockInAt).atZone(zone).toLocalDate().toString(), row.clockInAt, row.clockOutAt, row.clockOutAt == null)
+                val first = java.time.LocalDate.parse(start); val end = attendancePeriodEnd(period, first)
+                val entries = rows.map(::fact).filter { java.time.LocalDate.parse(it.localDate).let { d -> !d.isBefore(first) && d.isBefore(end) } }
+                AttendanceCardsPage(period, start, end.toString(), zone.id, "2026-11-02T09:00:00Z", branch,
+                    rows.singleOrNull { it.userId == user && it.clockOutAt == null }?.let(::fact),
+                    if (entries.isEmpty()) emptyList() else listOf(AttendancePersonCard(user, "Synthetic worker", entries.map { it.localDate }.distinct().size, entries, false, false)), null)
+            }
+        }
         override suspend fun summary(month: String, userId: String?): StaffTimeSummary {
             reads++; return summaryHook?.invoke(month, userId) ?: summary(userId ?: user, month, rows)
         }
@@ -58,11 +71,16 @@ class StaffTimeControllerTest {
                 body.dailyPresenceMinutes, body.dailyBreakMinutes, body.workingWeekdayMask, null, "draft", body.reason, "2026-11-02T09:00:00Z")
     }
     private class Store : StaffTimePendingStore {
-        var attempt: PendingTimeAttempt? = null; var failSave = false; var cleared = 0; var archived = 0
+        var attempt: PendingTimeAttempt? = null; var failPrepare = false; var failSave = false; var cleared = 0; var archived = 0
         override suspend fun read(scopeKey: String) = attempt
         override suspend fun save(scopeKey: String, attempt: PendingTimeAttempt) {
             if (failSave) throw IOException("Synthetic storage failure")
             check(this.attempt == null || this.attempt == attempt); this.attempt = attempt
+        }
+        override suspend fun prepareForDispatch(scopeKey: String, expected: PendingTimeAttempt): PendingTimeAttempt {
+            if (failPrepare) throw IOException("Synthetic transition failure")
+            check(attempt == expected)
+            return expected.copy(rejectedStatus = null).also { attempt = it }
         }
         override suspend fun reject(scopeKey: String, key: String, status: Int): PendingTimeAttempt {
             check(attempt?.intent?.key == key && status in DEFINITIVE_TIME_REJECTIONS)
@@ -84,19 +102,19 @@ class StaffTimeControllerTest {
     }
     private fun controller(env: Env, store: Store) = StaffTimeController(user, company, StaffTimeAccess(true, env.manage), env, store, "2026-11")
 
-    @Test fun ordinaryStaffReadsOnlySelfAndNeverDirectoryPeopleOrSalaryHistory() = runBlocking {
+    @Test fun ordinaryStaffReadsSharedClockFactsAndNeverPrivateSummaryPeopleOrSalaryHistory() = runBlocking {
         val api = Api(); val env = Env(api); val c = controller(env, Store()); c.refresh()
-        assertTrue(c.state.value.fresh); assertEquals(user, c.state.value.summary?.userId)
+        assertTrue(c.state.value.fresh); assertNull(c.state.value.summary); assertNotNull(c.state.value.cards); assertEquals(0, api.reads)
         assertEquals(0, api.peopleCalls); assertEquals(0, api.policyCalls)
         c.selectPerson(other); c.openPolicy(); assertEquals(user, c.state.value.selectedId); assertNull(c.state.value.draft)
     }
-    @Test fun ordinaryStaffRejectsUnexpectedPrivatePayEstimateBeforePublishingSnapshot() = runBlocking {
+    @Test fun ordinaryStaffNeverRequestsPotentiallyPrivatePayEstimate() = runBlocking {
         val api = Api(); val env = Env(api); val c = controller(env, Store())
         api.summaryHook = { month, id -> summary(id ?: user, month).copy(payEstimate = TimePayEstimate(
             "unavailable", "Private salary review", "paid_presence_clock_in_workday", "company", monthlySalaryMinor = 1200000)) }
         c.refresh()
         assertNull(c.state.value.summary)
-        assertFalse(c.state.value.fresh)
+        assertTrue(c.state.value.fresh); assertEquals(0, api.reads)
     }
     @Test fun ownerUsesDedicatedPeopleProjectionAndSeparatePolicyHistory() = runBlocking {
         val api = Api(); val c = controller(Env(api, true), Store()); c.refresh()
@@ -165,12 +183,14 @@ class StaffTimeControllerTest {
         val api = Api(); val c = controller(Env(api), Store())
         api.summaryHook = { month, id -> summary(id ?: user, month).copy(
             policy = TimeWorkPolicy(entryId, user, 1, "2026-11-01", 50_000, 600, 30, 31, null, "draft", "Private", "2026-11-01T00:00:00Z")) }
-        c.refresh(); assertNull(c.state.value.summary); assertFalse(c.state.value.fresh)
+        c.refresh(); assertNull(c.state.value.summary); assertTrue(c.state.value.fresh); assertEquals(0, api.reads)
     }
     @Test fun delayedResponseAfterWorkspaceInvalidationCannotRestoreOldData() = runBlocking {
         val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
         val api = Api(); val env = Env(api); val c = controller(env, Store())
-        api.summaryHook = { month, id -> entered.complete(Unit); release.await(); summary(id ?: user, month) }
+        api.cardsHook = { period, start, _ -> entered.complete(Unit); release.await()
+            AttendanceCardsPage(period, start, attendancePeriodEnd(period, java.time.LocalDate.parse(start)).toString(),
+                "UTC", "2026-11-02T09:00:00Z", branch, null, emptyList(), null) }
         val task = async { c.refresh() }; entered.await(); env.active = false; c.invalidate(); release.complete(Unit); task.await()
         assertNull(c.state.value.summary); assertTrue(c.state.value.people.isEmpty()); assertFalse(c.state.value.fresh)
     }
@@ -188,10 +208,12 @@ class StaffTimeControllerTest {
         val first = async { c.confirmDraft() }; entered.await(); c.confirmDraft(); release.complete(Unit); first.await()
         assertEquals(1, api.writes.size); assertEquals(1, store.cleared)
     }
-    @Test fun offlineAndHistoricalMonthNeverStartClockWrites() = runBlocking {
-        val api = Api(); val env = Env(api); val c = controller(env, Store())
-        c.refresh(); c.selectMonth("2026-10"); c.openClockDraft(false); assertNull(c.state.value.draft)
-        env.connected = false; c.refresh(); assertFalse(c.state.value.fresh); assertTrue(api.writes.isEmpty())
+    @Test fun historicalCardPeriodDoesNotHideOwnClockButOfflineStillNeverDispatches() = runBlocking {
+        val api = Api().apply { rows = listOf(entry()) }; val env = Env(api); val c = controller(env, Store())
+        c.refresh(); c.selectAttendance("month", "2026-10-01"); c.openClockDraft(true)
+        assertEquals(entryId, c.state.value.draft?.clockFact?.id); assertNull(c.state.value.draft?.attendance)
+        c.closeDraft(); env.connected = false; c.refresh(); c.openClockDraft(false)
+        assertFalse(c.state.value.fresh); assertNull(c.state.value.draft); assertTrue(api.writes.isEmpty())
     }
     @Test fun unknownRetry404CannotBecomeProofOfOriginalRejection() = runBlocking {
         val api = Api(); val store = Store(); val c = controller(Env(api), store)
@@ -310,6 +332,78 @@ class StaffTimeControllerTest {
         val store = Store(); val c = controller(Env(api, true), store)
         c.refresh(); c.openCorrection(row); c.editDraft { it.copy(breakText = "0", reason = "Synthetic reviewed correction") }
         c.confirmDraft(); assertNull(store.attempt); assertEquals(1, store.cleared); assertTrue(c.state.value.fresh)
+    }
+
+    @Test fun rejectedRetryLostResponseIsDurablyUnknownAndCannotBeArchivedAfterRestart() = runBlocking {
+        val api = Api(); val env = Env(api); val store = Store(); val c = controller(env, store)
+        api.inHook = { _, _ -> throw ApiException("Denied", 401) }
+        c.refresh(); c.openClockDraft(false); c.confirmDraft()
+        val rejected = requireNotNull(store.attempt); assertEquals(401, rejected.rejectedStatus)
+        c.refresh(); api.inHook = { _, _ ->
+            assertNull(store.attempt?.rejectedStatus)
+            throw IOException("Commit may have succeeded; reply lost")
+        }
+        c.retryExact()
+        assertEquals(rejected.intent, store.attempt?.intent); assertNull(store.attempt?.rejectedStatus)
+        val restored = controller(env, store); restored.refresh(); restored.acknowledgeRejected()
+        assertNotNull(store.attempt); assertEquals(0, store.archived)
+    }
+    @Test fun rejectedRetryCancellationKeepsUnknownAndSameKey() = runBlocking {
+        val api = Api(); val env = Env(api); val store = Store(); val c = controller(env, store)
+        api.inHook = { _, _ -> throw ApiException("Denied", 401) }
+        c.refresh(); c.openClockDraft(false); c.confirmDraft(); val intent = store.attempt!!.intent
+        c.refresh(); api.inHook = { _, _ -> throw kotlinx.coroutines.CancellationException("Synthetic process loss") }
+        assertTrue(runCatching { c.retryExact() }.exceptionOrNull() is kotlinx.coroutines.CancellationException)
+        assertEquals(intent, store.attempt?.intent); assertNull(store.attempt?.rejectedStatus)
+        val restored = controller(env, store); restored.refresh(); restored.acknowledgeRejected()
+        assertEquals(0, store.archived)
+    }
+    @Test fun failedUnknownTransitionPreventsRetryTransportButNewDefinitiveDenialRemainsReviewable() = runBlocking {
+        val api = Api(); val env = Env(api); val store = Store(); val c = controller(env, store)
+        api.inHook = { _, _ -> throw ApiException("Denied", 401) }
+        c.refresh(); c.openClockDraft(false); c.confirmDraft(); c.refresh()
+        store.failPrepare = true; c.retryExact()
+        assertEquals(1, api.writes.size); assertEquals(401, store.attempt?.rejectedStatus)
+        store.failPrepare = false; c.refresh(); c.retryExact()
+        assertEquals(2, api.writes.size); assertEquals(401, store.attempt?.rejectedStatus)
+    }
+
+    @Test fun ownerRoleLossClearsPrivateSummaryAndPoliciesWhileCardsRemainUsable() = runBlocking {
+        val api = Api(); val env = Env(api, true); val c = controller(env, Store())
+        c.refresh(); assertNotNull(c.state.value.summary)
+        env.manage = false; c.refresh()
+        assertNull(c.state.value.summary); assertTrue(c.state.value.policies.isEmpty()); assertFalse(c.state.value.canManage)
+        assertEquals(user, c.state.value.selectedId); assertNotNull(c.state.value.cards)
+    }
+    @Test fun companyMondayAndNewMonthDefaultsFollowAsOfButExplicitPeriodDoesNotMove() = runBlocking {
+        val api = Api(); val c = controller(Env(api), Store())
+        api.cardsHook = { period, start, _ -> AttendanceCardsPage(period, start,
+            attendancePeriodEnd(period, java.time.LocalDate.parse(start)).toString(), "Asia/Dubai", "2026-11-30T21:00:00Z", branch, null, emptyList(), null) }
+        c.refresh(); assertEquals("2026-11-30", c.state.value.attendanceStart)
+        c.selectAttendance("month"); assertEquals("2026-12-01", c.state.value.attendanceStart)
+        c.selectAttendance("week", "2026-10-05"); c.refresh(); assertEquals("2026-10-05", c.state.value.attendanceStart)
+    }
+    @Test fun badScopeCardCannotPublishOrAuthorizeClock() = runBlocking {
+        val api = Api(); val c = controller(Env(api), Store())
+        api.cardsHook = { period, start, _ -> AttendanceCardsPage(period, start,
+            attendancePeriodEnd(period, java.time.LocalDate.parse(start)).toString(), "UTC", "2026-11-02T09:00:00Z", other, null, emptyList(), null) }
+        c.refresh(); c.openClockDraft(false); assertFalse(c.state.value.fresh); assertNull(c.state.value.draft); assertNull(c.state.value.cards)
+    }
+
+    @Test fun sundayUtcDefaultUsesMondayCompanyWeek() = runBlocking {
+        val api = Api(); val c = controller(Env(api), Store())
+        api.cardsHook = { period, start, _ -> AttendanceCardsPage(period, start,
+            attendancePeriodEnd(period, java.time.LocalDate.parse(start)).toString(), "Asia/Dubai", "2026-11-01T21:00:00Z", branch, null, emptyList(), null) }
+        c.refresh(); assertEquals("2026-11-02", c.state.value.attendanceStart)
+    }
+    @Test fun selfClockOutUsesOnlyMinimalFactAndKeepsExactReceiptValidation() = runBlocking {
+        val api = Api().apply { rows = listOf(entry()) }; val store = Store(); val c = controller(Env(api), store)
+        c.refresh(); c.selectAttendance("month", "2026-10-01"); c.openClockDraft(true)
+        val draft = requireNotNull(c.state.value.draft)
+        assertNull(draft.attendance); assertEquals(entryId, draft.clockFact?.id)
+        c.editDraft { it.copy(breakText = "0") }; c.confirmDraft()
+        assertEquals(TimeSelfClockOut(entryId, 0), StaffTimeJson.decodeFromString<TimeSelfClockOut>(api.writes.single().second))
+        assertNull(store.attempt); assertEquals(0, api.reads)
     }
 
 }

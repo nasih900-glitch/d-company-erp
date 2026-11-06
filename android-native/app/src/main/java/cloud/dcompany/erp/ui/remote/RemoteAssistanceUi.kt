@@ -38,6 +38,7 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.key
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,6 +56,7 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import cloud.dcompany.erp.core.remote.RemoteAssistanceUiState
+import cloud.dcompany.erp.core.remote.RemoteUiTarget
 import cloud.dcompany.erp.core.remote.RemoteCapturePrivacyController
 import cloud.dcompany.erp.core.remote.RemoteConsentChoice
 import cloud.dcompany.erp.core.remote.RemoteGrantPrompt
@@ -114,12 +116,13 @@ internal fun RemoteAssistanceConsentDialog(
                 )
                 Text(
                     (if (grant.kind == RemoteGrantKind.ANYTIME) {
-                        "If you allow it, the owner may start future short sessions until " +
+                        "If you allow it, server permission for short sessions lasts until " +
                             "${remoteGrantExpiryLabel(grant)} (for up to 24 hours), or until you revoke it. "
                     } else {
                         "If you allow it, this request can start one short session only and expires at " +
                             "${remoteGrantExpiryLabel(grant)}. "
-                    }) + "Every session is always visible. The owner can view only the Help screen, " +
+                    }) + "Sharing pauses after restart or a changed support session and requires local confirmation. " +
+                        "Every sharing session is visible. The owner can view only the Help screen, " +
                         "open or refresh Help, collect safe diagnostics, or end the session. Passwords, " +
                         "PINs, payments, voids, refunds and Shift close are hidden.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -166,9 +169,14 @@ internal fun RemoteAssistanceActiveBanner(
     privacyProtected: Boolean,
     lastCommandLabel: String?,
     onStop: () -> Unit,
+    sharingConfirmed: Boolean = false,
+    resumeAvailable: Boolean = false,
+    onResume: () -> Unit = {},
+    resumeTarget: RemoteUiTarget? = null,
 ) {
     if (!active) return
     val statusDetail = when {
+        !sharingConfirmed -> "Sharing and remote commands are paused. Confirm this session locally to resume. Stop remains available."
         !online -> "Sharing paused while offline. Owner can view Help only; other ERP screens " +
             "stay hidden. Stop remains available."
         privacyProtected -> "Owner can view Help only. This screen and other ERP screens are hidden."
@@ -184,7 +192,7 @@ internal fun RemoteAssistanceActiveBanner(
             .testTag("remote-assistance-active")
             .semantics {
                 liveRegion = LiveRegionMode.Assertive
-                contentDescription = "Owner ERP remote assistance active. $statusDetail"
+                contentDescription = if (sharingConfirmed) "Owner ERP remote assistance active. $statusDetail" else "Owner ERP support paused. $statusDetail"
             },
     ) {
         Row(
@@ -205,7 +213,7 @@ internal fun RemoteAssistanceActiveBanner(
             }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                    "Owner ERP support active — Help only",
+                    if (sharingConfirmed) "Owner ERP support active — Help only" else "Owner ERP support paused — confirmation required",
                     color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.labelLarge,
                 )
@@ -214,6 +222,12 @@ internal fun RemoteAssistanceActiveBanner(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelMedium,
                 )
+            }
+            if (!sharingConfirmed) {
+                key(resumeTarget?.authority, resumeTarget?.consentGrantId, resumeTarget?.displayedSessionId) {
+                    Button(onClick = onResume, enabled = resumeAvailable,
+                        modifier = Modifier.heightIn(min = 48.dp).testTag("remote-assistance-banner-resume")) { Text("Resume sharing") }
+                }
             }
             Button(
                 onClick = onStop,
@@ -295,8 +309,9 @@ internal fun RemoteAssistanceSettingsCard(
     onRevoke: () -> Unit,
     onEnableNotifications: () -> Unit,
     onReplaceDeviceKey: () -> Unit = {},
+    onResume: () -> Unit = {},
 ) {
-    var confirmRevoke by remember { mutableStateOf(false) }
+    var confirmRevoke by remember(state.actionAuthority, state.consentGrantId) { mutableStateOf(false) }
     Surface(
         color = MaterialTheme.colorScheme.surface,
         shape = Radius.shapeLg,
@@ -314,7 +329,7 @@ internal fun RemoteAssistanceSettingsCard(
                     Text(
                         when (state.consent) {
                             RemoteConsentChoice.ALLOWED ->
-                                "ERP support is allowed for the approved request on this tablet."
+                                "Server support permission is saved. Sharing still needs local confirmation for each changed support session."
                             RemoteConsentChoice.UNDECIDED -> "No owner support request has been reviewed yet."
                             RemoteConsentChoice.DENIED -> "Owner ERP support was denied on this tablet."
                             RemoteConsentChoice.REVOKED -> "Owner ERP support has been revoked on this tablet."
@@ -396,6 +411,14 @@ internal fun RemoteAssistanceSettingsCard(
                 }
             }
             state.statusMessage?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            if (state.activeSession != null && !state.sharingConfirmed) {
+                Text("Sharing is paused. Each app restart, account or support-session change needs a new local confirmation. Server permission alone does not share this tablet.",
+                    modifier = Modifier.testTag("remote-assistance-paused"))
+                key(state.actionAuthority, state.consentGrantId, state.activeSession?.sessionId, state.displayedSessionId) {
+                    Button(onClick = onResume, enabled = state.canResumeSharing,
+                        modifier = Modifier.testTag("remote-assistance-resume")) { Text("Resume sharing") }
+                }
+            }
             if (state.activeSession != null) {
                 Button(
                     onClick = onStop,
@@ -403,12 +426,12 @@ internal fun RemoteAssistanceSettingsCard(
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.operationalDanger),
                 ) { Text("Stop active session") }
             }
-            if (state.consent == RemoteConsentChoice.ALLOWED) {
+            if (state.consent == RemoteConsentChoice.ALLOWED || state.revokeSaveRetryRequired) {
                 TextButton(
                     onClick = { confirmRevoke = true },
                     enabled = !state.decisionInFlight,
                     modifier = Modifier.testTag("remote-assistance-revoke"),
-                ) { Text("Revoke owner support", color = MaterialTheme.colorScheme.operationalDanger) }
+                ) { Text(if (state.revokeSaveRetryRequired) "Retry saving revoke" else "Revoke owner support", color = MaterialTheme.colorScheme.operationalDanger) }
             }
         }
     }

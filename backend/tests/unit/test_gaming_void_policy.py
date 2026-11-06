@@ -4,9 +4,9 @@ from types import SimpleNamespace
 import pytest
 
 from app.api.v1.gaming.router import (
-    SessionCancel,
     _VOID_REASON_REQUIRED_AFTER_MS,
     _VOID_WITHOUT_USER_REASON,
+    SessionCancel,
     _session_void_elapsed_ms,
     _void_reason_policy,
     _void_request_reason_matches,
@@ -189,3 +189,57 @@ def test_supplied_reason_retains_exact_normalized_matching() -> None:
     assert _void_request_reason_matches(gs, request, audit, request_hash=request_hash)
     gs.cancel_reason = _VOID_WITHOUT_USER_REASON
     assert not _void_request_reason_matches(gs, request, audit, request_hash=request_hash)
+
+
+@pytest.mark.parametrize("revision,operator,status,denied", [
+    (1, "incoming", "open", False),
+    (2, "incoming", "open", False),
+    (None, None, "open", False),
+    (None, "incoming", "open", True),
+    (1, None, "open", True),
+    (0, None, "open", True),
+    (None, None, "closed", True),
+    (0, "incoming", "open", True),
+    (1, "other", "open", True),
+    (1, "incoming", "closed", True),
+])
+def test_recorded_operator_void_authority_requires_open_recorded_current_identity(
+    revision, operator, status, denied,
+):
+    from uuid import uuid4
+
+    from app.api.v1.gaming.router import _require_void_source_authority
+    from app.core.tenant import TenantContext
+
+    company, branch, terminal, incoming, opener = [uuid4() for _ in range(5)]
+    shift = SimpleNamespace(company_id=company, branch_id=branch, terminal_id=terminal,
+        opened_by=opener, status=status, operator_revision=revision,
+        operator_user_id=incoming if operator == "incoming" else uuid4() if operator else None)
+    tenant = TenantContext(user_id=incoming, company_id=company, branch_id=branch,
+                           terminal_id=terminal, roles=("gaming_cashier",))
+    if denied:
+        with pytest.raises(BusinessRuleError):
+            _require_void_source_authority(shift, station=SimpleNamespace(branch_id=branch), tenant=tenant)
+    else:
+        assert _require_void_source_authority(shift, station=SimpleNamespace(branch_id=branch), tenant=tenant) is shift
+
+
+@pytest.mark.parametrize("different", ["company", "branch", "terminal", "station"])
+@pytest.mark.parametrize("recorded", [True, False])
+def test_recorded_operator_void_authority_never_skips_scope_validation(different, recorded):
+    from uuid import uuid4
+
+    from app.api.v1.gaming.router import _require_void_source_authority
+    from app.core.errors import NotFoundError
+    from app.core.tenant import TenantContext
+
+    company, branch, terminal, incoming = [uuid4() for _ in range(4)]
+    shift = SimpleNamespace(company_id=company, branch_id=branch, terminal_id=terminal,
+        opened_by=uuid4(), status="open", operator_revision=1 if recorded else None,
+        operator_user_id=incoming if recorded else None)
+    tenant = TenantContext(user_id=incoming, company_id=uuid4() if different == "company" else company,
+        branch_id=uuid4() if different == "branch" else branch,
+        terminal_id=uuid4() if different == "terminal" else terminal, roles=("gaming_cashier",))
+    station = SimpleNamespace(branch_id=uuid4() if different == "station" else branch)
+    with pytest.raises((BusinessRuleError, NotFoundError)):
+        _require_void_source_authority(shift, station=station, tenant=tenant)

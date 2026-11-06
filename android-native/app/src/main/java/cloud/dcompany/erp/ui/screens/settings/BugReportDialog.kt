@@ -148,6 +148,9 @@ internal fun BugReportDialog(
             )
         },
         text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                if (state.workspaceRequired) Text(BUG_REPORT_WORKSPACE_REQUIRED,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
             if (state.showingHistory) {
                 SupportHistory(
                     state = state,
@@ -171,6 +174,7 @@ internal fun BugReportDialog(
                     onOpenHistory = onOpenHistory,
                 )
             }
+            }
         },
         confirmButton = {
             when {
@@ -178,14 +182,14 @@ internal fun BugReportDialog(
                 !submitted -> ErpButton(
                     text = "Send to owner",
                     onClick = onSubmit,
-                    enabled = !state.saving,
+                    enabled = !state.saving && !state.workspaceRequired,
                     busy = state.saving,
                     leadingIcon = Icons.Default.ReportProblem,
                 )
                 actionRequired -> ErpButton(
                     text = "Retry send",
                     onClick = onRetry,
-                    enabled = !state.saving,
+                    enabled = !state.saving && !state.workspaceRequired,
                     busy = state.saving,
                 )
                 else -> ErpButton(text = "Done", onClick = onDismiss)
@@ -731,10 +735,10 @@ private fun SupportHistory(
                         }
                         if (request.actionRequired) {
                             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                                TextButton(onClick = { onRetry(request.identity) }) {
+                                TextButton(onClick = { onRetry(request.identity) }, enabled = !state.workspaceRequired) {
                                     Text("Retry send")
                                 }
-                                TextButton(onClick = { onRequestDiscard(request.identity) }) {
+                                TextButton(onClick = { onRequestDiscard(request.identity) }, enabled = !state.workspaceRequired) {
                                     Text("Remove saved copy", color = MaterialTheme.colorScheme.operationalDanger)
                                 }
                             }

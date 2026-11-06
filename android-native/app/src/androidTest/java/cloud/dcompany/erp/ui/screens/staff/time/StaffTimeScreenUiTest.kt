@@ -31,7 +31,10 @@ class StaffTimeScreenUiTest {
     private fun state(owner: Boolean = false) = StaffTimeState(user, "2026-11", owner,
         summary = StaffTimeSummary(user, "Synthetic worker", "2026-11", "Asia/Kolkata", "2026-11-02T09:00:00Z",
             emptyList(), 0, 0, 0, emptyList(), "draft"), storageReady = true, fresh = true,
-        policyHistoryLoaded = true)
+        policyHistoryLoaded = true, attendanceStart = "2026-11-02",
+        cards = AttendanceCardsPage("week", "2026-11-02", "2026-11-09", "Asia/Kolkata", "2026-11-02T09:00:00Z", branch, null,
+            listOf(AttendancePersonCard(other, "Synthetic colleague", 1, listOf(AttendanceClockFact(entry.id, other, branch,
+                "2026-11-02", entry.clockInAt, entry.clockOutAt, false)), false, false)), null))
     private var clocks = 0; private var confirms = 0; private var retries = 0; private var selected: String? = null
     private fun render(initial: StaffTimeState, width: Int = 1100, height: Int = 700): MutableState<StaffTimeState> {
         val s = mutableStateOf(initial)
@@ -44,9 +47,13 @@ class StaffTimeScreenUiTest {
         } } }
         return s
     }
-    @Test fun staffSeesOnlyOwnTimeWithNoPayOrPeopleAndClockReviewIsExplicit() {
+    @Test fun staffSeesSharedClockCardsWithNoPrivateHoursPayOrPeopleAndClockReviewIsExplicit() {
         render(state())
-        compose.onNodeWithText("My working time").assertIsDisplayed()
+        compose.onNodeWithText("Attendance", substring = false).assertIsDisplayed()
+        compose.onNodeWithText("Synthetic colleague").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Clock-in days: 1").assertIsDisplayed()
+        compose.onNodeWithText("Recorded working time").assertDoesNotExist()
+        compose.onNodeWithText("Planned schedule").assertDoesNotExist()
         compose.onNodeWithText("Draft pay").assertDoesNotExist()
         compose.onNodeWithTag("staff-time-choose-person").assertDoesNotExist()
         compose.onNodeWithTag("staff-time-clock").performScrollTo().assertIsEnabled().performClick()
@@ -55,7 +62,7 @@ class StaffTimeScreenUiTest {
     @Test fun staleSnapshotDisablesClockAndRetainsServerFacts() {
         render(state().copy(fresh = false))
         compose.onNodeWithTag("staff-time-clock").performScrollTo().assertIsNotEnabled()
-        compose.onNodeWithText("Closed presence: 0h 0m 0s").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Clock-in days: 1").performScrollTo().assertIsDisplayed()
     }
     @Test fun ownerChooserIncludesDepartedHistoryWithoutUsingDirectoryUi() {
         render(state(true).copy(people = listOf(TimePerson(other, "Synthetic departed", "inactive", true))))
@@ -68,6 +75,7 @@ class StaffTimeScreenUiTest {
         val a = state(true); render(a.copy(summary = a.summary!!.copy(entries = listOf(entry), closedGrossSeconds = 3600,
             closedWorkSeconds = null, reviewAttendanceIds = listOf(entry.id))))
         compose.onNodeWithText("History", substring = false).performClick()
+        compose.onNodeWithTag("staff-time-content-list").performScrollToNode(hasText("Actual break: not confirmed"))
         compose.onNodeWithText("Actual break: not confirmed").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Owner review required").assertIsDisplayed()
         compose.onNodeWithText("Recorded break: 0 minutes").assertDoesNotExist()
@@ -76,6 +84,7 @@ class StaffTimeScreenUiTest {
         val d = TimeEditDraft(TimeWriteKind.POLICY, user, "Synthetic worker", 0, effectiveFrom = "2026-11-02")
         val s = render(state(true))
         compose.onNodeWithText("Draft pay", substring = false).performClick()
+        compose.onNodeWithTag("staff-time-content-list").performScrollToNode(hasText("Payable amount: not activated. Overtime pay: not activated."))
         compose.onNodeWithText("Payable amount: not activated. Overtime pay: not activated.").performScrollTo().assertIsDisplayed()
         compose.runOnIdle { s.value = s.value.copy(draft = d) }
         compose.onNode(hasText("Draft monthly amount") and hasSetTextAction()).performScrollTo()
@@ -91,17 +100,25 @@ class StaffTimeScreenUiTest {
         val initial = state(true)
         val s = render(initial.copy(summary = initial.summary!!.copy(payEstimate = p)))
         compose.onNodeWithText("Draft pay", substring = false).performClick()
+        compose.onNodeWithTag("staff-time-content-list").performScrollToNode(hasTestTag("staff-pay-total"))
         compose.onNodeWithTag("staff-pay-total").performScrollTo().assertTextEquals("Total estimate: 400.00")
+        compose.onNodeWithTag("staff-time-content-list").performScrollToNode(hasTestTag("staff-pay-ot-125"))
         compose.onNodeWithTag("staff-pay-ot-125").performScrollTo().performClick()
+        compose.onNodeWithTag("staff-time-content-list").performScrollToNode(hasTestTag("staff-pay-total"))
         compose.onNodeWithTag("staff-pay-total").performScrollTo().assertTextEquals("Total estimate: 483.33")
         compose.runOnIdle { s.value = s.value.copy(summary = s.value.summary!!.copy(asOf = "2026-11-02T10:00:00Z")) }
+        compose.onNodeWithTag("staff-time-content-list").performScrollToNode(hasTestTag("staff-pay-total"))
         compose.onNodeWithTag("staff-pay-total").performScrollTo().assertTextEquals("Total estimate: 400.00")
+        compose.onNodeWithTag("staff-time-content-list").performScrollToNode(hasTestTag("staff-pay-ot-150"))
         compose.onNodeWithTag("staff-pay-ot-150").performScrollTo().performClick()
+        compose.onNodeWithTag("staff-time-content-list").performScrollToNode(hasTestTag("staff-pay-total"))
         compose.onNodeWithTag("staff-pay-total").performScrollTo().assertTextEquals("Total estimate: 500.00")
         compose.runOnIdle { s.value = s.value.copy(month = "2026-10", summary = s.value.summary!!.copy(month = "2026-10")) }
+        compose.onNodeWithTag("staff-time-content-list").performScrollToNode(hasTestTag("staff-pay-total"))
         compose.onNodeWithTag("staff-pay-total").performScrollTo().assertTextEquals("Total estimate: 400.00")
         compose.runOnIdle { s.value = s.value.copy(selectedId = other, summary = s.value.summary!!.copy(userId = other, name = "Synthetic colleague")) }
         compose.onNodeWithText("Draft pay", substring = false).performClick()
+        compose.onNodeWithTag("staff-time-content-list").performScrollToNode(hasTestTag("staff-pay-total"))
         compose.onNodeWithTag("staff-pay-total").performScrollTo().assertTextEquals("Total estimate: 400.00")
         compose.runOnIdle { assertEquals(0, confirms) }
     }
@@ -119,6 +136,7 @@ class StaffTimeScreenUiTest {
         val i = StaffTimeIntent("66666666-6666-4666-8666-666666666666", user, company, branch, null, "b".repeat(64),
             user, "Synthetic worker", TimeWriteKind.SELF_IN, payload = StaffTimeJson.encodeToString(TimeSelfClockIn(branch)))
         render(state().copy(pending = PendingTimeAttempt(i), pendingAuthorityChanged = true))
+        compose.onNodeWithTag("staff-time-content-list").performScrollToNode(hasText("Access or sign-in changed.", substring = true))
         compose.onNodeWithText("Access or sign-in changed.", substring = true).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Retry exact request").assertDoesNotExist()
         compose.onNodeWithText("Review rejection").assertDoesNotExist()
@@ -128,6 +146,7 @@ class StaffTimeScreenUiTest {
         val i = StaffTimeIntent("66666666-6666-4666-8666-666666666666", user, company, branch, null, "b".repeat(64),
             user, "Synthetic worker", TimeWriteKind.SELF_IN, payload = StaffTimeJson.encodeToString(TimeSelfClockIn(branch)))
         render(state().copy(pending = PendingTimeAttempt(i)))
+        compose.onNodeWithTag("staff-time-content-list").performScrollToNode(hasText("Retry exact request"))
         compose.onNodeWithText("Retry exact request", substring = false).performScrollTo().performClick()
         compose.runOnIdle { assertEquals(0, retries) }
         compose.onNodeWithText("Retry the retained request?").assertIsDisplayed()
@@ -143,4 +162,22 @@ class StaffTimeScreenUiTest {
         compose.onNodeWithText("Cancel", substring = false).assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
         compose.runOnIdle { assertNull(s.value.draft) }
     }
+    @Test fun ownerAlsoSeesSharedCardsAndRoleLossRemovesPrivateSections() {
+        val s = render(state(true))
+        compose.onNodeWithText("Shared clock-in records").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Clock-in days: 1").performScrollTo().assertIsDisplayed()
+        compose.runOnIdle { s.value = s.value.copy(canManage = false) }
+        compose.onNodeWithText("Draft pay", substring = false).assertDoesNotExist()
+        compose.onNodeWithText("Closed presence:", substring = true).assertDoesNotExist()
+        compose.onNodeWithText("Clock-in days: 1").performScrollTo().assertIsDisplayed()
+    }
+    @Test fun minimalOwnOpenFactRemainsClockOutReadyOutsideSelectedPeriod() {
+        val a = state(); val fact = AttendanceClockFact(entry.id, user, branch, "2026-10-01",
+            "2026-10-01T00:00:00Z", null, true)
+        render(a.copy(summary = null, cards = a.cards!!.copy(currentOpenAttendance = fact)))
+        compose.onNodeWithTag("staff-time-clock").performScrollTo().assertIsEnabled().assertTextContains("Review clock-out")
+        compose.onNodeWithTag("staff-time-clock").performClick()
+        compose.runOnIdle { assertEquals(1, clocks) }
+    }
+
 }

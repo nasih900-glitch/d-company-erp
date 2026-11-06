@@ -32,6 +32,11 @@ from app.models.base import Base, TenantMixin, TimestampMixin, _uuid_pk
 class Shift(Base, TimestampMixin, TenantMixin):
     __tablename__ = "shifts"
     __table_args__ = (
+        CheckConstraint(
+            "(operator_user_id IS NULL AND operator_revision IS NULL) OR "
+            "(operator_user_id IS NOT NULL AND operator_revision IS NOT NULL AND operator_revision >= 1)",
+            name="ck_shift_operator_state",
+        ),
         UniqueConstraint("company_id", "opening_action_id", name="uq_shift_opening_action"),
         CheckConstraint(
             "(opening_action_id IS NULL AND opening_request_hash IS NULL AND NOT opening_was_offline) OR (opening_action_id IS NOT NULL AND opening_request_hash IS NOT NULL AND opening_received_at IS NOT NULL)",
@@ -109,6 +114,11 @@ class Shift(Base, TimestampMixin, TenantMixin):
         nullable=True,
         index=True,
     )
+    # NULL preserves unrecorded historical responsibility; never infer from opened_by.
+    operator_user_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    operator_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     opening_float_minor: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     expected_minor: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)

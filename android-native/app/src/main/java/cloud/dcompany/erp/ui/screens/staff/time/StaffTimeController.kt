@@ -29,6 +29,8 @@ internal class StaffTimeAuthority(
     val canManage: Boolean,
     val isCurrent: () -> Boolean,
     val api: StaffTimeApi,
+    val sharedApi: SharedAttendanceApi? = null,
+    val canClockShared: Boolean = false,
 ) {
     val scopeKey = timeDigest(listOf(actorId, companyId, branchId.orEmpty(), terminalId.orEmpty()).joinToString("|"))
 }
@@ -42,6 +44,7 @@ internal data class TimeEditDraft(
     val targetName: String,
     val epoch: Long,
     val attendance: TimeAttendance? = null,
+    val clockFact: AttendanceClockFact? = null,
     val expectedRevision: Int = 0,
     val breakText: String = "",
     val reason: String = "",
@@ -61,6 +64,9 @@ internal data class StaffTimeState(
     val canManage: Boolean,
     val selectedId: String = actorId,
     val summary: StaffTimeSummary? = null,
+    val attendancePeriod: String = "week",
+    val attendanceStart: String = attendancePeriodStart("week", LocalDate.now(ZoneOffset.UTC)).toString(),
+    val cards: AttendanceCardsPage? = null,
     val people: List<TimePerson> = emptyList(),
     val nextPeopleCursor: String? = null,
     val peopleLoaded: Boolean = false,
@@ -77,8 +83,8 @@ internal data class StaffTimeState(
     val notice: String? = null,
     val draft: TimeEditDraft? = null,
 ) {
-    val serverCurrentMonth: String? get() = summary?.let {
-        YearMonth.from(Instant.parse(it.asOf).atZone(ZoneId.of(it.timezone))).toString()
+    val serverCurrentMonth: String? get() = (cards?.let { it.asOf to it.timezone } ?: summary?.let { it.asOf to it.timezone })?.let {
+        YearMonth.from(Instant.parse(it.first).atZone(ZoneId.of(it.second))).toString()
     }
     val openAttendance: TimeAttendance? get() = summary?.entries?.singleOrNull { it.clockOutAt == null }
     val currentMonth: Boolean get() = month == serverCurrentMonth
@@ -92,14 +98,21 @@ internal class StaffTimeController(
     private val environment: StaffTimeEnvironment,
     private val store: StaffTimePendingStore,
     initialMonth: String = YearMonth.now(ZoneOffset.UTC).toString(),
+    private val actorName: String = "My attendance",
 ) {
     private val epoch = AtomicLong()
     private val publication = Any()
     private val writer = Mutex()
     private var boundScope: String? = null
     private var monthChosen = false
+    private var attendanceChosen = false
     private val mutable = MutableStateFlow(StaffTimeState(actorId, timeMonth(initialMonth), initialAccess.canManage))
     val state = mutable.asStateFlow()
+    fun handoverBlocked() = synchronized(publication) {
+        epoch.incrementAndGet()
+        mutable.value = mutable.value.copy(busy = false, loading = false, fresh = false,
+            error = "Resolve the retained till handover in the original account before recording working time. Saved requests are retained.")
+    }
     fun invalidate() = synchronized(publication) {
         epoch.incrementAndGet()
         mutable.value = StaffTimeState(actorId, mutable.value.month, false,
@@ -136,18 +149,25 @@ internal class StaffTimeController(
             a = authority()
             if (!current(a, e)) return
             var month = mutable.value.month
-            val target = mutable.value.selectedId
-            check(target == actorId || a.canManage) { "You can only view your own time." }
-            var summary = a.api.summary(month, target.takeUnless { it == actorId })
-            validateSummary(summary, target, month, a.canManage)
+            val target = if (a.canManage) mutable.value.selectedId else actorId
+            val period = mutable.value.attendancePeriod
+            var periodStart = mutable.value.attendanceStart
+            var cards = a.api.attendanceCards(period, periodStart)
+            validateAttendancePage(cards, period, periodStart, actorId, a.branchId)
             if (!current(a, e)) return
-            val serverMonth = YearMonth.from(Instant.parse(summary.asOf).atZone(ZoneId.of(summary.timezone))).toString()
-            if (!monthChosen && month != serverMonth) {
-                month = timeMonth(serverMonth)
-                summary = a.api.summary(month, target.takeUnless { it == actorId })
-                validateSummary(summary, target, month, a.canManage)
+            val companyDay = Instant.parse(cards.asOf).atZone(ZoneId.of(cards.timezone)).toLocalDate()
+            val companyStart = attendancePeriodStart(period, companyDay).toString()
+            if (!attendanceChosen && periodStart != companyStart) {
+                periodStart = companyStart
+                cards = a.api.attendanceCards(period, periodStart)
+                validateAttendancePage(cards, period, periodStart, actorId, a.branchId)
                 if (!current(a, e)) return
             }
+            val serverMonth = YearMonth.from(companyDay).toString()
+            if (!monthChosen) month = timeMonth(serverMonth)
+            val summary = if (a.canManage) a.api.summary(month, target.takeUnless { it == actorId }) else null
+            summary?.let { validateSummary(it, target, month, true) }
+            if (!current(a, e)) return
             val pending = store.read(a.scopeKey)
             if (!current(a, e)) return
             var policies = emptyList<TimeWorkPolicy>()
@@ -156,7 +176,11 @@ internal class StaffTimeController(
                 validatePolicies(policies, target)
                 if (!current(a, e)) return
             }
-            publish(a, e) { it.copy(month = month, canManage = a.canManage, summary = summary,
+            publish(a, e) { it.copy(month = month, selectedId = target, canManage = a.canManage, summary = summary,
+                attendanceStart = periodStart, cards = cards,
+                people = if (a.canManage) it.people else emptyList(),
+                nextPeopleCursor = if (a.canManage) it.nextPeopleCursor else null,
+                peopleLoaded = a.canManage && it.peopleLoaded,
                 pending = pending, pendingAuthorityChanged = pending != null && !matches(pending.intent, a),
                 policies = policies, policyHistoryLoaded = a.canManage, morePolicies = policies.size == 50,
                 storageReady = true, loading = false, fresh = true, error = null) }
@@ -166,6 +190,39 @@ internal class StaffTimeController(
             if (a == null || current(a, e)) readFailure(error)
             else if (!a.isCurrent()) invalidate()
         }
+    }
+    suspend fun selectAttendance(period: String, start: String? = null) {
+        val s = mutable.value
+        if (s.busy || s.draft != null || s.loading) return
+        try {
+            val day = start?.let(LocalDate::parse) ?: s.cards?.let {
+                Instant.parse(it.asOf).atZone(ZoneId.of(it.timezone)).toLocalDate()
+            } ?: LocalDate.now(ZoneOffset.UTC)
+            val chosen = attendancePeriodStart(period, day)
+            require(chosen.year in 2000..2100)
+            attendanceChosen = start != null
+            epoch.incrementAndGet()
+            mutable.value = s.copy(attendancePeriod = period, attendanceStart = chosen.toString(), cards = null, fresh = false)
+            refresh()
+        } catch (error: IllegalArgumentException) { fail(message(error)) }
+        catch (error: DateTimeException) { fail("Enter a valid period date in YYYY-MM-DD format.") }
+    }
+    suspend fun moreAttendance() {
+        val s = mutable.value
+        val previous = s.cards ?: return
+        val cursor = previous.nextCursor ?: return
+        if (s.loading || s.busy || s.draft != null) return
+        val e = epoch.get()
+        mutable.value = s.copy(loading = true)
+        var a: StaffTimeAuthority? = null
+        try {
+            a = authority()
+            val page = a.api.attendanceCards(s.attendancePeriod, s.attendanceStart, cursor)
+            validateAttendancePage(page, s.attendancePeriod, s.attendanceStart, actorId, a.branchId, more = true)
+            val combined = mergeAttendancePages(previous, page)
+            publish(a, e) { it.copy(cards = combined, loading = false) }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Throwable) { if (a == null || current(a, e)) readFailure(error) }
     }
     suspend fun selectPerson(id: String) {
         if (mutable.value.busy || mutable.value.pending != null || mutable.value.draft != null) return
@@ -220,14 +277,17 @@ internal class StaffTimeController(
     }
     fun openClockDraft(out: Boolean) {
         val s = mutable.value
-        if (!s.fresh || !s.currentMonth || s.pending != null || s.busy || s.summary == null) return
+        if (!s.fresh || s.pending != null || s.busy || s.cards == null) return
         val other = s.selectedId != actorId
-        if (other && !s.canManage) return
-        if (!out && (s.openAttendance != null || s.people.any { it.id == s.selectedId && (it.departed || it.status != "active") })) return
-        val entry = if (out) s.openAttendance ?: return else null
+        if (other && (!s.canManage || !s.currentMonth || s.summary == null)) return
+        val fact = if (!other) s.cards.currentOpenAttendance else null
+        val entry = if (other) s.openAttendance else null
+        if (!out && (fact != null || entry != null || s.people.any { it.id == s.selectedId && (it.departed || it.status != "active") })) return
+        if (out && fact == null && entry == null) return
         val kind = if (other) { if (out) TimeWriteKind.OWNER_OUT else TimeWriteKind.OWNER_IN }
             else if (out) TimeWriteKind.SELF_OUT else TimeWriteKind.SELF_IN
-        mutable.value = s.copy(draft = TimeEditDraft(kind, s.selectedId, s.summary.name, epoch.get(), entry), error = null)
+        mutable.value = s.copy(draft = TimeEditDraft(kind, s.selectedId, if (other) requireNotNull(s.summary).name else actorName,
+            epoch.get(), attendance = entry, clockFact = fact), error = null)
     }
     fun openCorrection(entry: TimeAttendance) {
         val s = mutable.value
@@ -254,7 +314,7 @@ internal class StaffTimeController(
         val original = mutable.value.draft ?: return
         val next = transform(original)
         require(next.kind == original.kind && next.targetId == original.targetId && next.epoch == original.epoch &&
-            next.attendance == original.attendance && next.expectedRevision == original.expectedRevision)
+            next.attendance == original.attendance && next.clockFact == original.clockFact && next.expectedRevision == original.expectedRevision)
         mutable.value = mutable.value.copy(draft = next, error = null)
     }
     fun closeDraft() { if (!mutable.value.busy) mutable.value = mutable.value.copy(draft = null, error = null) }
@@ -267,8 +327,9 @@ internal class StaffTimeController(
         val branch = requireNotNull(a.branchId) { "Select a verified branch workspace before recording time." }
         val proof = requireNotNull(a.authBinding) { "Sign in again to verify this staff-time session." }
         val body = when (d.kind) {
+            TimeWriteKind.SHARED_IN, TimeWriteKind.SHARED_OUT -> error("Use the password-verified shared attendance flow.")
             TimeWriteKind.SELF_IN -> StaffTimeJson.encodeToString(TimeSelfClockIn(branch))
-            TimeWriteKind.SELF_OUT -> StaffTimeJson.encodeToString(TimeSelfClockOut(requireNotNull(d.attendance).id, actualBreak(d.breakText)))
+            TimeWriteKind.SELF_OUT -> StaffTimeJson.encodeToString(TimeSelfClockOut(requireNotNull(d.clockFact?.id ?: d.attendance?.id), actualBreak(d.breakText)))
             TimeWriteKind.OWNER_IN -> StaffTimeJson.encodeToString(TimeOwnerClockIn(branch, timeReason(d.reason)))
             TimeWriteKind.OWNER_OUT -> StaffTimeJson.encodeToString(TimeOwnerClockOut(requireNotNull(d.attendance).id, actualBreak(d.breakText), timeReason(d.reason)))
             TimeWriteKind.CORRECTION -> StaffTimeJson.encodeToString(TimeAttendanceCorrection(requireNotNull(d.attendance).updatedAt,
@@ -279,7 +340,7 @@ internal class StaffTimeController(
                 d.weekdayMask, reason = timeReason(d.reason)))
         }
         return StaffTimeIntent(UUID.randomUUID().toString(), actorId, companyId, branch, a.terminalId,
-            proof, d.targetId, d.targetName, d.kind, d.attendance?.id, body).also { it.validate(); require(!it.needsOwner || a.canManage) }
+            proof, d.targetId, d.targetName, d.kind, d.clockFact?.id ?: d.attendance?.id, body).also { it.validate(); require(!it.needsOwner || a.canManage) }
     }
     private fun matches(i: StaffTimeIntent, a: StaffTimeAuthority): Boolean =
         i.actorId == a.actorId && i.companyId == a.companyId && i.branchId == a.branchId &&
@@ -314,9 +375,10 @@ internal class StaffTimeController(
             intent.validate()
             check(matches(intent, a)) { "Access or credentials changed. The earlier request is retained for Owner review; do not repeat it." }
             mutable.value = mutable.value.copy(busy = true, error = null)
-            if (!retry) store.save(a.scopeKey, PendingTimeAttempt(intent))
+            val dispatchAttempt = if (retry) store.prepareForDispatch(a.scopeKey, requireNotNull(retained))
+                else PendingTimeAttempt(intent).also { store.save(a.scopeKey, it) }
             if (!current(a, e)) return
-            publish(a, e) { it.copy(pending = retained ?: PendingTimeAttempt(intent)) }
+            publish(a, e) { it.copy(pending = dispatchAttempt) }
             try {
                 dispatch(a, intent)
                 check(current(a, e)) { "The workspace changed before the receipt could be accepted." }
@@ -359,6 +421,7 @@ internal class StaffTimeController(
     private suspend fun dispatch(a: StaffTimeAuthority, i: StaffTimeIntent) {
         check(a.isCurrent() && matches(i, a)) { "The request's verified authority changed." }
         val attendance: TimeAttendance? = when (i.kind) {
+            TimeWriteKind.SHARED_IN, TimeWriteKind.SHARED_OUT -> error("Use the password-verified shared attendance flow.")
             TimeWriteKind.SELF_IN -> a.api.selfClockIn(StaffTimeJson.decodeFromString(i.payload), i.key)
             TimeWriteKind.SELF_OUT -> a.api.selfClockOut(StaffTimeJson.decodeFromString(i.payload), i.key)
             TimeWriteKind.OWNER_IN -> a.api.ownerClockIn(i.targetId, StaffTimeJson.decodeFromString(i.payload), i.key)
@@ -401,7 +464,7 @@ internal class StaffTimeController(
                         attendance.clockOutAt?.let(Instant::parse) == b.clockOutAt?.let(Instant::parse) &&
                         attendance.breakMinutes == b.breakMinutes && (b.clockOutAt == null || attendance.breakConfirmed))
                 }
-                TimeWriteKind.POLICY -> error("Unexpected policy attendance receipt")
+                TimeWriteKind.POLICY, TimeWriteKind.SHARED_IN, TimeWriteKind.SHARED_OUT -> error("Unexpected attendance receipt")
             }
         }
     }

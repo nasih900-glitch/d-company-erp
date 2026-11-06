@@ -44,6 +44,7 @@ from app.models import (
     User,
     UserRole,
 )
+from app.models.shift_operator import ShiftOperatorHandover
 from app.services.reports import ReportsAggregator
 
 
@@ -2476,10 +2477,21 @@ async def test_void_retention_targets_staff_opener_includes_same_hybrid_without_
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_void_retention_targets_public_owner_override_and_nonopener_denial(client, session, seed_owner):
+async def test_void_retention_targets_public_owner_override_and_recorded_other_denial(client, session, seed_owner):
     opener = await _void_retention_staff(session, seed_owner)
     shift, _station, _drink, gs = await _seed_live_session(session, seed_owner, opener=opener)
     other_staff = await _void_retention_staff(session, seed_owner)
+    session.add(ShiftOperatorHandover(
+        company_id=shift.company_id, shift_id=shift.id,
+        branch_id=shift.branch_id, terminal_id=shift.terminal_id,
+        initiated_by_user_id=seed_owner["owner"].id,
+        previous_operator_user_id=None, incoming_user_id=opener.id,
+        from_revision=0, to_revision=1,
+        action_key=f"recorded-void-fixture:{uuid4()}", request_hash="0" * 64,
+    ))
+    await session.commit()
+    await session.refresh(shift)
+    assert shift.operator_user_id == opener.id and shift.operator_revision == 1
     denied = await client.get(f"/api/v1/gaming/sessions/{gs.id}/void-retention-targets",
                               headers=_void_retention_headers(seed_owner, other_staff))
     assert denied.status_code == 422, denied.text

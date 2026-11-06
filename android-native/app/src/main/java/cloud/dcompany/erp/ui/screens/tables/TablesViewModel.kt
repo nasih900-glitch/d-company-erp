@@ -149,6 +149,7 @@ private data class TablesErrors(
 class TablesViewModel : ViewModel() {
 
     private val app = DCompanyApp.instance
+    private val operations = app.handoverOperations.caller(app.shiftCache.profile.value, app.cacheIsolation.currentLease())
     private val db = app.db
     private val cafeDao = db.cafeOrderDao()
     private val resolvedShift = db.shiftDao()
@@ -278,7 +279,7 @@ class TablesViewModel : ViewModel() {
 
     fun load() {
         app.sync.requestSync()
-        viewModelScope.launch { app.sync.refresh("tables") }
+        operations.launch(viewModelScope, onRejected = { busy.value = false; error.value = "Resolve the original till handover before changing this bill." }) { app.sync.refresh("tables") }
     }
 
     fun selectFloor(id: String?) { selectedFloorId.value = id }
@@ -495,7 +496,7 @@ class TablesViewModel : ViewModel() {
             createdAtMillis = createdAt,
         )
         busy.value = true
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; error.value = "Resolve the original till handover before changing this bill." }) {
             try {
                 val result = app.cacheIsolation.commitResultIfCurrent(lease) {
                     if (selectedBill == null) cafeDao.captureNewBill(bill, action)
@@ -667,7 +668,7 @@ class TablesViewModel : ViewModel() {
             createdAtMillis = now,
         )
         busy.value = true
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; error.value = "Resolve the original till handover before changing this bill." }) {
             try {
                 val result = app.cacheIsolation.commitResultIfCurrent(lease) {
                     cafeDao.captureAction(localBill, action)
@@ -693,7 +694,7 @@ class TablesViewModel : ViewModel() {
             return
         }
         busy.value = true
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; error.value = "Resolve the original till handover before changing this bill." }) {
             try {
                 if (!refreshBillsForRecovery()) {
                     notice.value = "The account or terminal changed during refresh. The original action remains saved."
@@ -749,7 +750,7 @@ class TablesViewModel : ViewModel() {
             return
         }
         busy.value = true
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; error.value = "Resolve the original till handover before changing this bill." }) {
             try {
                 if (!refreshBillsForRecovery()) {
                     notice.value = "The account or terminal changed during refresh. The saved action was not discarded."

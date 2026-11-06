@@ -66,6 +66,8 @@ import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.ui.AuthState
 import cloud.dcompany.erp.ui.SessionViewModel
+import cloud.dcompany.erp.ui.TillTakeoverDialog
+import cloud.dcompany.erp.ui.TillTakeoverRecovery
 import cloud.dcompany.erp.ui.TerminalChangeUiState
 import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceScaffold
@@ -128,6 +130,7 @@ import cloud.dcompany.erp.core.update.InstallerLaunchResult
 import cloud.dcompany.erp.core.update.matchesDescriptor
 import cloud.dcompany.erp.core.update.validateDirectUpdateMetadata
 import cloud.dcompany.erp.core.auth.EffectivePermissions
+import cloud.dcompany.erp.core.auth.ErpPermission
 import cloud.dcompany.erp.core.auth.canVoidPosLinkedSessions
 import cloud.dcompany.erp.core.auth.hasNormalizedOwnerRole
 import cloud.dcompany.erp.core.alarm.OperationalNotificationDestination
@@ -352,6 +355,7 @@ private fun AppRoot(
     val terminalChange by session.terminalChange.collectAsStateWithLifecycle()
     val remoteAssistance = DCompanyApp.instance.remoteAssistance
     val remoteAssistanceState by remoteAssistance.uiState.collectAsStateWithLifecycle()
+    val remoteActionBinding = remember(remoteAssistanceState) { remoteAssistance.captureUiActions(remoteAssistanceState) }
     val remotePrivacyBlocked by remoteAssistance.privacy.blocked.collectAsStateWithLifecycle()
     val enableRemoteNotifications = rememberRemoteNotificationAccessAction(
         notificationReady = remoteAssistanceState.notificationReady,
@@ -608,15 +612,22 @@ private fun AppRoot(
         }
 
         is AuthState.Blocked -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.padding(24.dp),
-            ) {
-                Text("Cannot open this workspace", style = MaterialTheme.typography.titleLarge)
-                Text(s.message, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Button(onClick = session::restore) { Text("Verify again") }
-                TextButton(onClick = session::signOut) { Text("Sign in as someone else") }
+            val takeover by session.tillTakeover.collectAsStateWithLifecycle()
+            val retained = takeover?.takeIf { it.intent != null }
+            if (retained != null) {
+                TillTakeoverRecovery(retained, session::recoverTillTakeover, session::activateIncomingTill,
+                    session::verifyOriginalTillLogin, session::cancelUnsentTillTakeover)
+            } else {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.padding(24.dp),
+                ) {
+                    Text("Cannot open this workspace", style = MaterialTheme.typography.titleLarge)
+                    Text(s.message, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Button(onClick = session::restore) { Text("Verify again") }
+                    TextButton(onClick = session::signOut) { Text("Sign in as someone else") }
+                }
             }
         }
 
@@ -758,7 +769,7 @@ private fun AppRoot(
                 LaunchedEffect(visibleDestination) {
                     AppHealthRecorder.setScreen(visibleDestination.name)
                 }
-                val remoteCommandHost = remember(s.me.userId, destinations, bugReportVm) {
+                val remoteCommandHost = remember(s.me.userId, destinations, bugReportVm, remoteAssistanceState.actionAuthority) {
                     RemoteUiCommandHost(
                         currentRouteKey = {
                             resolveWorkspaceDestination(
@@ -790,8 +801,7 @@ private fun AppRoot(
                         refreshCurrent = {
                             when (resolveWorkspaceDestination(currentDestination, destinations)) {
                                 Destination.Help -> {
-                                    bugReportVm.refreshHistory(silent = true)
-                                    true
+                                    bugReportVm.refreshHistoryAndAwait(silent = true)
                                 }
                                 else -> false
                             }
@@ -801,8 +811,9 @@ private fun AppRoot(
                 DisposableEffect(remoteCommandHost) {
                     remoteAssistance.uiGateway.attach(remoteCommandHost)
                     onDispose {
-                        remoteAssistance.uiGateway.detach(remoteCommandHost)
-                        remoteAssistance.onVisibleWorkspaceUnavailable()
+                        if (remoteAssistance.uiGateway.detach(remoteCommandHost)) {
+                            remoteActionBinding?.original?.let(remoteAssistance::onVisibleWorkspaceUnavailable)
+                        }
                     }
                 }
                 SideEffect {
@@ -859,6 +870,7 @@ private fun AppRoot(
                 }
                 WorkspaceScaffold(
                     destinations = destinations,
+                    staffAttendanceOnly = permissions.staffAccess().let { !it.canReadDirectory && !it.canManageDirectory },
                     currentDestination = currentDestination,
                     employeeName = s.me.name,
                     locationLabel = locationLabel,
@@ -869,6 +881,10 @@ private fun AppRoot(
                     remoteSupportRequestWaiting = remoteAssistanceState.pendingGrant != null &&
                         Destination.Help in destinations,
                     remoteSupportActive = remoteAssistanceState.activeSession != null,
+                    remoteSupportSharingConfirmed = remoteAssistanceState.sharingConfirmed,
+                    remoteSupportTarget = remoteActionBinding?.target,
+                    remoteSupportResumeAvailable = remoteAssistanceState.canResumeSharing,
+                    onResumeRemoteSupport = { remoteActionBinding?.let(remoteAssistance::resumeSharing) },
                     remoteSupportOnline = effectiveOnline,
                     remoteSupportPrivacyProtected = remoteAssistanceState.privacyProtected,
                     remoteSupportLastCommandLabel = remoteAssistanceState.lastCommandLabel,
@@ -887,7 +903,7 @@ private fun AppRoot(
                             )
                         }
                     },
-                    onStopRemoteSupport = remoteAssistance::stopByUser,
+                    onStopRemoteSupport = { remoteActionBinding?.let(remoteAssistance::stopByUser) },
                     onDestinationChanged = {
                         acceptWorkspaceNavigation(
                             target = it,
@@ -910,8 +926,8 @@ private fun AppRoot(
                                     RemoteAssistanceConsentDialog(
                                         grant = grant,
                                         busy = remoteAssistanceState.decisionInFlight,
-                                        onDeny = remoteAssistance::denyPendingGrant,
-                                        onAllow = remoteAssistance::allowPendingGrant,
+                                        onDeny = { remoteActionBinding?.let(remoteAssistance::denyPendingGrant) },
+                                        onAllow = { remoteActionBinding?.let(remoteAssistance::allowPendingGrant) },
                                     )
                                 }
                             }
@@ -1180,7 +1196,14 @@ private fun AppRoot(
                                     }
                                 },
                             )
-                            Destination.Shift -> ShiftScreen(access = permissions.shiftAccess())
+                            Destination.Shift -> {
+                                ShiftScreen(access = permissions.shiftAccess(),
+                                    onHandover = (session::showTillTakeover).takeIf { permissions.has(ErpPermission.PosWrite) })
+                                val takeover by session.tillTakeover.collectAsStateWithLifecycle()
+                                takeover?.takeIf { it.intent == null }?.let {
+                                    TillTakeoverDialog(it, session::dismissTillTakeover, session::moreTillCandidates, session::confirmTillTakeover)
+                                }
+                            }
                             Destination.Customers -> CustomersScreen(access = permissions.customersAccess())
                             Destination.Menu -> MenuScreen(access = permissions.menuAccess())
                             Destination.Staff -> StaffScreen(
@@ -1210,10 +1233,11 @@ private fun AppRoot(
                                 remoteAssistanceContent = {
                                     RemoteAssistanceSettingsCard(
                                         state = remoteAssistanceState,
-                                        onStop = remoteAssistance::stopByUser,
-                                        onRevoke = remoteAssistance::revokeConsent,
+                                        onStop = { remoteActionBinding?.let(remoteAssistance::stopByUser) },
+                                        onRevoke = { remoteActionBinding?.let(remoteAssistance::revokeConsent) },
+                                        onResume = { remoteActionBinding?.let(remoteAssistance::resumeSharing) },
                                         onEnableNotifications = enableRemoteNotifications,
-                                        onReplaceDeviceKey = remoteAssistance::startDeviceKeyReplacement,
+                                        onReplaceDeviceKey = { remoteActionBinding?.let(remoteAssistance::startDeviceKeyReplacement) },
                                     )
                                 },
                                 workspaceBackgroundState = workspaceBackgroundState,

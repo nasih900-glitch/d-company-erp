@@ -136,7 +136,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         raise AcceptanceError("acceptance redirects are refused")
 
 
-def verify(value: dict, base_url: str, *, opener=None, clock=time.monotonic) -> dict:
+def verify(value: dict, base_url: str, *, opener=None, clock=time.monotonic, require_owner=False) -> dict:
     opener = opener or urllib.request.build_opener(
         urllib.request.ProxyHandler({}), NoRedirect()
     )
@@ -182,6 +182,10 @@ def verify(value: dict, base_url: str, *, opener=None, clock=time.monotonic) -> 
         raise AcceptanceError(
             "authoritative account/workspace did not match the reviewed identity"
         )
+    if require_owner:
+        roles = me.get("roles")
+        if not isinstance(roles, list) or "owner" not in roles:
+            raise AcceptanceError("authenticated account is not an Owner")
     permissions = me.get("effective_permissions")
     if not isinstance(permissions, list) or not {"gaming.read", "pos.read"}.issubset(
         permissions
@@ -213,13 +217,14 @@ def verify(value: dict, base_url: str, *, opener=None, clock=time.monotonic) -> 
         "branch_id": value["expected_branch_id"],
         "terminal_id": value["expected_terminal_id"],
         "account_read": True,
+        **({"owner_verified": True} if require_owner else {}),
         "gaming_read": True,
         "shift_read": True,
         "mutations": False,
     }
 
 
-def internal_probe(raw: bytes, expected_digest: str, container_id: str) -> dict:
+def internal_probe(raw: bytes, expected_digest: str, container_id: str, *, require_owner=False) -> dict:
     if (
         not re.fullmatch(r"[a-f0-9]{64}", expected_digest)
         or hashlib.sha256(raw).hexdigest() != expected_digest
@@ -241,6 +246,7 @@ def internal_probe(raw: bytes, expected_digest: str, container_id: str) -> dict:
                 "-c",
                 Path(__file__).read_text(),
                 "internal",
+                *(["--require-owner"] if require_owner else []),
             ],
             input=raw,
             capture_output=True,
@@ -264,6 +270,7 @@ def internal_probe(raw: bytes, expected_digest: str, container_id: str) -> dict:
         or receipt.get("status") != "authenticated_reads_verified"
         or receipt.get("schema_version") != 1
         or receipt.get("mutations") is not False
+        or (require_owner and receipt.get("owner_verified") is not True)
         or verified_at.utcoffset() is None
         or verified_at.utcoffset().total_seconds() != 0
         or not -2 <= age <= TOTAL_DEADLINE_SECONDS + 2
@@ -297,6 +304,7 @@ def internal_probe(raw: bytes, expected_digest: str, container_id: str) -> dict:
             "gaming_read",
             "shift_read",
             "mutations",
+            *(("owner_verified",) if require_owner else ()),
         )
     }
 
@@ -308,6 +316,7 @@ def main() -> int:
     parser.add_argument("--credential-file", type=Path)
     parser.add_argument("--expected-sha256")
     parser.add_argument("--container-id")
+    parser.add_argument("--require-owner", action="store_true")
     args = parser.parse_args()
 
     def expired(_signal, _frame):
@@ -335,6 +344,7 @@ def main() -> int:
                 private_input(args.credential_file),
                 args.expected_sha256,
                 args.container_id,
+                require_owner=args.require_owner,
             )
             print(json.dumps(result, sort_keys=True, separators=(",", ":")))
             return 0
@@ -361,7 +371,7 @@ def main() -> int:
                 )
             raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
             base = "http://127.0.0.1:8000"
-        result = verify(credentials(raw), base)
+        result = verify(credentials(raw), base, require_owner=args.require_owner)
         if args.mode == "public":
             result["credential_input_sha256"] = hashlib.sha256(raw).hexdigest()
         print(json.dumps(result, sort_keys=True, separators=(",", ":")))

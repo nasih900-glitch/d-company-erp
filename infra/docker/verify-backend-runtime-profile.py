@@ -100,7 +100,16 @@ def verify_application_imports() -> int:
     return len(modules)
 
 
-async def verify_postgres() -> None:
+def expected_runtime_revision(runtime_version: str, configured_version: str | None) -> str:
+    if configured_version != runtime_version:
+        raise RuntimeError('Configured and installed application versions differ')
+    expected = {'3.1.57': '0094', '3.1.58': '0094', '3.1.59': '0095'}.get(runtime_version)
+    if expected is None:
+        raise RuntimeError('No PostgreSQL runtime proof is defined for this application version')
+    return expected
+
+
+async def verify_postgres(expected_revision: str) -> None:
     from alembic.migration import MigrationContext
     from sqlalchemy import create_engine, text
     from app.core.config import get_settings
@@ -120,7 +129,7 @@ async def verify_postgres() -> None:
         with engine.connect() as connection:
             if connection.scalar(text('SELECT 1')) != 1:
                 raise RuntimeError('psycopg PostgreSQL probe failed')
-            if MigrationContext.configure(connection).get_current_revision() != '0094':
+            if MigrationContext.configure(connection).get_current_revision() != expected_revision:
                 raise RuntimeError('Unexpected production migration revision')
     finally:
         engine.dispose()
@@ -129,12 +138,15 @@ async def verify_postgres() -> None:
 def main() -> None:
     if os.geteuid() == 0 or Path.cwd() != Path('/app'):
         raise RuntimeError('Run the final image proof as its non-root user from /app')
+    version = importlib.import_module('app').__version__
+    expected_revision = expected_runtime_revision(version, os.environ.get('APP_VERSION'))
     verify_absence()
     verify_native_modules()
     verify_postgres_drivers()
     module_count = verify_application_imports()
-    asyncio.run(verify_postgres())
+    asyncio.run(verify_postgres(expected_revision))
     print(json.dumps({'status': 'PASS', 'profile': 'postgresql-without-sqlite',
+                      'application_version': version, 'database_revision': expected_revision,
                       'application_modules_imported': module_count, 'uid': os.geteuid()}))
 
 

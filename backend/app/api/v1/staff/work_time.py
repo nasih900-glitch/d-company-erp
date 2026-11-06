@@ -355,6 +355,13 @@ async def time_summary(
     month: str = Query(pattern=r"^\d{4}-\d{2}$"),
     user_id: UUID | None = None,
 ) -> TimeSummaryRead:
+    if not has_owner_role(tenant.roles) or not await has_permission(
+        session, tenant, "staff.payroll.write"
+    ):
+        raise ForbiddenError(
+            "Update the app to view attendance clock-in records. "
+            "Detailed hours, schedules and pay are Owner-only."
+        )
     target_id = user_id or tenant.user_id
     is_owner = has_owner_role(tenant.roles)
     can_manage = is_owner and await has_permission(session, tenant, "staff.payroll.write")

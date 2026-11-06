@@ -928,6 +928,8 @@ def _shift(tenant: TenantContext, **overrides):
         "branch_id": tenant.branch_id,
         "terminal_id": tenant.terminal_id,
         "opened_by": tenant.user_id,
+        "operator_user_id": None,
+        "operator_revision": None,
         "opened_at": datetime.now(UTC),
         "opening_action_id": None,
         "opening_request_hash": None,
@@ -2513,10 +2515,12 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
             wrong_terminal,
         )
 
-    # Cancelling removes a billable session, so ordinary staff on the same
-    # terminal still need the accountable shift opener to perform it.
+    # Once custody is recorded, another staff member on the same terminal
+    # cannot waive the charge just because they share the workspace.
     gaming_session.status = "ended"
     shift.status = "open"
+    shift.operator_user_id = tenant.user_id
+    shift.operator_revision = 1
     other_staff = _tenant(
         company_id=tenant.company_id,
         branch_id=tenant.branch_id,

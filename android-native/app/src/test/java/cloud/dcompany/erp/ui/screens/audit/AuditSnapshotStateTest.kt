@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.screens.audit
 
+import cloud.dcompany.erp.core.handover.standaloneOperationCaller
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.ui.screens.finance.TenderCorrectionNotice
 import cloud.dcompany.erp.ui.screens.finance.TenderScope
@@ -50,7 +51,7 @@ class AuditSnapshotStateTest {
     private val staff=Proxy.newProxyInstance(StaffApi::class.java.classLoader,arrayOf(StaffApi::class.java)){_,method,_->
         if(method.name=="list") emptyList<StaffUser>() else error("Unexpected Staff call ${method.name}")
     } as StaffApi
-    private fun vm(api:Api,scope:CoroutineScope,clock:()->Long={System.nanoTime()/1_000_000})=AuditLogViewModel(api,staff,scope,clock).also{it.bindIdentity("owner","company","branch",true)}
+    private fun vm(api:Api,scope:CoroutineScope,clock:()->Long={System.nanoTime()/1_000_000})=AuditLogViewModel(api,staff,scope,clock,standaloneOperationCaller()).also{it.bindIdentity("owner","company","branch",true)}
 
     @Test fun activityCheckReusesCursorAndNeverReplacesLoadedPagesOrSelectedDetail() {
         val scope=CoroutineScope(SupervisorJob()+Dispatchers.Unconfined)

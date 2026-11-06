@@ -31,6 +31,7 @@ PERMISSIONS: dict[str, str] = {
     "pos.discount.large": "Apply a manual order discount",
     "pos.shift.open": "Open a shift",
     "pos.shift.close": "Close a shift",
+    "pos.shift.handover.recover": "Owner recovery of recorded till operator responsibility",
     # Tables
     "tables.read": "View floor plan",
     "tables.write": "Update table status, layout",
@@ -168,6 +169,7 @@ MANAGER_ACCESS = {
 }
 
 OWNER_ACCESS = MANAGER_ACCESS | {
+    "pos.shift.handover.recover",
     "pos.refund.reconcile",
     "finance.assets.write",
     "staff.payroll.write",
@@ -204,6 +206,7 @@ AUDITOR_ACCESS = {
 # or "enable Staff" grant role administration. Overrides may still disable and
 # re-enable the safe subset already assigned to a role.
 HIGH_TRUST_PERMISSIONS = {
+    "pos.shift.handover.recover",
     "finance.tender.correct",
     "pos.refund.reconcile",
     "pos.void",
@@ -254,7 +257,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
 # Coarse feature groupings for the Access Control panel — one toggle per
 # module per role, rather than one per fine-grained permission string (too
 # granular to be a sane UI). Deliberately excludes the owner-only
-# settings.manage/memberships.manage permissions and the protected-owner-only
+# settings.manage/memberships.manage/till recovery permissions and the protected-owner-only
 # admin.audit.read/admin.support/admin.system permissions. None may be widened
 # through a coarse module toggle; in particular, support, audit, and protected
 # evidence access must never become self-grantable.

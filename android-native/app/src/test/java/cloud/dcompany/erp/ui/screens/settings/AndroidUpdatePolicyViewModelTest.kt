@@ -1,6 +1,7 @@
 package cloud.dcompany.erp.ui.screens.settings
 
 import cloud.dcompany.erp.core.auth.CacheScope
+import cloud.dcompany.erp.core.handover.standaloneOperationCaller
 import cloud.dcompany.erp.core.auth.CacheScopeLease
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.MeResponse
@@ -30,7 +31,7 @@ class AndroidUpdatePolicyViewModelTest {
     @Test fun authorityNeverComesFromGenericOwnerRoleAndReviewIsRequired()=runBlocking {
         val tasks=CoroutineScope(coroutineContext+SupervisorJob())
         try {
-            val api=Api();val vm=AndroidUpdatePolicyViewModel(api,tasks,{lease},{_,write->write();true})
+            val api=Api();val vm=AndroidUpdatePolicyViewModel(api,tasks,{lease},{_,write->write();true},standaloneOperationCaller())
             vm.bind(profile.copy(releaseControlAccess=false,roles=listOf("owner")));yield()
             assertEquals(0,api.reads);assertNull(vm.state.value.authority)
             vm.bind(profile);idle(vm);vm.reason("Allow supported builds");vm.apply();yield()
@@ -45,7 +46,7 @@ class AndroidUpdatePolicyViewModelTest {
         try {
             val api=Api();val blocker=CompletableDeferred<Unit>();api.blocked=blocker
             var current=lease
-            val vm=AndroidUpdatePolicyViewModel(api,tasks,{current},{captured,write->if(captured==current){write();true}else false})
+            val vm=AndroidUpdatePolicyViewModel(api,tasks,{current},{captured,write->if(captured==current){write();true}else false},standaloneOperationCaller())
             vm.bind(profile);yield()
             current=CacheScopeLease(lease.scope.copy(userId="other"),2)
             vm.bind(profile.copy(userId="other",releaseControlAccess=false))
@@ -57,7 +58,7 @@ class AndroidUpdatePolicyViewModelTest {
     @Test fun uncertainWriteRequiresRefreshInsteadOfReusingStaleCasReview()=runBlocking {
         val tasks=CoroutineScope(coroutineContext+SupervisorJob())
         try {
-            val api=Api();val vm=AndroidUpdatePolicyViewModel(api,tasks,{lease},{_,write->write();true})
+            val api=Api();val vm=AndroidUpdatePolicyViewModel(api,tasks,{lease},{_,write->write();true},standaloneOperationCaller())
             vm.bind(profile);idle(vm);vm.reason("Reviewed policy");vm.reviewed(true)
             api.rejected=true;vm.apply();idle(vm)
             assertNull(vm.state.value.policy);assertFalse(vm.state.value.reviewed)

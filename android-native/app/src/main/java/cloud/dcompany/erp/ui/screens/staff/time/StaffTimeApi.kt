@@ -140,6 +140,10 @@ internal data class StaffTimeSummary(
 )
 
 internal interface StaffTimeApi {
+    @GET("staff/attendance-cards") suspend fun attendanceCards(
+        @Query("period") period: String, @Query("start") start: String,
+        @Query("after") after: String? = null, @Query("limit") limit: Int = 100,
+    ): AttendanceCardsPage
     @GET("staff/time-summary") suspend fun summary(
         @Query("month") month: String, @Query("user_id") userId: String?,
     ): StaffTimeSummary

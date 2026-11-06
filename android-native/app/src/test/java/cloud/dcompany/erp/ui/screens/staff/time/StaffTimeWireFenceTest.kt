@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.screens.staff.time
 
+import cloud.dcompany.erp.core.handover.OperationDispatchGate
 import cloud.dcompany.erp.core.net.ApiClient
 import java.io.IOException
 import java.util.concurrent.CountDownLatch
@@ -19,6 +20,8 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class StaffTimeWireFenceTest {
+    // This standalone transport fixture has no Application; production startup is tested separately.
+    private val fixtureGate = OperationDispatchGate { _ -> }
     @Test fun obsoleteAuthorityIsRefusedBeforeAnyRequestReachesTransport() {
         MockWebServer().use { server ->
             server.start()
@@ -73,7 +76,7 @@ class StaffTimeWireFenceTest {
         MockWebServer().use { server ->
             server.start(); server.enqueue(MockResponse().setResponseCode(503).addHeader("Retry-After", "0"))
             server.enqueue(MockResponse().setBody("{}"))
-            val client = ApiClient.ephemeralAuthorityClient("synthetic-captured", singleAttempt = true)
+            val client = ApiClient.ephemeralAuthorityClient("synthetic-captured", singleAttempt = true, operationGate = fixtureGate)
             try {
                 runCatching { client.newCall(Request.Builder().url(server.url("/api/v1/staff/my-attendance/clock-in"))
                     .post("{}".toRequestBody()).build()).execute().close() }
@@ -87,7 +90,7 @@ class StaffTimeWireFenceTest {
             val active = AtomicBoolean(true)
             val client = ApiClient.ephemeralAuthorityClient("synthetic-captured", beforeDispatch = {
                 if (!active.get()) throw IOException("Synthetic session changed during connect")
-            }, singleAttempt = true).newBuilder().eventListener(object : EventListener() {
+            }, singleAttempt = true, operationGate = fixtureGate).newBuilder().eventListener(object : EventListener() {
                 override fun connectEnd(call: Call, address: InetSocketAddress, proxy: Proxy, protocol: Protocol?) { active.set(false) }
             }).build()
             try {
@@ -100,7 +103,7 @@ class StaffTimeWireFenceTest {
         MockWebServer().use { server ->
             server.start(); server.enqueue(MockResponse().setResponseCode(503).addHeader("Retry-After", "0"))
             server.enqueue(MockResponse().setBody("{}"))
-            val client = ApiClient.ephemeralAuthorityClient("synthetic-captured")
+            val client = ApiClient.ephemeralAuthorityClient("synthetic-captured", operationGate = fixtureGate)
             try {
                 client.newCall(Request.Builder().url(server.url("/api/v1/identity-read")).build()).execute().use { assertEquals(200, it.code) }
                 assertEquals(2, server.requestCount)
@@ -112,7 +115,7 @@ class StaffTimeWireFenceTest {
         MockWebServer().use { server ->
             server.start(); repeat(2) { server.enqueue(MockResponse().setBody("{}")) }
             var checks = 0
-            val client = ApiClient.ephemeralAuthorityClient("synthetic-captured", beforeDispatch = { checks++ }, singleAttempt = true)
+            val client = ApiClient.ephemeralAuthorityClient("synthetic-captured", beforeDispatch = { checks++ }, singleAttempt = true, operationGate = fixtureGate)
             try {
                 repeat(2) { client.newCall(Request.Builder().url(server.url("/api/v1/staff/time-summary")).build()).execute().use { assertEquals(200, it.code) } }
                 assertEquals(2, server.requestCount); assertEquals(4, checks)

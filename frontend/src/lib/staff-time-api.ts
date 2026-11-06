@@ -34,6 +34,34 @@ export interface StaffTimePeople {
   items: StaffTimePerson[];
   next_cursor: string | null;
 }
+export interface AttendanceClockFact {
+  id: string;
+  user_id: string;
+  branch_id: string;
+  local_date: string;
+  clock_in_at: string;
+  clock_out_at: string | null;
+  is_open: boolean;
+}
+export interface AttendancePersonCard {
+  user_id: string;
+  name: string;
+  clock_in_day_count: number;
+  entries: AttendanceClockFact[];
+  continued_from_previous: boolean;
+  entries_continued: boolean;
+}
+export interface AttendanceCardsPage {
+  period: 'week' | 'month';
+  period_start: string;
+  period_end_exclusive: string;
+  timezone: string;
+  as_of: string;
+  scope_branch_id: string | null;
+  current_open_attendance: AttendanceClockFact | null;
+  items: AttendancePersonCard[];
+  next_cursor: string | null;
+}
 export interface StaffAttendance {
   id: string;
   user_id: string;
@@ -152,6 +180,9 @@ export type StaffTimeAction = {
   body: StaffTimeCorrection;
 };
 export const staffTime = {
+  cards: (period: 'week' | 'month', start: string, after?: string, signal?: AbortSignal) => api.get<AttendanceCardsPage>('/staff/attendance-cards', {
+    params: { period, start, limit: 100, ...(after ? { after } : {}) }, signal
+  }).then(r => r.data),
   people: (afterId?: string, signal?: AbortSignal) => api.get<StaffTimePeople>('/staff/time-people', {
     params: {
       limit: 50,

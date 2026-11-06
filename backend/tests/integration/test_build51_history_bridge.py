@@ -488,8 +488,11 @@ async def test_current_legacy_history_preserves_real_nonempty_tender_ledgers(
     client, session, seed_owner, tender_history_0091
 ):
     """Valid public commands populate both ledgers with every guard enabled."""
+    from tests.integration.test_build55_transition_state_query import _current_finance_seed_shift_columns
     from tests.integration.test_tender_corrections import case, unlock
 
+    _factory, dsn = tender_history_0091
+    _current_finance_seed_shift_columns(dsn, enable=True)
     headers, day, order, payment, _ = await case(session, seed_owner)
     protected = await unlock(client, seed_owner, headers, "payment")
     preview = await client.post(
@@ -529,7 +532,8 @@ async def test_current_legacy_history_preserves_real_nonempty_tender_ledgers(
     )
     assert actuals.status_code == 201, actuals.text
     assert actuals.json()["financial_effect"] is False
-    _factory, dsn = tender_history_0091
+    await session.rollback()
+    _current_finance_seed_shift_columns(dsn, enable=False)
     module = verifier()
     with psycopg.connect(dsn) as c:
         c.execute("SET LOCAL dcompany.build51_fresh_lineage='true'")

@@ -93,6 +93,7 @@ data class EventsUiState(
 class EventsViewModel : ViewModel() {
 
     private val appCtx = DCompanyApp.instance
+    private val operations = appCtx.handoverOperations.caller(appCtx.shiftCache.profile.value, appCtx.cacheIsolation.currentLease())
     private val db = appCtx.db
     private val api = ApiClient.create<EventsApi>()
     @Volatile private var access = EventsAccess()
@@ -328,7 +329,7 @@ class EventsViewModel : ViewModel() {
             if (!busy.value) {
                 busy.value = true
                 formError.value = null
-                viewModelScope.launch {
+                operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "The original workspace is unavailable; resolve the handover before editing." }) {
                     try {
                         if (editingId == null) {
                             api.createEvent(
@@ -367,6 +368,7 @@ class EventsViewModel : ViewModel() {
                         busy.value = false
                         dialog.value = null
                         formError.value = null
+                        reconciled()
                         appCtx.sync.refresh("events")
                     } catch (e: CancellationException) {
                         throw e
@@ -393,7 +395,7 @@ class EventsViewModel : ViewModel() {
         if (busy.value) return
         formError.value = null
         busy.value = true
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "The original workspace is unavailable; resolve the handover before editing." }) {
             try {
                 api.updateEvent(event.id, EventUpdate(status = status))
                 busy.value = false
@@ -401,6 +403,7 @@ class EventsViewModel : ViewModel() {
                 if (status == "cancelled" && dialog.value is EventsDialog.ConfirmCancel) {
                     dialog.value = null
                 }
+                reconciled()
                 appCtx.sync.refresh("events")
             } catch (e: CancellationException) {
                 throw e
@@ -416,12 +419,13 @@ class EventsViewModel : ViewModel() {
         if (busy.value) return
         busy.value = true
         formError.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "The original workspace is unavailable; resolve the handover before editing." }) {
             try {
                 api.deleteEvent(event.id)
                 busy.value = false
                 dialog.value = null
                 notice.value = "Event deleted."
+                reconciled()
                 appCtx.sync.refresh("events")
             } catch (e: CancellationException) {
                 throw e
@@ -451,7 +455,7 @@ class EventsViewModel : ViewModel() {
     fun retryTicketSale(localId: String) {
         if (!requireCheckIn()) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { formError.value = "Resolve the original till handover before changing Events. Saved work is retained." }) {
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     db.eventDao().retryTicketSale(localId)
                 }
@@ -463,7 +467,7 @@ class EventsViewModel : ViewModel() {
     fun discardRejectedTicketSale(localId: String) {
         if (!requireCheckIn()) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { formError.value = "Resolve the original till handover before changing Events. Saved work is retained." }) {
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     db.eventDao().discardRejectedTicketSale(localId)
                 }
@@ -478,7 +482,7 @@ class EventsViewModel : ViewModel() {
         if (!requireCheckIn()) return
         if (busy.value) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { formError.value = "Resolve the original till handover before changing Events. Saved work is retained." }) {
             busy.value = true
             var inserted = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
@@ -505,7 +509,7 @@ class EventsViewModel : ViewModel() {
     fun retryCheckIn(localId: String) {
         if (!requireCheckIn()) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { formError.value = "Resolve the original till handover before changing Events. Saved work is retained." }) {
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     db.eventDao().retryCheckIn(localId)
                 }
@@ -524,7 +528,7 @@ class EventsViewModel : ViewModel() {
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         busy.value = true
         formError.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "The original workspace is unavailable; resolve the handover before editing." }) {
             try {
                 var message = ""
                 if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {

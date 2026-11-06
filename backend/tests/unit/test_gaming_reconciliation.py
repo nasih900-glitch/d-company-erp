@@ -103,6 +103,8 @@ def _shift(tenant: TenantContext, *, status: str, terminal_id: UUID | None = Non
         branch_id=tenant.branch_id,
         terminal_id=terminal_id or tenant.terminal_id,
         opened_by=tenant.user_id,
+        operator_user_id=None,
+        operator_revision=None,
         opened_at=datetime(2026, 8, 26, 9, tzinfo=UTC),
         status=status,
     )

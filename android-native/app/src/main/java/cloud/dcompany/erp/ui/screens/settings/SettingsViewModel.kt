@@ -217,6 +217,7 @@ internal fun settingsReadPresentation(
 class SettingsViewModel : ViewModel() {
 
     private val appCtx = DCompanyApp.instance
+    private val operations = appCtx.handoverOperations.caller(appCtx.shiftCache.profile.value, appCtx.cacheIsolation.currentLease())
     private val db = appCtx.db
     private val api = ApiClient.create<SettingsApi>()
     private val keys = IdempotencyKeys()
@@ -354,7 +355,7 @@ class SettingsViewModel : ViewModel() {
             loyaltyProgramError = null,
             loyaltyProgramNotice = null,
         )
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(loyaltyProgramSaving = false, loyaltyProgramError = "Resolve the original till handover before changing this workspace.") }) {
             try {
                 if (cacheIsolation.currentLease() != lease) return@launch
                 val saved = api.publishLoyaltyProgram(body, key)
@@ -380,6 +381,7 @@ class SettingsViewModel : ViewModel() {
                     loyaltyProgramDraft = saved.rules,
                     loyaltyProgramNotice = "Points program revision ${saved.revision} published. New rules apply only to future points actions.",
                 )
+                reconciled()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -438,10 +440,11 @@ class SettingsViewModel : ViewModel() {
             return
         }
         _state.value = _state.value.copy(accountBusy = true, accountError = null, accountNotice = null)
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(accountBusy = false, accountError = "Resolve the original till handover before changing this workspace.") }) {
             try {
                 val challenge = api.requestPasswordReset(PasswordResetRequestBody(email))
                 _state.value = _state.value.copy(challenge = challenge)
+                reconciled()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -475,7 +478,7 @@ class SettingsViewModel : ViewModel() {
             return
         }
         _state.value = _state.value.copy(accountBusy = true, accountError = null)
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(accountBusy = false, accountError = "Resolve the original till handover before changing this workspace.") }) {
             try {
                 val result = api.confirmPasswordReset(
                     PasswordResetConfirmBody(
@@ -489,6 +492,7 @@ class SettingsViewModel : ViewModel() {
                     accountNotice = result.message.ifBlank { "Password updated." },
                     passwordChanged = true,
                 )
+                reconciled()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -598,7 +602,7 @@ class SettingsViewModel : ViewModel() {
         _state.value = _state.value.copy(
             companySaving = true, companyFormError = null, companyNotice = null,
         )
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(companySaving = false, companyFormError = "Resolve the original till handover before changing this workspace.") }) {
             try {
                 if (!cacheIsolation.commitIfCurrent(scopeLease) {
                         db.settingsDao().replacePendingCompanyEdit(
@@ -641,7 +645,7 @@ class SettingsViewModel : ViewModel() {
     fun retryCompanyEdit() {
         val localId = _state.value.companyPendingLocalId ?: return
         val scopeLease = cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(companyNotice = "Resolve the original till handover before changing this workspace.") }) {
             var queued = false
             if (!cacheIsolation.commitIfCurrent(scopeLease) {
                     queued = db.settingsDao().retryCompanyEdit(localId) == 1
@@ -661,7 +665,7 @@ class SettingsViewModel : ViewModel() {
     fun discardRejectedCompanyEdit() {
         val localId = _state.value.companyPendingLocalId ?: return
         val scopeLease = cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(companyNotice = "Resolve the original till handover before changing this workspace.") }) {
             try {
                 var discarded = false
                 var cached: CompanyDto? = null
@@ -802,7 +806,7 @@ class SettingsViewModel : ViewModel() {
                 _state.value = _state.value.copy(branchSaving = false)
                 return
             }
-            viewModelScope.launch {
+            operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(branchSaving = false, branchFormError = "Resolve the original till handover before changing this workspace.") }) {
                 try {
                     if (!cacheIsolation.commitIfCurrent(scopeLease) {
                             db.settingsDao().insertLocalBranch(
@@ -828,7 +832,8 @@ class SettingsViewModel : ViewModel() {
                         branchForm = null,
                         branchNotice = "Shop \"${form.name.trim()}\" queued — will sync when back online.",
                     )
-                    clearNoticeLater { it.copy(branchNotice = null) }
+                    reconciled()
+                clearNoticeLater { it.copy(branchNotice = null) }
                     appCtx.sync.requestSync()
                 } catch (cancelled: CancellationException) {
                     throw cancelled
@@ -849,7 +854,7 @@ class SettingsViewModel : ViewModel() {
         val body = form.toBody()
         val operation = "branch:${form.id}"
         val key = keys.keyFor(operation, body)
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(branchSaving = false, branchFormError = "Resolve the original till handover before changing this workspace.") }) {
             try {
                 val saved = api.updateBranch(form.id!!, body, key)
                 keys.done(operation)
@@ -876,7 +881,7 @@ class SettingsViewModel : ViewModel() {
 
     fun retryBranch(localId: String) {
         val scopeLease = cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(branchNotice = "Resolve the original till handover before changing this workspace.") }) {
             var queued = false
             if (!cacheIsolation.commitIfCurrent(scopeLease) {
                     queued = db.settingsDao().retryBranch(localId) == 1
@@ -895,7 +900,7 @@ class SettingsViewModel : ViewModel() {
 
     fun discardRejectedBranch(localId: String) {
         val scopeLease = cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(branchNotice = "Resolve the original till handover before changing this workspace.") }) {
             try {
                 var discarded = false
                 if (!cacheIsolation.commitIfCurrent(scopeLease) {
@@ -1067,7 +1072,7 @@ class SettingsViewModel : ViewModel() {
             terminalActionError = null,
             terminalsError = null,
         )
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(terminalBusy = false, terminalEditError = "Resolve the original till handover before changing this workspace.") }) {
             try {
                 val updated = api.updateTerminal(edit.id, edit.toBody())
                 _state.value = _state.value.copy(
@@ -1113,6 +1118,7 @@ class SettingsViewModel : ViewModel() {
                     )
                 }
                 clearNoticeLater { it.copy(terminalNotice = null) }
+                reconciled()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -1168,7 +1174,7 @@ class SettingsViewModel : ViewModel() {
             terminalFormError = null,
             terminalActionError = null,
         )
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(terminalBusy = false, terminalActionError = "Resolve the original till handover before changing this workspace.") }) {
             try {
                 if (!cacheIsolation.commitIfCurrent(scopeLease) {
                         db.settingsDao().insertLocalTerminal(
@@ -1208,7 +1214,7 @@ class SettingsViewModel : ViewModel() {
 
     fun retryTerminal(localId: String) {
         val scopeLease = cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(terminalNotice = "Resolve the original till handover before changing this workspace.") }) {
             var queued = false
             if (!cacheIsolation.commitIfCurrent(scopeLease) {
                     queued = db.settingsDao().retryTerminal(localId) == 1
@@ -1227,7 +1233,7 @@ class SettingsViewModel : ViewModel() {
 
     fun discardRejectedTerminal(localId: String) {
         val scopeLease = cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(terminalNotice = "Resolve the original till handover before changing this workspace.") }) {
             try {
                 var discarded = false
                 if (!cacheIsolation.commitIfCurrent(scopeLease) {
@@ -1278,7 +1284,7 @@ class SettingsViewModel : ViewModel() {
             terminalBusy = true,
             terminalActionError = null,
         )
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(terminalBusy = false, terminalActionError = "Resolve the original till handover before changing this workspace.") }) {
             try {
                 api.deleteTerminal(terminal.id, key)
                 keys.done(operation)
@@ -1287,6 +1293,7 @@ class SettingsViewModel : ViewModel() {
                 )
                 loadTerminalsCache()
                 clearNoticeLater { it.copy(terminalNotice = null) }
+                reconciled()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {

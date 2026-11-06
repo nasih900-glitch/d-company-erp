@@ -410,6 +410,63 @@ class RemoteAssistanceStoreDeviceTest {
         assertNull(store.snapshot().grantId)
     }
 
+    @Test
+    fun malformedAndInvalidScopedBytesRemainUnchangedAndBlockReplacement() {
+        val prefs = context.getSharedPreferences("dcompany_remote_assistance", Context.MODE_PRIVATE)
+        for (raw in listOf("{private-malformed", """{"format":2,"journals":[{"scope":{"companyId":"wrong","installationId":"wrong","userId":"wrong"},"state":{}}]}""")) {
+            assertTrue(prefs.edit().putString("state", raw).commit())
+            val store = newStore()
+            assertFalse(store.inspectHandoverWork().verified)
+            assertFalse(store.inspectHandoverWork().isClear)
+            assertNull(store.recordDecision(GRANT_ONE, false, RemoteGrantKind.ONE_TIME, GRANT_EXPIRY))
+            assertFalse(store.activateCommandSession(SESSION_ID))
+            assertFalse(store.acknowledgeCommand(COMMAND_ONE))
+            assertEquals(0, store.retireExpiredInstallationGrants(GRANT_EXPIRY.toString()))
+            assertEquals(raw, prefs.getString("state", null))
+            assertFalse(newStore().inspectHandoverWork().verified)
+        }
+    }
+
+    @Test
+    fun acknowledgedAuditHistoryIsRetainedWithoutBecomingPendingWork() {
+        val store = newStore()
+        assertTrue(store.activateCommandSession(SESSION_ID))
+        assertNotNull(store.reserveCommand(SESSION_ID, COMMAND_ONE, 1L))
+        assertNotNull(store.completeCommand(COMMAND_ONE, "acknowledged"))
+        assertTrue(store.inspectHandoverWork().pending)
+        assertTrue(store.acknowledgeCommand(COMMAND_ONE))
+        // A valid retained historical receipt without a live command session is audit, not pending work.
+        val prefs = context.getSharedPreferences("dcompany_remote_assistance", Context.MODE_PRIVATE)
+        val raw = requireNotNull(prefs.getString("state", null))
+        val liveSessionField = "\"commandSessionId\":\"$SESSION_ID\","
+        assertTrue(raw.contains(liveSessionField))
+        val before = raw.replace(liveSessionField, "")
+        assertTrue(prefs.edit().putString("state", before).commit())
+        assertTrue(newStore().inspectHandoverWork().isClear)
+        assertNotNull(newStore().snapshot().receipts.singleOrNull { it.commandId == COMMAND_ONE })
+        assertEquals(before, context.getSharedPreferences("dcompany_remote_assistance", Context.MODE_PRIVATE).getString("state", null))
+    }
+
+    @Test
+    fun reservedReceiptAtAcknowledgedCursorRemainsPendingAndByteExact() {
+        val store = newStore()
+        assertTrue(store.activateCommandSession(SESSION_ID))
+        assertNotNull(store.reserveCommand(SESSION_ID, COMMAND_ONE, 1L))
+        assertNotNull(store.completeCommand(COMMAND_ONE, "acknowledged"))
+        assertTrue(store.acknowledgeCommand(COMMAND_ONE))
+        val prefs = context.getSharedPreferences("dcompany_remote_assistance", Context.MODE_PRIVATE)
+        val raw = requireNotNull(prefs.getString("state", null))
+        val liveSessionField = "\"commandSessionId\":\"$SESSION_ID\","
+        val completedFields = "\"state\":\"$RECEIPT_COMPLETED\",\"outcome\":\"acknowledged\""
+        assertTrue(raw.contains(liveSessionField) && raw.contains(completedFields))
+        val retained = raw.replace(liveSessionField, "").replace(completedFields, "\"state\":\"$RECEIPT_RESERVED\"")
+        assertTrue(prefs.edit().putString("state", retained).commit())
+        assertTrue(newStore().inspectHandoverWork().verified)
+        assertTrue(newStore().inspectHandoverWork().pending)
+        assertFalse(newStore().inspectHandoverWork().isClear)
+        assertEquals(retained, prefs.getString("state", null))
+    }
+
     private fun newStore(
         uuid: () -> String = { java.util.UUID.randomUUID().toString() },
     ): RemoteAssistanceStore = RemoteAssistanceStore(

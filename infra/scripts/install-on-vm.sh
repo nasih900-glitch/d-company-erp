@@ -44,6 +44,7 @@ shift
 
 MAINTENANCE_CONFIRMED=false
 BUILD55_ACCEPTANCE_CREDENTIAL_FILE=""
+BUILD66_ACCEPTANCE_CREDENTIAL_FILE=""
 LEGACY_CODE14_REVISION=""
 LEGACY_CODE16_REVISION=""
 KNOWN_CODE14_REVISION="e5e90df5781e93681b8e9dcdd1ae9a6a5fb6a0b9"
@@ -60,6 +61,13 @@ while [ "$#" -gt 0 ]; do
         echo "Build55 acceptance requires an absolute private credential file path." >&2; exit 1
       fi
       BUILD55_ACCEPTANCE_CREDENTIAL_FILE=$2
+      shift 2
+      ;;
+    --build66-acceptance-credential-file)
+      if [ "$#" -lt 2 ] || [[ "$2" != /* ]] || [ -n "$BUILD66_ACCEPTANCE_CREDENTIAL_FILE" ]; then
+        echo "Build66 requires one absolute private Owner acceptance file path." >&2; exit 1
+      fi
+      BUILD66_ACCEPTANCE_CREDENTIAL_FILE=$2
       shift 2
       ;;
     --legacy-code16-revision)
@@ -248,6 +256,82 @@ for release_input in \
     exit 1
   fi
 done
+
+BUILD66_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build66-transition.py"
+BUILD66_SHIFT_SQL="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build66-shift-projection.sql"
+BUILD66_EXACT_TRANSITION=false
+BUILD66_POST_PROOF_SUCCEEDED=false
+BUILD66_APP_WRITERS_STARTED=false
+if grep -qx 'APP_VERSION=3.1.59' "$CANDIDATE_BUILD_ROOT/.env.production.example"; then
+  if [ ! -f .env ] || [ -z "$BUILD66_ACCEPTANCE_CREDENTIAL_FILE" ] || \
+     [ -n "$BUILD55_ACCEPTANCE_CREDENTIAL_FILE" ] || \
+     [ -n "$LEGACY_CODE14_REVISION" ] || [ -n "$LEGACY_CODE16_REVISION" ]; then
+    echo "Build66 requires the exact existing Build65 deployment and a private Owner acceptance input." >&2
+    exit 1
+  fi
+  for release_input in "$BUILD66_VERIFIER" "$BUILD66_SHIFT_SQL"; do
+    if [ ! -f "$release_input" ] || [ -L "$release_input" ]; then
+      echo "Frozen Build66 transition proof is incomplete or linked." >&2; exit 1
+    fi
+  done
+  BUILD66_EXACT_TRANSITION=true
+elif [ -n "$BUILD66_ACCEPTANCE_CREDENTIAL_FILE" ]; then
+  echo "The typed Build66 Owner input cannot select another release path." >&2; exit 1
+fi
+
+capture_build66_state() {
+  local container=$1 database=$2 sql=$3 output=$4
+  (umask 077; docker exec -i "$container" \
+    psql -X --no-psqlrc --quiet -U erp -d "$database" --tuples-only --no-align \
+    < "$sql" > "$output")
+}
+
+capture_build66_runtime() {
+  local container=$1 output=$2
+  (umask 077; docker inspect --format '{{json .Config}}' "$container" \
+    | python3 "$BUILD66_VERIFIER" runtime-override /dev/stdin > "$output")
+}
+
+build66_services_are_stopped() {
+  local service ids id observed
+  [[ "$DEPLOY_PROJECT_NAME" =~ ^[a-z0-9][a-z0-9_.-]*$ ]] || return 1
+  for service in "$@"; do
+    ids=$(docker ps -aq --no-trunc \
+      --filter "label=com.docker.compose.project=$DEPLOY_PROJECT_NAME" \
+      --filter "label=com.docker.compose.service=$service") || return 1
+    while IFS= read -r id; do
+      [ -n "$id" ] || continue
+      [[ "$id" =~ ^[a-f0-9]{64}$ ]] || return 1
+      observed=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}|{{.State.Status}}' "$id") || return 1
+      case "$observed" in
+        "$DEPLOY_PROJECT_NAME|$service|created"|"$DEPLOY_PROJECT_NAME|$service|exited") ;;
+        *) return 1 ;;
+      esac
+    done <<< "$ids"
+  done
+}
+
+stop_build66_services() {
+  "${candidate_compose[@]}" --env-file .env stop -t 30 "$@" >/dev/null 2>&1 && \
+    build66_services_are_stopped "$@"
+}
+
+restore_build66_database() {
+  local container=$1 dump=$2
+  build66_services_are_stopped caddy backend frontend redis && \
+    docker exec "$container" psql -U erp -d postgres -v ON_ERROR_STOP=1 -c \
+      "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'erp' AND pid <> pg_backend_pid()" >/dev/null && \
+    docker exec "$container" dropdb -U erp --if-exists erp >/dev/null && \
+    docker exec "$container" createdb -U erp -T template0 erp >/dev/null && \
+    docker exec -i "$container" pg_restore -U erp -d erp --single-transaction --exit-on-error --no-owner \
+      < "$dump" >/dev/null
+}
+
+verify_build66_baseline_seal() {
+  [ "$(sha256sum "$UPGRADE_SNAPSHOT/build66-baseline.sha256" | awk '{print $1}')" \
+    = "$BUILD66_BASELINE_MANIFEST_SHA256" ] && \
+    sha256sum -c "$UPGRADE_SNAPSHOT/build66-baseline.sha256" >/dev/null
+}
 
 verify_production_business_quiescence() {
   local phase=$1
@@ -704,6 +788,29 @@ if set(services) != {"backend", "caddy", "frontend", "postgres", "redis"} or len
 print(json.dumps({"services": services}, sort_keys=True))
 PYPRIORIMAGES
     chmod 600 "$BUILD55_PRIOR_IMAGE_OVERRIDE"
+  elif [ "$BUILD66_EXACT_TRANSITION" = true ]; then
+    if [ "$PRIOR_REVISION" != 9e31d0daaa5fbf8b46647a213f6e7beab1ca087a ] || \
+       [ "$PRIOR_SOURCE_ARCHIVE_SHA256" != 4fd2f08f96f956e843d6e0f45ab8b80834163a1a3459a82c342e82cdfa4fd067 ] || \
+       [ "$PRIOR_APP_VERSION" != 3.1.58 ] || [ "$PRIOR_DB_HEAD" != 0094 ] || \
+       [ -n "$LEGACY_MINIO_CONTAINER" ] || [ "${#EXPECTED_SERVICES[@]}" -ne 5 ] || \
+       [ "${#RUNNING_CONTAINER_IDS[@]}" -ne 5 ] || \
+       [ "${PRIOR_SERVICE_IMAGE_IDS[backend]:-}" != sha256:6b334a05a995e834a880433dcb450e3099dcc2700bfdff86f192daec2e67f3c5 ] || \
+       [ "${PRIOR_SERVICE_IMAGE_IDS[frontend]:-}" != sha256:079415857f944dd4468e8628d4bb48b7a06cbbc9ed28f77393b2e01f67458e0d ] || \
+       [ "${PRIOR_SERVICE_IMAGE_IDS[caddy]:-}" != sha256:8e8540e2ef956dbf104e539f3e45b1dabddbad07c789d269214fbd73b75b3f62 ] || \
+       [ "${PRIOR_SERVICE_IMAGE_IDS[postgres]:-}" != sha256:88ea7adcc3f1483132db955f26dfc10da4dfd199bcd768ebf12806660f992b65 ] || \
+       [ "${PRIOR_SERVICE_IMAGE_IDS[redis]:-}" != sha256:34ea250806994349b1f4732da3fd5fbadfb8eae18e5ee1cf7bdc3369e7d08b8d ]; then
+      echo "Build66 requires the admitted Build65 source, all five running images and schema 0094." >&2
+      exit 1
+    fi
+    BUILD66_RUNTIME_OVERRIDE="$UPGRADE_SNAPSHOT/build66-runtime.override.json"
+    BUILD66_PRIOR_IMAGE_OVERRIDE="$UPGRADE_SNAPSHOT/build66-prior-images.override.json"
+    capture_build66_runtime "$EXISTING_BACKEND_CONTAINER" "$BUILD66_RUNTIME_OVERRIDE"
+    (umask 077
+      for service in backend frontend caddy postgres redis; do
+        printf '%s %s\n' "$service" "${PRIOR_SERVICE_IMAGE_IDS[$service]}"
+      done | python3 -c 'import json,sys; print(json.dumps({"services": {s: {"image": i} for s, i in map(str.split, sys.stdin)}}, sort_keys=True))' \
+        > "$BUILD66_PRIOR_IMAGE_OVERRIDE")
+    chmod 400 "$BUILD66_RUNTIME_OVERRIDE" "$BUILD66_PRIOR_IMAGE_OVERRIDE"
   elif [ -n "$BUILD55_ACCEPTANCE_CREDENTIAL_FILE" ]; then
     echo "The typed Build55 acceptance input cannot select another release path." >&2; exit 1
   fi
@@ -720,6 +827,9 @@ PYPRIORIMAGES
   if [ "$BUILD55_EXACT_TRANSITION" = true ]; then
     (cd "$UPGRADE_SNAPSHOT" && sha256sum build55-container-inspect.json build55-prior-runtime.json \
       build55-runtime.override.json build55-prior-images.override.json) >> "$ROLLBACK_STATE_MANIFEST"
+  elif [ "$BUILD66_EXACT_TRANSITION" = true ]; then
+    (cd "$UPGRADE_SNAPSHOT" && sha256sum build66-runtime.override.json build66-prior-images.override.json) \
+      >> "$ROLLBACK_STATE_MANIFEST"
   fi
   chmod 400 "$ROLLBACK_STATE_MANIFEST"
   ROLLBACK_STATE_MANIFEST_DIGEST=$(sha256sum "$ROLLBACK_STATE_MANIFEST" \
@@ -771,6 +881,8 @@ candidate_compose=(
 )
 if [ "$BUILD55_EXACT_TRANSITION" = true ]; then
   candidate_compose+=(-f "$BUILD55_RUNTIME_OVERRIDE")
+elif [ "$BUILD66_EXACT_TRANSITION" = true ]; then
+  candidate_compose+=(-f "$BUILD66_RUNTIME_OVERRIDE")
 fi
 printf -v OPERATIONS_COMPOSE_COMMAND \
   'docker compose -p %q --project-directory %q -f %q --env-file %q' \
@@ -945,6 +1057,13 @@ handle_install_failure() {
     "${candidate_compose[@]}" --env-file .env stop -t 30 caddy backend >/dev/null 2>&1 || true
     echo "Build55 candidate writers started; current DB is preserved and ingress remains closed." >&2
     echo "Do not restore the old54 dump or run its history projection. Use forward repair." >&2
+  elif [ "${BUILD66_EXACT_TRANSITION:-false}" = true ] && [ "$BUILD66_APP_WRITERS_STARTED" = true ]; then
+    if stop_build66_services caddy backend; then
+      echo "Build66 writers may have started. Verified Caddy and backend stopped." >&2
+    else
+      echo "Build66 containment failed. Caddy/backend shutdown could not be verified." >&2
+    fi
+    echo "The current database is retained for forward repair." >&2
   elif [ "$PROMOTION_COMPLETE" = true ] && \
      [ "$CODE30_2_CLEANUP_WINDOW_ACTIVE" = true ] && \
      [ "$CODE30_2_CLEANUP_SUCCEEDED" != true ]; then
@@ -959,18 +1078,30 @@ handle_install_failure() {
     echo "No pre-upgrade database restore was attempted after the cleanup window opened." >&2
     echo "Use the protected evidence at $UPGRADE_SNAPSHOT and the cleanup runbook." >&2
   elif [ "$PROMOTION_COMPLETE" = true ] && [ -n "$UPGRADE_SNAPSHOT" ]; then
-    echo "==> Release acceptance failed; restoring the quiesced prior release." >&2
+    rollback_succeeded=true
     # Stop every candidate writer/runtime, including a partially started
     # PostgreSQL container. Rollback below recreates PostgreSQL from the
     # attested prior image before it touches the logical backup.
-    "${candidate_compose[@]}" --env-file .env \
-      stop -t 30 caddy backend frontend redis postgres >/dev/null 2>&1 || true
+    if [ "${BUILD66_EXACT_TRANSITION:-false}" = true ]; then
+      if stop_build66_services caddy backend frontend redis postgres; then
+        echo "==> Verified candidate services stopped before Build66 rollback." >&2
+      else
+        echo "Build66 containment failed; automatic database restore was refused." >&2
+        rollback_succeeded=false
+      fi
+    else
+      echo "==> Release acceptance failed; restoring the quiesced prior release." >&2
+      "${candidate_compose[@]}" --env-file .env \
+        stop -t 30 caddy backend frontend redis postgres >/dev/null 2>&1 || true
+    fi
     if [ -f .env ]; then
       install -m 0600 .env "$UPGRADE_SNAPSHOT/.env.failed-code17"
     fi
-    rollback_succeeded=true
     if [ "$BUILD55_EXACT_TRANSITION" = true ]; then
       verify_build55_baseline_seal || rollback_succeeded=false
+    fi
+    if [ "${BUILD66_EXACT_TRANSITION:-false}" = true ]; then
+      verify_build66_baseline_seal || rollback_succeeded=false
     fi
     if ! [[ "$ROLLBACK_STATE_MANIFEST_DIGEST" =~ ^[0-9a-f]{64}$ ]] || \
        [ "$(sha256sum "$UPGRADE_SNAPSHOT/rollback-state.sha256" 2>/dev/null \
@@ -1039,6 +1170,10 @@ handle_install_failure() {
           rollback_succeeded=false
           break
         fi
+        if [ "${BUILD66_EXACT_TRANSITION:-false}" = true ]; then
+          # This predecessor already ran the five immutable image IDs.
+          continue
+        fi
         # Docker cannot create a mutable tag whose target itself contains an
         # @sha256 digest. Digest references are already immutable; mutable
         # application names are restored directly from the exact image ID.
@@ -1067,6 +1202,8 @@ handle_install_failure() {
           -f "$UPGRADE_SNAPSHOT/docker-compose.prior.yml"
           -f "$UPGRADE_SNAPSHOT/docker-compose.rollback-live-data.yml"
           -f "$BUILD55_RUNTIME_OVERRIDE" -f "$BUILD55_PRIOR_IMAGE_OVERRIDE" --env-file .env)
+      elif [ "${BUILD66_EXACT_TRANSITION:-false}" = true ]; then
+        prior_compose+=(-f "$BUILD66_RUNTIME_OVERRIDE" -f "$BUILD66_PRIOR_IMAGE_OVERRIDE")
       fi
       "${prior_compose[@]}" up -d --no-build --pull never \
         --force-recreate postgres \
@@ -1104,18 +1241,27 @@ handle_install_failure() {
       done
     fi
     if [ "$rollback_succeeded" = true ]; then
-      docker exec "$rollback_postgres" psql -U erp -d postgres \
-        -v ON_ERROR_STOP=1 -c \
-        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'erp' AND pid <> pg_backend_pid()" \
-        >/dev/null || rollback_succeeded=false
+      if [ "${BUILD66_EXACT_TRANSITION:-false}" = true ]; then
+        if ! restore_build66_database "$rollback_postgres" "$UPGRADE_SNAPSHOT/database.dump"; then
+          echo "Build66 rollback could not verify stopped writers or complete the database restore." >&2
+          rollback_succeeded=false
+        fi
+      else
+        docker exec "$rollback_postgres" psql -U erp -d postgres \
+          -v ON_ERROR_STOP=1 -c \
+          "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'erp' AND pid <> pg_backend_pid()" \
+          >/dev/null || rollback_succeeded=false
+      fi
       if [ "$rollback_succeeded" = true ]; then
-        docker exec "$rollback_postgres" dropdb -U erp --if-exists erp \
-          >/dev/null || rollback_succeeded=false
-        docker exec "$rollback_postgres" createdb -U erp -T template0 erp \
-          >/dev/null || rollback_succeeded=false
-        docker exec -i "$rollback_postgres" pg_restore -U erp -d erp \
-          --exit-on-error --no-owner < "$UPGRADE_SNAPSHOT/database.dump" \
-          >/dev/null || rollback_succeeded=false
+        if [ "${BUILD66_EXACT_TRANSITION:-false}" != true ]; then
+          docker exec "$rollback_postgres" dropdb -U erp --if-exists erp \
+            >/dev/null || rollback_succeeded=false
+          docker exec "$rollback_postgres" createdb -U erp -T template0 erp \
+            >/dev/null || rollback_succeeded=false
+          docker exec -i "$rollback_postgres" pg_restore -U erp -d erp \
+            --exit-on-error --no-owner < "$UPGRADE_SNAPSHOT/database.dump" \
+            >/dev/null || rollback_succeeded=false
+        fi
         restored_head=$(docker exec "$rollback_postgres" \
           psql -U erp -d erp -Atc "SELECT version_num FROM alembic_version" \
           2>/dev/null || true)
@@ -1135,6 +1281,12 @@ handle_install_failure() {
     --after-transition-state "$UPGRADE_SNAPSHOT/build55-rollback-transition.json" \
     --after-fleet-state "$UPGRADE_SNAPSHOT/build55-rollback-fleet.json" \
     > "$UPGRADE_SNAPSHOT/build55-rollback-report.json" || rollback_succeeded=false
+        fi
+        if [ "$rollback_succeeded" = true ] && [ "${BUILD66_EXACT_TRANSITION:-false}" = true ]; then
+          capture_build66_state "$rollback_postgres" erp "$BUILD55_TRANSITION_SQL" \
+            "$UPGRADE_SNAPSHOT/build66-rollback.json" && \
+          python3 "$BUILD66_VERIFIER" restore "$BUILD66_PRE_STATE" \
+            "$UPGRADE_SNAPSHOT/build66-rollback.json" || rollback_succeeded=false
         fi
         if [ "$rollback_succeeded" = true ] && [ -n "$BUILD51_CURRENT_BASELINE" ]; then
           RESTORED_CURRENT_STATE="$UPGRADE_SNAPSHOT/current-restored-history-raw.json"
@@ -1268,6 +1420,10 @@ handle_install_failure() {
     --actual-runtime "$UPGRADE_SNAPSHOT/build55-restored-runtime.json" \
     --identity "$UPGRADE_SNAPSHOT/build55-identity.json" \
     > "$UPGRADE_SNAPSHOT/build55-restored-runtime-verification.json" || rollback_succeeded=false
+    elif [ "$rollback_succeeded" = true ] && [ "${BUILD66_EXACT_TRANSITION:-false}" = true ]; then
+      rollback_backend=$("${prior_compose[@]}" ps -q backend) && \
+      capture_build66_runtime "$rollback_backend" "$UPGRADE_SNAPSHOT/build66-rollback-runtime.json" && \
+      cmp -s "$BUILD66_RUNTIME_OVERRIDE" "$UPGRADE_SNAPSHOT/build66-rollback-runtime.json" || rollback_succeeded=false
     fi
     if [ "$rollback_succeeded" = true ]; then
       "${prior_compose[@]}" up -d --no-build --pull never \
@@ -1304,9 +1460,17 @@ handle_install_failure() {
       echo "==> Prior release and final quiesced database backup restored." >&2
       echo "    Investigate the failed release before another scheduled upgrade." >&2
     else
-      "${candidate_compose[@]}" --env-file .env stop caddy \
-        >/dev/null 2>&1 || true
-      echo "AUTOMATIC ROLLBACK FAILED; public ingress remains closed." >&2
+      if [ "${BUILD66_EXACT_TRANSITION:-false}" = true ]; then
+        if stop_build66_services caddy backend; then
+          echo "AUTOMATIC BUILD66 ROLLBACK FAILED; verified Caddy and backend stopped." >&2
+        else
+          echo "AUTOMATIC BUILD66 ROLLBACK AND CONTAINMENT FAILED; Caddy/backend shutdown is unverified." >&2
+        fi
+      else
+        "${candidate_compose[@]}" --env-file .env stop caddy \
+          >/dev/null 2>&1 || true
+        echo "AUTOMATIC ROLLBACK FAILED; public ingress remains closed." >&2
+      fi
       echo "Use the protected evidence at $UPGRADE_SNAPSHOT and the incident runbook." >&2
     fi
   elif [ "$PROMOTION_COMPLETE" = true ]; then
@@ -1528,6 +1692,11 @@ if [ "$BUILD55_EXACT_TRANSITION" = true ]; then
   chmod 600 "$UPGRADE_SNAPSHOT/build55-auth-before.json"
   BUILD55_CREDENTIAL_SHA256=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["credential_input_sha256"])' \
     "$UPGRADE_SNAPSHOT/build55-auth-before.json")
+elif [ "$BUILD66_EXACT_TRANSITION" = true ]; then
+  (umask 077; python3 "$BUILD55_AUTH_TOOL" public --require-owner --domain "$DOMAIN" \
+    --credential-file "$BUILD66_ACCEPTANCE_CREDENTIAL_FILE" > "$UPGRADE_SNAPSHOT/build66-auth-before.json")
+  BUILD66_CREDENTIAL_SHA256=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["credential_input_sha256"])' \
+    "$UPGRADE_SNAPSHOT/build66-auth-before.json")
 fi
 
 # A deployed database gets one final verified snapshot only after ingress and
@@ -1546,6 +1715,10 @@ if [ -n "$EXISTING_POSTGRES_CONTAINER" ]; then
   "${candidate_compose[@]}" --env-file .env stop -t 30 frontend
   # Re-read from a new database snapshot after every application writer has
   # stopped. This closes the race between the live preflight and maintenance.
+  if [ "$BUILD66_EXACT_TRANSITION" = true ] && ! build66_services_are_stopped caddy backend frontend; then
+    echo "Build66 containment failed; quiesced writer shutdown could not be verified." >&2
+    exit 1
+  fi
   verify_production_business_quiescence "after writer stop"
   pending_outbox_count=$(docker exec "$EXISTING_POSTGRES_CONTAINER" \
     psql -U erp -d erp -Atc \
@@ -1598,6 +1771,15 @@ PYIDENTITY
     chmod 400 "$UPGRADE_SNAPSHOT/build55-baseline.sha256"
     BUILD55_BASELINE_MANIFEST_SHA256=$(sha256sum "$UPGRADE_SNAPSHOT/build55-baseline.sha256" | awk '{print $1}')
     sha256sum -c "$UPGRADE_SNAPSHOT/build55-baseline.sha256" >/dev/null
+  elif [ "$BUILD66_EXACT_TRANSITION" = true ]; then
+    BUILD66_PRE_STATE="$UPGRADE_SNAPSHOT/build66-transition-before.json"
+    BUILD66_PRE_SHIFT="$UPGRADE_SNAPSHOT/build66-shifts-before.json"
+    capture_build66_state "$EXISTING_POSTGRES_CONTAINER" erp "$BUILD55_TRANSITION_SQL" "$BUILD66_PRE_STATE"
+    capture_build66_state "$EXISTING_POSTGRES_CONTAINER" erp "$BUILD66_SHIFT_SQL" "$BUILD66_PRE_SHIFT"
+    python3 "$BUILD66_VERIFIER" pre "$BUILD66_PRE_STATE" "$BUILD66_PRE_SHIFT"
+    (umask 077; sha256sum "$BUILD66_PRE_STATE" "$BUILD66_PRE_SHIFT" > "$UPGRADE_SNAPSHOT/build66-baseline.sha256")
+    chmod 400 "$BUILD66_PRE_STATE" "$BUILD66_PRE_SHIFT" "$UPGRADE_SNAPSHOT/build66-baseline.sha256"
+    BUILD66_BASELINE_MANIFEST_SHA256=$(sha256sum "$UPGRADE_SNAPSHOT/build66-baseline.sha256" | awk '{print $1}')
   else
   if [ "$PRIOR_DB_HEAD" = 0091 ]; then
     BUILD51_CURRENT_BASELINE="$UPGRADE_SNAPSHOT/build51-current-history-before.json"
@@ -2355,7 +2537,7 @@ PYIDENTITY
   fi
   fi
   # Preserve the original legacy-path guard unless an exact compatibility proof passed.
-  if [ "${BUILD55_EXACT_TRANSITION:-false}" != true ]; then
+  if [ "${BUILD55_EXACT_TRANSITION:-false}" != true ] && [ "${BUILD66_EXACT_TRANSITION:-false}" != true ]; then
   if [ "$pending_outbox_count" -ne 0 ] && \
      [ "$BUILD42_PENDING_CARRIED_UNRESOLVED" = false ] && \
      [ "${BUILD45_PENDING_CARRIED_UNRESOLVED:-false}" = false ] && \
@@ -2410,8 +2592,12 @@ PYIDENTITY
   VERIFY_DATABASE="code17_restore_verify_${SNAPSHOT_STAMP//[^a-zA-Z0-9_]/_}"
   docker exec "$EXISTING_POSTGRES_CONTAINER" \
     createdb -U erp -T template0 "$VERIFY_DATABASE"
+  backup_restore_options=(--exit-on-error --no-owner)
+  if [ "$BUILD66_EXACT_TRANSITION" = true ]; then
+    backup_restore_options+=(--single-transaction)
+  fi
   if ! docker exec -i "$EXISTING_POSTGRES_CONTAINER" \
-    pg_restore -U erp -d "$VERIFY_DATABASE" --exit-on-error --no-owner \
+    pg_restore -U erp -d "$VERIFY_DATABASE" "${backup_restore_options[@]}" \
     < "$DATABASE_BACKUP" >/dev/null; then
     docker exec "$EXISTING_POSTGRES_CONTAINER" \
       dropdb -U erp --if-exists "$VERIFY_DATABASE" >/dev/null 2>&1 || true
@@ -2432,6 +2618,11 @@ PYIDENTITY
       --pre-fleet-sha256 "$BUILD55_PRE_FLEET_SHA256" --pre-transition-state "$BUILD55_PRE_TRANSITION" --pre-fleet-state "$BUILD55_PRE_FLEET" \
     --after-transition-state "$UPGRADE_SNAPSHOT/build55-restored-transition.json" \
     --after-fleet-state "$UPGRADE_SNAPSHOT/build55-restored-fleet.json" > "$UPGRADE_SNAPSHOT/build55-restore-verification.json"
+  elif [ "$BUILD66_EXACT_TRANSITION" = true ]; then
+    verify_build66_baseline_seal
+    capture_build66_state "$EXISTING_POSTGRES_CONTAINER" "$VERIFY_DATABASE" "$BUILD55_TRANSITION_SQL" \
+      "$UPGRADE_SNAPSHOT/build66-backup-restore.json"
+    python3 "$BUILD66_VERIFIER" restore "$BUILD66_PRE_STATE" "$UPGRADE_SNAPSHOT/build66-backup-restore.json"
   fi
   docker exec "$EXISTING_POSTGRES_CONTAINER" \
     dropdb -U erp --if-exists "$VERIFY_DATABASE" >/dev/null
@@ -2526,6 +2717,52 @@ PYPIN55
     --after-transition-state "$UPGRADE_SNAPSHOT/build55-transition-after.json" --after-fleet-state "$UPGRADE_SNAPSHOT/build55-fleet-after.json" \
     > "$UPGRADE_SNAPSHOT/build55-post-verification.json"
   BUILD55_POST_PROOF_SUCCEEDED=true
+elif [ "$BUILD66_EXACT_TRANSITION" = true ]; then
+  verify_build66_baseline_seal
+  BUILD66_ATTESTATION="$UPGRADE_SNAPSHOT/build66-candidate-images.json"
+  BUILD66_OVERRIDE="$UPGRADE_SNAPSHOT/build66-pinned-images.override.json"
+  build66_base="$UPGRADE_SNAPSHOT/build66-compose-base.json"
+  build66_pinned="$UPGRADE_SNAPSHOT/build66-compose-pinned.json"
+  (umask 077
+    printf '%s\n' "$CANDIDATE_IMAGE_ATTESTATION" > "$BUILD66_ATTESTATION"
+    python3 "$BUILD66_VERIFIER" image-override "$BUILD66_ATTESTATION" > "$BUILD66_OVERRIDE"
+    "${candidate_compose[@]}" --env-file .env config --format json > "$build66_base")
+  build66_compose=("${candidate_compose[@]}" -f "$BUILD66_OVERRIDE")
+  (umask 077; "${build66_compose[@]}" --env-file .env config --format json > "$build66_pinned")
+  python3 "$BUILD66_VERIFIER" compose "$BUILD66_ATTESTATION" "$build66_base" "$build66_pinned"
+  chmod 400 "$BUILD66_OVERRIDE" "$BUILD66_ATTESTATION"
+  candidate_compose=("${build66_compose[@]}")
+  printf -v OPERATIONS_COMPOSE_COMMAND \
+    'docker compose -p %q --project-directory %q -f %q -f %q -f %q --env-file %q' \
+    "$DEPLOY_PROJECT_NAME" "$CANDIDATE_BUILD_ROOT" "$RELEASE_COMPOSE_FILE" \
+    "$BUILD66_RUNTIME_OVERRIDE" "$BUILD66_OVERRIDE" "$REPO_DIR/.env"
+
+  "${candidate_compose[@]}" --env-file .env up -d --no-build --pull never postgres
+  BUILD66_POSTGRES=$("${candidate_compose[@]}" --env-file .env ps -q postgres)
+  expected_postgres=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["services"]["postgres"]["image_id"])' "$BUILD66_ATTESTATION")
+  if ! [[ "$BUILD66_POSTGRES" =~ ^[a-f0-9]{64}$ ]] || \
+     [ "$(docker inspect --format '{{.Image}}' "$BUILD66_POSTGRES")" != "$expected_postgres" ]; then
+    echo "Build66 PostgreSQL is not the scanned candidate image." >&2; exit 1
+  fi
+  for attempt in $(seq 1 120); do
+    if docker exec "$BUILD66_POSTGRES" pg_isready -U erp -d erp >/dev/null 2>&1; then break; fi
+    if [ "$attempt" -eq 120 ]; then echo "Build66 PostgreSQL is not ready." >&2; exit 1; fi
+    sleep 1
+  done
+  capture_build66_state "$BUILD66_POSTGRES" erp "$BUILD66_SHIFT_SQL" "$UPGRADE_SNAPSHOT/build66-rebound.json"
+  if ! cmp -s "$BUILD66_PRE_SHIFT" "$UPGRADE_SNAPSHOT/build66-rebound.json"; then
+    echo "Build66 migration PostgreSQL did not reattach the exact quiesced database." >&2; exit 1
+  fi
+  "${candidate_compose[@]}" --env-file .env run --pull never --rm --no-deps \
+    --entrypoint python backend -m alembic upgrade 0095
+  build66_after="$UPGRADE_SNAPSHOT/build66-transition-after.json"
+  build66_after_shift="$UPGRADE_SNAPSHOT/build66-shifts-after.json"
+  capture_build66_state "$BUILD66_POSTGRES" erp "$BUILD55_TRANSITION_SQL" "$build66_after"
+  capture_build66_state "$BUILD66_POSTGRES" erp "$BUILD66_SHIFT_SQL" "$build66_after_shift"
+  verify_build66_baseline_seal
+  (umask 077; python3 "$BUILD66_VERIFIER" post "$BUILD66_PRE_STATE" "$BUILD66_PRE_SHIFT" \
+    "$build66_after" "$build66_after_shift" > "$UPGRADE_SNAPSHOT/build66-post-verification.json")
+  BUILD66_POST_PROOF_SUCCEEDED=true
 fi
 
 # The exact Build50-to-Build52 path migrates with the scanned backend image but
@@ -2684,6 +2921,9 @@ if [ "$BUILD55_EXACT_TRANSITION" = true ]; then
   BUILD55_APP_WRITERS_STARTED=true
   # From the first candidate process, rollback is forward-only even before ingress.
   trap handle_post_ingress_failure EXIT
+elif [ "$BUILD66_EXACT_TRANSITION" = true ]; then
+  if [ "$BUILD66_POST_PROOF_SUCCEEDED" != true ]; then echo "Build66 writers require full post proof." >&2; exit 1; fi
+  BUILD66_APP_WRITERS_STARTED=true
 fi
 "${candidate_compose[@]}" --env-file .env \
   up -d --no-build --pull never postgres redis backend frontend
@@ -2791,6 +3031,7 @@ fi
 # verifies history only: no new50-to51 opaque pending-work exception is granted.
 if [ "$FRESH_INSTALL" = false ] && \
    [ "$BUILD55_EXACT_TRANSITION" = false ] && \
+   [ "$BUILD66_EXACT_TRANSITION" = false ] && \
    [ "$BUILD50_TO_SUCCESSOR_PENDING_PRESERVED" = false ]; then
   BUILD51_POSTGRES_IDS=()
   while IFS= read -r container_id; do
@@ -2880,7 +3121,7 @@ python3 "$WEB_PUBLIC_ASSET_VERIFIER" --container "$CANDIDATE_FRONTEND_CONTAINER"
 echo "==> Auditing the owner-approved Gaming Centre tariff…"
 "${candidate_compose[@]}" --env-file .env exec -T backend \
   python -m scripts.ensure_gaming_tariff --dry-run
-if [ "$BUILD55_EXACT_TRANSITION" != true ]; then
+if [ "$BUILD55_EXACT_TRANSITION" != true ] && [ "$BUILD66_EXACT_TRANSITION" != true ]; then
   echo "==> Applying the owner-approved Gaming Centre tariff…"
   "${candidate_compose[@]}" --env-file .env exec -T backend \
     python -m scripts.ensure_gaming_tariff
@@ -3116,9 +3357,19 @@ if [ "$BUILD55_EXACT_TRANSITION" = true ]; then
     --credential-file "$BUILD55_ACCEPTANCE_CREDENTIAL_FILE" --expected-sha256 "$BUILD55_CREDENTIAL_SHA256" \
     > "$UPGRADE_SNAPSHOT/build55-auth-after.json"
   chmod 600 "$UPGRADE_SNAPSHOT/build55-auth-after.json"
+elif [ "$BUILD66_EXACT_TRANSITION" = true ]; then
+  BUILD66_BACKEND=$("${candidate_compose[@]}" --env-file .env ps -q backend)
+  capture_build66_runtime "$BUILD66_BACKEND" "$UPGRADE_SNAPSHOT/build66-running-runtime.json"
+  cmp -s "$BUILD66_RUNTIME_OVERRIDE" "$UPGRADE_SNAPSHOT/build66-running-runtime.json"
+  (umask 077
+    docker exec "$BUILD66_BACKEND" python /usr/local/bin/verify-backend-runtime-profile.py \
+      > "$UPGRADE_SNAPSHOT/build66-runtime-profile.json"
+    python3 "$BUILD55_AUTH_TOOL" internal-probe --require-owner --container-id "$BUILD66_BACKEND" \
+      --credential-file "$BUILD66_ACCEPTANCE_CREDENTIAL_FILE" --expected-sha256 "$BUILD66_CREDENTIAL_SHA256" \
+      > "$UPGRADE_SNAPSHOT/build66-auth-after.json")
 fi
 echo "==> Backend acceptance passed; reopening public ingress…"
-if [ -n "$UPGRADE_SNAPSHOT" ]; then
+if [ -n "$UPGRADE_SNAPSHOT" ] && [ "$BUILD66_EXACT_TRANSITION" = false ]; then
   # The quiesced dump is a safe automatic rollback point only while ingress is
   # closed. Once Caddy may accept writes, never restore that older snapshot.
   # DNS/TLS was already proven against the unchanged domain before maintenance.

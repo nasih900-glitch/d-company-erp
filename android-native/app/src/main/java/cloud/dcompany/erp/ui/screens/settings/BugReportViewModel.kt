@@ -17,7 +17,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.UUID
 
+internal const val BUG_REPORT_WORKSPACE_REQUIRED = "Select a workspace before sending, retrying or changing saved help requests. Your own request history remains available."
+
 data class BugReportUiState(
+    val workspaceRequired: Boolean = false,
     val isOpen: Boolean = false,
     val showingHistory: Boolean = false,
     val launchContext: BugReportLaunchContext = BugReportLaunchContext("ERP"),
@@ -56,11 +59,14 @@ internal class BugReportViewModel(
     private val owner: BugReportOwnerScope,
     private val outbox: BugReportOutboxGateway,
     private val api: BugReportApi,
+    private val operations: cloud.dcompany.erp.core.handover.CallerOperations,
+    private val workspaceReady: Boolean = true,
+    private val preTerminalHistory: (suspend () -> BugReportMinePage)? = null,
     private val keyFactory: () -> String = { UUID.randomUUID().toString() },
     private val requestScope: CoroutineScope? = null,
 ) : ViewModel() {
 
-    private val _state = MutableStateFlow(BugReportUiState())
+    private val _state = MutableStateFlow(BugReportUiState(workspaceRequired = !workspaceReady))
     val state: StateFlow<BugReportUiState> = _state.asStateFlow()
     private var localRows: List<LocalBugReportEntity> = emptyList()
     private var localAttachments: List<LocalBugReportAttachmentEntity> = emptyList()
@@ -119,6 +125,7 @@ internal class BugReportViewModel(
         if (current.saving) return
         _state.value = if (current.submittedLocalId != null) {
             BugReportUiState(
+                workspaceRequired = current.workspaceRequired,
                 pendingCount = current.pendingCount,
                 recentRequests = current.recentRequests,
             )
@@ -193,6 +200,10 @@ internal class BugReportViewModel(
     }
 
     fun submit(clientContext: BugReportClientContext) {
+        if (_state.value.workspaceRequired) {
+            _state.value = _state.value.copy(error = BUG_REPORT_WORKSPACE_REQUIRED, historyError = BUG_REPORT_WORKSPACE_REQUIRED)
+            return
+        }
         val current = _state.value
         if (current.saving || current.submittedLocalId != null) return
         val validation = current.draft.validate()
@@ -226,7 +237,10 @@ internal class BugReportViewModel(
             saving = true,
             error = null,
         )
-        (requestScope ?: viewModelScope).launch {
+        operations.launch(requestScope ?: viewModelScope, onRejected = {
+            _state.value = _state.value.copy(saving = false, refreshingHistory = false,
+                error = "The original workspace is unavailable. Your saved request remains protected.")
+        }) {
             try {
                 outbox.capture(owner, localId, request, current.attachment)
                 _state.value = _state.value.copy(
@@ -246,6 +260,10 @@ internal class BugReportViewModel(
     }
 
     fun retrySubmitted() {
+        if (_state.value.workspaceRequired) {
+            _state.value = _state.value.copy(error = BUG_REPORT_WORKSPACE_REQUIRED, historyError = BUG_REPORT_WORKSPACE_REQUIRED)
+            return
+        }
         val current = _state.value
         val localId = current.submittedLocalId ?: return
         val attachment = localAttachments.firstOrNull {
@@ -254,7 +272,10 @@ internal class BugReportViewModel(
         val retryReport = current.submittedState == BugReportOutboxState.ACTION_REQUIRED
         if (current.saving || (!retryReport && attachment == null)) return
         _state.value = current.copy(saving = true, error = null)
-        (requestScope ?: viewModelScope).launch {
+        operations.launch(requestScope ?: viewModelScope, onRejected = {
+            _state.value = _state.value.copy(saving = false, refreshingHistory = false,
+                error = "The original workspace is unavailable. Your saved request remains protected.")
+        }) {
             try {
                 val queued = if (retryReport) {
                     outbox.retry(owner, localId)
@@ -293,12 +314,19 @@ internal class BugReportViewModel(
     }
 
     fun retryHistoryItem(identity: String) {
+        if (_state.value.workspaceRequired) {
+            _state.value = _state.value.copy(error = BUG_REPORT_WORKSPACE_REQUIRED, historyError = BUG_REPORT_WORKSPACE_REQUIRED)
+            return
+        }
         val local = localRows.firstOrNull { it.localId == identity }
         val attachment = localAttachments.firstOrNull {
             it.reportLocalId == identity && it.state == BugReportOutboxState.ACTION_REQUIRED
         }
         if (local?.state != BugReportOutboxState.ACTION_REQUIRED && attachment == null) return
-        (requestScope ?: viewModelScope).launch {
+        operations.launch(requestScope ?: viewModelScope, onRejected = {
+            _state.value = _state.value.copy(saving = false, refreshingHistory = false,
+                error = "The original workspace is unavailable. Your saved request remains protected.")
+        }) {
             try {
                 val queued = if (local?.state == BugReportOutboxState.ACTION_REQUIRED) {
                     outbox.retry(owner, local.localId)
@@ -321,12 +349,19 @@ internal class BugReportViewModel(
     }
 
     fun discardHistoryItem(identity: String) {
+        if (_state.value.workspaceRequired) {
+            _state.value = _state.value.copy(error = BUG_REPORT_WORKSPACE_REQUIRED, historyError = BUG_REPORT_WORKSPACE_REQUIRED)
+            return
+        }
         val local = localRows.firstOrNull { it.localId == identity } ?: return
         val attachmentNeedsReview = localAttachments.any {
             it.reportLocalId == identity && it.state == BugReportOutboxState.ACTION_REQUIRED
         }
         if (local.state != BugReportOutboxState.ACTION_REQUIRED && !attachmentNeedsReview) return
-        (requestScope ?: viewModelScope).launch {
+        operations.launch(requestScope ?: viewModelScope, onRejected = {
+            _state.value = _state.value.copy(saving = false, refreshingHistory = false,
+                error = "The original workspace is unavailable. Your saved request remains protected.")
+        }) {
             try {
                 val discarded = outbox.discardAfterReview(owner, identity)
                 if (!discarded) {
@@ -345,27 +380,40 @@ internal class BugReportViewModel(
     }
 
     fun refreshHistory(silent: Boolean = false) {
+        (requestScope ?: viewModelScope).launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            refreshHistoryAndAwait(silent)
+        }
+    }
+
+    /** Remote commands await this exact original ViewModel's full read/publication, never a root job. */
+    suspend fun refreshHistoryAndAwait(silent: Boolean = false): Boolean {
         val current = _state.value
-        if (current.refreshingHistory) return
-        _state.value = current.copy(
-            refreshingHistory = true,
-            historyError = if (silent) current.historyError else null,
-        )
-        (requestScope ?: viewModelScope).launch {
-            try {
-                remoteRows = api.mine().items
-                rebuildHistory()
-                _state.value = _state.value.copy(refreshingHistory = false, historyError = null)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                _state.value = _state.value.copy(
-                    refreshingHistory = false,
-                    historyError = if (silent) _state.value.historyError else {
-                        "Could not refresh owner replies. Saved requests on this tablet are still shown below."
-                    },
-                )
+        if (current.refreshingHistory) return false
+        _state.value = current.copy(refreshingHistory = true, historyError = if (silent) current.historyError else null)
+        var succeeded = false
+        val read: suspend () -> Unit = {
+            val original = if (current.workspaceRequired) null else checkNotNull(
+                cloud.dcompany.erp.core.handover.OperationDispatchContext.captured()?.binding,
+            ) { "The original support-history workspace is unavailable." }
+            val page = if (current.workspaceRequired) requireNotNull(preTerminalHistory).invoke() else api.mine()
+            check(current.workspaceRequired || original?.isCurrent() == true) {
+                "The original support-history workspace changed."
             }
+            remoteRows = page.items
+            rebuildHistory()
+            _state.value = _state.value.copy(historyError = null)
+            succeeded = true
+        }
+        try {
+            if (current.workspaceRequired) read() else operations.run { read() }
+            return succeeded
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) {
+            _state.value = _state.value.copy(historyError = if (silent) _state.value.historyError else
+                "Could not refresh owner replies. Saved requests on this tablet are still shown below.")
+            return false
+        } finally {
+            _state.value = _state.value.copy(refreshingHistory = false)
         }
     }
 
@@ -450,14 +498,30 @@ internal class BugReportViewModel(
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 require(modelClass.isAssignableFrom(BugReportViewModel::class.java))
+                val login = app.tokens.refreshLease()
+                val operations = app.handoverOperations.deferredCaller(owner.userId, owner.companyId, login)
+                val lease = app.cacheIsolation.currentLease()
+                val workspaceReady = lease?.scope?.let { it.userId == owner.userId && it.companyId == owner.companyId } == true
+                val history = BugReportOwnerHistory(owner,
+                    originalBearer = { login?.let(app.tokens::currentAccessFor) },
+                    originalLoginIsCurrent = {
+                        login != null && app.tokens.refreshLease()?.session?.lineage === login.session.lineage &&
+                            app.cacheIsolation.currentLease() == null &&
+                            app.handoverOperations.status() == cloud.dcompany.erp.core.handover.HandoverStartupStatus.Open
+                    })
                 return BugReportViewModel(
                     owner = owner,
+                    operations = operations,
+                    workspaceReady = workspaceReady,
+                    preTerminalHistory = { history.read().also { history.bearer() } },
                     outbox = BugReportOutbox(
                         dao = app.db.bugReportDao(),
                         scheduleDelivery = { BugReportSyncScheduler.enqueue(app) },
                         scopedCommitter = BugReportScopedCommitter { write ->
-                            val lease = app.cacheIsolation.currentLease()
-                            if (lease == null) {
+                            val binding = cloud.dcompany.erp.core.handover.OperationDispatchContext.captured()?.binding
+                            val lease = binding?.cacheLease
+                            if (lease == null || !binding.isCurrent() ||
+                                lease.scope.userId != owner.userId || lease.scope.companyId != owner.companyId) {
                                 false
                             } else {
                                 app.cacheIsolation.commitIfCurrent(lease, write)

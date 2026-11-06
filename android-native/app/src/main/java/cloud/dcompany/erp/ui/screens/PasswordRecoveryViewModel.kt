@@ -45,10 +45,8 @@ class PasswordRecoveryViewModel internal constructor(
     private val confirmReset: suspend (PasswordResetConfirmRequest) -> AccountActionResponse,
 ) : ViewModel() {
 
-    constructor() : this(
-        requestReset = ApiClient.api::requestPasswordReset,
-        confirmReset = ApiClient.api::confirmPasswordReset,
-    )
+    private constructor(api: cloud.dcompany.erp.core.net.AnonymousPasswordRecoveryApi) : this(api::requestPasswordReset, api::confirmPasswordReset)
+    constructor() : this(ApiClient.anonymousPasswordRecoveryApi())
 
     private val _state = MutableStateFlow(PasswordRecoveryState())
     internal val state: StateFlow<PasswordRecoveryState> = _state.asStateFlow()

@@ -4,12 +4,14 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import cloud.dcompany.erp.BuildConfig
 import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.PersistedStartupFailure
 import cloud.dcompany.erp.PersistedStartupStateResult
 import cloud.dcompany.erp.core.alarm.OperationalAlarmRegistry
 import cloud.dcompany.erp.core.auth.AccessTokenIdentityParser
 import cloud.dcompany.erp.core.auth.CacheScope
+import cloud.dcompany.erp.core.auth.CachedScopeLeaseAdoption
 import cloud.dcompany.erp.core.auth.CacheScopeActivation
 import cloud.dcompany.erp.core.auth.CacheScopeException
 import cloud.dcompany.erp.core.auth.EffectivePermissions
@@ -18,6 +20,7 @@ import cloud.dcompany.erp.core.auth.LoginSessionLease
 import cloud.dcompany.erp.core.auth.OutboxGateResult
 import cloud.dcompany.erp.core.auth.OutboxOwnerIdentity
 import cloud.dcompany.erp.core.auth.PricingLock
+import cloud.dcompany.erp.core.auth.SessionLogoutLease
 import cloud.dcompany.erp.core.auth.SessionRefreshLease
 import cloud.dcompany.erp.core.auth.TerminalResolution
 import cloud.dcompany.erp.core.auth.TerminalPurpose
@@ -25,15 +28,32 @@ import cloud.dcompany.erp.core.auth.ValidatedTerminalDisplay
 import cloud.dcompany.erp.core.auth.activateAndRememberTerminal
 import cloud.dcompany.erp.core.auth.bestEffortAuthenticatedLogout
 import cloud.dcompany.erp.core.auth.resolveTerminalAssignment
+import cloud.dcompany.erp.core.handover.AcceptedTillReads
+import cloud.dcompany.erp.core.handover.HandoverAction
+import cloud.dcompany.erp.core.handover.HandoverAuthority
+import cloud.dcompany.erp.core.handover.HandoverCoordinator
+import cloud.dcompany.erp.core.handover.HandoverIntent
+import cloud.dcompany.erp.core.handover.HandoverStage
+import cloud.dcompany.erp.core.handover.HandoverStartupStatus
+import cloud.dcompany.erp.core.handover.OriginalOperationBinding
+import cloud.dcompany.erp.core.handover.TillPreparationBlocked
+import cloud.dcompany.erp.core.handover.WorkspaceExitAuthority
+import cloud.dcompany.erp.core.handover.WorkspaceExitKind
+import cloud.dcompany.erp.core.handover.inspectLocalHandoverWork
+import cloud.dcompany.erp.core.handover.logoutOriginalWorkspace
+import cloud.dcompany.erp.core.handover.WorkspaceSelectorReads
+import cloud.dcompany.erp.core.handover.workspaceSelectorReads
 import cloud.dcompany.erp.core.errors.RecoveryRisk
 import cloud.dcompany.erp.core.errors.recoveryGuidance
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.ApiException
+import cloud.dcompany.erp.core.net.ErpApi
 import cloud.dcompany.erp.core.net.LoginRequest
 import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.core.net.Terminal
 import cloud.dcompany.erp.ui.screens.gaming.GamingApi
 import cloud.dcompany.erp.ui.screens.shift.ShiftApi
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
@@ -48,6 +68,35 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
+
+private enum class RestoreStage {
+    SERVER_PROFILE, IDENTITY_CHECK, TERMINAL_AND_CACHE, OUTBOX_BIND, SAVE_PROFILE,
+    SHIFT_AUTHORITY, PUBLISH_WORKSPACE, START_SYNC, START_REALTIME, RECEIPT_REFRESH,
+}
+
+private val restoreFrameNames = setOf(
+    "SessionViewModel", "HandoverOperations", "HandoverCoordinator", "SyncEngine", "CacheIsolationCoordinator",
+    "OutboxSafetyGate", "ShiftCache", "TerminalStore", "TokenStore", "SessionRefreshCoordinator", "ApiClient",
+    "CoordinatorOperationDispatchGate", "OperationDispatchInterceptor", "DCompanyApp",
+)
+
+private fun logRestoreFailure(stage: RestoreStage, error: Exception) {
+    val kind = when (error) {
+        is kotlinx.serialization.SerializationException -> "SerializationException"
+        is IllegalStateException -> "IllegalStateException"
+        is IllegalArgumentException -> "IllegalArgumentException"
+        is SecurityException -> "SecurityException"
+        is java.io.IOException -> "IOException"
+        else -> "OtherException"
+    }
+    val frame = error.stackTrace.firstOrNull {
+        it.className.startsWith("cloud.dcompany.erp.") &&
+            it.className.substringAfterLast('.').substringBefore('$') in restoreFrameNames
+    }
+    val frameName = frame?.className?.substringAfterLast('.')?.substringBefore('$') ?: "UNKNOWN"
+    val line = frame?.lineNumber?.takeIf { it > 0 } ?: 0
+    Log.i("DCompanyRestore", "stage=${stage.name} kind=$kind frame=$frameName line=$line")
+}
 
 sealed interface AuthState {
     data object Loading : AuthState
@@ -165,6 +214,8 @@ private data class PendingTerminalSession(
     val installedLogin: LoginSessionLease? = null,
     val restoredSession: SessionRefreshLease? = null,
     val previousTerminal: ValidatedTerminalDisplay? = null,
+    val selectorAuthority: WorkspaceExitAuthority? = null,
+    val selectorExit: HandoverCoordinator.WorkspaceExit? = null,
 ) {
     init {
         check((installedLogin == null) xor (restoredSession == null))
@@ -220,12 +271,355 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private val db = dCompanyApp.db
     private val outboxSafety = dCompanyApp.outboxSafety
     private val cacheIsolation = dCompanyApp.cacheIsolation
+    private data class PendingWorkspaceExit(val authority: WorkspaceExitAuthority, val cap: HandoverCoordinator.WorkspaceExit)
+    private var pendingLogoutExit: PendingWorkspaceExit? = null
+    private var pendingLogoutRemoval: SessionLogoutLease? = null
+    private var pendingLogoutProfile: String? = null
+    private var pendingLogoutOwnsProfile = false
+    private suspend fun publishOriginalLogout(authority: WorkspaceExitAuthority, removal: SessionLogoutLease,
+        publish: () -> Unit): Boolean = cacheIsolation.publishIfInactiveGeneration(authority.originalGeneration + 1) {
+        tokens.publishIfCurrentLogout(removal, publish)
+    }
+    private var signOutJob: Job? = null
+    private fun captureWorkspaceExit(): WorkspaceExitAuthority {
+        val lease = cacheIsolation.currentLease()
+        val me = (_state.value as? AuthState.SignedIn)?.me
+        val original = if (lease == null) null else
+            checkNotNull(dCompanyApp.handoverOperations.captureOriginal(me, lease)) { "The original workspace needs recovery before leaving." }
+        return WorkspaceExitAuthority(original, tokens.refreshLease(), lease, cacheIsolation.currentGeneration(),
+            tokens::refreshLease, tokens::currentAccessFor, cacheIsolation::currentLease, cacheIsolation::currentGeneration)
+    }
+    private suspend fun closeWorkspaceAdmission(authority: WorkspaceExitAuthority, kind: WorkspaceExitKind): PendingWorkspaceExit {
+        val cap = dCompanyApp.handoverOperations.beginWorkspaceExit(authority.original, kind, authority::beforeDeactivation)
+        return PendingWorkspaceExit(authority, cap)
+    }
+    private suspend fun exitLifetimesDrained(exit: PendingWorkspaceExit): Boolean =
+        dCompanyApp.handoverOperations.coordinator.awaitWorkspaceExitDrained(exit.cap, 15_000) &&
+            (exit.authority.original?.let { sync.awaitWorkspaceExitWorkers(it, exit.cap) } ?: true)
+    private suspend fun privateExitWorkClear(exit: PendingWorkspaceExit): Boolean =
+        inspectLocalHandoverWork(dCompanyApp).isClear &&
+            (exit.authority.original?.let { dCompanyApp.idleCheckoutClaims.snapshot(it.authority.scope).isEmpty() } ?: true)
+
     private val shiftApi = ApiClient.create<ShiftApi>()
     private val gamingApi = ApiClient.create<GamingApi>()
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
     private val _state = MutableStateFlow<AuthState>(AuthState.Loading)
     val state: StateFlow<AuthState> = _state.asStateFlow()
+
+    private val _tillTakeover = MutableStateFlow<TillTakeoverUi?>(null)
+    internal val tillTakeover = _tillTakeover.asStateFlow()
+    private var tillTakeoverJob: Job? = null
+    private var tillSelection: OriginalOperationBinding? = null
+    private val handovers get() = dCompanyApp.handoverOperations
+    private val tillTransport get() = dCompanyApp.tillHandoverTransport
+
+    internal fun showTillTakeover(shiftId: String) {
+        if (tillTakeoverJob?.isActive == true) return
+        val signedIn = _state.value as? AuthState.SignedIn ?: return
+        if (!connectivity.online.value || !EffectivePermissions.from(signedIn.me).has(ErpPermission.PosWrite)) return
+        val original = handovers.captureOriginal(signedIn.me, cacheIsolation.currentLease()) ?: return
+        tillSelection = original
+        val display = TillTakeoverUi(shiftId, busy = true)
+        _tillTakeover.value = display
+        loadTillCandidates(original, display)
+    }
+
+    internal fun moreTillCandidates() {
+        val visible = _tillTakeover.value ?: return
+        val original = tillSelection ?: return
+        if (visible.busy || visible.intent != null || visible.nextCursor == null) return
+        val display = visible.copy(busy = true, error = null)
+        _tillTakeover.value = display
+        loadTillCandidates(original, display)
+    }
+
+    private fun loadTillCandidates(original: OriginalOperationBinding, display: TillTakeoverUi) {
+        tillTakeoverJob = viewModelScope.launch {
+            try {
+                val (revision, candidates) = tillTransport.choices(original, display.shiftId, display.nextCursor)
+                check(display.revision == null || display.revision == revision)
+                check(candidates.items.none { person -> display.people.any { it.id == person.id } })
+                if (_tillTakeover.value === display && original.isCurrent()) {
+                    _tillTakeover.value = display.copy(revision = revision, busy = false,
+                        people = display.people + candidates.items, nextCursor = candidates.nextCursor)
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) {
+                if (_tillTakeover.value === display && original.isCurrent()) {
+                    _tillTakeover.value = display.copy(busy = false, error = "The current till and eligible staff could not be verified.")
+                }
+            }
+        }
+    }
+
+    internal fun dismissTillTakeover() {
+        if (_tillTakeover.value?.intent != null || tillTakeoverJob?.isActive == true) return
+        tillSelection = null
+        _tillTakeover.value = null
+    }
+
+    internal fun confirmTillTakeover(display: TillTakeoverUi, selected: String, password: String) {
+        val original = tillSelection ?: return
+        val revision = display.revision ?: return
+        if (_tillTakeover.value !== display || display.busy || display.intent != null ||
+            display.people.none { it.id == selected } || !original.isCurrent()) return
+        val action = HandoverAction(UUID.randomUUID().toString(), original.authority, display.shiftId, selected, revision)
+        runTillAction(display) { tillTransport.submit(original, action, password, approved = true) }
+    }
+
+    internal fun recoverTillTakeover(display: TillTakeoverUi, password: String?) {
+        val expected = display.intent ?: return
+        if (expected.stage == HandoverStage.ACCEPTED || (expected.stage == HandoverStage.NOT_SENT && password == null)) return
+        runTillAction(display) {
+            val original = recoverOriginalTill(expected)
+            when {
+                expected.stage == HandoverStage.NOT_SENT ->
+                    tillTransport.resumeNotSent(original, expected, requireNotNull(password), approved = true)
+                password == null -> tillTransport.receipt(original, expected)
+                else -> tillTransport.retry(original, expected, password, approved = true)
+            }
+        }
+    }
+
+    internal fun cancelUnsentTillTakeover(display: TillTakeoverUi) {
+        val expected = display.intent?.takeIf { it.stage == HandoverStage.NOT_SENT } ?: return
+        if (_tillTakeover.value !== display || display.busy || tillTakeoverJob?.isActive == true) return
+        val working = display.copy(busy = true, error = null)
+        _tillTakeover.value = working
+        tillTakeoverJob = viewModelScope.launch {
+            try {
+                val original = recoverOriginalTill(expected)
+                check(dCompanyApp.handoverDomains.inspect(original, expected) is
+                    cloud.dcompany.erp.core.handover.OriginalDomainCheck.Clear)
+                check(original.isCurrent())
+                handovers.coordinator.cancelNotSent(original.authority, expected.action.key)
+                _tillTakeover.value = null
+                restore()
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) {
+                if (_tillTakeover.value === working) showRetainedTill(expected, "The original cashier’s saved work still needs verification.")
+            }
+        }
+    }
+
+    internal fun verifyOriginalTillLogin(display: TillTakeoverUi, email: String, password: String) {
+        val expected = display.intent?.takeIf { it.stage != HandoverStage.ACCEPTED } ?: return
+        if (_tillTakeover.value !== display || display.busy || tillTakeoverJob?.isActive == true ||
+            email.isBlank() || password.isEmpty()) return
+        val working = display.copy(busy = true, error = null)
+        _tillTakeover.value = working
+        tillTakeoverJob = viewModelScope.launch {
+            try {
+                val previous = tokens.refreshLease()
+                val expectedScope = expected.action.origin.scope
+                fun stillCurrent() = retainedTill() == expected && connectivity.online.value &&
+                    (if (previous == null) tokens.refreshLease() == null else tokens.currentAccessFor(previous) != null)
+                val guard = { check(stillCurrent()) }
+                val api = ApiClient.createEphemeralAuthorityApi<ErpApi>(beforeDispatch = guard, singleAttempt = true)
+                val pair = api.login(LoginRequest(email.trim().lowercase(), password))
+                val signedIn = ApiClient.createEphemeralAuthorityApi<ErpApi>(accessToken = pair.accessToken,
+                    beforeDispatch = guard, singleAttempt = true)
+                val original = signedIn.me()
+                check(AccessTokenIdentityParser.parse(pair.accessToken) == OutboxOwnerIdentity.from(original) &&
+                    original.companyId == expectedScope.companyId && original.userId == expectedScope.actorId &&
+                    (original.branchId == null || original.branchId == expectedScope.branchId))
+                val terminal = verifiedHandoverTerminal(signedIn, requireNotNull(expectedScope.branchId),
+                    requireNotNull(expectedScope.terminalId))
+                check(stillCurrent())
+                val adoption = cacheIsolation.adoptCachedOnlyIfInactive(scopeFor(original, terminal.id))
+                val lease = (adoption as? CachedScopeLeaseAdoption.Ready)?.lease ?: error("The original till cache changed.")
+                check(cacheIsolation.commitIfCurrent(lease) {
+                    check(stillCurrent())
+                    withContext(Dispatchers.IO) {
+                        check(tokens.commitIfOriginalLoginCurrent(previous) {
+                            tokens.installForLogin(pair.accessToken, pair.refreshToken)
+                        })
+                    }
+                    cache.rememberProfile(json.encodeToString(MeResponse.serializer(), original))
+                    terminals.rememberValidated(terminal)
+                })
+                if (_tillTakeover.value === working) showRetainedTill(expected, "Original cashier verified. Continue checking this saved handover.")
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) {
+                if (_tillTakeover.value === working) showRetainedTill(expected, "Use the original cashier’s sign-in for this exact till.")
+            }
+        }
+    }
+
+    private fun retainedTill(): HandoverIntent? =
+        (handovers.status() as? HandoverStartupStatus.RecoveryRequired)?.intent
+
+    private fun runTillAction(display: TillTakeoverUi, run: suspend () -> HandoverIntent) {
+        if (_tillTakeover.value !== display || display.busy || tillTakeoverJob?.isActive == true) return
+        val working = display.copy(busy = true, error = null)
+        _tillTakeover.value = working
+        tillTakeoverJob = viewModelScope.launch {
+            try {
+                val next = run()
+                if (_tillTakeover.value === working) showRetainedTill(next)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                if (BuildConfig.DEBUG && error is TillPreparationBlocked) {
+                    Log.i("DCompanyTill", error.evidence)
+                }
+                if (_tillTakeover.value !== working) return@launch
+                val retained = retainedTill() ?: handovers.coordinator.state.value.intent
+                if (retained != null) showRetainedTill(retained, "This handover still needs verification. The saved action was kept.")
+                else _tillTakeover.value = display.copy(error = (error as? TillPreparationBlocked)?.message
+                    ?: "The tablet could not verify this till for handover. Refresh Shift and retry.")
+            }
+        }
+    }
+
+    private fun showRetainedTill(intent: HandoverIntent, message: String? = null) {
+        tillSelection = null
+        _tillTakeover.value = TillTakeoverUi(intent.action.shiftId, intent = intent, error = message)
+        _state.value = AuthState.Blocked("Complete the retained till handover before using this tablet.")
+        realtime.disconnect()
+    }
+
+    private suspend fun recoverOriginalTill(expected: HandoverIntent): OriginalOperationBinding {
+        check(retainedTill() == expected && connectivity.online.value)
+        val scope = expected.action.origin.scope
+        val login = checkNotNull(tokens.refreshLease())
+        val bearer = checkNotNull(tokens.currentAccessFor(login))
+        val originalApi = ApiClient.createEphemeralAuthorityApi<ErpApi>(
+            accessToken = bearer, singleAttempt = true, beforeDispatch = {
+                check(retainedTill() == expected && tokens.currentAccessFor(login) == bearer)
+            })
+        val me = originalApi.me()
+        check(AccessTokenIdentityParser.parse(tokens.currentAccessFor(login).orEmpty()) == OutboxOwnerIdentity.from(me) &&
+            me.companyId == scope.companyId && me.userId == scope.actorId &&
+            (me.branchId == null || me.branchId == scope.branchId))
+        val branchId = requireNotNull(scope.branchId)
+        val terminal = verifiedHandoverTerminal(originalApi, branchId, requireNotNull(scope.terminalId))
+        fun originalIsCurrent() = retainedTill() == expected && tokens.currentAccessFor(login) != null
+        check(originalIsCurrent())
+        val adoption = cacheIsolation.adoptCachedOnlyIfInactive(scopeFor(me, terminal.id))
+        val lease = (adoption as? CachedScopeLeaseAdoption.Ready)?.lease ?: error("The original till cache could not be verified.")
+        check(cacheIsolation.commitIfCurrent(lease) {
+            check(originalIsCurrent())
+            terminals.rememberValidated(terminal)
+            check(originalIsCurrent())
+            cache.rememberProfile(json.encodeToString(MeResponse.serializer(), me))
+        })
+        return checkNotNull(if (expected.stage == HandoverStage.NOT_SENT) handovers.captureForRecovery(me, lease, expected)
+            else handovers.captureForSentHandover(me, lease, expected))
+    }
+
+    private suspend fun verifiedHandoverTerminal(api: ErpApi, branchId: String, terminalId: String): Terminal {
+        val available = api.terminals(branchId).filter { it.branchId == branchId }
+        if (WorkspaceFeatureProfiles.Active.singleHybridTerminalOnly) {
+            check(available.size == 1 && available.single().purpose == TerminalPurpose.HYBRID)
+        }
+        return available.single { it.id == terminalId }
+    }
+
+    internal fun activateIncomingTill(display: TillTakeoverUi, email: String, password: String, ownerReturned: Boolean) {
+        val expected = display.intent?.takeIf { it.stage == HandoverStage.ACCEPTED } ?: return
+        if (_tillTakeover.value !== display || display.busy || tillTakeoverJob?.isActive == true ||
+            email.isBlank() || password.isEmpty()) return
+        val working = display.copy(busy = true, error = null)
+        _tillTakeover.value = working
+        tillTakeoverJob = viewModelScope.launch {
+            try {
+                finishIncomingTill(expected, email, password, ownerReturned)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) {
+                if (_tillTakeover.value === working) {
+                    val message = if (ownerReturned) "The Owner’s linked return or original cashier could not be verified. Keep this handover and check the Owner’s recovery receipt."
+                        else "The incoming operator or running till could not be verified. Sign in again to continue, or ask an Owner to recover this till."
+                    showRetainedTill(expected, message)
+                }
+            }
+        }
+    }
+
+    private suspend fun finishIncomingTill(expected: HandoverIntent, email: String, password: String, ownerReturned: Boolean) {
+        val receipt = checkNotNull(expected.receipt)
+        val expectedActor = if (ownerReturned) receipt.initiatedBy else receipt.incomingUserId
+        fun verifyState(state: cloud.dcompany.erp.core.handover.IncomingTillState) {
+            if (ownerReturned) state.verifyOwnerReturn(expected) else state.verify(expected)
+        }
+        val previous = tokens.refreshLease()
+        val previousLease = cacheIsolation.currentLease()
+        val generation = cacheIsolation.currentGeneration()
+        fun originalIsCurrent() = retainedTill() == expected && connectivity.online.value &&
+            (if (previous == null) tokens.refreshLease() == null else tokens.currentAccessFor(previous) != null)
+        check(originalIsCurrent())
+        if (previous != null) {
+            val identity = checkNotNull(AccessTokenIdentityParser.parse(previous.accessToken))
+            check(identity.companyId == receipt.companyId && identity.userId in setOf(receipt.initiatedBy, receipt.incomingUserId))
+        }
+        previousLease?.scope?.let {
+            check(it.companyId == receipt.companyId && it.userId in setOf(receipt.initiatedBy, receipt.incomingUserId) &&
+                (it.branchId == null || it.branchId == receipt.branchId) && it.terminalId == receipt.terminalId)
+        }
+        val verifyOriginal = {
+            check(originalIsCurrent() && cacheIsolation.currentLease() == previousLease &&
+                cacheIsolation.currentGeneration() == generation)
+        }
+        val unauthenticated = ApiClient.createEphemeralAuthorityApi<ErpApi>(
+            singleAttempt = true, beforeDispatch = verifyOriginal)
+        val pair = unauthenticated.login(LoginRequest(email.trim().lowercase(), password))
+        val verifiedApi = ApiClient.createEphemeralAuthorityApi<ErpApi>(
+            accessToken = pair.accessToken, singleAttempt = true, beforeDispatch = verifyOriginal)
+        val me = verifiedApi.me()
+        check(AccessTokenIdentityParser.parse(pair.accessToken) == OutboxOwnerIdentity.from(me) &&
+            me.userId == expectedActor && me.companyId == receipt.companyId &&
+            (me.branchId == null || me.branchId == receipt.branchId) && EffectivePermissions.from(me).has(ErpPermission.PosWrite))
+        val terminal = verifiedHandoverTerminal(verifiedApi, receipt.branchId, receipt.terminalId)
+        val canReadGaming = EffectivePermissions.from(me).has(ErpPermission.GamingRead)
+        val before = AcceptedTillReads(receipt, pair.accessToken, canReadGaming) {
+            originalIsCurrent() && cacheIsolation.currentLease() == previousLease && cacheIsolation.currentGeneration() == generation
+        }.till.state(receipt.shiftId).also(::verifyState)
+        check(canReadGaming || !before.hasRunningGames)
+        check(inspectLocalHandoverWork(dCompanyApp).isClear && outboxSafety.canInstallSession(pair.accessToken) is OutboxGateResult.Allowed)
+        val incomingScope = scopeFor(me, receipt.terminalId)
+        val lease = cacheIsolation.activateValidatedForHandover(incomingScope, previousLease, generation, ::originalIsCurrent)
+        sync.clearSessionFeedback()
+        var installed: LoginSessionLease? = null
+        withContext(Dispatchers.IO) {
+            check(cacheIsolation.currentLease() == lease && tokens.commitIfOriginalLoginCurrent(previous) {
+                check(originalIsCurrent())
+                installed = tokens.installForLogin(pair.accessToken, pair.refreshToken)
+            })
+        }
+        val login = checkNotNull(installed)
+        fun incomingIsCurrent() = retainedTill() == expected && connectivity.online.value &&
+            cacheIsolation.currentLease() == lease && tokens.isCurrent(login)
+        check(cacheIsolation.commitIfCurrent(lease) {
+            check(incomingIsCurrent())
+            check(outboxSafety.bindAuthenticated(OutboxOwnerIdentity.from(me)) is OutboxGateResult.Allowed)
+            check(incomingIsCurrent())
+            cache.rememberProfile(json.encodeToString(MeResponse.serializer(), me))
+            check(incomingIsCurrent())
+            terminals.rememberValidated(terminal)
+        })
+        val reads = AcceptedTillReads(receipt, pair.accessToken, canReadGaming, ::incomingIsCurrent)
+        sync.hydrateAcceptedTill(lease, receipt.shiftId, receipt.branchId, reads.shifts, reads.gaming.takeIf { canReadGaming },
+            requireRunningGame = before.hasRunningGames, stillCurrent = ::incomingIsCurrent)
+        val current = reads.till.state(receipt.shiftId).also(::verifyState)
+        check(current.hasRunningGames == before.hasRunningGames && (canReadGaming || !current.hasRunningGames))
+        check(inspectLocalHandoverWork(dCompanyApp).isClear)
+        val authority = HandoverAuthority(expected.action.origin.scope.copy(actorId = me.userId), 1)
+        handovers.initializeAcceptedRecovery(expected, authority, ::incomingIsCurrent)
+        withContext(NonCancellable) {
+            handovers.coordinator.completeAccepted(expected, ::incomingIsCurrent)
+            check(cacheIsolation.commitIfCurrent(lease) {
+                check(tokens.isCurrent(login))
+                ApiClient.activateTerminalScope(receipt.terminalId)
+                _tillTakeover.value = null
+                _state.value = AuthState.SignedIn(me)
+            })
+        }
+        PricingLock.lock()
+        dCompanyApp.onVerifiedScopeAvailable()
+        reconcileOperationalAlarms()
+        realtime.connect()
+        sync.requestSync()
+    }
 
     private val _signingIn = MutableStateFlow(false)
     val signingIn: StateFlow<Boolean> = _signingIn.asStateFlow()
@@ -437,11 +831,19 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             ) {
                 PersistedStartupStateResult.Ready -> Unit
                 is PersistedStartupStateResult.Unavailable -> {
+                    if (restored.failure == PersistedStartupFailure.HANDOVER_RECOVERY) {
+                        retainedTill()?.let {
+                            showRetainedTill(it)
+                            return@launch
+                        }
+                    }
                     _state.value = AuthState.Blocked(
                         when (restored.failure) {
                             PersistedStartupFailure.TIMEOUT ->
                                 "The tablet took too long to restore its saved sign-in and offline work. " +
                                     "Nothing was changed. Tap Verify again; if this continues, restart the app or contact support."
+                            PersistedStartupFailure.HANDOVER_RECOVERY ->
+                                "This tablet has a retained till handover that needs reconciliation. The original cashier's work is preserved."
                             PersistedStartupFailure.STORAGE ->
                                 "The tablet could not safely restore its saved sign-in and offline work. " +
                                     "Nothing was changed. Tap Verify again or contact support."
@@ -546,6 +948,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         cachedProfile: MeResponse?,
     ) {
         var liveProfileVerified = false
+        var stage = RestoreStage.SERVER_PROFILE
         try {
             val me = withTimeoutOrNull(RESTORE_SERVER_TIMEOUT_MILLIS) {
                 ApiClient.api.me()
@@ -554,6 +957,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 code = "network_timeout",
             )
 
+            stage = RestoreStage.IDENTITY_CHECK
             val activeAccess = tokens.currentAccessFor(restoreLease) ?: return
             if (!cachedProfileMatchesToken(activeAccess, me)) {
                 rejectRestoredSession(
@@ -570,21 +974,29 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             // The cached profile is display-only while this check runs. No
             // feature ViewModel or Room write lease exists until the live
             // account and till below have been verified.
+            stage = RestoreStage.TERMINAL_AND_CACHE
             if (!activateResolvedTerminalOrRequestSelection(
                     me = me,
                     restoredSession = restoreLease,
                 )
             ) return
+            stage = RestoreStage.OUTBOX_BIND
             if (!acceptAuthenticated(me, restoredSession = restoreLease)) return
             if (tokens.currentAccessFor(restoreLease) == null) return
+            stage = RestoreStage.SAVE_PROFILE
             cache.rememberProfile(json.encodeToString(MeResponse.serializer(), me))
             if (EffectivePermissions.from(me).has(ErpPermission.PosRead)) {
+                stage = RestoreStage.SHIFT_AUTHORITY
                 refreshShiftAuthorityAtLogin()
             }
             if (tokens.currentAccessFor(restoreLease) == null) return
+            stage = RestoreStage.PUBLISH_WORKSPACE
             _state.value = AuthState.SignedIn(me)
+            stage = RestoreStage.START_SYNC
             sync.requestSync()
+            stage = RestoreStage.START_REALTIME
             realtime.connect()
+            stage = RestoreStage.RECEIPT_REFRESH
             refreshReceiptHistoryAfterLogin(me)
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -626,7 +1038,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     rejectRestoredSession(restoreLease, message = null)
                 }
             }
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            if (BuildConfig.DEBUG) logRestoreFailure(stage, error)
             // A malformed response is not the same as being offline. Keep the
             // cached write lease locked and give the employee a clear retry
             // path instead of accepting possibly revoked authority.
@@ -675,6 +1088,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             // can still identify this lineage if cancellation wins that race.
             val installedLoginCapture = AtomicReference<LoginSessionLease?>(null)
             try {
+                when (val startup = dCompanyApp.awaitPersistedStartupState(retryFailed = true)) {
+                    PersistedStartupStateResult.Ready -> Unit
+                    is PersistedStartupStateResult.Unavailable -> {
+                        _loginError.value = if (startup.failure == PersistedStartupFailure.HANDOVER_RECOVERY)
+                            "This tablet has a retained till handover. The original cashier's account and queued work are preserved."
+                        else "The saved account and work could not be verified. Verify again before signing in."
+                        return@launch
+                    }
+                }
                 val pair = ApiClient.api.login(
                     LoginRequest(email = email.trim().lowercase(), password = password),
                 )
@@ -946,93 +1368,124 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 "This account has no branch assignment. Ask an owner to correct it before changing tills.",
             )
 
-        val firstTerminalRows = verifiedBranchTerminals(ApiClient.api.terminals(branchId), branchId)
-        requireCurrentReassignmentSession(me, lease)
-        val currentStillAvailable = firstTerminalRows.any {
-            it.id == exactActive.terminalId && it.branchId == exactActive.branchId
-        }
+        val exitAuthority = captureWorkspaceExit()
+        val exit = closeWorkspaceAdmission(exitAuthority, WorkspaceExitKind.TERMINAL_CHANGE)
+        try {
+            check(exitLifetimesDrained(exit)) { "The original workspace is still finishing saved work." }
+            val observed = dCompanyApp.handoverOperations.observeWorkspaceExit(
+                requireNotNull(exitAuthority.original), exit.cap,
+            ) {
+                val firstTerminalRows = verifiedBranchTerminals(ApiClient.api.terminals(branchId), branchId)
+                requireCurrentReassignmentSession(me, lease)
+                val currentStillAvailable = firstTerminalRows.any {
+                    it.id == exactActive.terminalId && it.branchId == exactActive.branchId
+                }
 
-        val openShifts = shiftApi.shifts(onlyOpen = true, limit = 200)
-        requireCurrentReassignmentSession(me, lease)
-        val serverOpenCount = openShifts.count { row ->
-            row.branchId != branchId ||
-                row.status != "open" ||
-                row.terminalId == null ||
-                row.terminalId == exactActive.terminalId
-        }
+                val openShifts = shiftApi.shifts(onlyOpen = true, limit = 200)
+                requireCurrentReassignmentSession(me, lease)
+                val serverOpenCount = terminalReassignmentShiftBlockers(openShifts, branchId, exactActive.terminalId)
+                    ?: throw TerminalScopeException(TERMINAL_SHIFT_RESPONSE_LIMIT_MESSAGE)
 
-        val serverSessions = gamingApi.sessions(unbilledOnly = true, limit = 500)
-        requireCurrentReassignmentSession(me, lease)
-        val serverGamingCount = serverSessions.count {
-            gamingBlocksTillReassignment(it.status, it.orderId)
-        } + if (serverSessions.size >= 500 && serverSessions.none {
-                gamingBlocksTillReassignment(it.status, it.orderId)
+                val serverSessions = gamingApi.sessions(unbilledOnly = true, limit = 500)
+                requireCurrentReassignmentSession(me, lease)
+                val serverGamingCount = serverSessions.count {
+                    gamingBlocksTillReassignment(it.status, it.orderId)
+                } + if (serverSessions.size >= 500 && serverSessions.none {
+                        gamingBlocksTillReassignment(it.status, it.orderId)
+                    }
+                ) 1 else 0
+
+                // Re-fetch choices after the slower shift/gaming checks. The selector
+                // never opens from a stale first response.
+                val finalTerminalRows = verifiedBranchTerminals(ApiClient.api.terminals(branchId), branchId)
+                requireCurrentReassignmentSession(me, lease)
+                val finalCurrentStillAvailable = currentStillAvailable && finalTerminalRows.any {
+                    it.id == exactActive.terminalId && it.branchId == exactActive.branchId
+                }
+                val alternatives = finalTerminalRows.filter { it.id != exactActive.terminalId }
+
+                val remoteDecision = reassignmentFacts(
+                    expected = me,
+                    lease = lease,
+                    active = exactActive,
+                    currentTerminalStillAvailable = finalCurrentStillAvailable,
+                    serverOpenShiftCount = serverOpenCount,
+                    serverGamingBlockerCount = serverGamingCount,
+                    alternativeTillCount = alternatives.size,
+                )
+                requireReassignmentAllowed(remoteDecision)
+
+                Triple(alternatives, finalCurrentStillAvailable, serverOpenCount to serverGamingCount)
             }
-        ) 1 else 0
+            val alternatives = observed.first
+            val finalCurrentStillAvailable = observed.second
+            val serverOpenCount = observed.third.first
+            val serverGamingCount = observed.third.second
 
-        // Re-fetch choices after the slower shift/gaming checks. The selector
-        // never opens from a stale first response.
-        val finalTerminalRows = verifiedBranchTerminals(ApiClient.api.terminals(branchId), branchId)
-        requireCurrentReassignmentSession(me, lease)
-        val finalCurrentStillAvailable = currentStillAvailable && finalTerminalRows.any {
-            it.id == exactActive.terminalId && it.branchId == exactActive.branchId
-        }
-        val alternatives = finalTerminalRows.filter { it.id != exactActive.terminalId }
-
-        val remoteDecision = reassignmentFacts(
-            expected = me,
-            lease = lease,
-            active = exactActive,
-            currentTerminalStillAvailable = finalCurrentStillAvailable,
-            serverOpenShiftCount = serverOpenCount,
-            serverGamingBlockerCount = serverGamingCount,
-            alternativeTillCount = alternatives.size,
-        )
-        requireReassignmentAllowed(remoteDecision)
-
-        val finalDecision = cacheIsolation.deactivateAfterOutboxGate {
-            val facts = reassignmentFacts(
-                expected = me,
-                lease = lease,
-                active = exactActive,
-                currentTerminalStillAvailable = finalCurrentStillAvailable,
-                serverOpenShiftCount = serverOpenCount,
-                serverGamingBlockerCount = serverGamingCount,
-                alternativeTillCount = alternatives.size,
-            )
-            when (val decision = terminalReassignmentDecision(facts)) {
-                TerminalReassignmentDecision.Allowed -> OutboxGateResult.Allowed
-                is TerminalReassignmentDecision.Blocked -> OutboxGateResult.Blocked(decision.message)
+            var finalDecision: OutboxGateResult = OutboxGateResult.Blocked("Saved work needs recovery before changing tills.")
+            dCompanyApp.handoverOperations.coordinator.finalizeWorkspaceExit(exit.cap, exitAuthority::beforeDeactivation) {
+                finalDecision = cacheIsolation.deactivateOriginalAfterOutboxGate(
+                    exitAuthority.originalCache, exitAuthority.originalGeneration, exitAuthority::beforeDeactivation,
+                    { commit -> tokens.commitIfOriginalLoginCurrent(exitAuthority.login, commit) },
+                ) {
+                    if (!privateExitWorkClear(exit)) return@deactivateOriginalAfterOutboxGate OutboxGateResult.Blocked(
+                        "Finish or review the original employee's pending work and open checkout before changing tills.")
+                    val facts = reassignmentFacts(
+                        expected = me,
+                        lease = lease,
+                        active = exactActive,
+                        currentTerminalStillAvailable = finalCurrentStillAvailable,
+                        serverOpenShiftCount = serverOpenCount,
+                        serverGamingBlockerCount = serverGamingCount,
+                        alternativeTillCount = alternatives.size,
+                    )
+                    when (val decision = terminalReassignmentDecision(facts)) {
+                        TerminalReassignmentDecision.Allowed -> OutboxGateResult.Allowed
+                        is TerminalReassignmentDecision.Blocked -> OutboxGateResult.Blocked(decision.message)
+                    }
+                }
+                finalDecision is OutboxGateResult.Allowed
             }
-        }
-        if (finalDecision is OutboxGateResult.Blocked) {
-            throw TerminalScopeException(finalDecision.message)
-        }
 
-        sync.clearSessionFeedback()
+            val exactDecision = finalDecision
+            if (exactDecision is OutboxGateResult.Blocked) {
+                throw TerminalScopeException(exactDecision.message)
+            }
 
-        // The final gate has revoked every feature lease, so no cart/shift or
-        // outbox write can race the switch from this point onward.
-        if (!isCurrentReassignmentSession(me, lease)) {
-            restorePreviousTerminalAfterInterruptedChange(me, lease, exactActive)
-            throw TerminalScopeException(
-                "Your sign-in changed during the final till check. The previous assignment was kept.",
+            sync.clearSessionFeedback()
+
+            // The final gate has revoked every feature lease, so no cart/shift or
+            // outbox write can race the switch from this point onward.
+            if (!isCurrentReassignmentSession(me, lease)) {
+                restorePreviousTerminalAfterInterruptedChange(me, lease, exactActive, exitAuthority.originalGeneration + 1)
+                throw TerminalScopeException(
+                    "Your sign-in changed during the final till check. The previous assignment was kept.",
+                )
+            }
+            deactivateTerminalRuntime()
+            realtime.disconnect()
+            pendingTerminalSession = PendingTerminalSession(
+                me = me,
+                restoredSession = lease,
+                previousTerminal = exactActive,
+                selectorAuthority = exitAuthority,
+                selectorExit = exit.cap,
             )
+            _terminalChange.value = TerminalChangeUiState.Idle
+            _state.value = AuthState.SelectTerminal(
+                me = me,
+                terminals = alternatives,
+                reassigning = true,
+                previousTerminalName = exactActive.terminalName,
+            )
+            dCompanyApp.handoverOperations.coordinator.completeWorkspaceExit(exit.cap, exitAuthority::afterDeactivation)
+        } catch (failure: Throwable) {
+            if (!exit.cap.deactivated) {
+                try { dCompanyApp.handoverOperations.coordinator.abortWorkspaceExit(exit.cap, exitAuthority::beforeDeactivation) }
+                catch (_: Exception) { /* Actual storage/authority uncertainty remains closed. */ }
+            }
+            throw failure
         }
-        deactivateTerminalRuntime()
-        realtime.disconnect()
-        pendingTerminalSession = PendingTerminalSession(
-            me = me,
-            restoredSession = lease,
-            previousTerminal = exactActive,
-        )
-        _terminalChange.value = TerminalChangeUiState.Idle
-        _state.value = AuthState.SelectTerminal(
-            me = me,
-            terminals = alternatives,
-            reassigning = true,
-            previousTerminalName = exactActive.terminalName,
-        )
     }
 
     private suspend fun reassignmentFacts(
@@ -1109,18 +1562,23 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         expected: MeResponse,
         lease: SessionRefreshLease,
         previous: ValidatedTerminalDisplay,
+        inactiveGeneration: Long,
     ) {
-        val current = (_state.value as? AuthState.SignedIn)?.me ?: return
-        if (
-            tokens.currentAccessFor(lease) == null ||
-            OutboxOwnerIdentity.from(current) != OutboxOwnerIdentity.from(expected)
-        ) return
+        val visible = _state.value as? AuthState.SignedIn ?: return
+        if (OutboxOwnerIdentity.from(visible.me) != OutboxOwnerIdentity.from(expected)) return
         runCatching {
-            cacheIsolation.activateCached(scopeFor(current, previous.terminalId))
-            sync.clearSessionFeedback()
-            ApiClient.activateTerminalScope(previous.terminalId)
-            terminals.activateCachedValidated(previous.terminalId, previous.branchId)
-            reconcileOperationalAlarms()
+            resumeOriginalCachedTerminal(cacheIsolation, scopeFor(expected, previous.terminalId), inactiveGeneration,
+                originalSelectionCurrent = { _state.value === visible && tokens.currentAccessFor(lease) != null },
+                commitOriginalLogin = { commit -> tokens.commitIfOriginalLoginCurrent(lease, commit) },
+                publish = {
+                    if (!terminals.activateCachedValidated(previous.terminalId, previous.branchId)) {
+                        throw TerminalScopeException("The previous till label could not be verified.")
+                    }
+                    ApiClient.activateTerminalScope(previous.terminalId)
+                    reconcileOperationalAlarms()
+                },
+                cleanup = ::deactivateTerminalRuntime,
+            )
         }
     }
 
@@ -1149,14 +1607,15 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 if (!pending.isTokenCurrent()) return@launch
-                val branchId = pending.me.branchId?.trim()?.takeIf(String::isNotEmpty)
+                val selector = pending.reassignmentReads()
+                val branchId = pending.me.branchId?.trim()?.takeIf(String::isNotEmpty) ?: selector?.branchId
                     ?: throw TerminalScopeException(
                         "This account has no branch assignment. Ask a manager to assign one before opening the workspace.",
                     )
                 val refreshed = if (pending.previousTerminal == null) {
                     verifiedBranchTerminals(ApiClient.api.terminals(branchId), branchId)
                 } else {
-                    verifiedReassignmentChoices(pending, branchId)
+                    verifiedReassignmentChoices(pending, branchId, requireNotNull(selector))
                 }
                 val chosen = refreshed.firstOrNull { it.id == terminal.id }
                 if (chosen == null) {
@@ -1174,6 +1633,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
 
+                selector?.requireCurrent()
                 activateAndRememberTerminal(
                     terminalId = chosen.id,
                     shouldRemember = true,
@@ -1241,12 +1701,13 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 if (!pending.isTokenCurrent()) return@launch
-                val branchId = pending.me.branchId?.trim()?.takeIf(String::isNotEmpty)
+                val selector = pending.reassignmentReads()
+                val branchId = pending.me.branchId?.trim()?.takeIf(String::isNotEmpty) ?: selector?.branchId
                     ?: throw TerminalScopeException(
                         "This account has no branch assignment. Ask a manager to assign one before opening the workspace.",
                     )
                 val refreshed = verifiedBranchTerminals(
-                    ApiClient.api.terminals(branchId),
+                    selector?.terminals() ?: ApiClient.api.terminals(branchId),
                     branchId,
                 ).let { rows ->
                     pending.previousTerminal?.let { old ->
@@ -1296,6 +1757,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun verifiedReassignmentChoices(
         pending: PendingTerminalSession,
         branchId: String,
+        selector: WorkspaceSelectorReads,
     ): List<Terminal> {
         val previous = pending.previousTerminal
             ?: throw TerminalScopeException("The previous till assignment is unavailable. Cancel and try again.")
@@ -1311,19 +1773,20 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
 
-        val firstRows = verifiedBranchTerminals(ApiClient.api.terminals(branchId), branchId)
+        check(selector.branchId == branchId && previous.branchId == branchId)
+        val firstRows = verifiedBranchTerminals(selector.terminals(), branchId)
         if (!pending.isTokenCurrent()) {
             throw TerminalScopeException("Your sign-in changed during the till check. Cancel and sign in again.")
         }
-        val openShifts = shiftApi.shifts(onlyOpen = true, limit = 200)
+        val openShifts = selector.shifts()
         if (!pending.isTokenCurrent()) {
             throw TerminalScopeException("Your sign-in changed during the till check. Cancel and sign in again.")
         }
-        val sessions = gamingApi.sessions(unbilledOnly = true, limit = 500)
+        val sessions = selector.sessions()
         if (!pending.isTokenCurrent()) {
             throw TerminalScopeException("Your sign-in changed during the till check. Cancel and sign in again.")
         }
-        val finalRows = verifiedBranchTerminals(ApiClient.api.terminals(branchId), branchId)
+        val finalRows = verifiedBranchTerminals(selector.terminals(), branchId)
         if (!pending.isTokenCurrent()) {
             throw TerminalScopeException("Your sign-in changed during the till check. Cancel and sign in again.")
         }
@@ -1335,12 +1798,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             .currentShiftCountForTerminal(previous.terminalId)
         val localGamingCount = db.gamingDao().localSessionOverlaysForAlarms().size
         val outboxCount = outboxSafety.snapshot().count
-        val serverShiftCount = openShifts.count { row ->
-            row.branchId != branchId ||
-                row.status != "open" ||
-                row.terminalId == null ||
-                row.terminalId == previous.terminalId
-        }
+        val serverShiftCount = terminalReassignmentShiftBlockers(openShifts, branchId, previous.terminalId)
+            ?: throw TerminalScopeException(TERMINAL_SHIFT_RESPONSE_LIMIT_MESSAGE)
         val serverGamingCount = sessions.count {
             gamingBlocksTillReassignment(it.status, it.orderId)
         } + if (sessions.size >= 500 && sessions.none {
@@ -1364,6 +1823,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
                 alternativeTillCount = alternatives.size,
             ),
         )
+        selector.requireCurrent()
         return alternatives
     }
 
@@ -1372,47 +1832,63 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         val pending = pendingTerminalSession ?: return
         val previous = pending.previousTerminal ?: return
         if (!visible.reassigning || visible.choosing) return
-        _state.value = visible.copy(choosing = true, error = null)
-        viewModelScope.launch {
-            try {
-                if (!pending.isTokenCurrent()) {
-                    throw TerminalScopeException(
-                        "Your sign-in changed while choosing a till. Sign in again to reopen the tablet.",
-                    )
-                }
-                cacheIsolation.activateCached(scopeFor(pending.me, previous.terminalId))
-                sync.clearSessionFeedback()
-                ApiClient.activateTerminalScope(previous.terminalId)
-                if (!terminals.activateCachedValidated(previous.terminalId, previous.branchId)) {
-                    deactivateTerminalRuntime()
-                    cacheIsolation.deactivate()
-                    throw TerminalScopeException(
-                        "The previous till label could not be verified. Reconnect and refresh the till list.",
-                    )
-                }
-                pendingTerminalSession = null
-                _state.value = AuthState.SignedIn(pending.me)
-                sync.requestSync()
-                realtime.connect()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: CacheScopeException) {
-                updateTerminalSelectionError(
-                    error.message ?: "The previous till could not be reopened safely. Try again.",
-                )
-            } catch (error: TerminalScopeException) {
-                updateTerminalSelectionError(error.message ?: "The previous till could not be reopened.")
-            } catch (_: Exception) {
-                updateTerminalSelectionError(
-                    "The previous till could not be reopened safely. Refresh the till list or ask support.",
-                )
-            } finally {
-                val current = _state.value
-                if (current is AuthState.SelectTerminal && current.choosing) {
-                    _state.value = current.copy(choosing = false)
+        val choosing = visible.copy(choosing = true, error = null)
+        val login = pending.restoredSession ?: return
+        val inactiveGeneration = pending.selectorAuthority?.originalGeneration?.plus(1) ?: return
+        _state.value = choosing
+        // Error/finally publication must not change a newer person's selector either.
+        fun feedback(message: String?) {
+            tokens.commitIfOriginalLoginCurrent(login) {
+                if (pendingTerminalSession === pending && _state.value === choosing) {
+                    _state.value = choosing.copy(choosing = false, error = message)
                 }
             }
         }
+        viewModelScope.launch {
+            try {
+                requireNotNull(pending.reassignmentReads()).requireCurrent()
+                val owned = resumeOriginalCachedTerminal(cacheIsolation, scopeFor(pending.me, previous.terminalId), inactiveGeneration,
+                    originalSelectionCurrent = { pendingTerminalSession === pending && _state.value === choosing && pending.isTokenCurrent() },
+                    commitOriginalLogin = { commit -> tokens.commitIfOriginalLoginCurrent(login, commit) },
+                    publish = {
+                        if (!terminals.activateCachedValidated(previous.terminalId, previous.branchId)) {
+                            throw TerminalScopeException("The previous till label could not be verified. Reconnect and refresh the till list.")
+                        }
+                        ApiClient.activateTerminalScope(previous.terminalId)
+                        pendingTerminalSession = null
+                        _state.value = AuthState.SignedIn(pending.me)
+                    },
+                    cleanup = ::deactivateTerminalRuntime,
+                ) ?: return@launch
+                // Never enter worker/socket locks while holding the login mutation lock.
+                cacheIsolation.commitIfCurrent(owned) {
+                    if (tokens.currentAccessFor(login) != null) sync.clearSessionFeedback()
+                }
+                dCompanyApp.handoverOperations.caller(pending.me, owned).run { sync.requestSync() }
+                realtime.connectForOriginal(login)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: CacheScopeException) {
+                feedback(error.message ?: "The previous till could not be reopened safely. Try again.")
+            } catch (error: TerminalScopeException) {
+                feedback(error.message ?: "The previous till could not be reopened.")
+            } catch (_: Exception) {
+                feedback("The previous till could not be reopened safely. Refresh the till list or ask support.")
+            } finally {
+                feedback(null)
+            }
+        }
+    }
+
+    /** Keep authority, not an expiring API/bearer, across explicit selector refresh attempts. */
+    private fun PendingTerminalSession.reassignmentReads(): WorkspaceSelectorReads? {
+        val previous = previousTerminal ?: return null
+        val authority = selectorAuthority
+            ?: throw TerminalScopeException("The original till-selection authority is unavailable. Sign in again.")
+        val cap = selectorExit
+            ?: throw TerminalScopeException("The original till-selection proof is unavailable. Sign in again.")
+        return workspaceSelectorReads(authority, cap, dCompanyApp.handoverOperations.coordinator,
+            previous.branchId, dCompanyApp.handoverOperations::status)
     }
 
     private fun PendingTerminalSession.isTokenCurrent(): Boolean = when {
@@ -1460,6 +1936,7 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Cancel persisted alarms from the purged workspace before B is rendered. */
     private suspend fun activateValidatedScope(scope: CacheScope) {
+        dCompanyApp.handoverOperations.requireOperationalReadiness()
         terminals.deactivateValidatedDisplay()
         val activation = cacheIsolation.activateValidated(scope)
         sync.clearSessionFeedback()
@@ -1524,14 +2001,50 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun signOut() {
+        if (signOutJob?.isActive == true) return
+        val captured = try { pendingLogoutExit?.authority ?: captureWorkspaceExit() }
+        catch (_: Exception) {
+            outboxSafety.publishNotice("The original workspace needs recovery before sign-out. Saved work has been kept.")
+            return
+        }
+        val removal = pendingLogoutRemoval ?: tokens.captureLogoutLease(captured.login) ?: return
+        if (pendingLogoutRemoval == null) {
+            pendingLogoutProfile = cache.profileSnapshot()
+            pendingLogoutOwnsProfile = cache.profile.value?.let { profile ->
+                captured.login?.accessToken?.let(AccessTokenIdentityParser::parse) == OutboxOwnerIdentity.from(profile)
+            } == true
+            pendingLogoutRemoval = removal
+        }
         authorityRefresh.cancelPending()
         terminalChangeJob?.cancel()
         terminalChangeGate.finish()
         _terminalChange.value = TerminalChangeUiState.Idle
-        viewModelScope.launch {
+        signOutJob = viewModelScope.launch {
+            var exit = pendingLogoutExit
             val decision = try {
-                cacheIsolation.deactivateAfterOutboxGate {
-                    outboxSafety.canSignOut()
+                if (exit == null) {
+                    exit = closeWorkspaceAdmission(captured, WorkspaceExitKind.LOGOUT)
+                    pendingLogoutExit = exit
+                }
+                val held = requireNotNull(exit)
+                if (held.cap.deactivated) {
+                    check(captured.afterDeactivation() || captured.localSessionRemoved())
+                    OutboxGateResult.Allowed
+                } else if (!exitLifetimesDrained(held)) {
+                    OutboxGateResult.Blocked("The original workspace is still finishing or recovering saved work. No employee was signed out.")
+                } else {
+                    var gate: OutboxGateResult = OutboxGateResult.Blocked("Saved work needs recovery before sign-out.")
+                    dCompanyApp.handoverOperations.coordinator.finalizeWorkspaceExit(held.cap, captured::beforeDeactivation) {
+                        gate = cacheIsolation.deactivateOriginalAfterOutboxGate(
+                            captured.originalCache, captured.originalGeneration, captured::beforeDeactivation,
+                            { commit -> tokens.commitIfOriginalLoginCurrent(captured.login, commit) },
+                        ) {
+                            if (!privateExitWorkClear(held)) OutboxGateResult.Blocked("Finish or review the original employee's pending work and open checkout before sign-out.")
+                            else outboxSafety.canSignOut()
+                        }
+                        gate is OutboxGateResult.Allowed
+                    }
+                    gate
                 }
             } catch (_: Exception) {
                 OutboxGateResult.Blocked(
@@ -1541,14 +2054,23 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             }
             _loginError.value = loginErrorAfterSignOutDecision(_loginError.value, decision)
             if (decision is OutboxGateResult.Blocked) {
+                exit?.takeIf { !it.cap.deactivated }?.let { held ->
+                    try {
+                        dCompanyApp.handoverOperations.coordinator.abortWorkspaceExit(held.cap, captured::beforeDeactivation)
+                        pendingLogoutExit = null
+                        pendingLogoutRemoval = null
+                        pendingLogoutProfile = null
+                    } catch (_: Exception) { /* Actual storage/authority uncertainty remains closed. */ }
+                }
                 outboxSafety.publishNotice(decision.message)
                 return@launch
             }
+            val held = requireNotNull(exit)
             // Dispose the authenticated feature tree before any IO-backed
             // credential cleanup suspends. Otherwise the old workspace stays
             // tappable with an already-deactivated cache lease and actions can
             // appear to do nothing during sign-out.
-            _state.value = AuthState.SigningOut
+            if (!publishOriginalLogout(captured, removal) { _state.value = AuthState.SigningOut }) return@launch
             freshLoginHandoff.clear()
             sync.clearSessionFeedback()
             deactivateTerminalRuntime()
@@ -1562,31 +2084,47 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 bestEffortAuthenticatedLogout(
                     timeoutMillis = REMOTE_LOGOUT_TIMEOUT_MILLIS,
-                    revokeRemoteSession = { ApiClient.api.logout() },
+                    revokeRemoteSession = { logoutOriginalWorkspace(captured, held.cap, dCompanyApp.handoverOperations.coordinator) },
                     clearLocalSession = {
-                        withContext(Dispatchers.IO) { tokens.clear() }
+                        withContext(Dispatchers.IO) {
+                            check(captured.inactiveCacheUnchanged() && tokens.clearForLogoutIfCurrent(removal)) {
+                                "The original logout cleanup authority changed."
+                            }
+                        }
                     },
                 )
             } catch (_: Exception) {
-                _state.value = AuthState.SignOutFailed(
-                    "This tablet could not durably remove the secure session. Keep this screen open, " +
-                        "retry sign-out, and do not hand the tablet to another employee until it succeeds.",
-                )
+                publishOriginalLogout(captured, removal) {
+                    _state.value = AuthState.SignOutFailed(
+                        "This tablet could not durably remove the secure session. Keep this screen open, " +
+                            "retry sign-out, and do not hand the tablet to another employee until it succeeds.",
+                    )
+                }
                 return@launch
             }
-            // Must also drop the cached profile: leaving it would let the next
-            // cold start reopen the till as the staff member who just signed out.
+            // A pre-terminal logout cannot erase another unadopted owner's cached profile.
             try {
-                cache.rememberProfile(null)
+                if (pendingLogoutOwnsProfile) {
+                    check(cache.forgetOriginalProfile(pendingLogoutProfile) {
+                        captured.inactiveCacheUnchanged() && tokens.isCurrentLogoutRemoval(removal)
+                    }) { "The original cached profile changed." }
+                }
+                dCompanyApp.handoverOperations.coordinator.completeWorkspaceExit(held.cap) {
+                    cacheIsolation.publishIfInactiveGeneration(captured.originalGeneration + 1) {
+                        tokens.publishIfCurrentLogoutRemoval(removal) {
+                            pendingLogoutExit = null
+                            pendingLogoutRemoval = null
+                            pendingLogoutProfile = null
+                            _state.value = AuthState.SignedOut
+                        }
+                    }
+                }
             } catch (_: Exception) {
-                // Credentials are already gone, so sign-out itself succeeded.
-                // Surface the local cleanup problem on Login rather than
-                // leaving the employee trapped behind an endless spinner.
-                _loginError.value =
-                    "Signed out, but this tablet could not clear its saved display profile. " +
-                        "Restart the app before the next employee signs in."
+                publishOriginalLogout(captured, removal) {
+                    _state.value = AuthState.SignOutFailed(
+                        "The secure session was removed, but workspace cleanup needs recovery. Keep this screen open and retry sign-out.")
+                }
             }
-            _state.value = AuthState.SignedOut
         }
     }
 

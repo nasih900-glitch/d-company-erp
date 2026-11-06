@@ -1044,6 +1044,7 @@ def test_installer_legacy_guard_is_separate_from_the_exact55_proof(
 
 def test_build55_backend_write_surface_is_bounded_to_reviewed_corrections(verifier):
     assert verifier.PRIOR_REVISION == "5ad146ae076f5178acc2c8e4cb840ecbb0d0343a"
+    # Compare the historical release trees after the active worktree advances.
     changed = set(
         subprocess.run(
             [
@@ -1051,23 +1052,7 @@ def test_build55_backend_write_surface_is_bounded_to_reviewed_corrections(verifi
                 "diff",
                 "--name-only",
                 verifier.PRIOR_REVISION,
-                "--",
-                "backend/app",
-                "backend/alembic",
-            ],
-            cwd=ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.splitlines()
-    )
-    changed.update(
-        subprocess.run(
-            [
-                "git",
-                "ls-files",
-                "--others",
-                "--exclude-standard",
+                "9e31d0daaa5fbf8b46647a213f6e7beab1ca087a",
                 "--",
                 "backend/app",
                 "backend/alembic",

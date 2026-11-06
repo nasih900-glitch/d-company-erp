@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
 from uuid import uuid4
 
+import psycopg
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
@@ -48,6 +50,37 @@ def _snapshot(dsn):
     )
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
+
+
+def _current_finance_seed_shift_columns(dsn, *, enable):
+    """Allow current ORM only during seeding of the owned historical fixture."""
+    with psycopg.connect(dsn) as connection:
+        database, revision = connection.execute(
+            "SELECT current_database(), (SELECT version_num FROM public.alembic_version)"
+        ).fetchone()
+        assert connection.info.host in {"localhost", "127.0.0.1", "::1"}
+        assert re.fullmatch(r"erp_build(?:51_nonempty_tender|55_stable_schema)_[0-9a-f]{16}", database)
+        assert revision == "0091"
+        connection.execute("SET LOCAL lock_timeout = '5s'")
+        if enable:
+            connection.execute(
+                "ALTER TABLE public.shifts ADD COLUMN operator_user_id uuid, "
+                "ADD COLUMN operator_revision integer"
+            )
+        else:
+            assert connection.execute(
+                "SELECT NOT EXISTS (SELECT 1 FROM public.shifts "
+                "WHERE operator_user_id IS NOT NULL OR operator_revision IS NOT NULL)"
+            ).fetchone() == (True,)
+            connection.execute(
+                "ALTER TABLE public.shifts DROP COLUMN operator_user_id, "
+                "DROP COLUMN operator_revision"
+            )
+            assert connection.execute(
+                "SELECT count(*) FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'shifts' "
+                "AND column_name IN ('operator_user_id', 'operator_revision')"
+            ).fetchone() == (0,)
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -127,6 +160,10 @@ async def session(owned_policy_database, stable_owned_schema):
 async def test_build55_retains_nonempty_finance_audit_and_exact_stopped_restore(
     client, session, seed_owner, owned_policy_database, tmp_path, gaming_session_count
 ):
+    engine = owned_policy_database.kw["bind"]
+    url = engine.url.set(drivername="postgresql+psycopg").render_as_string(hide_password=False)
+    dsn = url.replace("postgresql+psycopg://", "postgresql://", 1)
+    _current_finance_seed_shift_columns(dsn, enable=True)
     headers, day, order, payment, shift = await case(session, seed_owner)
     gaming_ids = {
         "station": uuid4(), "session": uuid4(), "company": order.company_id,
@@ -172,9 +209,7 @@ async def test_build55_retains_nonempty_finance_audit_and_exact_stopped_restore(
     assert actuals.status_code == 201, actuals.text
     assert actuals.json()["financial_effect"] is False
     await session.rollback()
-    engine = owned_policy_database.kw["bind"]
-    url = engine.url.set(drivername="postgresql+psycopg").render_as_string(hide_password=False)
-    dsn = url.replace("postgresql+psycopg://", "postgresql://", 1)
+    _current_finance_seed_shift_columns(dsn, enable=False)
     migration = _run_alembic(url, "downgrade", "0091")
     assert migration.returncode == 0, migration.stderr
     # Exercise the new NULL-field projection with real predecessor rows, not

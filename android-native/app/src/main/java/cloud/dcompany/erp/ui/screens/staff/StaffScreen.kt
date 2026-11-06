@@ -114,7 +114,7 @@ fun StaffScreen(profile: MeResponse, access: StaffAccess) {
     var identity by remember(profile.userId, profile.companyId, time, canAdminister) { mutableStateOf(!time.canRead) }
     Column(Modifier.fillMaxSize()) {
         if (time.canRead && canAdminister) Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-            TextButton({ identity = false }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Time & draft pay") }
+            TextButton({ identity = false }, modifier = Modifier.heightIn(min = 48.dp)) { Text(if (time.canManage) "Time & draft pay" else "Attendance") }
             TextButton({ identity = true }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Logins & access") }
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {

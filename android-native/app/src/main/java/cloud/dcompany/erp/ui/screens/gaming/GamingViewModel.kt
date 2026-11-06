@@ -1749,6 +1749,8 @@ internal suspend fun recoverGamingThenRefresh(
 class GamingViewModel : ViewModel() {
 
     private val appCtx = DCompanyApp.instance
+    private val originalOperation = appCtx.handoverOperations.captureOriginal(appCtx.shiftCache.profile.value, appCtx.cacheIsolation.currentLease())
+    private val operations = cloud.dcompany.erp.core.handover.CallerOperations(appCtx.handoverOperations, originalOperation)
     private val db = appCtx.db
     private val gamingApi = ApiClient.create<GamingApi>()
     private val manualAdmission = ManualBackendRequestAdmission(
@@ -2006,7 +2008,7 @@ class GamingViewModel : ViewModel() {
 
     init {
         val recoveryLease = appCtx.cacheIsolation.currentLease()
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { refreshing.value = false; refreshError.value = "Resolve the original till handover before refreshing Gaming." }) {
             recoverGamingThenRefresh(
                 recover = {
                     // MIGRATION_16_17 handles normal upgrades. This idempotent
@@ -2040,11 +2042,11 @@ class GamingViewModel : ViewModel() {
         if (refreshing.value) return
         refreshing.value = true
         refreshError.value = null
-        viewModelScope.launch { refreshGaming() }
+        operations.launch(viewModelScope, onRejected = { refreshing.value = false; refreshError.value = "Resolve the original till handover before refreshing Gaming." }) { refreshGaming() }
     }
 
     fun refreshCustomersForStart() {
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             // Best effort: the scoped Room cache remains usable offline and the
             // dialog states the backend's current 500-row pull bound.
             customerLookupMutex.withLock { appCtx.sync.refresh("customers") }
@@ -2060,7 +2062,7 @@ class GamingViewModel : ViewModel() {
             preservedState = "No customer was selected or changed.",
         )
         val lease = scopeLeaseOrError(workspaceMessage) ?: return
-        customerSearchJob = viewModelScope.launch {
+        customerSearchJob = operations.launch(viewModelScope, onRejected = { error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             delay(250)
             try {
                 customerLookupMutex.withLock {
@@ -2319,7 +2321,7 @@ class GamingViewModel : ViewModel() {
         busyStationId.value = station.id
         error.value = null
         notice.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { if (busyStationId.value == station.id) busyStationId.value = null; error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             try {
                 val localSessionId = UUID.randomUUID().toString()
                 var inserted = false
@@ -2443,7 +2445,7 @@ class GamingViewModel : ViewModel() {
         busyStationId.value = session.stationId
         error.value = null
         notice.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { if (busyStationId.value == session.stationId) busyStationId.value = null; error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             try {
                 var changed = true
                 if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
@@ -2665,7 +2667,7 @@ class GamingViewModel : ViewModel() {
         busyStationId.value = session.stationId
         error.value = null
         notice.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { if (busyStationId.value == session.stationId) busyStationId.value = null; error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             try {
                 var captured = false
                 if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
@@ -2769,7 +2771,7 @@ class GamingViewModel : ViewModel() {
         busyStationId.value = session.stationId
         error.value = null
         notice.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { if (busyStationId.value == session.stationId) busyStationId.value = null; error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             try {
                 var captured = false
                 if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
@@ -2845,7 +2847,7 @@ class GamingViewModel : ViewModel() {
         busyStationId.value = actionOwner
         error.value = null
         notice.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { if (busyStationId.value == actionOwner) busyStationId.value = null; error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             try {
                 val changed = appCtx.cacheIsolation.commitResultIfCurrent(scopeLease) {
                     db.gamingDao().discardRejectedSessionAddonAction(
@@ -2950,7 +2952,7 @@ class GamingViewModel : ViewModel() {
         busyStationId.value = session.stationId
         error.value = null
         notice.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { if (busyStationId.value == session.stationId) busyStationId.value = null; error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             val authority = if (currentIsProtectedApprover) {
                 LegacyRecoveryAuthority(profile.userId, gamingApi)
             } else {
@@ -3303,7 +3305,7 @@ class GamingViewModel : ViewModel() {
         busyStationId.value = session.stationId
         error.value = null
         notice.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { if (busyStationId.value == session.stationId) busyStationId.value = null; error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             try {
                 var changed = true
                 if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
@@ -3390,7 +3392,7 @@ class GamingViewModel : ViewModel() {
         busyStationId.value = session.stationId
         error.value = null
         notice.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { if (busyStationId.value == session.stationId) busyStationId.value = null; error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             try {
                 val local = db.gamingDao().localSessionByEitherId(session.id)
                 val serverSessionId = local?.serverId ?: session.id.takeIf { local == null }
@@ -3495,7 +3497,7 @@ class GamingViewModel : ViewModel() {
         busyStationId.value = session.stationId
         error.value = null
         notice.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { if (busyStationId.value == session.stationId) busyStationId.value = null; error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             try {
                 val result = gamingApi.handoffToPos(
                     id = selection.serverSessionId,
@@ -3532,6 +3534,7 @@ class GamingViewModel : ViewModel() {
                 if (!handoffCommitted) {
                     return@launch
                 }
+                reconciled()
                 notice.value = if (result.alreadyLinked) {
                     "This bill was already waiting at ${target.terminalName}; no duplicate order was created."
                 } else {
@@ -3655,7 +3658,7 @@ class GamingViewModel : ViewModel() {
         busyStationId.value = session.stationId
         error.value = null
         notice.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { if (busyStationId.value == session.stationId) busyStationId.value = null; error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             try {
                 var captured = false
                 if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(
@@ -3759,7 +3762,7 @@ class GamingViewModel : ViewModel() {
         val actionId = UUID.randomUUID().toString()
         busyStationId.value = session.stationId
         error.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { if (busyStationId.value == session.stationId) busyStationId.value = null; error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             try {
                 var saved = false
                 if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(scopeLease, onStale = {
@@ -3934,7 +3937,7 @@ class GamingViewModel : ViewModel() {
         }
         busyStationId.value = session.stationId
         error.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { if (busyStationId.value == session.stationId) busyStationId.value = null; error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             try {
                 var saved = false
                 var captureError: String? = null
@@ -4060,7 +4063,7 @@ class GamingViewModel : ViewModel() {
         ) ?: return
         busyStationId.value = session.stationId
         error.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { if (busyStationId.value == session.stationId) busyStationId.value = null; error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             try {
                 var discarded = false
                 if (!appCtx.cacheIsolation.commitIfCurrentOrNotifyStale(lease, onStale = {
@@ -4126,7 +4129,7 @@ class GamingViewModel : ViewModel() {
         busyStationId.value = action.serverSessionId
         error.value = null
         notice.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { if (busyStationId.value == action.serverSessionId) busyStationId.value = null; error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             try {
                 var retainedSnapshot: LocalGamingPackageExtensionEntity? = null
                 var retainedLedger: LocalGamingSessionActionEntity? = null
@@ -4379,7 +4382,7 @@ class GamingViewModel : ViewModel() {
         busyStationId.value = session.stationId
         error.value = null
         notice.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { if (busyStationId.value == session.stationId) busyStationId.value = null; error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             try {
                 val repaired = gamingApi.repairBilling(
                     id = session.id,
@@ -4398,6 +4401,7 @@ class GamingViewModel : ViewModel() {
                     db.gamingDao().upsertAuthoritativeSession(cache)
                 }
                 if (scopeStillCurrent) {
+                    reconciled()
                     notice.value = "Missing billing repaired to ${amountMinor.asRupees()}. Review it before sending to POS."
                 }
             } catch (e: ApiException) {
@@ -4438,7 +4442,7 @@ class GamingViewModel : ViewModel() {
         busyStationId.value = session.stationId
         error.value = null
         notice.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { if (busyStationId.value == session.stationId) busyStationId.value = null; error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             try {
                 // Flow-backed button state normally closes this path as soon
                 // as an action is captured. Recheck Room immediately before
@@ -4462,6 +4466,7 @@ class GamingViewModel : ViewModel() {
                         },
                     )
                 ) {
+                    reconciled()
                     notice.value = successMessage
                 }
             } catch (cancelled: CancellationException) {
@@ -4559,7 +4564,7 @@ class GamingViewModel : ViewModel() {
         busyStationId.value = session.stationId
         error.value = null
         notice.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { if (busyStationId.value == session.stationId) busyStationId.value = null; error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             try {
                 val result = gamingApi.reconcileToPos(
                     session.id,
@@ -4585,6 +4590,7 @@ class GamingViewModel : ViewModel() {
                         }
                     }
                 ) {
+                    reconciled()
                     notice.value = if (result.alreadyLinked) {
                         "This session was already reconciled and is available in POS."
                     } else {
@@ -4632,7 +4638,7 @@ class GamingViewModel : ViewModel() {
         ) ?: return
         busyStationId.value = session.stationId
         error.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { if (busyStationId.value == session.stationId) busyStationId.value = null; error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             try {
                 val review = manualAdmission.execute(
                     operation = ManualBackendOperation.MANUAL_READ,
@@ -4741,7 +4747,7 @@ class GamingViewModel : ViewModel() {
         }
         busyStationId.value = review.session.stationId
         error.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { if (busyStationId.value == review.session.stationId) busyStationId.value = null; error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             try {
                 val cancelled = manualAdmission.execute(
                     operation = ManualBackendOperation.DIRECT_AUDITED_MUTATION,
@@ -4778,6 +4784,7 @@ class GamingViewModel : ViewModel() {
                         GamingAlarmReconciler.reconcile(appCtx)
                         _sessionVoidReview.compareAndSet(review, null)
                         sessionVoidAttemptOwner.compareAndSet(attempt, null)
+                        reconciled()
                         notice.value = if (retainedOrder == null) {
                             "Session voided. No POS bill was created."
                         } else {
@@ -4839,7 +4846,7 @@ class GamingViewModel : ViewModel() {
         ) ?: return
         busyStationId.value = session.stationId
         error.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { if (busyStationId.value == session.stationId) busyStationId.value = null; error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             var claimToken: String? = null
             try {
                 check(db.heldOrderDao().paymentForTarget(requireNotNull(session.orderId)) == null) {
@@ -4873,6 +4880,7 @@ class GamingViewModel : ViewModel() {
                 appCtx.cacheIsolation.commitIfCurrent(reviewLease) {
                     linkedGamingVoidAttemptOwner.set(null)
                     _linkedGamingVoidReview.value = review
+                    reconciled()
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -4916,6 +4924,8 @@ class GamingViewModel : ViewModel() {
             currentLease = appCtx.cacheIsolation::currentLease,
             release = { id, token -> pos.releaseCheckoutClaim(id, token) },
         )
+        val originalBinding = requireNotNull(kotlinx.coroutines.currentCoroutineContext()[cloud.dcompany.erp.core.handover.OperationDispatchContext]?.binding)
+        appCtx.idleCheckoutClaims.remember(originalBinding, order.id, claim.claimToken)
         return LinkedGamingVoidReviewUi(current, order, addons, claim.claimToken, expiry, scopeLease)
     }
 
@@ -4923,14 +4933,20 @@ class GamingViewModel : ViewModel() {
         val review = takeLinkedGamingVoidReview() ?: return
         linkedGamingVoidAttemptOwner.set(null)
         if (appCtx.cacheIsolation.currentLease() == review.scopeLease) {
-            viewModelScope.launch { releaseGamingVoidClaimBestEffort(review.order.id, review.claimToken) }
+            operations.launch(viewModelScope, onRejected = { error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) { releaseGamingVoidClaimBestEffort(review.order.id, review.claimToken) }
         }
+    }
+
+    private fun clearLinkedGamingVoidReview(review: LinkedGamingVoidReviewUi): Boolean {
+        if (!_linkedGamingVoidReview.compareAndSet(review, null)) return false
+        originalOperation?.let { appCtx.idleCheckoutClaims.markAbandoned(it.authority.scope, review.order.id, review.claimToken) }
+        return true
     }
 
     private fun takeLinkedGamingVoidReview(): LinkedGamingVoidReviewUi? {
         while (true) {
             val review = _linkedGamingVoidReview.value ?: return null
-            if (_linkedGamingVoidReview.compareAndSet(review, null)) return review
+            if (clearLinkedGamingVoidReview(review)) return review
         }
     }
 
@@ -4973,7 +4989,7 @@ class GamingViewModel : ViewModel() {
         }
         busyStationId.value = review.session.stationId
         error.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { if (busyStationId.value == review.session.stationId) busyStationId.value = null; error.value = "Resolve the original till handover before continuing Gaming. Saved work is retained." }) {
             try {
                 val response = manualAdmission.execute(
                     operation = ManualBackendOperation.DIRECT_AUDITED_MUTATION,
@@ -5007,8 +5023,9 @@ class GamingViewModel : ViewModel() {
                             else db.heldOrderDao().upsertAll(listOf(retainedOrder.toHeldOrderCache()))
                         }
                         GamingAlarmReconciler.reconcile(appCtx)
-                        _linkedGamingVoidReview.compareAndSet(review, null)
+                        clearLinkedGamingVoidReview(review)
                         linkedGamingVoidAttemptOwner.compareAndSet(attempt, null)
+                        reconciled()
                         notice.value = if (retainedOrder == null) {
                             "Gaming charge voided. The empty unpaid order is closed."
                         } else {
@@ -5064,12 +5081,16 @@ class GamingViewModel : ViewModel() {
     )
 
     private suspend fun releaseGamingVoidClaimBestEffort(orderId: String, token: String) {
+        originalOperation?.let { appCtx.idleCheckoutClaims.markAbandoned(it.authority.scope, orderId, token) }
         runCatching {
             manualAdmission.execute(
                 operation = ManualBackendOperation.DIRECT_AUDITED_MUTATION,
                 normal = { ApiClient.api.releaseCheckoutClaim(orderId, token) },
                 direct = { ApiClient.createManualDirectApi(ErpApi::class.java).releaseCheckoutClaim(orderId, token) },
             )
+            kotlinx.coroutines.currentCoroutineContext()[cloud.dcompany.erp.core.handover.OperationDispatchContext]?.binding?.let { original ->
+                appCtx.idleCheckoutClaims.forgetExact(original.authority.scope, orderId, token)
+            }
         }
     }
 
