@@ -148,7 +148,11 @@ def test_psycopg_must_use_the_locked_binary_implementation(profile, monkeypatch,
     ('3.1.59', '3.1.60', None),
     ('3.1.60', '3.1.59', None),
     ('3.1.60', None, None),
-    ('3.1.61', '3.1.61', None),
+    ('3.1.61', '3.1.61', '0095'),
+    ('3.1.60', '3.1.61', None),
+    ('3.1.61', '3.1.60', None),
+    ('3.1.61', None, None),
+    ('3.1.62', '3.1.62', None),
 ])
 def test_runtime_revision_is_bound_to_installed_and_configured_identity(profile, installed, configured, expected):
     if expected is None:
@@ -166,6 +170,7 @@ def test_runtime_revision_is_bound_to_installed_and_configured_identity(profile,
     (None, None, '3.1.58', '0094'), (None, None, '3.1.59', '0095'),
     (None, 'revision', '3.1.58', '0095'), (None, 'revision', '3.1.59', '0094'),
     (None, None, '3.1.60', '0095'), (None, 'revision', '3.1.60', '0094'),
+    (None, None, '3.1.61', '0095'), (None, 'revision', '3.1.61', '0094'),
 ])
 def test_each_postgres_query_must_succeed_and_engines_are_disposed(
     profile, monkeypatch, driver, failure, version, actual_revision
@@ -252,10 +257,10 @@ def test_scanner_child_failure_propagates_through_actual_find(tmp_path, before_w
     assert 'UNREACHABLE' not in completed.stdout
 
 
-@pytest.mark.parametrize('version,expected', [('3.1.57', 7), ('3.1.58', 7), ('3.1.59', 7), ('3.1.60', 7), ('3.1.44', 0), ('3.1.45', 0), ('3.1.46', 0)])
+@pytest.mark.parametrize('version,expected', [('3.1.57', 7), ('3.1.58', 7), ('3.1.59', 7), ('3.1.60', 7), ('3.1.61', 7), ('3.1.44', 0), ('3.1.45', 0), ('3.1.46', 0)])
 def test_new_profile_is_mandatory_only_for_current_runtime(version, expected, tmp_path):
     source = (ROOT / 'infra/scripts/verify-production-runtime-images.sh').read_text()
-    marker = '# The final-image profile is mandatory for Builds 64 through 67.'
+    marker = '# The final-image profile is mandatory for Builds 64 through 68.'
     block = source[source.index(marker):].split('\nfi\n', 1)[0] + '\nfi\n'
     fake = tmp_path / 'compose'
     fake.write_text('#!/bin/sh\nexit 7\n')

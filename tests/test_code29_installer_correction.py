@@ -41,6 +41,7 @@ from scripts.verify_code26_regression_freeze import (
     CODE30_4_BUILD64_BASE,
     CODE30_4_BUILD65_BASE,
     CODE30_4_BUILD66_BASE,
+    CODE30_4_BUILD67_BASE,
     CODE30_4_FREEZE_CONTROL_PATHS,
     REVIEWED_CODE30_2_PRODUCTION_PATHS,
     REVIEWED_CODE30_2_SHA256,
@@ -75,6 +76,7 @@ from scripts.verify_code26_regression_freeze import (
     REVIEWED_CODE30_4_BUILD65_SHA256,
     REVIEWED_CODE30_4_BUILD66_SHA256,
     REVIEWED_CODE30_4_BUILD67_SHA256,
+    REVIEWED_CODE30_4_BUILD68_SHA256,
     REVIEWED_CODE30_4_SHA256,
     REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256,
 )
@@ -83,7 +85,7 @@ from scripts.verify_code26_regression_freeze import (
 ROOT = Path(__file__).resolve().parents[1]
 ORIGINAL_CODE29 = "0949620b4632ebd6accdfa62a203be8d85b31a24"
 CADDY_SHA256 = "951a0136950bb9edf60ff5cec6ca2df0a041b27ded9e610f0aab49b168739dac"
-CURRENT_CADDY_SHA256 = "f2fcd13d0aeb36b7622b041fb6a607bd9cd0bef846291f0751a2e20ee4ab827b"
+CURRENT_CADDY_SHA256 = "db2378c42f9ae1b9db772cad5f857026138cee72ac91c057114faf138afdceb2"
 LOCK_VERIFIER_SHA256 = "338cea91b56c2d85be109d259af1d77aa6d4ceaab4b13b379876c02e4485c029"
 HISTORICAL_CODE29_GUARD_SHA256 = (
     "2d761a871369d891849e0170c85533a0269d209f7949b376300eb0994bd5fc15"
@@ -607,7 +609,7 @@ def _assert_sha256(path: str, content: bytes, expected: str) -> None:
 
 
 def _current_reviewed_sha256(path: str, fallback: str) -> str:
-    return REVIEWED_CODE30_4_BUILD67_SHA256.get(path) or REVIEWED_CODE30_4_BUILD66_SHA256.get(path) or REVIEWED_CODE30_4_BUILD65_SHA256.get(path) or REVIEWED_CODE30_4_BUILD64_SHA256.get(path) or REVIEWED_CODE30_4_BUILD63_SHA256.get(path) or REVIEWED_CODE30_4_BUILD62_SHA256.get(path) or REVIEWED_CODE30_4_BUILD61_SHA256.get(path) or REVIEWED_CODE30_4_BUILD60_SHA256.get(path) or REVIEWED_CODE30_4_BUILD59_SHA256.get(path) or REVIEWED_CODE30_4_BUILD58_SHA256.get(path) or REVIEWED_CODE30_4_BUILD57_SHA256.get(path) or REVIEWED_CODE30_4_BUILD56_SHA256.get(path) or REVIEWED_CODE30_4_BUILD55_SHA256.get(path) or REVIEWED_CODE30_4_BUILD54_SHA256.get(path) or REVIEWED_CODE30_4_BUILD53_SHA256.get(path) or REVIEWED_CODE30_4_BUILD52_SHA256.get(path) or REVIEWED_CODE30_4_BUILD51_SHA256.get(path) or REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
+    return REVIEWED_CODE30_4_BUILD68_SHA256.get(path) or REVIEWED_CODE30_4_BUILD67_SHA256.get(path) or REVIEWED_CODE30_4_BUILD66_SHA256.get(path) or REVIEWED_CODE30_4_BUILD65_SHA256.get(path) or REVIEWED_CODE30_4_BUILD64_SHA256.get(path) or REVIEWED_CODE30_4_BUILD63_SHA256.get(path) or REVIEWED_CODE30_4_BUILD62_SHA256.get(path) or REVIEWED_CODE30_4_BUILD61_SHA256.get(path) or REVIEWED_CODE30_4_BUILD60_SHA256.get(path) or REVIEWED_CODE30_4_BUILD59_SHA256.get(path) or REVIEWED_CODE30_4_BUILD58_SHA256.get(path) or REVIEWED_CODE30_4_BUILD57_SHA256.get(path) or REVIEWED_CODE30_4_BUILD56_SHA256.get(path) or REVIEWED_CODE30_4_BUILD55_SHA256.get(path) or REVIEWED_CODE30_4_BUILD54_SHA256.get(path) or REVIEWED_CODE30_4_BUILD53_SHA256.get(path) or REVIEWED_CODE30_4_BUILD52_SHA256.get(path) or REVIEWED_CODE30_4_BUILD51_SHA256.get(path) or REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
         path,
         REVIEWED_CODE30_4_BUILD41_SHA256.get(
             path,
@@ -625,6 +627,8 @@ def _current_reviewed_sha256(path: str, fallback: str) -> str:
 
 
 def _reviewed_sha256(path: str, historical: dict[str, str]) -> str:
+    if path in REVIEWED_CODE30_4_BUILD68_SHA256:
+        return REVIEWED_CODE30_4_BUILD68_SHA256[path]
     if path in REVIEWED_CODE30_4_BUILD67_SHA256:
         return REVIEWED_CODE30_4_BUILD67_SHA256[path]
     if path in REVIEWED_CODE30_4_BUILD66_SHA256:
@@ -793,7 +797,7 @@ def test_live_delta_is_exactly_the_reviewed_code29_correction() -> None:
         | set(REVIEWED_CODE30_4_BUILD53_SHA256)
         | set(REVIEWED_CODE30_4_BUILD54_SHA256)
         | set(REVIEWED_CODE30_4_BUILD55_SHA256)
-        | set(REVIEWED_CODE30_4_BUILD56_SHA256) | set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256)
+        | set(REVIEWED_CODE30_4_BUILD56_SHA256) | set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256)
     )
     protected_application_changes = {
         path
@@ -868,8 +872,8 @@ def test_live_coordinated_identity_is_version_name_3_1_47_with_build_55() -> Non
             _assert_exact_text(path, _current(path), _identity_expected(path))
 
     build = _current("android-native/app/build.gradle.kts")
-    assert build.count("versionCode = 67") == 1
-    assert build.count('versionName = "3.1.60"') == 1
+    assert build.count("versionCode = 68") == 1
+    assert build.count('versionName = "3.1.61"') == 1
 
     historical_build44 = _historical_bytes(
         CODE30_4_BUILD44_BASE, "android-native/app/build.gradle.kts"
@@ -905,7 +909,7 @@ def test_live_coordinated_identity_is_version_name_3_1_47_with_build_55() -> Non
             REVIEWED_CODE30_2_SHA256[".env.production.example"],
         ),
     )
-    assert "APP_VERSION=3.1.60" in actual_env
+    assert "APP_VERSION=3.1.61" in actual_env
     assert "ANDROID_MIN_SUPPORTED_VERSION_CODE=8" in actual_env
     assert "ANDROID_LATEST_VERSION_CODE=8" in actual_env
     assert "CLIENT_COMPATIBILITY_POLICY_REVISION=1" in actual_env
@@ -2748,6 +2752,8 @@ def test_reviewed_code30_point4_delta_files_are_exact() -> None:
     for path, expected_sha256 in REVIEWED_CODE30_4_BUILD66_SHA256.items():
         _assert_sha256(path, _historical_bytes(CODE30_4_BUILD66_BASE, path), expected_sha256)
     for path, expected_sha256 in REVIEWED_CODE30_4_BUILD67_SHA256.items():
+        _assert_sha256(path, _historical_bytes(CODE30_4_BUILD67_BASE, path), expected_sha256)
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD68_SHA256.items():
         _assert_sha256(path, (ROOT / path).read_bytes(), expected_sha256)
 
 

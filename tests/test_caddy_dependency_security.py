@@ -17,9 +17,54 @@ CODE29_SIGNED_BASE = "0949620b4632ebd6accdfa62a203be8d85b31a24"
 BUILD42_RELEASE_BASE = "1c1c7582eb8d6d6c509ddddc159014af10ce5f89"
 BUILD43_RELEASE_BASE = "8418e349eac0707ef62629f6cd3b7dc434690436"
 BUILD45_RUNTIME_BASE = "5b8ef38597871599fde4a42a5b895cd9a05c4d11"
+BUILD67_RELEASE_BASE = "6224fccac9be7f32c0119ef73b8ed66f9c1aec3c"
 OLD_BINARY_SHA256 = "73c0169f0b72b465e2ae20bdb67a3e017044b2ab3d267816398b9d6ece243fb0"
 PATCHED_BINARY_SHA256 = "951a0136950bb9edf60ff5cec6ca2df0a041b27ded9e610f0aab49b168739dac"
-CURRENT_BINARY_SHA256 = "f2fcd13d0aeb36b7622b041fb6a607bd9cd0bef846291f0751a2e20ee4ab827b"
+BUILD67_BINARY_SHA256 = "f2fcd13d0aeb36b7622b041fb6a607bd9cd0bef846291f0751a2e20ee4ab827b"
+CURRENT_BINARY_SHA256 = "db2378c42f9ae1b9db772cad5f857026138cee72ac91c057114faf138afdceb2"
+# GO-2026-6860 and GO-2026-6866 require x/net v0.62.0 and its selected graph.
+NET_SECURITY_UPGRADES = (
+    (
+        "golang.org/x/crypto", "v0.57.0", "v0.58.0",
+        "h1:COkYLr4k7nDI4r6QtMML2AfzeIswWHAJthLS6K/M/54=",
+        "h1:Xh+kl5A+M0gMiWDytH2Hhr5Z7WbNCpv/eB/EFgfSk+w=",
+    ),
+    (
+        "golang.org/x/net", "v0.60.0", "v0.62.0",
+        "h1:18ELalfM5+XNRwzM2nYqXsZQ9ByS1uhj2O/U7+5jqRY=",
+        "h1:WgDCOTH8iwtB66T4/GfI94AHo/hhdb7Hah9NDseQfiI=",
+    ),
+    (
+        "golang.org/x/sync", "v0.23.0", "v0.24.0",
+        "h1:iqiDrGoDgyuvAKrhLQthUEzU/R378N78gXbBjxed7oA=",
+        "h1:sUUOizhqBxiL6pEWpqNLUiaJn1ShEbZ6BBqskPbjZm0=",
+    ),
+    (
+        "golang.org/x/sys", "v0.48.0", "v0.49.0",
+        "h1:XbzkgYJHdqh/8m2Uu0W/dQv8nktxx4BFHp1M0gROTXA=",
+        "h1:hNLxWAXmnKAxqDtdwIYC4bM9oQPEecfsnNMuSxOs3og=",
+    ),
+    (
+        "golang.org/x/telemetry", "v0.0.0-20260811182544-a038080d80e5", "v0.0.0-20260924152758-ed294f943157",
+        "h1:DftxASHKl6JolFPqoN+2WrFO53JvkHwRXvFqf8gsivA=",
+        "h1:i+ivNqjDnTF3WTElsdk5g9V5DTSBYgdNo7xTU9SDwYA=",
+    ),
+    (
+        "golang.org/x/term", "v0.46.0", "v0.47.0",
+        "h1:cpyOwQkr2Nzxe2p6KnrTG7Ei2wtzjsuSjhpXXepZ/BM=",
+        "h1:efAfAuG6RKABvg1ArGebRkvX6LXul14SM67o2e4mUCY=",
+    ),
+    (
+        "golang.org/x/text", "v0.42.0", "v0.43.0",
+        "h1:1QivrlhwAsnMOcqgOdl9my7s9OyZl8O5/UGUTJVXoWc=",
+        "h1:hbSIYA/amXcRXTFSZqh8tWHEoqRvvbKPJ2uz/KU+a+s=",
+    ),
+    (
+        "golang.org/x/tools", "v0.49.0", "v0.51.0",
+        "h1:k4Xc/1Om9jwkBJBo4NVLMSARBoWtK10mx+W5BnXCeAI=",
+        "h1:9eEncMayCV6zRMGhR5eZEC2iBx98qWcF1HZ9Z7wJOoA=",
+    ),
+)
 OLD_GOSU_SHA256 = "cdcdfbe2a74dc15d62f6f73da877a372641b80104ff04ca5bee7bc36ee9936ab"
 CURRENT_GOSU_SHA256 = "ffd70d9dcf141b9f13ae293ec5a6c48cf8d04f56bddc80cf244c62398b24f2ea"
 OLD_GO_BUILDER = (
@@ -100,6 +145,17 @@ def test_caddy_graph_applies_only_the_reviewed_go_security_closure() -> None:
         expected_go_mod = _replace_once(
             expected_go_mod, f"{module} {old} // indirect", f"{module} {new} // indirect"
         )
+    assert _file_at(BUILD67_RELEASE_BASE, GO_MOD) == expected_go_mod
+    for module, old, new, _, _ in NET_SECURITY_UPGRADES:
+        if module == "golang.org/x/telemetry":
+            anchor = "\tgolang.org/x/term v0.46.0 // indirect\n"
+            expected_go_mod = _replace_once(
+                expected_go_mod, anchor, f"\t{module} {new} // indirect\n{anchor}"
+            )
+        else:
+            expected_go_mod = _replace_once(
+                expected_go_mod, f"{module} {old} // indirect", f"{module} {new} // indirect"
+            )
     assert GO_MOD.read_text(encoding="utf-8") == expected_go_mod
 
     signed_go_sum = _replace_once(
@@ -178,8 +234,18 @@ def test_caddy_graph_applies_only_the_reviewed_go_security_closure() -> None:
         ),
     ):
         expected_go_sum = _replace_once(expected_go_sum, anchor, f"{anchor}\n{added}")
-    assert GO_SUM.read_text(encoding="utf-8") == expected_go_sum
+    assert _file_at(BUILD67_RELEASE_BASE, GO_SUM) == expected_go_sum
     assert len(expected_go_sum.splitlines()) == len(signed_go_sum.splitlines()) + 20
+    expected_lines = expected_go_sum.splitlines(keepends=True)
+    for module, _, new, checksum, mod_checksum in NET_SECURITY_UPGRADES:
+        last = max(
+            index for index, line in enumerate(expected_lines) if line.startswith(f"{module} ")
+        )
+        expected_lines[last + 1:last + 1] = [
+            f"{module} {new} {checksum}\n",
+            f"{module} {new}/go.mod {mod_checksum}\n",
+        ]
+    assert GO_SUM.read_text(encoding="utf-8") == "".join(expected_lines)
 
 
 def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> None:
@@ -312,7 +378,7 @@ def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> No
         "    test \"$(go list -mod=readonly -m -f '{{.Version}}' "
         "golang.org/x/tools)\" = \"v0.49.0\"; \\\n",
     )
-    expected = _replace_once(expected, PATCHED_BINARY_SHA256, CURRENT_BINARY_SHA256)
+    expected = _replace_once(expected, PATCHED_BINARY_SHA256, BUILD67_BINARY_SHA256)
     expected = _replace_once(
         expected,
         "    go version -m /out/caddy | grep -F 'go1.26.8'; \\\n",
@@ -414,6 +480,18 @@ def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> No
     expected = _replace_once(
         expected, package_anchor,
         package_anchor + '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'brotli-libs-1.2.1-r0\'; \\\n',
+    )
+    assert _file_at(BUILD67_RELEASE_BASE, CADDY_DOCKERFILE) == expected
+    for module, old, new, _, _ in NET_SECURITY_UPGRADES:
+        expected = _replace_once(expected, f'{module})" = "{old}"', f'{module})" = "{new}"')
+    expected = _replace_once(expected, BUILD67_BINARY_SHA256, CURRENT_BINARY_SHA256)
+    expected = _replace_once(
+        expected,
+        "    go version -m /out/caddy | grep -F 'v2.11.4'\n",
+        "    go version -m /out/caddy | grep -F 'v2.11.4'; \\\n"
+        '    go version -m /out/caddy | grep -Fx "$(printf '
+        r"'\tdep\tgolang.org/x/net\tv0.62.0\th1:18ELalfM5+XNRwzM2nYqXsZQ9ByS1uhj2O/U7+5jqRY='"
+        ')"\n',
     )
     assert CADDY_DOCKERFILE.read_text(encoding="utf-8") == expected
 
@@ -728,9 +806,10 @@ def test_caddy_binary_hash_is_coordinated_across_ci_and_release() -> None:
         assert hashlib.sha256(current_bytes).hexdigest() == CURRENT_WORKFLOW_SHA256[workflow]
         assert current.count(PATCHED_BINARY_SHA256) == 1
 
-        live = workflow.read_text(encoding="utf-8")
-        assert live.count(CURRENT_BINARY_SHA256) == 1
-        assert PATCHED_BINARY_SHA256 not in live
+        build67 = _file_at(BUILD67_RELEASE_BASE, workflow)
+        assert workflow.read_text(encoding="utf-8") == _replace_once(
+            build67, BUILD67_BINARY_SHA256, CURRENT_BINARY_SHA256
+        )
 
     assert "go 1.26.9" in GO_MOD.read_text(encoding="utf-8")
     assert "github.com/caddyserver/caddy/v2 v2.11.4" in GO_MOD.read_text(

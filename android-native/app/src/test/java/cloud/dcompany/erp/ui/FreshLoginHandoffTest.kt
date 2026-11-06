@@ -180,13 +180,56 @@ class FreshLoginHandoffTest {
             "private suspend fun activateResolvedTerminalOrRequestSelection(",
         )
 
-        assertTrue(directLogin.contains("_state.value = freshLoginState(me, installedLogin)"))
-        assertTrue(terminalCompletion.contains("pending.installedLogin != null"))
-        assertTrue(terminalCompletion.contains("pending.previousTerminal == null"))
-        assertTrue(terminalCompletion.contains("freshLoginState(pending.me, pending.installedLogin)"))
+        val publication = source.between(
+            "private suspend fun publishStartupWorkspace(",
+            "private fun refreshReceiptHistoryAfterLogin(",
+        )
+        val finalGate = source.between(
+            "internal fun publishVerifiedStartupState(",
+            "internal enum class RestoreFailureAction",
+        )
+        val guardedCall = "publishStartupWorkspace(publicationLogin, verifiedCache, original, signedIn)"
+        assertOrdered(
+            directLogin,
+            "val signedIn = freshLoginState(me, installedLogin)",
+            guardedCall,
+            "_state.value === expectedState && tokens.isCurrent(installedLogin)",
+        )
+        assertOrdered(
+            terminalCompletion,
+            "val signedIn = if (pending.installedLogin != null && pending.previousTerminal == null)",
+            "freshLoginState(pending.me, pending.installedLogin)",
+            guardedCall,
+            "pendingTerminalSession === pending && _state.value === choosingState && pending.isTokenCurrent()",
+        )
+        assertFalse("Neither explicit path may bypass the guarded publisher",
+            (directLogin + terminalCompletion).contains("_state.value = signedIn"))
+        assertOrdered(
+            publication,
+            "cacheIsolation.commitIfCurrent(lease) {",
+            "tokens.commitIfOriginalLoginCurrent(login) {",
+            "published = publishVerifiedStartupState(",
+            ") { _state.value = signedIn }",
+        )
+        assertOrdered(
+            finalGate,
+            "if (!ownsAttempt) return false",
+            "original.isCurrent()",
+            "requireOrdinaryReadiness()",
+            "publish()",
+        )
         assertFalse("Restores must bypass the fresh-login handoff", restore.contains("freshLoginState("))
         assertTrue(refresh.contains("freshLoginHandoff.preserve("))
         assertTrue(acknowledge.contains("freshLoginHandoff.consume("))
+    }
+
+    private fun assertOrdered(source: String, vararg markers: String) {
+        var previous = -1
+        for (marker in markers) {
+            val index = source.indexOf(marker, previous + 1)
+            assertTrue("Missing or out-of-order handoff contract: $marker", index > previous)
+            previous = index
+        }
     }
 
     private fun coordinator(

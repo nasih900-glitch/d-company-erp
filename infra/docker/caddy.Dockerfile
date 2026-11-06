@@ -25,15 +25,15 @@ RUN set -eux; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' github.com/caddyserver/caddy/v2)" = "v2.11.4"; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' github.com/go-jose/go-jose/v3)" = "v3.0.6-0.20261030183946-0e502b87c7aa"; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' github.com/go-jose/go-jose/v4)" = "v4.1.7"; \
-    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/crypto)" = "v0.57.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/crypto)" = "v0.58.0"; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/mod)" = "v0.41.0"; \
-    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/net)" = "v0.60.0"; \
-    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/sync)" = "v0.23.0"; \
-    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/sys)" = "v0.48.0"; \
-    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/telemetry)" = "v0.0.0-20260811182544-a038080d80e5"; \
-    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/term)" = "v0.46.0"; \
-    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/text)" = "v0.42.0"; \
-    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/tools)" = "v0.49.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/net)" = "v0.62.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/sync)" = "v0.24.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/sys)" = "v0.49.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/telemetry)" = "v0.0.0-20260924152758-ed294f943157"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/term)" = "v0.47.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/text)" = "v0.43.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/tools)" = "v0.51.0"; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' google.golang.org/grpc)" = "v1.83.2"
 
 COPY infra/docker/caddy-build/main.go ./
@@ -46,10 +46,11 @@ RUN set -eux; \
         -trimpath \
         -ldflags='-s -w -buildid= -X github.com/caddyserver/caddy/v2.CustomVersion=v2.11.4-dcompany.2' \
         -o /out/caddy .; \
-    echo 'f2fcd13d0aeb36b7622b041fb6a607bd9cd0bef846291f0751a2e20ee4ab827b  /out/caddy' | sha256sum -c -; \
+    echo 'db2378c42f9ae1b9db772cad5f857026138cee72ac91c057114faf138afdceb2  /out/caddy' | sha256sum -c -; \
     go version -m /out/caddy | grep -F 'go1.26.9'; \
     go version -m /out/caddy | grep -F 'github.com/caddyserver/caddy/v2'; \
-    go version -m /out/caddy | grep -F 'v2.11.4'
+    go version -m /out/caddy | grep -F 'v2.11.4'; \
+    go version -m /out/caddy | grep -Fx "$(printf '\tdep\tgolang.org/x/net\tv0.62.0\th1:18ELalfM5+XNRwzM2nYqXsZQ9ByS1uhj2O/U7+5jqRY=')"
 
 COPY infra/docker/caddy-build/verify-system-ca/ /tmp/dcompany-verify-system-ca/
 RUN set -eux; \

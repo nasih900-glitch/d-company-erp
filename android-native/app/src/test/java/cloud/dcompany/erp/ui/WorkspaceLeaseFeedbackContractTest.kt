@@ -278,17 +278,22 @@ class WorkspaceLeaseFeedbackContractTest {
     }
 
     private fun assertRetryCleanup(source: String, setName: String) {
-        val beforeLaunch = source.substringBefore("viewModelScope.launch")
-        val launchBody = source.substringAfter("viewModelScope.launch")
-        val beforeFinally = launchBody.substringBefore("finally {")
-        val finallyBody = launchBody.substringAfter("finally {")
-        assertTrue("Missing retry lease must explain that the old payment remains safe", "scopeLeaseOrNotice(POS_RETRY_WORKSPACE_UNAVAILABLE_MESSAGE)" in source)
-        assertTrue("A retry lease revoked after tap must show the same warning", "commitIfCurrentOrNotifyStale" in source)
-        assertTrue("Retry busy state must be released from a finally block", "finally {" in source)
-        assertTrue("Retry busy ownership must be acquired before launching work", "$setName.update { it + localId }" in beforeLaunch)
-        assertTrue("Retry busy state must not be released before the finally block", "$setName.update { it - localId }" !in beforeFinally)
-        assertTrue("Retry busy state must always release the exact id from the finally block", "$setName.update { it - localId }" in finallyBody)
-        assertTrue("Retry busy ownership must not be reacquired during cleanup", "$setName.update { it + localId }" !in finallyBody)
+        val launchMarker = "operations.launch(viewModelScope, onRejected = {"
+        val rejection = source.between(launchMarker, "}) {")
+        val beforeLaunch = source.substringBefore(launchMarker)
+        val launchBody = source.substringAfter(launchMarker).substringAfter("}) {")
+        val beforeFinally = launchBody.substringBefore("} finally {")
+        val finallyBody = launchBody.between("} finally {", "\n            }")
+        val acquire = "$setName.update { it + localId }"
+        val release = "$setName.update { it - localId }"
+
+        assertTrue("Missing retry lease must explain that the old payment remains safe", "scopeLeaseOrNotice(POS_RETRY_WORKSPACE_UNAVAILABLE_MESSAGE)" in beforeLaunch)
+        assertTrue("A retry lease revoked after tap must show the same warning", "commitIfCurrentOrNotifyStale" in beforeFinally && "onStale = { notice.value = POS_RETRY_WORKSPACE_UNAVAILABLE_MESSAGE }" in beforeFinally)
+        assertTrue("Retry busy ownership must be acquired before launching work", acquire in beforeLaunch)
+        assertTrue("Rejected admission must release the exact id and say saved work is retained", release in rejection && "Saved work is retained." in rejection)
+        assertTrue("Entered retry must keep its busy id until finally", release !in beforeLaunch && release !in beforeFinally)
+        assertTrue("Retry busy state must always release the exact id from the finally block", release in finallyBody)
+        assertTrue("Retry busy ownership must not be reacquired during cleanup", acquire !in rejection && acquire !in finallyBody)
     }
 
     private fun assertFeedbackBoundary(source: String, feedbackName: String) {

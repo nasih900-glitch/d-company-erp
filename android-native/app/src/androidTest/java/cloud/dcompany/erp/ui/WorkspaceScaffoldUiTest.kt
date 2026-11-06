@@ -54,6 +54,7 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertWidthIsAtLeast
@@ -412,6 +413,7 @@ class WorkspaceScaffoldUiTest {
         val syncing = mutableStateOf(false)
         val requestWaiting = mutableStateOf(false)
         val remoteActive = mutableStateOf(false)
+        val remoteSharingConfirmed = mutableStateOf(false)
         val remotePrivacyProtected = mutableStateOf(true)
         val reviewRequests = mutableIntStateOf(0)
         val stopRequests = mutableIntStateOf(0)
@@ -424,6 +426,7 @@ class WorkspaceScaffoldUiTest {
             syncingState = syncing,
             remoteSupportRequestWaitingState = requestWaiting,
             remoteSupportActiveState = remoteActive,
+            remoteSupportSharingConfirmedState = remoteSharingConfirmed,
             remoteSupportPrivacyProtectedState = remotePrivacyProtected,
             onReviewRemoteSupportRequest = { reviewRequests.intValue += 1 },
             onStopRemoteSupport = { stopRequests.intValue += 1 },
@@ -477,6 +480,7 @@ class WorkspaceScaffoldUiTest {
         exerciseSharedChromeContinuityAndBanners(
             requestWaiting = requestWaiting,
             remoteActive = remoteActive,
+            remoteSharingConfirmed = remoteSharingConfirmed,
             remotePrivacyProtected = remotePrivacyProtected,
             reviewRequests = reviewRequests,
             stopRequests = stopRequests,
@@ -2472,6 +2476,7 @@ class WorkspaceScaffoldUiTest {
         syncingState: MutableState<Boolean>? = null,
         remoteSupportRequestWaitingState: MutableState<Boolean>? = null,
         remoteSupportActiveState: MutableState<Boolean>? = null,
+        remoteSupportSharingConfirmedState: MutableState<Boolean>? = null,
         remoteSupportPrivacyProtectedState: MutableState<Boolean>? = null,
         onReviewRemoteSupportRequest: () -> Unit = {},
         onStopRemoteSupport: () -> Unit = {},
@@ -2524,6 +2529,7 @@ class WorkspaceScaffoldUiTest {
                             syncing = syncingState?.value ?: false,
                             remoteSupportRequestWaiting = remoteSupportRequestWaitingState?.value ?: false,
                             remoteSupportActive = remoteSupportActiveState?.value ?: false,
+                            remoteSupportSharingConfirmed = remoteSupportSharingConfirmedState?.value ?: false,
                             remoteSupportPrivacyProtected = remoteSupportPrivacyProtectedState?.value ?: true,
                             remoteSupportLastCommandLabel = "Inventory lookup completed",
                             canChangeTill = false,
@@ -2847,6 +2853,7 @@ class WorkspaceScaffoldUiTest {
     private fun exerciseSharedChromeContinuityAndBanners(
         requestWaiting: MutableState<Boolean>,
         remoteActive: MutableState<Boolean>,
+        remoteSharingConfirmed: MutableState<Boolean>,
         remotePrivacyProtected: MutableState<Boolean>,
         reviewRequests: androidx.compose.runtime.MutableIntState,
         stopRequests: androidx.compose.runtime.MutableIntState,
@@ -2899,10 +2906,18 @@ class WorkspaceScaffoldUiTest {
             drawProbe.clear()
             remoteActive.value = true
         }
-        compose.onNodeWithTag("remote-assistance-active").assertIsDisplayed()
-        compose.onNodeWithContentDescription(
-            "Owner ERP remote assistance active. Owner can view Help only. This screen and other ERP screens are hidden.",
-        ).assertIsDisplayed()
+        fun assertUnconfirmedBanner() {
+            compose.onNodeWithTag("remote-assistance-active").assertIsDisplayed()
+            compose.onNodeWithContentDescription(
+                "Owner ERP support paused. Sharing and remote commands are paused. " +
+                    "Confirm this session locally to resume. Stop remains available.",
+            ).assertIsDisplayed()
+            compose.onNodeWithText("Owner ERP support active — Help only").assertDoesNotExist()
+            compose.onNodeWithText("Inventory lookup completed", substring = true).assertDoesNotExist()
+            compose.onNodeWithTag("remote-assistance-banner-resume").assertIsDisplayed().assertIsNotEnabled()
+            compose.onNodeWithTag("remote-assistance-stop").assertIsDisplayed().assertIsEnabled()
+        }
+        assertUnconfirmedBanner()
         assertRouteClearsSharedChrome(Destination.Pos)
         val stableActiveRoute = compose.onNodeWithTag("fixture-Pos-root").getUnclippedBoundsInRoot()
         compose.runOnIdle {
@@ -2912,10 +2927,20 @@ class WorkspaceScaffoldUiTest {
                 actual = drawProbe.first(Destination.Pos, requestWaiting = true, remoteActive = true).bounds,
             )
         }
+        compose.runOnIdle { remoteSharingConfirmed.value = true }
+        compose.onNodeWithContentDescription(
+            "Owner ERP remote assistance active. Owner can view Help only. This screen and other ERP screens are hidden.",
+        ).assertIsDisplayed()
+        compose.onNodeWithTag("remote-assistance-banner-resume").assertDoesNotExist()
+        assertRouteClearsSharedChrome(Destination.Pos)
+
         compose.runOnIdle { remotePrivacyProtected.value = false }
         compose.onNodeWithContentDescription(
             "Owner ERP remote assistance active. Inventory lookup completed · Owner can view Help only; other ERP screens are hidden.",
         ).assertIsDisplayed()
+        compose.runOnIdle { remoteSharingConfirmed.value = false }
+        assertUnconfirmedBanner()
+        assertRouteClearsSharedChrome(Destination.Pos)
         compose.onNodeWithTag("remote-assistance-stop")
             .assertHeightIsAtLeast(48.dp).performTouchInput { click() }
         assertEquals(1, stopRequests.intValue)
@@ -2925,6 +2950,7 @@ class WorkspaceScaffoldUiTest {
             remoteActive.value = false
             remotePrivacyProtected.value = true
         }
+        compose.onNodeWithTag("remote-assistance-active").assertDoesNotExist()
         compose.onNodeWithTag("workspace-rail-Dashboard").performTouchInput { click() }
         compose.onNodeWithText("Dashboard count 1").assertIsDisplayed()
         compose.onNodeWithText("Lower action 1").assertIsDisplayed()

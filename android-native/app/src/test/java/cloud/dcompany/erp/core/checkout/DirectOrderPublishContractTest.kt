@@ -127,7 +127,7 @@ class DirectOrderPublishContractTest {
         )
         assertOrdered(
             acceptedHeldZeroTotal,
-            "preparedHeldCheckout.compareAndSet(prepared, null)",
+            "clearPreparedHeldCheckout(prepared)",
             "ApiClient.api.order(prepared.orderId)",
         )
         assertTrue(heldZeroTotal.contains("The detailed receipt is still syncing."))
@@ -141,10 +141,22 @@ class DirectOrderPublishContractTest {
             "db.orderDao().removeExactPreparedDirect(",
             "ApiClient.api.voidOrder(",
         )
+        val heldVoid = void.between("if (held != null) {", "ApiClient.api.voidOrder(")
         assertOrdered(
-            void,
-            "preparedHeldCheckout.compareAndSet(held, null)",
-            "ApiClient.api.voidOrder(",
+            heldVoid,
+            "if (!clearPreparedHeldCheckout(held)) {",
+            "return@launch",
+            "checkoutClosedSafely = true",
+        )
+        val heldClosure = viewModel.between(
+            "private fun clearPreparedHeldCheckout(",
+            "private suspend fun releaseClaimBestEffort(",
+        )
+        assertOrdered(
+            heldClosure,
+            "if (expected == null || !preparedHeldCheckout.compareAndSet(expected, null)) return false",
+            "markAbandoned(it.authority.scope, expected.orderId, expected.claimToken)",
+            "return true",
         )
         assertTrue(void.contains("direct?.claimToken ?: held?.claimToken"))
         assertFalse(void.contains("releaseClaimBestEffort(orderId, it.claimToken)"))
