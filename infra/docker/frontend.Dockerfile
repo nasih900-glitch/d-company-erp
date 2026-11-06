@@ -65,6 +65,8 @@ RUN set -eux; \
     apk info -v | grep -Fx 'zlib-1.3.2-r0'; \
     sh /tmp/verify-patched-zlib.sh; \
     rm -f /tmp/zlib-runtime-probe /tmp/verify-patched-zlib.sh
+RUN --mount=type=bind,source=infra/docker/install-pinned-musl-utils.sh,target=/tmp/install-pinned-musl-utils.sh,ro \
+    sh /tmp/install-pinned-musl-utils.sh 3.24
 COPY infra/nginx/frontend.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY infra/docker/write-release-identity.sh /tmp/write-release-identity.sh

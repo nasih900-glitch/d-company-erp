@@ -47,3 +47,6 @@ RUN set -eux; \
     sh /tmp/verify-patched-zlib.sh; \
     redis-server --version | grep -F 'v=7.4.11'; \
     rm -f /tmp/zlib-runtime-probe /tmp/verify-patched-zlib.sh
+
+RUN --mount=type=bind,source=infra/docker/install-pinned-musl-utils.sh,target=/tmp/install-pinned-musl-utils.sh,ro \
+    sh /tmp/install-pinned-musl-utils.sh 3.21

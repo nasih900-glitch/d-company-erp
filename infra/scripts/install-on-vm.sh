@@ -262,7 +262,7 @@ BUILD66_SHIFT_SQL="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build66-shift-proj
 BUILD66_EXACT_TRANSITION=false
 BUILD66_POST_PROOF_SUCCEEDED=false
 BUILD66_APP_WRITERS_STARTED=false
-if grep -qx 'APP_VERSION=3.1.62' "$CANDIDATE_BUILD_ROOT/.env.production.example"; then
+if grep -qx 'APP_VERSION=3.1.63' "$CANDIDATE_BUILD_ROOT/.env.production.example"; then
   if [ ! -f .env ] || [ -z "$BUILD66_ACCEPTANCE_CREDENTIAL_FILE" ] || \
      [ -n "$BUILD55_ACCEPTANCE_CREDENTIAL_FILE" ] || \
      [ -n "$LEGACY_CODE14_REVISION" ] || [ -n "$LEGACY_CODE16_REVISION" ]; then
@@ -278,6 +278,22 @@ if grep -qx 'APP_VERSION=3.1.62' "$CANDIDATE_BUILD_ROOT/.env.production.example"
 elif [ -n "$BUILD66_ACCEPTANCE_CREDENTIAL_FILE" ]; then
   echo "The typed Build66 Owner input cannot select another release path." >&2; exit 1
 fi
+
+wait_for_build66_owner_input() {
+  local input=$1
+  if [[ -e "$input" || -L "$input" ]]; then
+    return 0
+  fi
+  local deadline=$((SECONDS + 300))
+  echo "==> Build66 waiting for normal Owner acceptance input (up to 300 seconds)."
+  while [[ ! -e "$input" && ! -L "$input" ]]; do
+    if (( SECONDS >= deadline )); then
+      echo "Build66 Owner acceptance input did not arrive before maintenance." >&2
+      return 1
+    fi
+    sleep 1
+  done
+}
 
 capture_build66_state() {
   local container=$1 database=$2 sql=$3 output=$4
@@ -1693,6 +1709,7 @@ if [ "$BUILD55_EXACT_TRANSITION" = true ]; then
   BUILD55_CREDENTIAL_SHA256=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["credential_input_sha256"])' \
     "$UPGRADE_SNAPSHOT/build55-auth-before.json")
 elif [ "$BUILD66_EXACT_TRANSITION" = true ]; then
+  wait_for_build66_owner_input "$BUILD66_ACCEPTANCE_CREDENTIAL_FILE"
   (umask 077; python3 "$BUILD55_AUTH_TOOL" public --require-owner --domain "$DOMAIN" \
     --credential-file "$BUILD66_ACCEPTANCE_CREDENTIAL_FILE" > "$UPGRADE_SNAPSHOT/build66-auth-before.json")
   BUILD66_CREDENTIAL_SHA256=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["credential_input_sha256"])' \

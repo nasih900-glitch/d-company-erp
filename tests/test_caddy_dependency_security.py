@@ -18,10 +18,19 @@ BUILD42_RELEASE_BASE = "1c1c7582eb8d6d6c509ddddc159014af10ce5f89"
 BUILD43_RELEASE_BASE = "8418e349eac0707ef62629f6cd3b7dc434690436"
 BUILD45_RUNTIME_BASE = "5b8ef38597871599fde4a42a5b895cd9a05c4d11"
 BUILD67_RELEASE_BASE = "6224fccac9be7f32c0119ef73b8ed66f9c1aec3c"
+BUILD69_RELEASE_BASE = "0b15b6a87516125b4ef2628b7b89b84853f3058b"
+COMPRESS_SHA256 = "h1:v5tiZvm1KGLyg5d5oXdXe3lsSPrbEUiKoXGia//I7Qo="
+COMPRESS_MOD_SHA256 = "h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI="
+MUSL_UTILS_INSTALL = (
+    "RUN --mount=type=bind,source=infra/docker/install-pinned-musl-utils.sh,"
+    "target=/tmp/install-pinned-musl-utils.sh,ro \\\n"
+    "    sh /tmp/install-pinned-musl-utils.sh "
+)
 OLD_BINARY_SHA256 = "73c0169f0b72b465e2ae20bdb67a3e017044b2ab3d267816398b9d6ece243fb0"
 PATCHED_BINARY_SHA256 = "951a0136950bb9edf60ff5cec6ca2df0a041b27ded9e610f0aab49b168739dac"
 BUILD67_BINARY_SHA256 = "f2fcd13d0aeb36b7622b041fb6a607bd9cd0bef846291f0751a2e20ee4ab827b"
-CURRENT_BINARY_SHA256 = "db2378c42f9ae1b9db772cad5f857026138cee72ac91c057114faf138afdceb2"
+BUILD69_BINARY_SHA256 = "db2378c42f9ae1b9db772cad5f857026138cee72ac91c057114faf138afdceb2"
+CURRENT_BINARY_SHA256 = "bab9ead64a1462df94c98fc8046af79601867b9e4b9cfa1359e0073acc546699"
 # GO-2026-6860 and GO-2026-6866 require x/net v0.62.0 and its selected graph.
 NET_SECURITY_UPGRADES = (
     (
@@ -156,7 +165,12 @@ def test_caddy_graph_applies_only_the_reviewed_go_security_closure() -> None:
             expected_go_mod = _replace_once(
                 expected_go_mod, f"{module} {old} // indirect", f"{module} {new} // indirect"
             )
-    assert GO_MOD.read_text(encoding="utf-8") == expected_go_mod
+    assert _file_at(BUILD69_RELEASE_BASE, GO_MOD) == expected_go_mod
+    assert GO_MOD.read_text(encoding="utf-8") == _replace_once(
+        expected_go_mod,
+        "github.com/klauspost/compress v1.18.6 // indirect",
+        "github.com/klauspost/compress v1.20.2 // indirect",
+    )
 
     signed_go_sum = _replace_once(
         _file_at(CODE28_SCANNER_BASE, GO_SUM),
@@ -245,7 +259,15 @@ def test_caddy_graph_applies_only_the_reviewed_go_security_closure() -> None:
             f"{module} {new} {checksum}\n",
             f"{module} {new}/go.mod {mod_checksum}\n",
         ]
-    assert GO_SUM.read_text(encoding="utf-8") == "".join(expected_lines)
+    expected_go_sum = "".join(expected_lines)
+    assert _file_at(BUILD69_RELEASE_BASE, GO_SUM) == expected_go_sum
+    anchor = "github.com/klauspost/compress v1.18.6/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=\n"
+    assert GO_SUM.read_text(encoding="utf-8") == _replace_once(
+        expected_go_sum,
+        anchor,
+        anchor + f"github.com/klauspost/compress v1.20.2 {COMPRESS_SHA256}\n"
+        f"github.com/klauspost/compress v1.20.2/go.mod {COMPRESS_MOD_SHA256}\n",
+    )
 
 
 def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> None:
@@ -484,7 +506,7 @@ def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> No
     assert _file_at(BUILD67_RELEASE_BASE, CADDY_DOCKERFILE) == expected
     for module, old, new, _, _ in NET_SECURITY_UPGRADES:
         expected = _replace_once(expected, f'{module})" = "{old}"', f'{module})" = "{new}"')
-    expected = _replace_once(expected, BUILD67_BINARY_SHA256, CURRENT_BINARY_SHA256)
+    expected = _replace_once(expected, BUILD67_BINARY_SHA256, BUILD69_BINARY_SHA256)
     expected = _replace_once(
         expected,
         "    go version -m /out/caddy | grep -F 'v2.11.4'\n",
@@ -493,7 +515,29 @@ def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> No
         r"'\tdep\tgolang.org/x/net\tv0.62.0\th1:18ELalfM5+XNRwzM2nYqXsZQ9ByS1uhj2O/U7+5jqRY='"
         ')"\n',
     )
-    assert CADDY_DOCKERFILE.read_text(encoding="utf-8") == expected
+    assert _file_at(BUILD69_RELEASE_BASE, CADDY_DOCKERFILE) == expected
+    expected = _replace_once(expected, BUILD69_BINARY_SHA256, CURRENT_BINARY_SHA256)
+    assert expected.count("v2.11.4-dcompany.2") == 2
+    expected = expected.replace("v2.11.4-dcompany.2", "v2.11.4-dcompany.3")
+    module_anchor = '    test "$(go list -mod=readonly -m -f \'{{.Version}}\' github.com/go-jose/go-jose/v4)" = "v4.1.7"; \\\n'
+    expected = _replace_once(
+        expected, module_anchor, module_anchor
+        + '    test "$(go list -mod=readonly -m -f \'{{.Version}}\' github.com/klauspost/compress)" = "v1.20.2"; \\\n',
+    )
+    binary_anchor = (
+        '    go version -m /out/caddy | grep -Fx "$(printf '
+        r"'\tdep\tgolang.org/x/net\tv0.62.0\th1:18ELalfM5+XNRwzM2nYqXsZQ9ByS1uhj2O/U7+5jqRY='"
+        ')"'
+    )
+    expected = _replace_once(
+        expected,
+        binary_anchor + "\n",
+        binary_anchor + "; \\\n"
+        + '    go version -m /out/caddy | grep -Fx "$(printf '
+        + rf"'\tdep\tgithub.com/klauspost/compress\tv1.20.2\t{COMPRESS_SHA256}'"
+        + ')"\n',
+    )
+    assert CADDY_DOCKERFILE.read_text(encoding="utf-8") == expected + "\n" + MUSL_UTILS_INSTALL + "3.23\n"
 
 
 def test_postgres_runtime_changes_only_reviewed_security_corrections() -> None:
@@ -522,7 +566,7 @@ def test_postgres_runtime_changes_only_reviewed_security_corrections() -> None:
         "    gosu --version | grep -F '1.19 (go1.26.8 on linux/'; \\\n",
         "    gosu --version | grep -F '1.19 (go1.26.9 on linux/'; \\\n",
     )
-    assert POSTGRES_DOCKERFILE.read_text(encoding="utf-8") == expected
+    assert POSTGRES_DOCKERFILE.read_text(encoding="utf-8") == expected + "\n" + MUSL_UTILS_INSTALL + "3.24\n"
 
 
 def test_postgres_compatibility_gate_binds_the_current_gosu_binary() -> None:
@@ -750,6 +794,11 @@ def test_frontend_image_changes_only_reviewed_security_controls() -> None:
         '    test "$NGINX_VERSION" = \'1.31.8\'; \\\n'
         "    nginx -v 2>&1 | grep -Fx 'nginx version: nginx/1.31.8'; \\\n",
     )
+    expected = _replace_once(
+        expected,
+        "COPY infra/nginx/frontend.conf",
+        MUSL_UTILS_INSTALL + "3.24\nCOPY infra/nginx/frontend.conf",
+    )
     assert FRONTEND_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
@@ -776,7 +825,7 @@ def test_redis_changes_only_reviewed_openssl_packages_before_zlib_overlay() -> N
         expected = _replace_once(
             expected, f"'{package}-3.3.7-r1'", f"'{package}-3.3.7-r2'"
         )
-    assert REDIS_DOCKERFILE.read_text(encoding="utf-8") == expected
+    assert REDIS_DOCKERFILE.read_text(encoding="utf-8") == expected + "\n" + MUSL_UTILS_INSTALL + "3.21\n"
 
 
 def test_caddy_binary_hash_is_coordinated_across_ci_and_release() -> None:
@@ -807,12 +856,16 @@ def test_caddy_binary_hash_is_coordinated_across_ci_and_release() -> None:
         assert current.count(PATCHED_BINARY_SHA256) == 1
 
         build67 = _file_at(BUILD67_RELEASE_BASE, workflow)
+        build69 = _replace_once(build67, BUILD67_BINARY_SHA256, BUILD69_BINARY_SHA256)
+        assert _file_at(BUILD69_RELEASE_BASE, workflow) == build69
+        expected = _replace_once(build69, BUILD69_BINARY_SHA256, CURRENT_BINARY_SHA256)
         assert workflow.read_text(encoding="utf-8") == _replace_once(
-            build67, BUILD67_BINARY_SHA256, CURRENT_BINARY_SHA256
+            expected, "caddy version | grep -F v2.11.4-dcompany.2;",
+            "caddy version | grep -F v2.11.4-dcompany.3;",
         )
 
     assert "go 1.26.9" in GO_MOD.read_text(encoding="utf-8")
     assert "github.com/caddyserver/caddy/v2 v2.11.4" in GO_MOD.read_text(
         encoding="utf-8"
     )
-    assert "v2.11.4-dcompany.2" in CADDY_DOCKERFILE.read_text(encoding="utf-8")
+    assert "v2.11.4-dcompany.3" in CADDY_DOCKERFILE.read_text(encoding="utf-8")

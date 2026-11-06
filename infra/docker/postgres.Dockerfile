@@ -90,3 +90,6 @@ RUN set -eux; \
     test "$(readlink /usr/local/bin/su-exec)" = 'gosu'; \
     gosu nobody true; \
     su-exec nobody true
+
+RUN --mount=type=bind,source=infra/docker/install-pinned-musl-utils.sh,target=/tmp/install-pinned-musl-utils.sh,ro \
+    sh /tmp/install-pinned-musl-utils.sh 3.24

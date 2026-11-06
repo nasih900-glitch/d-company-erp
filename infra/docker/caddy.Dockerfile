@@ -25,6 +25,7 @@ RUN set -eux; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' github.com/caddyserver/caddy/v2)" = "v2.11.4"; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' github.com/go-jose/go-jose/v3)" = "v3.0.6-0.20261030183946-0e502b87c7aa"; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' github.com/go-jose/go-jose/v4)" = "v4.1.7"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' github.com/klauspost/compress)" = "v1.20.2"; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/crypto)" = "v0.58.0"; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/mod)" = "v0.41.0"; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/net)" = "v0.62.0"; \
@@ -44,13 +45,14 @@ RUN set -eux; \
       go build -p=1 -mod=readonly -buildvcs=false \
         -tags='nobadger,nomysql,nopgx' \
         -trimpath \
-        -ldflags='-s -w -buildid= -X github.com/caddyserver/caddy/v2.CustomVersion=v2.11.4-dcompany.2' \
+        -ldflags='-s -w -buildid= -X github.com/caddyserver/caddy/v2.CustomVersion=v2.11.4-dcompany.3' \
         -o /out/caddy .; \
-    echo 'db2378c42f9ae1b9db772cad5f857026138cee72ac91c057114faf138afdceb2  /out/caddy' | sha256sum -c -; \
+    echo 'bab9ead64a1462df94c98fc8046af79601867b9e4b9cfa1359e0073acc546699  /out/caddy' | sha256sum -c -; \
     go version -m /out/caddy | grep -F 'go1.26.9'; \
     go version -m /out/caddy | grep -F 'github.com/caddyserver/caddy/v2'; \
     go version -m /out/caddy | grep -F 'v2.11.4'; \
-    go version -m /out/caddy | grep -Fx "$(printf '\tdep\tgolang.org/x/net\tv0.62.0\th1:18ELalfM5+XNRwzM2nYqXsZQ9ByS1uhj2O/U7+5jqRY=')"
+    go version -m /out/caddy | grep -Fx "$(printf '\tdep\tgolang.org/x/net\tv0.62.0\th1:18ELalfM5+XNRwzM2nYqXsZQ9ByS1uhj2O/U7+5jqRY=')"; \
+    go version -m /out/caddy | grep -Fx "$(printf '\tdep\tgithub.com/klauspost/compress\tv1.20.2\th1:v5tiZvm1KGLyg5d5oXdXe3lsSPrbEUiKoXGia//I7Qo=')"
 
 COPY infra/docker/caddy-build/verify-system-ca/ /tmp/dcompany-verify-system-ca/
 RUN set -eux; \
@@ -136,4 +138,7 @@ COPY --from=caddy-builder /out/caddy /usr/bin/caddy
 RUN set -eux; \
     chmod 0755 /usr/bin/caddy; \
     setcap cap_net_bind_service=+ep /usr/bin/caddy; \
-    caddy version | grep -F 'v2.11.4-dcompany.2'
+    caddy version | grep -F 'v2.11.4-dcompany.3'
+
+RUN --mount=type=bind,source=infra/docker/install-pinned-musl-utils.sh,target=/tmp/install-pinned-musl-utils.sh,ro \
+    sh /tmp/install-pinned-musl-utils.sh 3.23

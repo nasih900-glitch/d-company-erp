@@ -184,7 +184,7 @@ def runtime_override(config):
 
 def image_override(attestation):
     images = attestation["services"]
-    require(attestation["version_name"] == "3.1.62" and set(images) == IMAGE_SERVICES,
+    require(attestation["version_name"] == "3.1.63" and set(images) == IMAGE_SERVICES,
             "unexpected candidate version or service inventory")
     services = {service: {"image": row["image_id"]} for service, row in images.items()}
     require(all(re.fullmatch(r"sha256:[0-9a-f]{64}", row["image"]) for row in services.values()),

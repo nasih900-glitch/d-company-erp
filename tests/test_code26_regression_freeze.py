@@ -43,6 +43,7 @@ from scripts.verify_code26_regression_freeze import (
     CODE30_4_BUILD66_BASE,
     CODE30_4_BUILD67_BASE,
     CODE30_4_BUILD68_BASE,
+    CODE30_4_BUILD69_BASE,
     CODE30_4_FREEZE_CONTROL_PATHS,
     RegressionFreezeError,
     REVIEWED_CODE29_2_PRODUCTION_PATHS,
@@ -88,6 +89,7 @@ from scripts.verify_code26_regression_freeze import (
     REVIEWED_CODE30_4_BUILD67_SHA256,
     REVIEWED_CODE30_4_BUILD68_SHA256,
     REVIEWED_CODE30_4_BUILD69_SHA256,
+    REVIEWED_CODE30_4_BUILD70_SHA256,
     REVIEWED_CODE30_4_SHA256,
     REVIEWED_POST_CODE30_3_MAINTENANCE_SHA256,
     REVIEWED_CODE30_PRODUCTION_PATHS,
@@ -139,7 +141,7 @@ def _reviewed_code30_point4_maps(source: bytes) -> dict[str, dict[str, str]]:
 
 
 def _current_reviewed_sha256(path: str, fallback: str) -> str:
-    return REVIEWED_CODE30_4_BUILD69_SHA256.get(path) or REVIEWED_CODE30_4_BUILD68_SHA256.get(path) or REVIEWED_CODE30_4_BUILD67_SHA256.get(path) or REVIEWED_CODE30_4_BUILD66_SHA256.get(path) or REVIEWED_CODE30_4_BUILD65_SHA256.get(path) or REVIEWED_CODE30_4_BUILD64_SHA256.get(path) or REVIEWED_CODE30_4_BUILD63_SHA256.get(path) or REVIEWED_CODE30_4_BUILD62_SHA256.get(path) or REVIEWED_CODE30_4_BUILD61_SHA256.get(path) or REVIEWED_CODE30_4_BUILD60_SHA256.get(path) or REVIEWED_CODE30_4_BUILD59_SHA256.get(path) or REVIEWED_CODE30_4_BUILD58_SHA256.get(path) or REVIEWED_CODE30_4_BUILD57_SHA256.get(path) or REVIEWED_CODE30_4_BUILD56_SHA256.get(path) or REVIEWED_CODE30_4_BUILD55_SHA256.get(path) or REVIEWED_CODE30_4_BUILD54_SHA256.get(path) or REVIEWED_CODE30_4_BUILD53_SHA256.get(path) or REVIEWED_CODE30_4_BUILD52_SHA256.get(path) or REVIEWED_CODE30_4_BUILD51_SHA256.get(path) or REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
+    return REVIEWED_CODE30_4_BUILD70_SHA256.get(path) or REVIEWED_CODE30_4_BUILD69_SHA256.get(path) or REVIEWED_CODE30_4_BUILD68_SHA256.get(path) or REVIEWED_CODE30_4_BUILD67_SHA256.get(path) or REVIEWED_CODE30_4_BUILD66_SHA256.get(path) or REVIEWED_CODE30_4_BUILD65_SHA256.get(path) or REVIEWED_CODE30_4_BUILD64_SHA256.get(path) or REVIEWED_CODE30_4_BUILD63_SHA256.get(path) or REVIEWED_CODE30_4_BUILD62_SHA256.get(path) or REVIEWED_CODE30_4_BUILD61_SHA256.get(path) or REVIEWED_CODE30_4_BUILD60_SHA256.get(path) or REVIEWED_CODE30_4_BUILD59_SHA256.get(path) or REVIEWED_CODE30_4_BUILD58_SHA256.get(path) or REVIEWED_CODE30_4_BUILD57_SHA256.get(path) or REVIEWED_CODE30_4_BUILD56_SHA256.get(path) or REVIEWED_CODE30_4_BUILD55_SHA256.get(path) or REVIEWED_CODE30_4_BUILD54_SHA256.get(path) or REVIEWED_CODE30_4_BUILD53_SHA256.get(path) or REVIEWED_CODE30_4_BUILD52_SHA256.get(path) or REVIEWED_CODE30_4_BUILD51_SHA256.get(path) or REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
         path,
         REVIEWED_CODE30_4_BUILD41_SHA256.get(
             path,
@@ -780,7 +782,7 @@ def test_code30_point4_delta_inventory_is_exact() -> None:
         | set(REVIEWED_CODE30_4_BUILD53_SHA256)
         | set(REVIEWED_CODE30_4_BUILD54_SHA256)
         | set(REVIEWED_CODE30_4_BUILD55_SHA256)
-        | set(REVIEWED_CODE30_4_BUILD56_SHA256) | set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256)
+        | set(REVIEWED_CODE30_4_BUILD56_SHA256) | set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256) | set(REVIEWED_CODE30_4_BUILD70_SHA256)
     )
 
 
@@ -1085,6 +1087,7 @@ def test_all_historical_reviewed_literal_maps_remain_unchanged_at_build50() -> N
         "REVIEWED_CODE30_4_BUILD67_SHA256",
         "REVIEWED_CODE30_4_BUILD68_SHA256",
         "REVIEWED_CODE30_4_BUILD69_SHA256",
+        "REVIEWED_CODE30_4_BUILD70_SHA256",
     }
 
 
@@ -1109,7 +1112,7 @@ def test_build51_exact_guard_refuses_changed_removed_linked_or_extra_source(
         check=True, capture_output=True,
     )
     # Include the separately reviewed controls when this test runs before their commit.
-    for path in CODE30_4_FREEZE_CONTROL_PATHS | set(REVIEWED_CODE30_4_BUILD53_SHA256) | set(REVIEWED_CODE30_4_BUILD54_SHA256) | set(REVIEWED_CODE30_4_BUILD55_SHA256) | set(REVIEWED_CODE30_4_BUILD56_SHA256) | set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256):
+    for path in CODE30_4_FREEZE_CONTROL_PATHS | set(REVIEWED_CODE30_4_BUILD53_SHA256) | set(REVIEWED_CODE30_4_BUILD54_SHA256) | set(REVIEWED_CODE30_4_BUILD55_SHA256) | set(REVIEWED_CODE30_4_BUILD56_SHA256) | set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256) | set(REVIEWED_CODE30_4_BUILD70_SHA256):
         destination = candidate / path
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / path, destination)
@@ -1134,7 +1137,7 @@ def test_build51_exact_guard_refuses_changed_removed_linked_or_extra_source(
     else:
         path = "backend/app/services/finance/unreviewed_build51_source.py"
         (candidate / path).write_text("UNREVIEWED = True\n", encoding="utf-8")
-        expected = f"unreviewed path entered the Code30.4 build-69 delta: {path}"
+        expected = f"unreviewed path entered the Code30.4 build-70 delta: {path}"
     errors: list[str] = []
     _verify_code30_4_exact_delta(candidate, errors)
     assert expected in errors
@@ -1195,6 +1198,7 @@ def test_all_frozen_build51_reviewed_literal_maps_remain_unchanged() -> None:
         "REVIEWED_CODE30_4_BUILD67_SHA256",
         "REVIEWED_CODE30_4_BUILD68_SHA256",
         "REVIEWED_CODE30_4_BUILD69_SHA256",
+        "REVIEWED_CODE30_4_BUILD70_SHA256",
     }
 
 
@@ -1209,7 +1213,7 @@ def test_all_frozen_build52_reviewed_literal_maps_remain_unchanged() -> None:
     assert "REVIEWED_CODE30_4_BUILD52_SHA256" in historical
     for name, value in historical.items():
         assert current[name] == value, name
-    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD53_SHA256", "REVIEWED_CODE30_4_BUILD54_SHA256", "REVIEWED_CODE30_4_BUILD55_SHA256", "REVIEWED_CODE30_4_BUILD56_SHA256", "REVIEWED_CODE30_4_BUILD57_SHA256", "REVIEWED_CODE30_4_BUILD58_SHA256", "REVIEWED_CODE30_4_BUILD59_SHA256", "REVIEWED_CODE30_4_BUILD60_SHA256", "REVIEWED_CODE30_4_BUILD61_SHA256", "REVIEWED_CODE30_4_BUILD62_SHA256", "REVIEWED_CODE30_4_BUILD63_SHA256", "REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256"}
+    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD53_SHA256", "REVIEWED_CODE30_4_BUILD54_SHA256", "REVIEWED_CODE30_4_BUILD55_SHA256", "REVIEWED_CODE30_4_BUILD56_SHA256", "REVIEWED_CODE30_4_BUILD57_SHA256", "REVIEWED_CODE30_4_BUILD58_SHA256", "REVIEWED_CODE30_4_BUILD59_SHA256", "REVIEWED_CODE30_4_BUILD60_SHA256", "REVIEWED_CODE30_4_BUILD61_SHA256", "REVIEWED_CODE30_4_BUILD62_SHA256", "REVIEWED_CODE30_4_BUILD63_SHA256", "REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256", "REVIEWED_CODE30_4_BUILD70_SHA256"}
 
 
 @pytest.mark.parametrize(("path", "expected_sha256"), REVIEWED_CODE30_4_BUILD52_SHA256.items())
@@ -1233,7 +1237,7 @@ def test_build53_exact_guard_refuses_source_mutations_after_positive_baseline(tm
         ["git", "clone", "--shared", "--quiet", "--no-hardlinks", str(ROOT), str(candidate)],
         check=True, capture_output=True,
     )
-    for path in CODE30_4_FREEZE_CONTROL_PATHS | set(REVIEWED_CODE30_4_BUILD53_SHA256) | set(REVIEWED_CODE30_4_BUILD54_SHA256) | set(REVIEWED_CODE30_4_BUILD55_SHA256) | set(REVIEWED_CODE30_4_BUILD56_SHA256) | set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256):
+    for path in CODE30_4_FREEZE_CONTROL_PATHS | set(REVIEWED_CODE30_4_BUILD53_SHA256) | set(REVIEWED_CODE30_4_BUILD54_SHA256) | set(REVIEWED_CODE30_4_BUILD55_SHA256) | set(REVIEWED_CODE30_4_BUILD56_SHA256) | set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256) | set(REVIEWED_CODE30_4_BUILD70_SHA256):
         destination = candidate / path
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / path, destination)
@@ -1257,7 +1261,7 @@ def test_build53_exact_guard_refuses_source_mutations_after_positive_baseline(tm
     else:
         path = "infra/scripts/unreviewed_build53_source.py"
         (candidate / path).write_text("UNREVIEWED = True\n")
-        expected = f"unreviewed path entered the Code30.4 build-69 delta: {path}"
+        expected = f"unreviewed path entered the Code30.4 build-70 delta: {path}"
     errors: list[str] = []
     _verify_code30_4_exact_delta(candidate, errors)
     assert expected in errors
@@ -1276,7 +1280,7 @@ def test_all_frozen_build53_maps_remain_unchanged() -> None:
     current = _reviewed_code30_point4_maps((ROOT / "scripts/verify_code26_regression_freeze.py").read_bytes())
     for name,value in historical.items():
         assert current[name] == value, name
-    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD54_SHA256", "REVIEWED_CODE30_4_BUILD55_SHA256", "REVIEWED_CODE30_4_BUILD56_SHA256", "REVIEWED_CODE30_4_BUILD57_SHA256", "REVIEWED_CODE30_4_BUILD58_SHA256", "REVIEWED_CODE30_4_BUILD59_SHA256", "REVIEWED_CODE30_4_BUILD60_SHA256", "REVIEWED_CODE30_4_BUILD61_SHA256", "REVIEWED_CODE30_4_BUILD62_SHA256", "REVIEWED_CODE30_4_BUILD63_SHA256", "REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256"}
+    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD54_SHA256", "REVIEWED_CODE30_4_BUILD55_SHA256", "REVIEWED_CODE30_4_BUILD56_SHA256", "REVIEWED_CODE30_4_BUILD57_SHA256", "REVIEWED_CODE30_4_BUILD58_SHA256", "REVIEWED_CODE30_4_BUILD59_SHA256", "REVIEWED_CODE30_4_BUILD60_SHA256", "REVIEWED_CODE30_4_BUILD61_SHA256", "REVIEWED_CODE30_4_BUILD62_SHA256", "REVIEWED_CODE30_4_BUILD63_SHA256", "REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256", "REVIEWED_CODE30_4_BUILD70_SHA256"}
 
 
 def test_build54_historical_delta_inventory_is_exact() -> None:
@@ -1302,7 +1306,7 @@ def test_build56_release_identity_normalisation_is_narrow() -> None:
         "android-native/app/src/test/java/cloud/dcompany/erp/core/net/ClientPolicyMonotonicTest.kt",
     ):
         assert _normalise_release_identity(path, current) == current
-    future = 'assertEquals(70, BuildConfig.VERSION_CODE)\n"3.1.63"\nversion_code = 70\n'
+    future = 'assertEquals(71, BuildConfig.VERSION_CODE)\n"3.1.64"\nversion_code = 71\n'
     assert _normalise_release_identity(identity, future) == future
 
 
@@ -1322,7 +1326,7 @@ def test_all_signed_build55_literal_maps_remain_unchanged() -> None:
     assert len(historical["REVIEWED_CODE30_4_BUILD55_SHA256"]) == 352
     for name, value in historical.items():
         assert current[name] == value, name
-    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD56_SHA256", "REVIEWED_CODE30_4_BUILD57_SHA256", "REVIEWED_CODE30_4_BUILD58_SHA256", "REVIEWED_CODE30_4_BUILD59_SHA256", "REVIEWED_CODE30_4_BUILD60_SHA256", "REVIEWED_CODE30_4_BUILD61_SHA256", "REVIEWED_CODE30_4_BUILD62_SHA256", "REVIEWED_CODE30_4_BUILD63_SHA256", "REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256"}
+    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD56_SHA256", "REVIEWED_CODE30_4_BUILD57_SHA256", "REVIEWED_CODE30_4_BUILD58_SHA256", "REVIEWED_CODE30_4_BUILD59_SHA256", "REVIEWED_CODE30_4_BUILD60_SHA256", "REVIEWED_CODE30_4_BUILD61_SHA256", "REVIEWED_CODE30_4_BUILD62_SHA256", "REVIEWED_CODE30_4_BUILD63_SHA256", "REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256", "REVIEWED_CODE30_4_BUILD70_SHA256"}
 
 
 def test_build56_historical_delta_inventory_is_exact() -> None:
@@ -1353,7 +1357,7 @@ def test_build55_release_identity_normalisation_is_narrow() -> None:
         "android-native/app/src/test/java/cloud/dcompany/erp/core/net/ClientPolicyMonotonicTest.kt",
     ):
         assert _normalise_release_identity(path, current) == current
-    future = 'assertEquals(70, BuildConfig.VERSION_CODE)\n"3.1.63"\nversion_code = 70\n'
+    future = 'assertEquals(71, BuildConfig.VERSION_CODE)\n"3.1.64"\nversion_code = 71\n'
     assert _normalise_release_identity(identity, future) == future
 
 
@@ -1377,7 +1381,7 @@ def test_all_frozen_build54_literal_maps_remain_unchanged() -> None:
     assert "REVIEWED_CODE30_4_BUILD55_SHA256" not in historical
     for name, value in historical.items():
         assert current[name] == value, name
-    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD55_SHA256", "REVIEWED_CODE30_4_BUILD56_SHA256", "REVIEWED_CODE30_4_BUILD57_SHA256", "REVIEWED_CODE30_4_BUILD58_SHA256", "REVIEWED_CODE30_4_BUILD59_SHA256", "REVIEWED_CODE30_4_BUILD60_SHA256", "REVIEWED_CODE30_4_BUILD61_SHA256", "REVIEWED_CODE30_4_BUILD62_SHA256", "REVIEWED_CODE30_4_BUILD63_SHA256", "REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256"}
+    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD55_SHA256", "REVIEWED_CODE30_4_BUILD56_SHA256", "REVIEWED_CODE30_4_BUILD57_SHA256", "REVIEWED_CODE30_4_BUILD58_SHA256", "REVIEWED_CODE30_4_BUILD59_SHA256", "REVIEWED_CODE30_4_BUILD60_SHA256", "REVIEWED_CODE30_4_BUILD61_SHA256", "REVIEWED_CODE30_4_BUILD62_SHA256", "REVIEWED_CODE30_4_BUILD63_SHA256", "REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256", "REVIEWED_CODE30_4_BUILD70_SHA256"}
 
 
 def test_build55_historical_delta_inventory_is_exact() -> None:
@@ -1405,7 +1409,7 @@ def test_build56_exact_guard_refuses_mutations_after_positive_baseline(
         ["git", "clone", "--shared", "--quiet", "--no-hardlinks", str(ROOT), str(candidate)],
         check=True, capture_output=True,
     )
-    for path in CODE30_4_FREEZE_CONTROL_PATHS | set(REVIEWED_CODE30_4_BUILD55_SHA256) | set(REVIEWED_CODE30_4_BUILD56_SHA256) | set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256):
+    for path in CODE30_4_FREEZE_CONTROL_PATHS | set(REVIEWED_CODE30_4_BUILD55_SHA256) | set(REVIEWED_CODE30_4_BUILD56_SHA256) | set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256) | set(REVIEWED_CODE30_4_BUILD70_SHA256):
         destination = candidate / path
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / path, destination)
@@ -1430,7 +1434,7 @@ def test_build56_exact_guard_refuses_mutations_after_positive_baseline(
     else:
         path = "backend/app/services/client_updates/unreviewed_build56_source.py"
         (candidate / path).write_text("UNREVIEWED = True\n", encoding="utf-8")
-        expected = f"unreviewed path entered the Code30.4 build-69 delta: {path}"
+        expected = f"unreviewed path entered the Code30.4 build-70 delta: {path}"
     errors: list[str] = []
     _verify_code30_4_exact_delta(candidate, errors)
     assert expected in errors
@@ -1497,7 +1501,7 @@ def test_build57_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(identity, current) == baseline
     assert _normalise_release_identity("backend/tests/unit/test_money.py", current) == current
-    future = 'assertEquals(70, BuildConfig.VERSION_CODE)\n"3.1.63"\nversion_code = 70\n'
+    future = 'assertEquals(71, BuildConfig.VERSION_CODE)\n"3.1.64"\nversion_code = 71\n'
     assert _normalise_release_identity(identity, future) == future
 
 
@@ -1518,7 +1522,7 @@ def test_all_29_signed_build56_literal_map_assignments_are_byte_identical() -> N
     assert len(REVIEWED_CODE30_4_BUILD56_SHA256) == 24
     for name, value in historical.items():
         assert current[name] == value, name
-    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD57_SHA256", "REVIEWED_CODE30_4_BUILD58_SHA256", "REVIEWED_CODE30_4_BUILD59_SHA256", "REVIEWED_CODE30_4_BUILD60_SHA256", "REVIEWED_CODE30_4_BUILD61_SHA256", "REVIEWED_CODE30_4_BUILD62_SHA256", "REVIEWED_CODE30_4_BUILD63_SHA256", "REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256"}
+    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD57_SHA256", "REVIEWED_CODE30_4_BUILD58_SHA256", "REVIEWED_CODE30_4_BUILD59_SHA256", "REVIEWED_CODE30_4_BUILD60_SHA256", "REVIEWED_CODE30_4_BUILD61_SHA256", "REVIEWED_CODE30_4_BUILD62_SHA256", "REVIEWED_CODE30_4_BUILD63_SHA256", "REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256", "REVIEWED_CODE30_4_BUILD70_SHA256"}
 
 
 def test_build57_historical_delta_inventory_is_exact() -> None:
@@ -1544,7 +1548,7 @@ def test_build57_exact_guard_refuses_mutations_after_positive_baseline(tmp_path:
         ["git", "clone", "--shared", "--quiet", "--no-hardlinks", str(ROOT), str(candidate)],
         check=True, capture_output=True,
     )
-    for path in CODE30_4_FREEZE_CONTROL_PATHS | set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256):
+    for path in CODE30_4_FREEZE_CONTROL_PATHS | set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256) | set(REVIEWED_CODE30_4_BUILD70_SHA256):
         destination = candidate / path
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / path, destination)
@@ -1568,7 +1572,7 @@ def test_build57_exact_guard_refuses_mutations_after_positive_baseline(tmp_path:
     else:
         path = "infra/scripts/unreviewed_build57_source.py"
         (candidate / path).write_text("UNREVIEWED = True\n", encoding="utf-8")
-        expected = f"unreviewed path entered the Code30.4 build-69 delta: {path}"
+        expected = f"unreviewed path entered the Code30.4 build-70 delta: {path}"
     errors: list[str] = []
     _verify_code30_4_exact_delta(candidate, errors)
     assert expected in errors
@@ -1580,7 +1584,7 @@ def test_build58_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(identity, current) == baseline
     assert _normalise_release_identity("backend/tests/unit/test_money.py", current) == current
-    future = 'assertEquals(70, BuildConfig.VERSION_CODE)\n"3.1.63"\nversion_code = 70\n'
+    future = 'assertEquals(71, BuildConfig.VERSION_CODE)\n"3.1.64"\nversion_code = 71\n'
     assert _normalise_release_identity(identity, future) == future
 
 
@@ -1602,7 +1606,7 @@ def test_all_30_signed_build57_literal_map_assignments_are_byte_identical() -> N
     assert len(REVIEWED_CODE30_4_BUILD57_SHA256) == 21
     for name, value in historical.items():
         assert current[name] == value, name
-    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD58_SHA256", "REVIEWED_CODE30_4_BUILD59_SHA256", "REVIEWED_CODE30_4_BUILD60_SHA256", "REVIEWED_CODE30_4_BUILD61_SHA256", "REVIEWED_CODE30_4_BUILD62_SHA256", "REVIEWED_CODE30_4_BUILD63_SHA256", "REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256"}
+    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD58_SHA256", "REVIEWED_CODE30_4_BUILD59_SHA256", "REVIEWED_CODE30_4_BUILD60_SHA256", "REVIEWED_CODE30_4_BUILD61_SHA256", "REVIEWED_CODE30_4_BUILD62_SHA256", "REVIEWED_CODE30_4_BUILD63_SHA256", "REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256", "REVIEWED_CODE30_4_BUILD70_SHA256"}
 
 
 
@@ -1630,7 +1634,7 @@ def test_build58_exact_guard_refuses_mutations_after_positive_baseline(tmp_path:
         ["git", "clone", "--shared", "--quiet", "--no-hardlinks", str(ROOT), str(candidate)],
         check=True, capture_output=True,
     )
-    for path in CODE30_4_FREEZE_CONTROL_PATHS | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256):
+    for path in CODE30_4_FREEZE_CONTROL_PATHS | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256) | set(REVIEWED_CODE30_4_BUILD70_SHA256):
         destination = candidate / path
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / path, destination)
@@ -1654,7 +1658,7 @@ def test_build58_exact_guard_refuses_mutations_after_positive_baseline(tmp_path:
     else:
         path = "infra/scripts/unreviewed_build58_source.py"
         (candidate / path).write_text("UNREVIEWED = True\n", encoding="utf-8")
-        expected = f"unreviewed path entered the Code30.4 build-69 delta: {path}"
+        expected = f"unreviewed path entered the Code30.4 build-70 delta: {path}"
     errors: list[str] = []
     _verify_code30_4_exact_delta(candidate, errors)
     assert expected in errors
@@ -1666,7 +1670,7 @@ def test_build59_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(identity, current) == baseline
     assert _normalise_release_identity("backend/tests/unit/test_money.py", current) == current
-    future = 'assertEquals(70, BuildConfig.VERSION_CODE)\n"3.1.63"\nversion_code = 70\n'
+    future = 'assertEquals(71, BuildConfig.VERSION_CODE)\n"3.1.64"\nversion_code = 71\n'
     assert _normalise_release_identity(identity, future) == future
 
 
@@ -1687,7 +1691,7 @@ def test_all_31_signed_build58_literal_map_assignments_are_byte_identical() -> N
     assert len(REVIEWED_CODE30_4_BUILD58_SHA256) == 22
     for name, value in historical.items():
         assert current[name] == value, name
-    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD59_SHA256", "REVIEWED_CODE30_4_BUILD60_SHA256", "REVIEWED_CODE30_4_BUILD61_SHA256", "REVIEWED_CODE30_4_BUILD62_SHA256", "REVIEWED_CODE30_4_BUILD63_SHA256", "REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256"}
+    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD59_SHA256", "REVIEWED_CODE30_4_BUILD60_SHA256", "REVIEWED_CODE30_4_BUILD61_SHA256", "REVIEWED_CODE30_4_BUILD62_SHA256", "REVIEWED_CODE30_4_BUILD63_SHA256", "REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256", "REVIEWED_CODE30_4_BUILD70_SHA256"}
 
 
 def test_build59_historical_delta_inventory_is_exact() -> None:
@@ -1713,7 +1717,7 @@ def test_build59_exact_guard_refuses_mutations_after_positive_baseline(tmp_path:
         ["git", "clone", "--shared", "--quiet", "--no-hardlinks", str(ROOT), str(candidate)],
         check=True, capture_output=True,
     )
-    for path in CODE30_4_FREEZE_CONTROL_PATHS | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256):
+    for path in CODE30_4_FREEZE_CONTROL_PATHS | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256) | set(REVIEWED_CODE30_4_BUILD70_SHA256):
         destination = candidate / path
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / path, destination)
@@ -1737,7 +1741,7 @@ def test_build59_exact_guard_refuses_mutations_after_positive_baseline(tmp_path:
     else:
         path = "infra/scripts/unreviewed_build59_source.py"
         (candidate / path).write_text("UNREVIEWED = True\n", encoding="utf-8")
-        expected = f"unreviewed path entered the Code30.4 build-69 delta: {path}"
+        expected = f"unreviewed path entered the Code30.4 build-70 delta: {path}"
     errors: list[str] = []
     _verify_code30_4_exact_delta(candidate, errors)
     assert expected in errors
@@ -1749,7 +1753,7 @@ def test_build60_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(identity, current) == baseline
     assert _normalise_release_identity("backend/tests/unit/test_money.py", current) == current
-    future = 'assertEquals(70, BuildConfig.VERSION_CODE)\n"3.1.63"\nversion_code = 70\n'
+    future = 'assertEquals(71, BuildConfig.VERSION_CODE)\n"3.1.64"\nversion_code = 71\n'
     assert _normalise_release_identity(identity, future) == future
 
 
@@ -1769,7 +1773,7 @@ def test_all_32_signed_build59_literal_map_assignments_are_byte_identical() -> N
     assert len(historical) == 32
     for name, value in historical.items():
         assert current[name] == value, name
-    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD60_SHA256", "REVIEWED_CODE30_4_BUILD61_SHA256", "REVIEWED_CODE30_4_BUILD62_SHA256", "REVIEWED_CODE30_4_BUILD63_SHA256", "REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256"}
+    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD60_SHA256", "REVIEWED_CODE30_4_BUILD61_SHA256", "REVIEWED_CODE30_4_BUILD62_SHA256", "REVIEWED_CODE30_4_BUILD63_SHA256", "REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256", "REVIEWED_CODE30_4_BUILD70_SHA256"}
 
 
 def test_build60_current_delta_inventory_is_exact() -> None:
@@ -1795,7 +1799,7 @@ def test_build60_exact_guard_refuses_mutations_after_positive_baseline(tmp_path:
         ["git", "clone", "--shared", "--quiet", "--no-hardlinks", str(ROOT), str(candidate)],
         check=True, capture_output=True,
     )
-    for path in CODE30_4_FREEZE_CONTROL_PATHS | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256):
+    for path in CODE30_4_FREEZE_CONTROL_PATHS | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256) | set(REVIEWED_CODE30_4_BUILD70_SHA256):
         destination = candidate / path
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / path, destination)
@@ -1819,7 +1823,7 @@ def test_build60_exact_guard_refuses_mutations_after_positive_baseline(tmp_path:
     else:
         path = "backend/app/services/unreviewed_staff_pay.py"
         (candidate / path).write_text("UNREVIEWED = True\n", encoding="utf-8")
-        expected = f"unreviewed path entered the Code30.4 build-69 delta: {path}"
+        expected = f"unreviewed path entered the Code30.4 build-70 delta: {path}"
     errors: list[str] = []
     _verify_code30_4_exact_delta(candidate, errors)
     assert expected in errors
@@ -1832,7 +1836,7 @@ def test_build61_exact_guard_refuses_mutations_after_positive_baseline(tmp_path:
         ["git", "clone", "--shared", "--quiet", "--no-hardlinks", str(ROOT), str(candidate)],
         check=True, capture_output=True,
     )
-    for path in CODE30_4_FREEZE_CONTROL_PATHS | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256):
+    for path in CODE30_4_FREEZE_CONTROL_PATHS | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256) | set(REVIEWED_CODE30_4_BUILD70_SHA256):
         destination = candidate / path
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / path, destination)
@@ -1856,7 +1860,7 @@ def test_build61_exact_guard_refuses_mutations_after_positive_baseline(tmp_path:
     else:
         path = "backend/app/services/unreviewed_staff_pay.py"
         (candidate / path).write_text("UNREVIEWED = True\n", encoding="utf-8")
-        expected = f"unreviewed path entered the Code30.4 build-69 delta: {path}"
+        expected = f"unreviewed path entered the Code30.4 build-70 delta: {path}"
     errors: list[str] = []
     _verify_code30_4_exact_delta(candidate, errors)
     assert expected in errors
@@ -1878,7 +1882,7 @@ def test_all_33_build60_literal_maps_are_byte_identical() -> None:
     assert len(historical) == 33
     for name, value in historical.items():
         assert current[name] == value, name
-    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD61_SHA256", "REVIEWED_CODE30_4_BUILD62_SHA256", "REVIEWED_CODE30_4_BUILD63_SHA256", "REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256"}
+    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD61_SHA256", "REVIEWED_CODE30_4_BUILD62_SHA256", "REVIEWED_CODE30_4_BUILD63_SHA256", "REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256", "REVIEWED_CODE30_4_BUILD70_SHA256"}
 
 
 def test_build61_current_delta_inventory_is_exact() -> None:
@@ -1903,7 +1907,7 @@ def test_build61_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(path, source) == baseline
     assert _normalise_release_identity("unrelated/test.kt", source) == source
-    future = 'assertEquals(70, BuildConfig.VERSION_CODE)\n"3.1.63"\nversion_code = 70\n'
+    future = 'assertEquals(71, BuildConfig.VERSION_CODE)\n"3.1.64"\nversion_code = 71\n'
     assert _normalise_release_identity(path, future) == future
 
 
@@ -1928,7 +1932,7 @@ def test_build62_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(path, source) == baseline
     assert _normalise_release_identity("unrelated/test.kt", source) == source
-    future = 'assertEquals(70, BuildConfig.VERSION_CODE)\n"3.1.63"\nversion_code = 70\n'
+    future = 'assertEquals(71, BuildConfig.VERSION_CODE)\n"3.1.64"\nversion_code = 71\n'
     assert _normalise_release_identity(path, future) == future
 
 
@@ -1948,7 +1952,7 @@ def test_all_34_build61_literal_maps_are_byte_identical() -> None:
     assert len(historical) == 34
     for name, value in historical.items():
         assert current[name] == value, name
-    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD62_SHA256", "REVIEWED_CODE30_4_BUILD63_SHA256", "REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256"}
+    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD62_SHA256", "REVIEWED_CODE30_4_BUILD63_SHA256", "REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256", "REVIEWED_CODE30_4_BUILD70_SHA256"}
 
 
 def test_build63_current_delta_inventory_is_exact() -> None:
@@ -1974,7 +1978,7 @@ def test_build63_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(path, source) == baseline
     assert _normalise_release_identity("unrelated/test.kt", source) == source
-    future = 'assertEquals(70, BuildConfig.VERSION_CODE)\n"3.1.63"\nversion_code = 70\n'
+    future = 'assertEquals(71, BuildConfig.VERSION_CODE)\n"3.1.64"\nversion_code = 71\n'
     assert _normalise_release_identity(path, future) == future
 
 
@@ -1994,7 +1998,7 @@ def test_all_35_build62_literal_maps_are_byte_identical() -> None:
     assert len(historical) == 35
     for name, value in historical.items():
         assert current[name] == value, name
-    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD63_SHA256", "REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256"}
+    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD63_SHA256", "REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256", "REVIEWED_CODE30_4_BUILD70_SHA256"}
 
 
 def test_build64_current_delta_inventory_is_exact() -> None:
@@ -2019,7 +2023,7 @@ def test_build64_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(path, source) == baseline
     assert _normalise_release_identity("unrelated/test.kt", source) == source
-    future = 'assertEquals(70, BuildConfig.VERSION_CODE)\n"3.1.63"\nversion_code = 70\n'
+    future = 'assertEquals(71, BuildConfig.VERSION_CODE)\n"3.1.64"\nversion_code = 71\n'
     assert _normalise_release_identity(path, future) == future
 
 
@@ -2039,7 +2043,7 @@ def test_all_36_build63_literal_maps_are_byte_identical() -> None:
     assert len(historical) == 36
     for name, value in historical.items():
         assert current[name] == value, name
-    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256"}
+    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD64_SHA256", "REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256", "REVIEWED_CODE30_4_BUILD70_SHA256"}
 
 
 def test_build65_current_delta_inventory_is_exact() -> None:
@@ -2064,7 +2068,7 @@ def test_build65_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(path, source) == baseline
     assert _normalise_release_identity("unrelated/test.kt", source) == source
-    future = 'assertEquals(70, BuildConfig.VERSION_CODE)\n"3.1.63"\nversion_code = 70\n'
+    future = 'assertEquals(71, BuildConfig.VERSION_CODE)\n"3.1.64"\nversion_code = 71\n'
     assert _normalise_release_identity(path, future) == future
 
 
@@ -2090,7 +2094,7 @@ def test_build66_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(path, source) == baseline
     assert _normalise_release_identity("unrelated/test.kt", source) == source
-    future = 'assertEquals(70, BuildConfig.VERSION_CODE)\n"3.1.63"\nversion_code = 70\n'
+    future = 'assertEquals(71, BuildConfig.VERSION_CODE)\n"3.1.64"\nversion_code = 71\n'
     assert _normalise_release_identity(path, future) == future
 
 def test_build67_historical_delta_inventory_is_exact() -> None:
@@ -2115,7 +2119,7 @@ def test_build67_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(path, source) == baseline
     assert _normalise_release_identity("unrelated/test.kt", source) == source
-    future = 'assertEquals(70, BuildConfig.VERSION_CODE)\n"3.1.63"\nversion_code = 70\n'
+    future = 'assertEquals(71, BuildConfig.VERSION_CODE)\n"3.1.64"\nversion_code = 71\n'
     assert _normalise_release_identity(path, future) == future
 
 def test_build68_historical_delta_inventory_is_exact() -> None:
@@ -2140,16 +2144,12 @@ def test_build68_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(path, source) == baseline
     assert _normalise_release_identity("unrelated/test.kt", source) == source
-    future = 'assertEquals(70, BuildConfig.VERSION_CODE)\n"3.1.63"\nversion_code = 70\n'
+    future = 'assertEquals(71, BuildConfig.VERSION_CODE)\n"3.1.64"\nversion_code = 71\n'
     assert _normalise_release_identity(path, future) == future
 
-def test_build69_current_delta_inventory_is_exact() -> None:
+def test_build69_historical_delta_inventory_is_exact() -> None:
     changed = set(subprocess.run(
-        ["git", "diff", "--name-only", CODE30_4_BUILD68_BASE],
-        cwd=ROOT, check=True, capture_output=True, text=True,
-    ).stdout.splitlines())
-    changed.update(subprocess.run(
-        ["git", "ls-files", "--others", "--exclude-standard"],
+        ["git", "diff", "--name-only", CODE30_4_BUILD68_BASE, CODE30_4_BUILD69_BASE],
         cwd=ROOT, check=True, capture_output=True, text=True,
     ).stdout.splitlines())
     assert changed == set(REVIEWED_CODE30_4_BUILD69_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
@@ -2158,7 +2158,7 @@ def test_build69_current_delta_inventory_is_exact() -> None:
 
 @pytest.mark.parametrize(("path", "expected_sha256"), REVIEWED_CODE30_4_BUILD69_SHA256.items())
 def test_build69_reviewed_overlay_rejects_any_byte_change(path: str, expected_sha256: str) -> None:
-    current = (ROOT / path).read_bytes()
+    current = _git_object_bytes(CODE30_4_BUILD69_BASE, path)
     assert hashlib.sha256(current).hexdigest() == expected_sha256
     assert hashlib.sha256(current + b"\n").hexdigest() != expected_sha256
 
@@ -2169,7 +2169,36 @@ def test_build69_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(path, source) == baseline
     assert _normalise_release_identity("unrelated/test.kt", source) == source
-    future = 'assertEquals(70, BuildConfig.VERSION_CODE)\n"3.1.63"\nversion_code = 70\n'
+    future = 'assertEquals(71, BuildConfig.VERSION_CODE)\n"3.1.64"\nversion_code = 71\n'
+    assert _normalise_release_identity(path, future) == future
+
+def test_build70_current_delta_inventory_is_exact() -> None:
+    changed = set(subprocess.run(
+        ["git", "diff", "--name-only", CODE30_4_BUILD69_BASE],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout.splitlines())
+    changed.update(subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout.splitlines())
+    assert changed == set(REVIEWED_CODE30_4_BUILD70_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    assert not set(REVIEWED_CODE30_4_BUILD70_SHA256) & set(CODE30_4_FREEZE_CONTROL_PATHS)
+
+
+@pytest.mark.parametrize(("path", "expected_sha256"), REVIEWED_CODE30_4_BUILD70_SHA256.items())
+def test_build70_reviewed_overlay_rejects_any_byte_change(path: str, expected_sha256: str) -> None:
+    current = (ROOT / path).read_bytes()
+    assert hashlib.sha256(current).hexdigest() == expected_sha256
+    assert hashlib.sha256(current + b"\n").hexdigest() != expected_sha256
+
+
+def test_build70_release_identity_normalisation_is_narrow() -> None:
+    path = "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt"
+    source = 'assertEquals(70, BuildConfig.VERSION_CODE)\n"3.1.63"\nversion_code = 70\n'
+    baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
+    assert _normalise_release_identity(path, source) == baseline
+    assert _normalise_release_identity("unrelated/test.kt", source) == source
+    future = 'assertEquals(71, BuildConfig.VERSION_CODE)\n"3.1.64"\nversion_code = 71\n'
     assert _normalise_release_identity(path, future) == future
 
 
@@ -2191,7 +2220,7 @@ def test_all_37_build64_literal_maps_are_byte_identical() -> None:
     assert len(historical) == 37
     for name, value in historical.items():
         assert current[name] == value, name
-    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256"}
+    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD65_SHA256", "REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256", "REVIEWED_CODE30_4_BUILD70_SHA256"}
 
 
 def test_all_38_build65_literal_maps_are_byte_identical() -> None:
@@ -2200,7 +2229,7 @@ def test_all_38_build65_literal_maps_are_byte_identical() -> None:
     assert len(historical) == 38
     for name, value in historical.items():
         assert current[name] == value, name
-    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256"}
+    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD66_SHA256", "REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256", "REVIEWED_CODE30_4_BUILD70_SHA256"}
 
 def test_all_39_build66_literal_maps_are_byte_identical() -> None:
     historical = _literal_map_assignments(_git_object_bytes(CODE30_4_BUILD66_BASE, "scripts/verify_code26_regression_freeze.py"))
@@ -2208,7 +2237,7 @@ def test_all_39_build66_literal_maps_are_byte_identical() -> None:
     assert len(historical) == 39
     for name, value in historical.items():
         assert current[name] == value, name
-    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256"}
+    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD67_SHA256", "REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256", "REVIEWED_CODE30_4_BUILD70_SHA256"}
 
 def test_all_40_build67_literal_maps_are_byte_identical() -> None:
     historical = _literal_map_assignments(_git_object_bytes(CODE30_4_BUILD67_BASE, "scripts/verify_code26_regression_freeze.py"))
@@ -2216,7 +2245,7 @@ def test_all_40_build67_literal_maps_are_byte_identical() -> None:
     assert len(historical) == 40
     for name, value in historical.items():
         assert current[name] == value, name
-    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256"}
+    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD68_SHA256", "REVIEWED_CODE30_4_BUILD69_SHA256", "REVIEWED_CODE30_4_BUILD70_SHA256"}
 
 def test_all_41_build68_literal_maps_are_byte_identical() -> None:
     historical = _literal_map_assignments(_git_object_bytes(CODE30_4_BUILD68_BASE, "scripts/verify_code26_regression_freeze.py"))
@@ -2224,4 +2253,12 @@ def test_all_41_build68_literal_maps_are_byte_identical() -> None:
     assert len(historical) == 41
     for name, value in historical.items():
         assert current[name] == value, name
-    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD69_SHA256"}
+    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD69_SHA256", "REVIEWED_CODE30_4_BUILD70_SHA256"}
+
+def test_all_42_build69_literal_maps_are_byte_identical() -> None:
+    historical = _literal_map_assignments(_git_object_bytes(CODE30_4_BUILD69_BASE, "scripts/verify_code26_regression_freeze.py"))
+    current = _literal_map_assignments((ROOT / "scripts/verify_code26_regression_freeze.py").read_bytes())
+    assert len(historical) == 42
+    for name, value in historical.items():
+        assert current[name] == value, name
+    assert current.keys() - historical.keys() == {"REVIEWED_CODE30_4_BUILD70_SHA256"}

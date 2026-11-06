@@ -117,7 +117,7 @@ def test_restore_allows_a_new_database_oid_but_checks_every_row(verifier, report
 
 def test_pin_all_five_images_without_changing_any_other_compose_field(verifier):
     attestation = {
-        "version_name": "3.1.62",
+        "version_name": "3.1.63",
         "services": {name: {"image_id": "sha256:" + "a" * 64} for name in verifier.IMAGE_SERVICES},
     }
     base = {"services": {name: {"image": f"{name}:candidate", "command": ["normal"]}
@@ -129,7 +129,7 @@ def test_pin_all_five_images_without_changing_any_other_compose_field(verifier):
     pinned["services"]["backend"]["command"] = ["different"]
     with pytest.raises(ValueError, match="pinned Compose"):
         verifier.verify_compose(attestation, base, pinned)
-    for historical in ("3.1.59", "3.1.60", "3.1.61"):
+    for historical in ("3.1.59", "3.1.60", "3.1.61", "3.1.62"):
         with pytest.raises(ValueError, match="candidate version"):
             verifier.image_override({**attestation, "version_name": historical})
     del attestation["services"]["redis"]
@@ -140,7 +140,11 @@ def test_pin_all_five_images_without_changing_any_other_compose_field(verifier):
 def test_installer_orders_quiescence_backup_migration_and_ingress():
     script = (ROOT / "infra/scripts/install-on-vm.sh").read_text()
     steps = (
+        'echo "==> Exact candidate image SBOM/CVE gate passed:',
+        'bash "$CAPACITY_CHECK_TOOL"',
+        'wait_for_build66_owner_input "$BUILD66_ACCEPTANCE_CREDENTIAL_FILE"',
         'public --require-owner --domain',
+        'MAINTENANCE_ACTIVE=true',
         'verify_production_business_quiescence "after writer stop"',
         '"$BUILD66_VERIFIER" pre "$BUILD66_PRE_STATE"',
         '"$BUILD66_VERIFIER" restore "$BUILD66_PRE_STATE" "$UPGRADE_SNAPSHOT/build66-backup-restore.json"',
@@ -156,11 +160,72 @@ def test_installer_orders_quiescence_backup_migration_and_ingress():
     )
     positions = [script.index(step) for step in steps]
     assert positions == sorted(positions)
+    assert (
+        'elif [ "$BUILD66_EXACT_TRANSITION" = true ]; then\n'
+        '  wait_for_build66_owner_input "$BUILD66_ACCEPTANCE_CREDENTIAL_FILE"\n'
+        '  (umask 077; python3 "$BUILD55_AUTH_TOOL" public --require-owner'
+    ) in script
     failure_handler = script.split("handle_install_failure() {", 1)[1]
     writer_failure = failure_handler.split('[ "$BUILD66_APP_WRITERS_STARTED" = true ]; then', 1)[1]
     writer_failure = writer_failure.split("  elif ", 1)[0]
     assert "stop_build66_services caddy backend" in writer_failure
     assert "pg_restore" not in writer_failure
+
+
+@pytest.mark.parametrize(
+    ("scenario", "expected_sleeps", "expected_status"),
+    [
+        ("private-arrival", 2, 0),
+        ("timeout", 300, 1),
+        ("present-invalid", 0, 0),
+        ("dangling-link", 0, 0),
+    ],
+)
+def test_owner_input_wait_is_bounded_and_leaves_validation_to_the_checker(
+    tmp_path, scenario, expected_sleeps, expected_status
+):
+    script = (ROOT / "infra/scripts/install-on-vm.sh").read_text()
+    wait = script.split("wait_for_build66_owner_input() {", 1)[1].split("\n}\n", 1)[0]
+    path = tmp_path / "private-owner-input.json"
+    if scenario == "present-invalid":
+        path.write_text("invalid")
+    elif scenario == "dangling-link":
+        path.symlink_to(tmp_path / "absent")
+    body = r'''
+set -eu
+scenario=$2
+path=$1
+ticks=0
+sleep() {
+  test "$1" = 1
+  ticks=$((ticks + 1))
+  SECONDS=$((SECONDS + 1))
+  if [[ "$scenario" == private-arrival && "$ticks" == 2 ]]; then
+    (umask 077; printf '%s\n' 'fixture' > "$path")
+  fi
+}
+status=0
+wait_for_build66_owner_input "$1" || status=$?
+printf 'sleeps=%s\n' "$ticks"
+exit "$status"
+'''
+    result = subprocess.run(
+        ["bash", "-c", "wait_for_build66_owner_input() {" + wait + "\n}\n" + body,
+         "wait-test", str(path), scenario],
+        capture_output=True, text=True, check=False, timeout=5,
+    )
+    assert result.returncode == expected_status, result.stderr
+    assert f"sleeps={expected_sleeps}\n" in result.stdout
+    assert str(path) not in result.stdout + result.stderr
+    assert ("waiting for normal Owner acceptance input" in result.stdout) == bool(expected_sleeps)
+    assert ("did not arrive before maintenance" in result.stderr) == bool(expected_status)
+    if scenario == "private-arrival":
+        assert path.read_text() == "fixture\n"
+        assert path.stat().st_mode & 0o777 == 0o600
+    elif scenario == "present-invalid":
+        assert path.read_text() == "invalid"
+    elif scenario == "dangling-link":
+        assert path.is_symlink()
 
 
 def set_schema(verifier, report, rows):
