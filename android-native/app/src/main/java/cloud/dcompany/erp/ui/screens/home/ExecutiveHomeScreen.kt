@@ -396,6 +396,41 @@ internal fun ExecutiveHomeScreen(
     )
 }
 
+private val StaffHomeShortcutOrder = listOf(
+    ExecutiveHomeShortcut(Destination.Gaming, "View stations"),
+    ExecutiveHomeShortcut(Destination.Pos, "Open POS"),
+    ExecutiveHomeShortcut(Destination.Shift, "Review shift"),
+    ExecutiveHomeShortcut(Destination.Customers, "Find customers"),
+    ExecutiveHomeShortcut(Destination.Staff, "Attendance"),
+)
+
+@Composable
+internal fun StaffHomeScreen(
+    employeeName: String,
+    locationLabel: String,
+    destinations: List<Destination>,
+    navigateTo: (Destination) -> Unit,
+) {
+    val shell = LocalExecutiveHomeShellLayout.current
+    val topInset = if (shell.enabled) shell.utilityHeight + shell.noticeHeight else 0.dp
+    val shortcuts = StaffHomeShortcutOrder.filter { it.destination in destinations }
+    BoxWithConstraints(Modifier.fillMaxSize().testTag("staff-home-workspace")) {
+        val wide = maxWidth >= 900.dp
+        Column(
+            Modifier.fillMaxSize().padding(top = topInset).verticalScroll(rememberScrollState())
+                .padding(horizontal = if (wide) 24.dp else 16.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            HomeHero(
+                greeting = executiveGreeting(employeeName, java.time.LocalTime.now().hour),
+                locationLabel = locationLabel,
+                compact = !wide,
+            )
+            if (shortcuts.isNotEmpty()) HomeShortcuts(shortcuts, wide, navigateTo)
+        }
+    }
+}
+
 @Composable
 internal fun ExecutiveHomeWorkspace(
     employeeName: String,

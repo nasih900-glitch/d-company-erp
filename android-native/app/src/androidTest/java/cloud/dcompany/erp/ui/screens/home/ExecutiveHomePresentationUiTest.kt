@@ -48,9 +48,12 @@ import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import cloud.dcompany.erp.BuildConfig
+import cloud.dcompany.erp.core.auth.ErpPermission
+import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceScaffold
+import cloud.dcompany.erp.ui.allowedDestinations
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
 import cloud.dcompany.erp.ui.theme.AppearancePreference
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
@@ -119,6 +122,47 @@ private data class HomeHostProof(
 class ExecutiveHomePresentationUiTest {
     @get:Rule
     val compose = createHomeComposeRule()
+
+    @Test
+    fun staffHomeShowsAuthorizedShortcutsWithoutExecutivePanels() {
+        val profile = MeResponse(
+            userId = "staff-user",
+            email = "staff@example.test",
+            name = "Staff Fixture",
+            roles = listOf("gaming_cashier"),
+            companyId = "fixture-company",
+            effectivePermissions = listOf(
+                ErpPermission.GamingRead,
+                ErpPermission.StaffAttendanceWrite,
+                ErpPermission.InventoryRead,
+            ),
+        )
+        val destinations = allowedDestinations(profile)
+        val opened = mutableListOf<Destination>()
+        compose.setContent {
+            DCompanyTheme {
+                StaffHomeScreen(
+                    employeeName = profile.name,
+                    locationLabel = "Fixture gaming centre",
+                    destinations = destinations,
+                    navigateTo = { opened += it },
+                )
+            }
+        }
+
+        compose.onNodeWithTag("staff-home-workspace").assertIsDisplayed()
+        compose.onNodeWithTag("home-hero").assertIsDisplayed()
+        compose.onNodeWithText("Fixture gaming centre").assertIsDisplayed()
+        for (tag in listOf("executive-home-workspace", "home-kpi-row", "home-sales-trend", "home-open-analytics")) {
+            compose.onNodeWithTag(tag).assertDoesNotExist()
+        }
+        for (destination in listOf(Destination.Pos, Destination.Customers, Destination.Inventory, Destination.Reports)) {
+            compose.onNodeWithTag("home-shortcut-${destination.name}").assertDoesNotExist()
+        }
+        compose.onNodeWithTag("home-shortcut-Gaming").assertHeightIsAtLeast(48.dp).performClick()
+        compose.onNodeWithTag("home-shortcut-Staff").assertHeightIsAtLeast(48.dp).performClick()
+        compose.runOnIdle { assertEquals(listOf(Destination.Gaming, Destination.Staff), opened) }
+    }
 
     @Test
     fun actualWorkspaceShellShowsApprovedHierarchyAndLowerPanelsInInitialViewport() {

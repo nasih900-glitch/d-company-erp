@@ -71,6 +71,7 @@ import cloud.dcompany.erp.ui.TillTakeoverRecovery
 import cloud.dcompany.erp.ui.TerminalChangeUiState
 import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceScaffold
+import cloud.dcompany.erp.ui.WorkspaceHomeMode
 import cloud.dcompany.erp.ui.MutableWorkspaceRouteAuthority
 import cloud.dcompany.erp.ui.WorkspaceRouteRejection
 import cloud.dcompany.erp.ui.WorkspaceRouteRequestResult
@@ -78,11 +79,13 @@ import cloud.dcompany.erp.ui.allowedDestinations
 import cloud.dcompany.erp.ui.canManageSystemSettings
 import cloud.dcompany.erp.ui.resolveWorkspaceDestination
 import cloud.dcompany.erp.ui.workspaceLocationLabel
+import cloud.dcompany.erp.ui.workspaceHomeMode
 import cloud.dcompany.erp.ui.usesAdvancedTerminalWorkflow
 import cloud.dcompany.erp.ui.screens.accesscontrol.AccessControlScreen
 import cloud.dcompany.erp.ui.screens.audit.AuditLogScreen
 import cloud.dcompany.erp.ui.screens.analytics.AnalyticsScreen
 import cloud.dcompany.erp.ui.screens.home.ExecutiveHomeScreen
+import cloud.dcompany.erp.ui.screens.home.StaffHomeScreen
 import cloud.dcompany.erp.ui.screens.FreshLoginSuccessScreen
 import cloud.dcompany.erp.ui.screens.customers.CustomersScreen
 import cloud.dcompany.erp.ui.screens.events.EventsScreen
@@ -1038,12 +1041,21 @@ private fun AppRoot(
                     },
                 ) { destination, navigateTo ->
                     when (destination) {
-                            Destination.Dashboard -> ExecutiveHomeScreen(
-                                employeeName = s.me.name,
-                                locationLabel = locationLabel,
-                                destinations = destinations,
-                                navigateTo = navigateTo,
-                            )
+                            Destination.Dashboard -> when (workspaceHomeMode(s.me, permissions = permissions)) {
+                                WorkspaceHomeMode.EXECUTIVE -> ExecutiveHomeScreen(
+                                    employeeName = s.me.name,
+                                    locationLabel = locationLabel,
+                                    destinations = destinations,
+                                    navigateTo = navigateTo,
+                                )
+                                WorkspaceHomeMode.STAFF -> StaffHomeScreen(
+                                    employeeName = s.me.name,
+                                    locationLabel = locationLabel,
+                                    destinations = destinations,
+                                    navigateTo = navigateTo,
+                                )
+                                null -> Unit
+                            }
                             Destination.Pos -> {
                                 // Constructing a feature ViewModel starts its
                                 // initial API pulls. Keep it inside its allowed

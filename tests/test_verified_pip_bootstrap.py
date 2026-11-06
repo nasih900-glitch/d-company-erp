@@ -316,7 +316,7 @@ def test_backend_ca_update_precedes_both_pip_network_boundaries_and_preserves_ot
         assert "grep -Fx 'ca-certificates-bundle-20261020-r0'" in stage
         assert stage.index("update-ca-certificates") < stage.index("--verify-system-ca") < stage.index("RUN python -I -B /tmp/bootstrap-verified-pip.py &&")
     gate = (ROOT / "infra/scripts/verify-production-runtime-images.sh").read_text()
-    block = gate.split('if [ "$APP_VERSION" = 3.1.57 ] || [ "$APP_VERSION" = 3.1.58 ] || [ "$APP_VERSION" = 3.1.59 ] || [ "$APP_VERSION" = 3.1.60 ] || [ "$APP_VERSION" = 3.1.61 ]; then', 1)[1].split("\nfi", 1)[0]
+    block = gate.split('if [ "$APP_VERSION" = 3.1.57 ] || [ "$APP_VERSION" = 3.1.58 ] || [ "$APP_VERSION" = 3.1.59 ] || [ "$APP_VERSION" = 3.1.60 ] || [ "$APP_VERSION" = 3.1.61 ] || [ "$APP_VERSION" = 3.1.62 ]; then', 1)[1].split("\nfi", 1)[0]
     assert '"$candidate_images"' in block
     assert '"$TRUST_BACKEND_IMAGE_ID"' in block and '"$TRUST_BACKEND_IMAGE_ID" = ' not in block
     assert "--network none --read-only --cap-drop ALL" in block

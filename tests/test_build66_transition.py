@@ -117,7 +117,7 @@ def test_restore_allows_a_new_database_oid_but_checks_every_row(verifier, report
 
 def test_pin_all_five_images_without_changing_any_other_compose_field(verifier):
     attestation = {
-        "version_name": "3.1.61",
+        "version_name": "3.1.62",
         "services": {name: {"image_id": "sha256:" + "a" * 64} for name in verifier.IMAGE_SERVICES},
     }
     base = {"services": {name: {"image": f"{name}:candidate", "command": ["normal"]}
@@ -129,7 +129,7 @@ def test_pin_all_five_images_without_changing_any_other_compose_field(verifier):
     pinned["services"]["backend"]["command"] = ["different"]
     with pytest.raises(ValueError, match="pinned Compose"):
         verifier.verify_compose(attestation, base, pinned)
-    for historical in ("3.1.59", "3.1.60"):
+    for historical in ("3.1.59", "3.1.60", "3.1.61"):
         with pytest.raises(ValueError, match="candidate version"):
             verifier.image_override({**attestation, "version_name": historical})
     del attestation["services"]["redis"]
@@ -163,6 +163,12 @@ def test_installer_orders_quiescence_backup_migration_and_ingress():
     assert "pg_restore" not in writer_failure
 
 
+def set_schema(verifier, report, rows):
+    report["schema_catalog_rows"] = rows
+    report["schema_catalog_row_count"] = len(rows)
+    report["schema_catalog_sha256"] = verifier.catalogue_digest(rows)
+
+
 def test_only_reviewed_check_rendering_is_tolerated_for_restore(verifier, reports):
     before, pre_shift, after, post_shift = reports
     restore_helper = verifier.run_path(
@@ -170,23 +176,53 @@ def test_only_reviewed_check_rendering_is_tolerated_for_restore(verifier, report
     )
     original, rerendered = restore_helper["RESTORE_CONSTRAINT_PAIRS"][0]
 
-    def set_schema(report, rows):
-        report["schema_catalog_rows"] = rows
-        report["schema_catalog_row_count"] = len(rows)
-        report["schema_catalog_sha256"] = verifier.catalogue_digest(rows)
-
-    set_schema(before, [original])
+    set_schema(verifier, before, [original])
     restored = deepcopy(before)
-    set_schema(restored, [rerendered])
+    set_schema(verifier, restored, [rerendered])
     verifier.verify_restore(before, restored)
 
-    set_schema(after, [rerendered, "schema|0095"])
+    set_schema(verifier, after, [rerendered, "schema|0095"])
     with pytest.raises(ValueError, match="schema catalogue delta"):
         verifier.verify_after(before, pre_shift, after, post_shift)
 
-    set_schema(restored, [original + " unexpected"])
+    set_schema(verifier, restored, [original + " unexpected"])
     with pytest.raises(ValueError, match="reviewed CHECK"):
         verifier.verify_restore(before, restored)
+
+
+@pytest.mark.parametrize(
+    ("table", "constraint", "first", "second"),
+    [
+        ("android_update_policy", "android_update_policy_mode_check", "optional", "required"),
+        ("gaming_void_receipts", "ck_gaming_void_receipt_mode", "unlinked_addons", "linked_pos"),
+    ],
+)
+def test_build66_accepts_exact_rehearsed_check_renderings_only_for_restore(
+    verifier, reports, table, constraint, first, second,
+):
+    before, pre_shift, after, post_shift = reports
+    prefix = f"constraint|{table}|{constraint}|CHECK (mode::text = ANY ("
+    original = f"{prefix}ARRAY['{first}'::character varying, '{second}'::character varying]::text[]))"
+    rerendered = f"{prefix}ARRAY['{first}'::character varying::text, '{second}'::character varying::text]))"
+    set_schema(verifier, before, [original])
+    restored = deepcopy(before)
+
+    set_schema(verifier, restored, [rerendered])
+    verifier.verify_restore(before, restored)
+
+    for unreviewed_rows in (
+        [rerendered.replace(f"'{second}'", "'unexpected'")],
+        [original, rerendered],
+    ):
+        set_schema(verifier, restored, unreviewed_rows)
+        with pytest.raises(ValueError, match="reviewed CHECK"):
+            verifier.verify_restore(before, restored)
+
+    set_schema(verifier, after, [original, "schema|0095"])
+    verifier.verify_after(before, pre_shift, after, post_shift)
+    set_schema(verifier, after, [rerendered, "schema|0095"])
+    with pytest.raises(ValueError, match="schema catalogue delta"):
+        verifier.verify_after(before, pre_shift, after, post_shift)
 
 
 def test_runtime_override_reuses_admitted_no_seed_command_and_only_the_message(verifier):

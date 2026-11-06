@@ -17,6 +17,33 @@ fun canRecoverMembershipEvidence(profile: MeResponse): Boolean =
 fun canManageSystemSettings(profile: MeResponse): Boolean =
     EffectivePermissions.from(profile).has(ErpPermission.SettingsManage)
 
+internal enum class WorkspaceHomeMode { EXECUTIVE, STAFF }
+
+private fun hasManagementWorkspace(profile: MeResponse): Boolean =
+    profile.protectedAccess || profile.auditAccess || profile.roles.any { role ->
+        val normalized = role.trim().lowercase().replace('-', '_').replace(' ', '_')
+        normalized.contains("manager") || normalized.contains("owner")
+    }
+
+internal fun workspaceHomeMode(
+    profile: MeResponse,
+    featureProfile: WorkspaceFeatureProfile = WorkspaceFeatureProfiles.Active,
+    permissions: EffectivePermissions = EffectivePermissions.from(profile),
+): WorkspaceHomeMode? {
+    val home = Destination.Dashboard
+    if (!featureProfile.includes(home) || home !in featureProfile.navigationOrder ||
+        (featureProfile.requiresManagement(home) && !hasManagementWorkspace(profile))
+    ) return null
+
+    val executiveAudience = !featureProfile.requiresOwner(home) || profile.protectedAccess || profile.auditAccess
+    return when {
+        executiveAudience && permissions.has(ErpPermission.AnalyticsRead) -> WorkspaceHomeMode.EXECUTIVE
+        "gaming_cashier" in profile.roles && permissions.hasAny(ErpPermission.GamingRead, ErpPermission.PosRead) ->
+            WorkspaceHomeMode.STAFF
+        else -> null
+    }
+}
+
 /**
  * Product-profile, owner-tier and server-permission intersection for every
  * Android route. Feature flags never grant authority and permissions never
@@ -28,20 +55,19 @@ fun allowedDestinations(
 ): List<Destination> {
     val permissions = EffectivePermissions.from(profile)
     val ownerWorkspace = profile.protectedAccess || profile.auditAccess
-    val managementWorkspace = ownerWorkspace || profile.roles.any { role ->
-        val normalized = role.trim().lowercase().replace('-', '_').replace(' ', '_')
-        normalized.contains("manager") || normalized.contains("owner")
-    }
-    return featureProfile.navigationOrder.filter { destination ->
+    val managementWorkspace = hasManagementWorkspace(profile)
+    val homeMode = workspaceHomeMode(profile, featureProfile, permissions)
+    val allowed = featureProfile.navigationOrder.filter { destination ->
         if (!featureProfile.includes(destination)) return@filter false
         // Attendance opens only the separate self-time pane, never identity administration.
         val ownTime = destination == Destination.Staff &&
             (permissions.has(ErpPermission.StaffAttendanceWrite) || staffTimeAccess(profile).canManage)
-        val audienceAllowed = (!featureProfile.requiresOwner(destination) || ownerWorkspace || ownTime) &&
+        val staffHome = destination == Destination.Dashboard && homeMode == WorkspaceHomeMode.STAFF
+        val audienceAllowed = (!featureProfile.requiresOwner(destination) || ownerWorkspace || ownTime || staffHome) &&
             (!featureProfile.requiresManagement(destination) || managementWorkspace)
         if (!audienceAllowed) return@filter false
         when (destination) {
-            Destination.Dashboard -> permissions.has(ErpPermission.AnalyticsRead)
+            Destination.Dashboard -> homeMode != null
             Destination.Pos -> permissions.has(ErpPermission.PosRead)
             Destination.Gaming -> permissions.has(ErpPermission.GamingRead)
             Destination.Tables -> permissions.has(ErpPermission.TablesRead)
@@ -79,4 +105,8 @@ fun allowedDestinations(
             Destination.Help -> true
         }
     }
+    // Keep the prior operational default and fallback when adding the staff Home route.
+    return if (homeMode == WorkspaceHomeMode.STAFF && allowed.firstOrNull() == Destination.Dashboard && allowed.size > 1) {
+        listOf(allowed[1], Destination.Dashboard) + allowed.drop(2)
+    } else allowed
 }

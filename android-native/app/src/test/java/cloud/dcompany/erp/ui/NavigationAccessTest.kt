@@ -48,6 +48,47 @@ class NavigationAccessTest {
     }
 
     @Test
+    fun `gaming cashier gets staff Home and keeps the prior operational fallback`() {
+        val gaming = profile(
+            roles = listOf("gaming_cashier"),
+            effective = listOf(ErpPermission.GamingRead, ErpPermission.StaffAttendanceWrite),
+        )
+        val routes = allowedDestinations(gaming)
+        assertEquals(WorkspaceHomeMode.STAFF, workspaceHomeMode(gaming))
+        assertEquals(listOf(Destination.Gaming, Destination.Dashboard, Destination.Staff, Destination.Help), routes)
+        assertEquals(Destination.Gaming, resolveWorkspaceDestination(null, routes))
+        assertEquals(Destination.Gaming, resolveWorkspaceDestination(Destination.Reports, routes))
+        assertEquals(Destination.Dashboard, resolveWorkspaceDestination(Destination.Dashboard, routes))
+
+        val pos = gaming.copy(effectivePermissions = listOf(ErpPermission.PosRead))
+        assertEquals(WorkspaceHomeMode.STAFF, workspaceHomeMode(pos))
+        assertEquals(Destination.Pos, resolveWorkspaceDestination(null, allowedDestinations(pos)))
+        assertFalse(Destination.Dashboard in allowedDestinations(gaming, WorkspaceFeatureProfiles.FullHospitality))
+    }
+
+    @Test
+    fun `staff Home requires exact role and operational permission while executive eligibility wins`() {
+        val staff = profile(roles = listOf("gaming_cashier"), effective = listOf(ErpPermission.GamingRead))
+        for (denied in listOf(
+            staff.copy(roles = listOf("cashier")),
+            staff.copy(effectivePermissions = listOf(ErpPermission.StaffAttendanceWrite)),
+            staff.copy(effectivePermissions = emptyList()),
+            staff.copy(effectivePermissions = null),
+        )) {
+            assertNull(workspaceHomeMode(denied))
+            assertFalse(Destination.Dashboard in allowedDestinations(denied))
+        }
+
+        val executive = staff.copy(
+            roles = staff.roles + "owner",
+            protectedAccess = true,
+            effectivePermissions = listOf(ErpPermission.AnalyticsRead, ErpPermission.GamingRead),
+        )
+        assertEquals(WorkspaceHomeMode.EXECUTIVE, workspaceHomeMode(executive))
+        assertEquals(Destination.Dashboard, resolveWorkspaceDestination(null, allowedDestinations(executive)))
+    }
+
+    @Test
     fun `attendance-only account gets Staff and Account settings only`() {
         val profile = profile(
             roles = listOf("attendance_only"),

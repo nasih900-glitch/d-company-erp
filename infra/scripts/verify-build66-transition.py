@@ -16,6 +16,22 @@ CATALOGUE_ADDITIONS = {
 }
 IMAGE_SERVICES = {"backend", "frontend", "caddy", "postgres", "redis"}
 
+# Exact CHECK renderings observed in the Build65 backup restore rehearsal.
+RESTORE_CHECK_PAIRS = (
+    (
+        "constraint|android_update_policy|android_update_policy_mode_check|"
+        "CHECK (mode::text = ANY (ARRAY['optional'::character varying, 'required'::character varying]::text[]))",
+        "constraint|android_update_policy|android_update_policy_mode_check|"
+        "CHECK (mode::text = ANY (ARRAY['optional'::character varying::text, 'required'::character varying::text]))",
+    ),
+    (
+        "constraint|gaming_void_receipts|ck_gaming_void_receipt_mode|"
+        "CHECK (mode::text = ANY (ARRAY['unlinked_addons'::character varying, 'linked_pos'::character varying]::text[]))",
+        "constraint|gaming_void_receipts|ck_gaming_void_receipt_mode|"
+        "CHECK (mode::text = ANY (ARRAY['unlinked_addons'::character varying::text, 'linked_pos'::character varying::text]))",
+    ),
+)
+
 
 def require(condition, message):
     if not condition:
@@ -95,9 +111,22 @@ def build65_runtime_support():
 def verify_restore(before, restored):
     inventory(before, "0094")
     inventory(restored, "0094")
-    # pg_restore can re-render the same CHECK expression. Reuse only the
-    # reviewed whole-string aliases, and never apply them to the live delta.
-    normalize = build65_runtime_support()["restore_catalogue"]
+    # Reuse the historical aliases and add only these exact restore renderings.
+    # The live migration delta continues to compare the raw catalogue.
+    historical_normalize = build65_runtime_support()["restore_catalogue"]
+    aliases = {restored: live for live, restored in RESTORE_CHECK_PAIRS}
+
+    def normalize(rows):
+        rows = historical_normalize(rows)
+        for live, restored in RESTORE_CHECK_PAIRS:
+            identity = live.rsplit("|", 1)[0] + "|"
+            matching = [row for row in rows if row.startswith(identity)]
+            require(
+                not matching or matching == [live] or matching == [restored],
+                "restored reviewed CHECK is duplicated or changed",
+            )
+        return sorted(aliases.get(row, row) for row in rows)
+
     require(
         before["database_identity"]["system_identifier"] == restored["database_identity"]["system_identifier"]
         and normalize(before["schema_catalog_rows"]) == normalize(restored["schema_catalog_rows"])
@@ -155,7 +184,7 @@ def runtime_override(config):
 
 def image_override(attestation):
     images = attestation["services"]
-    require(attestation["version_name"] == "3.1.61" and set(images) == IMAGE_SERVICES,
+    require(attestation["version_name"] == "3.1.62" and set(images) == IMAGE_SERVICES,
             "unexpected candidate version or service inventory")
     services = {service: {"image": row["image_id"]} for service, row in images.items()}
     require(all(re.fullmatch(r"sha256:[0-9a-f]{64}", row["image"]) for row in services.values()),

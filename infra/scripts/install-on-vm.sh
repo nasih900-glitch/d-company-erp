@@ -262,7 +262,7 @@ BUILD66_SHIFT_SQL="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build66-shift-proj
 BUILD66_EXACT_TRANSITION=false
 BUILD66_POST_PROOF_SUCCEEDED=false
 BUILD66_APP_WRITERS_STARTED=false
-if grep -qx 'APP_VERSION=3.1.61' "$CANDIDATE_BUILD_ROOT/.env.production.example"; then
+if grep -qx 'APP_VERSION=3.1.62' "$CANDIDATE_BUILD_ROOT/.env.production.example"; then
   if [ ! -f .env ] || [ -z "$BUILD66_ACCEPTANCE_CREDENTIAL_FILE" ] || \
      [ -n "$BUILD55_ACCEPTANCE_CREDENTIAL_FILE" ] || \
      [ -n "$LEGACY_CODE14_REVISION" ] || [ -n "$LEGACY_CODE16_REVISION" ]; then
