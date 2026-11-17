@@ -167,6 +167,7 @@ jobs:
       - name: Run complete backend suite
         working-directory: backend
         env:
+          ENV: test
           DATABASE_URL: postgresql+psycopg://erp:erp@localhost:5432/erp_test
           REDIS_URL: redis://localhost:6379/0
         run: pytest
