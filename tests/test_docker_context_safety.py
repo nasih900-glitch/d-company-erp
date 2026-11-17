@@ -221,7 +221,8 @@ class DockerContextSafetyTest(unittest.TestCase):
             '            "--$service-fixed-sbom" "$evidence_dir/$service.syft.json" \\\n'
             '            "$image" "${config_ids[0]}" \\\n'
             '            "$service=$evidence_dir/$service-grype.json" \\\n'
-            '            "--runtime-proof=$evidence_dir/$service-zlib-runtime.json" >> "$validation"',
+            '            "--runtime-proof=$evidence_dir/$service-zlib-runtime.json" \\\n'
+            '            "--archive-platform=${archive_platforms[0]}@${config_ids[0]}" "${hashlib_vex[@]}" >> "$validation"',
             action,
         )
         self.assertNotIn("sbom: ${{ runner.temp }}/container-security", action)

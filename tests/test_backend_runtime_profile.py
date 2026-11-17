@@ -252,6 +252,20 @@ def test_runtime_wiring_audits_wheels_after_pruning_base_and_uses_real_stack():
     assert 'apk del --no-network .python-rundeps sqlite-libs' in script
 
 
+def test_installer_reuses_ci_runtime_profile_before_owner_and_ingress():
+    gate = (ROOT / 'infra/scripts/verify-production-runtime-images.sh').read_text()
+    installer = (ROOT / 'infra/scripts/install-on-vm.sh').read_text()
+    probe = (
+        '"import runpy; runpy.run_path('
+        "'/usr/local/bin/verify-backend-runtime-profile.py', run_name='__main__')\""
+    )
+    assert 'exec -T backend python -B -c \\\n    ' + probe in gate
+    profile = installer.index('docker exec "$BUILD66_BACKEND" python -B -c \\\n      ' + probe)
+    owner = installer.index('internal-probe --require-owner --container-id "$BUILD66_BACKEND"')
+    ingress = installer.index('echo "==> Backend acceptance passed; reopening public ingress…"')
+    assert profile < owner < ingress
+
+
 @pytest.mark.parametrize('before_wheels', [True, False])
 def test_scanner_child_failure_propagates_through_actual_find(tmp_path, before_wheels):
     # Execute only the extracted non-destructive scanner, never the APK/module

@@ -692,11 +692,19 @@ class PosEmptyCatalogueUiTest {
             val insets = ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
             (insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0) > 0
         }
-        compose.waitUntil(5_000) { keyboardVisible() }
+        val unappliedMessage = hasText("Apply this edited amount or restore", substring = true)
+        val continueAction = hasTestTag("pos-held-review-continue")
+        val unappliedMessages = compose.onAllNodes(unappliedMessage)
+        val continueActions = compose.onAllNodes(continueAction)
+        // The decor view receives IME insets separately from the Compose layout that uses them.
+        compose.waitUntil(5_000) {
+            keyboardVisible() &&
+                unappliedMessages.fetchSemanticsNodes(atLeastOneRootRequired = false).isEmpty() &&
+                continueActions.fetchSemanticsNodes(atLeastOneRootRequired = false).isEmpty()
+        }
         val discountAction = compose.onNodeWithTag("pos-held-review-apply-discount")
             .assertIsDisplayed().assertIsEnabled().assertHeightIsAtLeast(48.dp).fetchSemanticsNode()
-        val unappliedMessage = compose.onNodeWithText("Apply this edited amount or restore", substring = true)
-        unappliedMessage.assertDoesNotExist()
+        compose.onNode(unappliedMessage).assertDoesNotExist()
         compose.runOnIdle {
             val visibleWindow = AndroidRect()
             compose.activity.window.decorView.getWindowVisibleDisplayFrame(visibleWindow)
@@ -708,12 +716,16 @@ class PosEmptyCatalogueUiTest {
                     discountAction.boundsInRoot.height >= coordinates.size.height - 1f,
             )
         }
-        compose.onNodeWithTag("pos-held-review-continue").assertDoesNotExist()
+        compose.onNode(continueAction).assertDoesNotExist()
         compose.onNode(hasSetTextAction()).performImeAction()
-        compose.waitUntil(5_000) { !keyboardVisible() }
+        compose.waitUntil(5_000) {
+            !keyboardVisible() &&
+                unappliedMessages.fetchSemanticsNodes(atLeastOneRootRequired = false).size == 1 &&
+                continueActions.fetchSemanticsNodes(atLeastOneRootRequired = false).size == 1
+        }
         compose.onNode(hasSetTextAction()).assertIsNotFocused()
-        unappliedMessage.assertIsDisplayed()
-        compose.onNodeWithTag("pos-held-review-continue").assertIsDisplayed().assertIsNotEnabled()
+        compose.onNode(unappliedMessage).assertIsDisplayed()
+        compose.onNode(continueAction).assertIsDisplayed().assertIsNotEnabled()
         compose.onNodeWithTag("pos-held-review-apply-discount")
             .assertIsDisplayed().assertIsEnabled().performClick()
         compose.runOnIdle { assertEquals(listOf("held-gaming-1" to 3_000L), appliedDiscounts) }

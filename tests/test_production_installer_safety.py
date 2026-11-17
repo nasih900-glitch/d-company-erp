@@ -370,7 +370,26 @@ def test_exact_candidate_images_are_scanned_before_maintenance() -> None:
     ) >= 2
     assert "--network none --read-only --cap-drop ALL" in source
     assert source.count("--security-opt no-new-privileges") >= 2
-    assert "--vex" not in scanner_source
+    assert scanner_source.count(" --vex ") == 1
+    assert '--vex /scan/hashlib-fixed.openvex.json' in scanner_source
+    scan_order = (
+        '--validate-hashlib-runtime "$hashlib_runtime" "$image_ref" "$config_image_id"',
+        'grype_arguments+=(--fail-on high --output json)',
+        'run_owned_container 1200s "$grype_report" online "${grype_arguments[@]}"',
+        'if [ "$service" = backend ] && [ "$scanner_status" -eq 2 ]; then',
+        'mv "$grype_report" "$raw_grype"',
+        '--prove-fixed-hashlib "$raw_grype" "$image_ref"',
+        '"$config_image_id" "$hashlib_runtime" "$hashlib_vex"',
+        'src=$hashlib_vex,dst=/scan/hashlib-fixed.openvex.json,readonly',
+        '"${grype_arguments[@]}" --vex /scan/hashlib-fixed.openvex.json',
+        'if [ "$scanner_status" -ne 0 ]; then',
+        '"--$service-fixed-sbom" "$syft_report"',
+        '"--archive-platform=$archive_platform@$config_image_id"',
+    )
+    previous_step = 0
+    for step in scan_order:
+        previous_step = scanner_source.index(step, previous_step) + len(step)
+    assert '[ "$run_status" -eq 2 ] && [ "$state" != false:2 ]' in scanner_source
     assert '"--$service-fixed-sbom" "$syft_report"' in scanner_source
     assert '"--runtime-proof=$runtime_proof"' in scanner_source
     assert '--bind-runtime-proof "$service"' in scanner_source

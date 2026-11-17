@@ -3649,7 +3649,8 @@ elif [ "$TYPED_LEDGER_TRANSITION" = true ]; then
   capture_build66_runtime "$BUILD66_BACKEND" "$UPGRADE_SNAPSHOT/build66-running-runtime.json"
   cmp -s "$BUILD66_RUNTIME_OVERRIDE" "$UPGRADE_SNAPSHOT/build66-running-runtime.json"
   (umask 077
-    docker exec "$BUILD66_BACKEND" python /usr/local/bin/verify-backend-runtime-profile.py \
+    docker exec "$BUILD66_BACKEND" python -B -c \
+      "import runpy; runpy.run_path('/usr/local/bin/verify-backend-runtime-profile.py', run_name='__main__')" \
       > "$UPGRADE_SNAPSHOT/build66-runtime-profile.json"
     python3 "$BUILD55_AUTH_TOOL" internal-probe --require-owner --container-id "$BUILD66_BACKEND" \
       --credential-file "$BUILD66_ACCEPTANCE_CREDENTIAL_FILE" --expected-sha256 "$BUILD66_CREDENTIAL_SHA256" \
