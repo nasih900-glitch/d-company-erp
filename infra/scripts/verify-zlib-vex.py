@@ -219,7 +219,11 @@ def validate_scanner_source(
         )
 
 
-def validate_fixed_sbom(service: str, path: Path, expected_image_id: str) -> str:
+def validate_fixed_sbom(
+    service: str, path: Path, expected_image_id: str, *, archive_platform_binding: str | None = None,
+) -> str:
+    if archive_platform_binding is not None and archive_platform_binding != f"linux/amd64@{expected_image_id}":
+        raise SystemExit(f"{service.capitalize()} archive platform/config identity mismatch")
     report = load_json(path)
     distro_version, port_commit = official_profile(service)
     package_version = CADDY_PACKAGE_VERSION
@@ -328,7 +332,11 @@ def validate_fixed_sbom(service: str, path: Path, expected_image_id: str) -> str
     ):
         raise SystemExit(f"{service.capitalize()} fixed-package SBOM zlib location is inconsistent")
 
-    if (metadata.get("architecture") != "amd64" or metadata.get("os") != "linux"
+    syft_platform = (metadata.get("os"), metadata.get("architecture"))
+    # Pinned Syft leaves both fields explicitly empty on some Docker archives.
+    # The hardened runner supplies the platform from the same verified config.
+    archive_platform_used = syft_platform == ("", "") and archive_platform_binding is not None
+    if ((syft_platform != ("linux", "amd64") and not archive_platform_used)
             or distro["versionID"] != distro_version or architecture != "x86_64"
             or apk_port_commit != port_commit):
         raise SystemExit(f"{service.capitalize()} fixed-package SBOM does not match the reviewed Alpine port")
@@ -350,6 +358,8 @@ def validate_fixed_sbom(service: str, path: Path, expected_image_id: str) -> str
     print(f"{service}_fixed_sbom_sha256={digest}")
     print(f"{service}_fixed_sbom_image_id={expected_image_id}")
     print(f"{service}_fixed_zlib_version={package_version}")
+    if archive_platform_used:
+        print(f"{service}_fixed_sbom_platform_source=verified-docker-archive")
     return digest
 
 
@@ -497,7 +507,7 @@ def bind_official_runtime(arguments: list[str]) -> int:
 def validate_fixed_mode(arguments: list[str], fixed_service: str) -> int:
     usage = (f"Usage: {arguments[0]} --{fixed_service}-fixed-sbom SYFT_REPORT "
              f"IMAGE_PRODUCT IMAGE_ID {fixed_service}=GRYPE_REPORT" +
-             " --runtime-proof=PROOF")
+             " --runtime-proof=PROOF [--archive-platform=PLATFORM@CONFIG_IMAGE_ID]")
     if len(arguments) < 6:
         raise SystemExit(usage)
     sbom_path = Path(arguments[2]).resolve(strict=True)
@@ -506,9 +516,14 @@ def validate_fixed_mode(arguments: list[str], fixed_service: str) -> int:
     service, separator, raw_report_path = arguments[5].partition("=")
     if service != fixed_service or not separator or not raw_report_path:
         raise SystemExit(f"--{fixed_service}-fixed-sbom requires exactly one {fixed_service} Grype report binding")
+    archive_platform_binding = None
     if fixed_service in OFFICIAL_PROFILES:
-        if len(arguments) != 7 or not arguments[6].startswith("--runtime-proof="):
+        if len(arguments) not in {7, 8} or not arguments[6].startswith("--runtime-proof="):
             raise SystemExit(usage)
+        if len(arguments) == 8:
+            flag, separator, archive_platform_binding = arguments[7].partition("=")
+            if flag != "--archive-platform" or not separator:
+                raise SystemExit(usage)
         proof_path = Path(arguments[6].removeprefix("--runtime-proof="))
         if proof_path.is_symlink() or proof_path.resolve(strict=True) != proof_path.absolute():
             raise SystemExit("Official runtime proof is linked")
@@ -522,7 +537,7 @@ def validate_fixed_mode(arguments: list[str], fixed_service: str) -> int:
     elif len(arguments) != 6:
         raise SystemExit(usage)
     report_path = Path(raw_report_path).resolve(strict=True)
-    validate_fixed_sbom(fixed_service, sbom_path, expected_image_id)
+    validate_fixed_sbom(fixed_service, sbom_path, expected_image_id, archive_platform_binding=archive_platform_binding)
     validate_fixed_report(fixed_service, report_path, expected_product, expected_image_id)
     return 0
 

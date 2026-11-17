@@ -96,6 +96,7 @@ declare -a ARCHIVES=()
 declare -a SYFT_REPORTS=()
 declare -a GRYPE_REPORTS=()
 declare -a CONFIG_IMAGE_IDS=()
+declare -a ARCHIVE_PLATFORMS=()
 SERVICE_KEYS='|'
 OUTPUT_KEYS='|'
 archive_total_bytes=0
@@ -167,21 +168,30 @@ for index in "${!SERVICES[@]}"; do
       exit 1
     }
   config_key=${service//-/_}_scanner_config_image_id
+  platform_key=${service//-/_}_archive_platform
   scanner_config_id=""
+  archive_platform=""
   while IFS='=' read -r key value; do
     if [ "$key" = "$config_key" ]; then
-      if [ -n "$scanner_config_id" ]; then
-        echo "Archive identity verifier returned duplicate config identity for $service." >&2
+      if [ -n "$scanner_config_id" ] || ! [[ "$value" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        echo "Archive identity verifier returned duplicate or invalid config identity for $service." >&2
         exit 1
       fi
       scanner_config_id=$value
+    elif [ "$key" = "$platform_key" ]; then
+      if [ -n "$archive_platform" ] || [ "$value" != linux/amd64 ]; then
+        echo "Archive identity verifier returned duplicate or invalid platform for $service." >&2
+        exit 1
+      fi
+      archive_platform=$value
     fi
   done <<< "$identity_validation"
-  if ! [[ "$scanner_config_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-    echo "Archive identity verifier returned invalid config identity for $service." >&2
+  if [ -z "$scanner_config_id" ] || [ -z "$archive_platform" ]; then
+    echo "Archive identity verifier did not bind the config and platform for $service." >&2
     exit 1
   fi
   CONFIG_IMAGE_IDS+=("$scanner_config_id")
+  ARCHIVE_PLATFORMS+=("$archive_platform")
   printf '%s\n' "$identity_validation" >> "$METADATA"
 
 done
@@ -513,6 +523,7 @@ for index in "${!SERVICES[@]}"; do
   image_ref=${IMAGE_REFS[$index]}
   runtime_image_id=${IMAGE_IDS[$index]}
   config_image_id=${CONFIG_IMAGE_IDS[$index]}
+  archive_platform=${ARCHIVE_PLATFORMS[$index]}
   archive=${ARCHIVES[$index]}
   syft_report=${SYFT_REPORTS[$index]}
   grype_report=${GRYPE_REPORTS[$index]}
@@ -619,7 +630,7 @@ PY
   fi
   python3 "$ZLIB_VEX_VERIFIER" "--$service-fixed-sbom" "$syft_report" \
     "$image_ref" "$config_image_id" "$service=$grype_report" \
-    "--runtime-proof=$runtime_proof" >> "$METADATA"
+    "--runtime-proof=$runtime_proof" "--archive-platform=$archive_platform@$config_image_id" >> "$METADATA"
   validation=$(python3 - "$grype_report" "$service" "$config_image_id" <<'PY'
 import json
 import sys

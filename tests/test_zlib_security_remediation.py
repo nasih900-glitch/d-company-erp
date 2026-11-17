@@ -469,6 +469,7 @@ def _verify_caddy(
     sbom: dict[str, object],
     report: dict[str, object],
     runtime: dict | None = None,
+    *, extra_arguments: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     sbom_path = tmp_path / "caddy.syft.json"
@@ -485,6 +486,7 @@ def _verify_caddy(
             IMAGE_ID,
             f"caddy={report_path}",
             f"--runtime-proof={_caddy_proof_file(tmp_path, runtime)}",
+            *extra_arguments,
         ],
         text=True,
         capture_output=True,
@@ -509,6 +511,40 @@ def test_caddy_official_14_requires_actual_syft_and_zero_suppressed_findings(
     assert "caddy_fixed_zlib_version=1.4-r0" in completed.stdout
     assert "caddy_fixed_zlib_ignored_matches=0" in completed.stdout
     assert not list(tmp_path.glob("*.openvex.json"))
+
+
+@pytest.mark.parametrize(
+    ("os_value", "architecture", "binding", "error"),
+    (
+        ("", "", f"linux/amd64@{IMAGE_ID}", None),
+        ("", "", None, "reviewed Alpine port"),
+        ("", "amd64", f"linux/amd64@{IMAGE_ID}", "reviewed Alpine port"),
+        ("linux", "", f"linux/amd64@{IMAGE_ID}", "reviewed Alpine port"),
+        (None, "", f"linux/amd64@{IMAGE_ID}", "reviewed Alpine port"),
+        ("", None, f"linux/amd64@{IMAGE_ID}", "reviewed Alpine port"),
+        ("windows", "amd64", f"linux/amd64@{IMAGE_ID}", "reviewed Alpine port"),
+        ("linux", "arm64", f"linux/amd64@{IMAGE_ID}", "reviewed Alpine port"),
+        ("", "", f"linux/arm64@{IMAGE_ID}", "archive platform/config identity mismatch"),
+        ("", "", "linux/amd64@sha256:" + "f" * 64, "archive platform/config identity mismatch"),
+    ),
+)
+def test_only_explicit_empty_syft_platform_can_use_matching_archive_binding(
+    tmp_path: Path, os_value: str | None, architecture: str | None, binding: str | None, error: str | None,
+) -> None:
+    sbom = _caddy_sbom()
+    metadata = sbom["source"]["metadata"]
+    for field, value in (("os", os_value), ("architecture", architecture)):
+        if value is None:
+            del metadata[field]
+        else:
+            metadata[field] = value
+    arguments = () if binding is None else (f"--archive-platform={binding}",)
+    result = _verify_caddy(tmp_path, sbom, _caddy_grype(), extra_arguments=arguments)
+    assert result.returncode == (0 if error is None else 1), result.stderr
+    if error is None:
+        assert "caddy_fixed_sbom_platform_source=verified-docker-archive" in result.stdout
+    else:
+        assert error in result.stderr
 
 
 @pytest.mark.parametrize(

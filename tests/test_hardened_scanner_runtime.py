@@ -172,7 +172,8 @@ elif args[0] == "start":
             "version": "1.4-r0", "gitCommitOfApkPort": port,
             "provides": ["so:libz.so.1=1.4"], "files": [{"path": "/usr/lib/libz.so.1.4"}],
         })
-        report["source"]["metadata"].update({"architecture": "amd64", "os": "linux"})
+        if service != "caddy":
+            report["source"]["metadata"].update({"architecture": "amd64", "os": "linux"})
         report["distro"]["versionID"] = distro
         report["files"][0]["location"]["path"] = "/usr/lib/libz.so.1.4"
         print(json.dumps(report))
@@ -547,6 +548,8 @@ def test_batch_scanner_executes_hardened_path_for_every_archive(tmp_path: Path) 
     assert all("--vex" not in call and "/scan/zlib.openvex.json" not in call for call in grype_creates)
     assert all(archive.exists() for archive in archives)
     metadata_text = metadata.read_text(encoding="utf-8")
+    assert metadata_text.count("_fixed_sbom_platform_source=verified-docker-archive") == 1
+    assert "caddy_fixed_sbom_platform_source=verified-docker-archive" in metadata_text
     for service in ("backend", "frontend", "caddy", "postgres", "redis"):
         assert f"{service}_grype_version=0.118.0" in metadata_text
         assert f"{service}_syft_version=1.42.3" in metadata_text
