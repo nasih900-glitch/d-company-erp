@@ -55,6 +55,7 @@ import java.io.File
 import java.time.Instant
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.ceil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -74,7 +75,7 @@ private const val PHYSICAL_PERFORMANCE_LOG_TAG = "DCompanyPhysicalPerf"
  * screenshots and video as acceptance evidence.
  */
 @RunWith(AndroidJUnit4::class)
-@SdkSuppress(minSdkVersion = Build.VERSION_CODES.N)
+@SdkSuppress(minSdkVersion = Build.VERSION_CODES.O)
 class PhysicalComponentFrameStressUiTest {
     @get:Rule
     val compose = createAndroidComposeRule<ComponentActivity>()
@@ -124,10 +125,13 @@ class PhysicalComponentFrameStressUiTest {
             compose.waitForIdle()
         }
 
+        val stressSamples = 200
         val window = compose.activity.window
         val callbackThread = HandlerThread("erp-frame-stress").apply { start() }
         val completedFrames = LinkedBlockingQueue<CompletedFrame>()
-        val listener = Window.OnFrameMetricsAvailableListener { _, frame, _ ->
+        val droppedReports = AtomicInteger()
+        val listener = Window.OnFrameMetricsAvailableListener { _, frame, dropped ->
+            droppedReports.addAndGet(dropped)
             completedFrames.add(
                 CompletedFrame(
                     frame.getMetric(FrameMetrics.VSYNC_TIMESTAMP),
@@ -142,7 +146,7 @@ class PhysicalComponentFrameStressUiTest {
         // rate the display can complete them. Compose idleness alone permits
         // the test to enqueue later inputs behind an unfinished frame.
         try {
-            repeat(200) { index ->
+            repeat(stressSamples) { index ->
                 var inputNanos = 0L
                 compose.runOnIdle {
                     inputNanos = System.nanoTime()
@@ -183,12 +187,16 @@ class PhysicalComponentFrameStressUiTest {
             compose.activity.display?.refreshRate ?: 60f,
         )
         writeScreenshot("03-gaming-after-connectivity-stress.png")
-        writeMetrics(metrics)
+        writeMetrics(
+            metrics,
+            measurementDetails = "samples=$stressSamples pacing=frame-completion droppedReports=${droppedReports.get()}",
+        )
         Log.i(PHYSICAL_PERFORMANCE_LOG_TAG, metrics.asLogLine())
+        assertEquals("The frame callback dropped stress evidence", 0, droppedReports.get())
 
         assertTrue(
             "The physical run captured too few frames for a useful audit: ${metrics.totalFrames}",
-            metrics.totalFrames >= 200,
+            metrics.totalFrames >= stressSamples,
         )
         assertEquals("A frozen frame was detected during Gaming/connectivity stress", 0, metrics.frozenFrames)
         // Jank and percentile values are calibration evidence on the first
@@ -206,8 +214,8 @@ class PhysicalComponentFrameStressUiTest {
         val deadline = inputNanos + TimeUnit.SECONDS.toNanos(5)
         while (true) {
             val remaining = deadline - System.nanoTime()
-            val frame = completedFrames.poll(remaining.coerceAtLeast(0), TimeUnit.NANOSECONDS)
-                ?: throw AssertionError("The changed frame never completed at stress sample $sample")
+            val frame = if (remaining > 0) completedFrames.poll(remaining, TimeUnit.NANOSECONDS) else null
+            checkNotNull(frame) { "No frame completed after input at stress sample $sample" }
             recordStressFrame(histogram, frame)
             if (frame.vsyncNanos >= inputNanos && frame.durationNanos > 0) return
         }
@@ -417,7 +425,7 @@ class PhysicalComponentFrameStressUiTest {
         metrics: FrameSummary,
         scenario: String = "component-gaming-connectivity",
         filename: String = "frame-metrics.txt",
-        measurementDetails: String = "samples=200 cadence=idle-bounded-stress",
+        measurementDetails: String,
     ) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val display = context.resources.displayMetrics
