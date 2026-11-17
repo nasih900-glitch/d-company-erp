@@ -100,6 +100,21 @@ def external_actions(source: str) -> list[str]:
 
 
 class AndroidReleasePipelineTest(unittest.TestCase):
+
+    def test_kotlin_plugin_markers_use_the_checksum_pinned_repository(self) -> None:
+        source = (ROOT / "android-native/settings.gradle.kts").read_text()
+        exclusive = source.split("exclusiveContent {", 1)[1].split("\n        }", 1)[0]
+        self.assertIn("forRepository { mavenCentral() }", exclusive)
+        for marker in ("android", "plugin.compose", "plugin.serialization"):
+            group = f"org.jetbrains.kotlin.{marker}"
+            module = f"{group}.gradle.plugin"
+            self.assertRegex(
+                exclusive,
+                rf'includeModule\(\s*"{re.escape(group)}",\s*"{re.escape(module)}",?\s*\)',
+            )
+        self.assertIn("<verify-metadata>true</verify-metadata>", (
+            ROOT / "android-native/gradle/verification-metadata.xml"
+        ).read_text())
     def test_api35_profile_installer_is_explicitly_locked_and_verified(self) -> None:
         import xml.etree.ElementTree as ET
 

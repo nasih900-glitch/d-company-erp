@@ -3,6 +3,17 @@ pluginManagement {
         google()
         mavenCentral()
         gradlePluginPortal()
+        exclusiveContent {
+            forRepository { mavenCentral() }
+            filter {
+                includeModule("org.jetbrains.kotlin.android", "org.jetbrains.kotlin.android.gradle.plugin")
+                includeModule("org.jetbrains.kotlin.plugin.compose", "org.jetbrains.kotlin.plugin.compose.gradle.plugin")
+                includeModule(
+                    "org.jetbrains.kotlin.plugin.serialization",
+                    "org.jetbrains.kotlin.plugin.serialization.gradle.plugin",
+                )
+            }
+        }
     }
 }
 
