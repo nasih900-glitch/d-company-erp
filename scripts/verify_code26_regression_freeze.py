@@ -2943,7 +2943,7 @@ REVIEWED_CODE30_4_BUILD72_SHA256 = {'.env.production.example': '3d2da9400f5b233d
  'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/shift/ShiftOverviewUiTest.kt': 'b9d74de7263d571f58e6733dfea38ef1dd82bec07a99e25a5c91465240478703',
  'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/shift/work/AtomicStartWorkStoreTest.kt': 'a9dfabbd8089ec3cfd06ec51e92e82700c023524fc4ddcd0fec7d1c0fd0e8803',
  'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/BackgroundLifecycleTraceRule.kt': '546efbcd285f8a2e75c322924444125f98b052992c59d9730f1da57ff1021b64',
- 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundUiTest.kt': 'b9921ca1b9b15fa336d016530166f7bf6873ba3ef2047ba57c14fe92fda20d82',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundUiTest.kt': '3a4b6cc38295f575b8a985d0cc056fe7e0be28b341c81982ab69f521a0d5b9a2',
  'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceGlassUiTest.kt': 'dba732f59bf9c78c95dbbe4b3db9c26f0fc74d0fd129110db52b0e698a95ba30',
  'android-native/app/src/main/java/cloud/dcompany/erp/MainActivity.kt': '2065dd2b089feb076c892792088c58d90f669d0e61acb73c9d1fd2b8966283a6',
  'android-native/app/src/main/java/cloud/dcompany/erp/core/auth/EffectivePermissions.kt': '5f9a71ffff0f92e29a8c1955e77562a37e8d816a50b364f1156054053a29d41b',

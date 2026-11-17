@@ -77,6 +77,8 @@ import cloud.dcompany.erp.ui.screens.settings.rememberWorkspaceBackgroundPending
 import java.io.File
 import java.io.FileNotFoundException
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.security.MessageDigest
 import kotlinx.coroutines.runBlocking
@@ -523,16 +525,25 @@ class WorkspaceBackgroundUiTest {
         val requestedColor = Color.rgb(34, 174, 92)
         val fallbackColor = Color.rgb(181, 52, 48)
         val requestedCalls = AtomicInteger()
+        val releaseRetry = CountDownLatch(1)
         val decoder = object : WorkspaceBackgroundDecoder {
             override fun decodeRequested(
                 image: WorkspaceBackgroundImage,
                 targetWidth: Int,
                 targetHeight: Int,
                 context: Context,
-            ): Bitmap? = if (requestedCalls.incrementAndGet() == 1) null else
-                Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888).apply {
+            ): Bitmap? {
+                val attempt = requestedCalls.incrementAndGet()
+                if (attempt == 1) return null
+                if (attempt == 2) {
+                    // The renderer decodes on its IO dispatcher. Hold the retry there
+                    // until the test has verified the fallback on the Compose thread.
+                    check(releaseRetry.await(8, TimeUnit.SECONDS)) { "Fallback check did not release the retry" }
+                }
+                return Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888).apply {
                     eraseColor(requestedColor)
                 }
+            }
 
             override fun decodeBundled(
                 slot: WorkspaceBackgroundSlot,
@@ -549,16 +560,20 @@ class WorkspaceBackgroundUiTest {
             contentId = UUID.randomUUID().toString(),
             privatePath = "/unavailable-test-image",
         )
-        compose.setContent {
-            WorkspaceBackgroundRenderer(imported, Modifier.fillMaxSize(), decoder)
+        try {
+            compose.setContent {
+                WorkspaceBackgroundRenderer(imported, Modifier.fillMaxSize(), decoder)
+            }
+            compose.waitUntil(4_000L) {
+                compose.onAllNodes(hasTestTag("workspace-background-fallback-home")).fetchSemanticsNodes().size == 1
+            }
+            assertEquals(
+                0,
+                compose.onAllNodes(hasTestTag("workspace-background-ready-home")).fetchSemanticsNodes().size,
+            )
+        } finally {
+            releaseRetry.countDown()
         }
-        compose.waitUntil(4_000L) {
-            compose.onAllNodes(hasTestTag("workspace-background-fallback-home")).fetchSemanticsNodes().size == 1
-        }
-        assertEquals(
-            0,
-            compose.onAllNodes(hasTestTag("workspace-background-ready-home")).fetchSemanticsNodes().size,
-        )
         compose.waitUntil(4_000L) {
             compose.onAllNodes(hasTestTag("workspace-background-ready-home")).fetchSemanticsNodes().size == 1
         }
