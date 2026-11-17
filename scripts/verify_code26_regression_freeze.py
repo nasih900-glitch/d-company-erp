@@ -3323,7 +3323,7 @@ REVIEWED_CODE30_4_BUILD72_SHA256 = {'.env.production.example': '3d2da9400f5b233d
  'tests/test_android_release_staging.py': '5ebdc790f1b0b15aec409cec86b413487bb8ae3a5d49d82f17ff11dcf1d58320',
  'tests/test_backend_runtime_profile.py': '66795c9ee919f560e4cb75ade9367dca72036d67abe2ff86592866bafa79928c',
  'tests/test_build42_pending_compatibility.py': '811c8569352103b35a5ed7733afd320881ec825e761027d8e5d49c61ac24bcd0',
- 'tests/test_build66_transition.py': '06511251b6cdb58b14ec9f1b54f455ad419c42fb8a8af0913866cfc708840806',
+ 'tests/test_build66_transition.py': 'cf9f2086d7ae5a7f1defa288801f9c1af2f2db571ad00b626840477d742beb84',
  'tests/test_build72_readiness.py': 'a01802c691b3050411f22990173e61b0e0d508fa0b25997da88e03ae8d5ea839',
  'tests/test_caddy_dependency_security.py': 'c907fea8409da14d0400088fe034b67955b22644acd67fe58302baf22da0e569',
  'tests/test_ci_docker_connection.py': '244caae5654b1073b7cabd2ec6a4855932ad42387b74954d4ceec5c3f0842fae',

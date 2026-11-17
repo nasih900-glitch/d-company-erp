@@ -197,6 +197,9 @@ scenario=$2
 path=$1
 LEDGER_BUILD=Build66
 ticks=0
+# Keep the fixture clock independent of real elapsed time.
+unset SECONDS
+SECONDS=0
 sleep() {
   test "$1" = 1
   ticks=$((ticks + 1))
