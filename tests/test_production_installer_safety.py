@@ -646,7 +646,7 @@ def test_code30_2_stale_outbox_bridge_completes_cleanup_before_caddy() -> None:
     preserve_cleaned_database = "trap handle_post_ingress_failure EXIT"
     public_caddy = (
         '"${candidate_compose[@]}" --env-file .env \\\n'
-        '  up -d --no-build --pull never caddy'
+        '    up -d --no-build --pull never caddy'
     )
 
     assert source.index(bridge_default) < source.index(quarantine_acceptance)
@@ -758,11 +758,10 @@ def test_rollback_keeps_ingress_closed_until_core_services_are_ready_and_atteste
     source = INSTALLER.read_text(encoding="utf-8")
 
     postgres_restore = (
-        '"${prior_compose[@]}" up -d --no-build --pull never \\\n'
-        '        --force-recreate postgres'
+        '"${prior_compose[@]}" up -d --no-build --pull never --force-recreate postgres'
     )
     core_restore = (
-        '"${prior_compose[@]}" up -d --no-build --pull never --force-recreate \\\n'
+        '"${prior_compose[@]}" up -d --no-build --pull never --force-recreate "${BUILD72_COMPOSE_NO_DEPS[@]}" \\\n'
         '          "${PRIOR_NON_POSTGRES_SERVICES[@]}"'
     )
     skip_caddy = '[ "$service" = caddy ] && continue'
@@ -797,8 +796,7 @@ def test_rollback_restores_prior_postgres_before_using_the_database_backup() -> 
     )
     restore_images = 'rollback_image_id=$(docker image inspect --format \'{{.Id}}\''
     start_prior_postgres = (
-        '"${prior_compose[@]}" up -d --no-build --pull never \\\n'
-        '        --force-recreate postgres'
+        '"${prior_compose[@]}" up -d --no-build --pull never --force-recreate postgres'
     )
     attest_prior_postgres = (
         'if [ "$restored_postgres_image_id" != '

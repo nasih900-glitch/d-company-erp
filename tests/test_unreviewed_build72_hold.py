@@ -20,7 +20,8 @@ def _preflight() -> str:
     )[0]
 
 
-def _run(tmp_path: Path, script_version: str, repo_version: str, *, template: str | None = None):
+def _run(tmp_path: Path, script_version: str, repo_version: str, *, template: str | None = None,
+         environment: dict | None = None, existing_env: bool = False):
     source = tmp_path / "source"
     repo = tmp_path / "repository"
     commands = tmp_path / "bin"
@@ -32,6 +33,8 @@ def _run(tmp_path: Path, script_version: str, repo_version: str, *, template: st
     (source / ".env.production.example").write_text(
         template if template is not None else f"APP_VERSION={script_version}\n"
     )
+    if existing_env:
+        (repo / ".env").write_text("synthetic existing environment\n")
     trace = tmp_path / "git-trace"
     git = commands / "git"
     git.write_text(
@@ -54,6 +57,7 @@ def _run(tmp_path: Path, script_version: str, repo_version: str, *, template: st
             "HOLD_REPO_VERSION": repo_version,
             "HOLD_SCRIPT": str(scripts / INSTALLER.name),
             "APP_VERSION": "3.1.64",
+            **(environment or {}),
         },
         cwd=repo,
         capture_output=True,
@@ -85,6 +89,24 @@ def test_disagreeing_historical_source_identities_are_refused(tmp_path):
     result, _ = _run(tmp_path, "3.1.63", "3.1.64")
     assert result.returncode == 1
     assert "source identities differ" in result.stderr
+
+
+@pytest.mark.parametrize(("existing", "maintenance", "legacy", "allowed"), [
+    (False, "true", "", False),
+    (True, "false", "", False),
+    (True, "true", "legacy-mode", False),
+    (True, "true", "", True),
+])
+def test_explicit_build72_route_requires_existing_environment_and_no_other_upgrade_flags(
+    tmp_path, existing, maintenance, legacy, allowed,
+):
+    result, _ = _run(tmp_path, "3.1.65", "3.1.65", existing_env=existing, environment={
+        "BUILD72_UPGRADE_EVIDENCE": "/private/reviewed.json",
+        "MAINTENANCE_CONFIRMED": maintenance, "LEGACY_CODE16_REVISION": legacy,
+    })
+    assert (result.returncode == 0) is allowed
+    if not allowed:
+        assert "Build72 production admission is closed" in result.stderr
 
 
 @pytest.mark.parametrize("template", ["", "APP_VERSION=3.1.65\nAPP_VERSION=3.1.64\n", "APP_VERSION=3.1.65 # override\n"])

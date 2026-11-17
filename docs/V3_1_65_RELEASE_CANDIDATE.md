@@ -40,9 +40,48 @@ selected Build 71 tablet must have synced within fifteen minutes of that capture
 The Redis section records its container and image IDs, named data volume and
 mount, entrypoint, startup command, working directory and ACL checksum. The
 verifier checks the exact repair receipt and recreation hold bytes against the
-baseline and confirms the prior Redis container differs from the live one. It reports
-`production_admission: false` even when they pass. The installer remains closed
-pending a reviewed production upgrade path that checks live state again and
-preserves the running Redis service during upgrade and rollback.
+baseline and confirms the prior Redis container differs from the live one. The
+readiness verifier reports `production_admission: false` even when they pass.
+
+## Guarded upgrade from Build 71
+
+The installer defaults to refusing Build 72. Its explicit upgrade takes
+`--maintenance-confirmed --build72-upgrade-evidence /absolute/private/manifest.json`.
+This path requires existing Build 71 source, PostgreSQL schema 0095, and all
+five reviewed running images. The manifest must be a canonical root-owned
+0600 regular file in a root-protected directory. It has these fields.
+
+| Field | Value |
+| --- | --- |
+| `schema_version` | `1` |
+| `candidate_revision` | Exact candidate Git commit |
+| `candidate_source_archive_sha256` | Independently reviewed SHA-256 of `git archive --format=tar` for that commit |
+| `tablet_installation_id` | Selected current Build 71 Android installation UUID |
+| `owner_credential_file` | Absolute protected input for the existing short-lived Owner probe |
+| `reviewed_runtime`, `reviewed_runtime_sha256` | Absolute path and exact checksum of the reviewed Build 71 source, image and Redis baseline |
+| `reviewed_prior_fleet`, `reviewed_prior_fleet_sha256` | Absolute path and exact checksum of the accepted predecessor fleet snapshot |
+
+The installer reads Docker and PostgreSQL directly before maintenance and
+again after stopping Caddy, backend and frontend. It seals the retained Redis
+process, container, local named data volume, network and ACL evidence. It also
+seals the existing PostgreSQL volume and database identity and verifies Caddy's
+certificate, configuration and Android file mounts before ingress opens. The
+quiesced dump must restore into a disposable database with exact data and fleet
+identity before the candidate can attach to the live data volume. The 0095 to
+0105 migration verifies the reviewed catalogue delta, empty new ledgers and
+preservation of historical rows, sequences, and fleet evidence.
+
+The existing Redis container remains running across candidate and rollback.
+Compose starts only the explicit application services with `--no-deps`. The
+Redis repair hold continues to apply to future Docker operations. The installer
+verifies the signed-in Owner, internal health, and exact candidate runtime and
+Caddy image before starting public ingress. It can restore the verified
+quiesced backup before candidate writers start. A later failure keeps the
+current database and closes ingress for recovery.
+
+The successful guarded installer writes a protected receipt keyed by Git
+revision. Build 72's Android staging tool reads that receipt and freshly
+verifies the four candidate images, schema 0105 and the actual retained Redis.
+The protected Owner activation and offered-update checks still apply.
 
 [Build 71 candidate history](V3_1_64_RELEASE_CANDIDATE.md)

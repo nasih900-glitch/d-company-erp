@@ -10,6 +10,7 @@ import json
 import os
 from collections import Counter
 from pathlib import Path
+from runpy import run_path
 import shutil
 import subprocess
 import sys
@@ -151,7 +152,7 @@ def _work_evidence(database_url: str) -> dict:
     return {"business": json.loads(lines[0]), "fleet": fleet}
 
 
-def _populate_build71(backend: Path, database_url: str) -> None:
+def _populate_build71(backend: Path, database_url: str, *, legacy_pending=False) -> None:
     _run_at(backend, database_url, ["-m", "alembic", "upgrade", "0095"])
     _run_feature(
         database_url, "tests/integration/test_gaming_session_addons.py",
@@ -175,8 +176,8 @@ def _populate_build71(backend: Path, database_url: str) -> None:
                 "last_user_id,terminal_id,platform,distribution_channel,version_name,version_code,"
                 "pending_outbox_count,update_state,last_seen_at) "
                 "VALUES(gen_random_uuid(),%s,gen_random_uuid(),%s,%s,%s,'android','direct',"
-                "'3.1.64',71,%s,'idle','2000-01-01T00:00:00Z')",
-                (company, user, user, terminal, pending),
+                "%s,%s,%s,'idle','2000-01-01T00:00:00Z')",
+                (company, user, user, terminal, *(("3.1.46", 54) if legacy_pending and pending else ("3.1.64", 71)), pending),
             )
         sequences = connection.execute(
             "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
@@ -188,56 +189,7 @@ def _populate_build71(backend: Path, database_url: str) -> None:
 
 
 def _restore_catalogue(rows: list[str]) -> list[str]:
-    # Reuse only explicit historical CHECK spellings; unknown changes remain
-    # exact mismatches. These aliases never apply to live migration deltas.
-    import runpy
-
-    previous = runpy.run_path(str(ROOT / "infra/scripts/verify-build55-pending-compatibility.py"))
-    successor = runpy.run_path(str(ROOT / "infra/scripts/verify-build66-transition.py"))
-    normalized = previous["restore_catalogue"](rows)
-    pairs = successor["RESTORE_CHECK_PAIRS"]
-    aliases = {value: live for live, restored in pairs for value in (live, restored)}
-    for live, _ in pairs:
-        prefix = live.rsplit("|", 1)[0] + "|"
-        matching = [row for row in normalized if row.startswith(prefix)]
-        assert len(matching) <= 1 and all(row in aliases for row in matching)
-    normalized = [aliases.get(row, row) for row in normalized]
-    # Literal, independently reviewed PG16 restore observations from immutable
-    # Build71: seven dropped-column ordinal gaps, ninety CHECK cast spellings,
-    # and six index cast/parenthesis spellings. No expression rewriting occurs.
-    observed = json.loads((Path(__file__).parent / "fixtures" /
-                           "build71_pg16_restore_catalogue_pairs.json").read_text())
-    assert isinstance(observed, list) and len(observed) == 103
-
-    def identity(row):
-        assert isinstance(row, str)
-        parts = row.split("|")
-        assert len(parts) >= 4 and parts[0] in {"column", "constraint", "index"}
-        return tuple(parts[:2] + [parts[3]]) if parts[0] == "column" else tuple(parts[:3])
-
-    by_identity = {}
-    for pair in observed:
-        assert isinstance(pair, list) and len(pair) == 2
-        live, restored = pair
-        key = identity(live)
-        assert identity(restored) == key and live != restored
-        assert key not in by_identity
-        by_identity[key] = (live, restored)
-    output = []
-    seen = set()
-    for row in normalized:
-        # Other catalogue row kinds remain exact and unchanged.
-        if row.split("|", 1)[0] not in {"column", "constraint", "index"}:
-            output.append(row)
-            continue
-        key = identity(row)
-        if key in by_identity:
-            assert key not in seen and row in by_identity[key], row
-            seen.add(key)
-            row = by_identity[key][0]
-        output.append(row)
-    assert seen == by_identity.keys(), "observed restore identities must all exist"
-    return sorted(output)
+    return run_path(str(ROOT / "infra/scripts/verify-build72-transition.py"))["restore_catalogue"](rows)
 
 
 def _assert_retained(before: dict, after: dict, columns: dict, projection: dict, work: dict, database_url: str, revision: str):
@@ -269,7 +221,7 @@ def test_restore_aliases_accept_only_the_observed_complete_pairs():
     restored = [pair[1] for pair in pairs]
     assert _restore_catalogue(original) == _restore_catalogue(restored)
     for altered in (restored[:-1], [*restored, restored[0]], [restored[0] + " changed", *restored[1:]]):
-        with pytest.raises(AssertionError):
+        with pytest.raises(ValueError):
             _restore_catalogue(altered)
 
 
@@ -697,6 +649,14 @@ def _assert_0105_report_delta(before: dict, after: dict) -> None:
                for row in triggers)
 
 
+def _retained_fleet(database_url: str) -> dict:
+    result = _client_command(
+        database_url, "psql", "-XqAt", "--file", str(ROOT / "infra/scripts/verify-build45-pending-state.sql"),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return json.loads(result.stdout)
+
+
 @pytest.mark.integration
 def test_build72_preserves_populated_build71_restore_and_empty_roundtrip(tmp_path):
     old_backend = _export_build71_backend(tmp_path / "build71-current")
@@ -704,8 +664,11 @@ def test_build72_preserves_populated_build71_restore_and_empty_roundtrip(tmp_pat
         _disposable_database("erp_grn_recovery_20261113_b71_source") as source,
         _disposable_database("erp_grn_recovery_20261113_b103_restore") as restored,
     ):
-        _populate_build71(old_backend, source)
+        verifier = run_path(str(ROOT / "infra/scripts/verify-build72-transition.py"))
+        _populate_build71(old_backend, source, legacy_pending=True)
         before = _inventory(source)
+        fleet_before = _retained_fleet(source)
+        verifier["verify_before"](before, fleet_before)
         columns = _columns(source)
         projection = _legacy_projection(source, columns)
         work = _work_evidence(source)
@@ -721,6 +684,8 @@ def test_build72_preserves_populated_build71_restore_and_empty_roundtrip(tmp_pat
             "--single-transaction", "--exit-on-error", str(backup))
         assert recovered.returncode == 0, recovered.stderr
         baseline = _inventory(restored)
+        verifier["verify_restore"](before, baseline)
+        verifier["verify_same_fleet"](fleet_before, _retained_fleet(restored))
         assert baseline["tables"] == before["tables"]
         assert baseline["sequences"] == before["sequences"]
         assert _restore_catalogue(baseline["schema_catalog_rows"]) == _restore_catalogue(
@@ -745,6 +710,18 @@ def test_build72_preserves_populated_build71_restore_and_empty_roundtrip(tmp_pat
         for previous, following in ((at103, at104), (at104, at105)):
             assert all(following["tables"][table] == entry for table, entry in previous["tables"].items()
                        if table != "alembic_version")
+        # The backup/restore probe can render known equivalent CHECK
+        # spellings. Exercise the installer against the raw live-shaped delta.
+        assert _run_alembic(source, "upgrade", "0105").returncode == 0
+        migrated = _inventory(source)
+        fleet_after = _retained_fleet(source)
+        verifier["verify_after"](before, fleet_before, migrated, fleet_after)
+        modified = {**migrated, "tables": {**migrated["tables"], "payments": migrated["tables"]["attendance"]}}
+        with pytest.raises(ValueError, match="retained rows changed"):
+            verifier["verify_after"](before, fleet_before, modified, fleet_after)
+        with pytest.raises(ValueError, match="fleet changed"):
+            verifier["verify_after"](before, fleet_before, migrated,
+                                    {**fleet_after, "all_installations_identity_sha256": "f" * 64})
         assert _run_alembic(restored, "downgrade", "0095").returncode == 0
         at95 = _inventory(restored)
         assert at95["database_revision"] == "0095"

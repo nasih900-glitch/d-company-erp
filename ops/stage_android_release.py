@@ -33,6 +33,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from runpy import run_path
 from typing import Any, BinaryIO
 from urllib.parse import urlsplit
 
@@ -555,12 +556,30 @@ def _validated_runtime_root(raw: Any) -> str:
 
 def _inspect_running_release(payload: dict[str, Any]) -> dict[str, Any]:
     root = _validated_runtime_root(payload.get("remote_root", DEFAULT_REMOTE_ROOT))
+    version = payload.get("version_name")
+    revision = payload.get("source_git_sha")
+    code = payload.get("version_code")
+    if version == "3.1.65" or code == 72:
+        if version != "3.1.65" or type(code) is not int or code != 72:
+            raise AndroidReleaseStagingError("Build 72 staging requires its exact Android version pair")
+        try:
+            verifier = Path(__file__).resolve().parents[1] / "infra/scripts/verify-build72-upgrade-runtime.py"
+            project, expected, redis, receipt_digest = run_path(str(verifier))["staging_identity"](Path(root), revision)
+            running = inspect_release_pair(
+                root, str(Path(root) / ".env"), version, revision, running=True, project_name=project,
+                services=tuple(expected), expected_images={"services": {name: {"image_id": image}
+                                                                        for name, image in expected.items()}},
+            )
+        except (KeyError, OSError, TypeError, ValueError, RuntimeParityError, subprocess.TimeoutExpired) as exc:
+            raise AndroidReleaseStagingError("Exact Build 72 deployment or retained Redis proof failed") from exc
+        return {**running, "services": {**running["services"], "redis": redis},
+                "deployment_receipt_sha256": receipt_digest, "project_name": project}
     try:
         return inspect_release_pair(
             root,
             str(Path(root) / ".env"),
-            payload.get("version_name"),
-            payload.get("source_git_sha"),
+            version,
+            revision,
             running=True,
         )
     except RuntimeParityError as exc:
@@ -765,12 +784,14 @@ def _validated_registration_receipt(
 
 
 def _register_staged_release_on_host(
-    remote_root: str, manifest: dict[str, Any]
+    remote_root: str, manifest: dict[str, Any], *, project_name: str | None = None,
 ) -> dict[str, Any]:
     root = _validated_runtime_root(remote_root)
+    project = ["-p", project_name] if project_name is not None else []
     command = [
         "docker",
         "compose",
+        *project,
         "-f",
         f"{root}/docker-compose.prod.yml",
         "--env-file",
@@ -819,6 +840,7 @@ def _finalize_staged_release(
         {
             "remote_root": target.root,
             "version_name": version_name,
+            "version_code": manifest["version_code"],
             "source_git_sha": source_git_sha,
             "initial_runtime_parity": initial_runtime,
             "manifest": manifest,
@@ -887,6 +909,7 @@ def stage_release(args: argparse.Namespace) -> dict[str, Any]:
     runtime_payload = {
         "remote_root": target.root,
         "version_name": ci.version_name,
+        "version_code": ci.version_code,
         "source_git_sha": ci.git_sha,
     }
     # This read-only guard precedes prepare, upload, publication and registration.
@@ -1388,7 +1411,12 @@ def _remote_action(
                 raise AndroidReleaseStagingError(
                     "Running ERP images changed during staging; registration was not attempted"
                 )
-            registered = _register_staged_release_on_host(root, manifest)
+            if "deployment_receipt_sha256" in final_runtime:
+                if any(manifest.get(key) != payload.get(key) for key in ("version_code", "version_name", "source_git_sha")):
+                    raise AndroidReleaseStagingError("Build 72 registry identity differs from the accepted deployment")
+                registered = _register_staged_release_on_host(root, manifest, project_name=final_runtime["project_name"])
+            else:
+                registered = _register_staged_release_on_host(root, manifest)
         return {
             "ok": True,
             "runtime_parity": final_runtime,

@@ -155,13 +155,13 @@ def test_installer_orders_quiescence_backup_migration_and_ingress():
         '"$BUILD66_VERIFIER" post "$BUILD66_PRE_STATE"',
         'BUILD66_APP_WRITERS_STARTED=true',
         'up -d --no-build --pull never postgres redis backend frontend',
-        'internal-probe --require-owner --container-id',
+        'internal-probe --require-owner --container-id "$BUILD66_BACKEND"',
         'echo "==> Backend acceptance passed; reopening public ingress…"',
     )
     positions = [script.index(step) for step in steps]
     assert positions == sorted(positions)
     assert (
-        'elif [ "$BUILD66_EXACT_TRANSITION" = true ]; then\n'
+        'elif [ "$TYPED_LEDGER_TRANSITION" = true ]; then\n'
         '  wait_for_build66_owner_input "$BUILD66_ACCEPTANCE_CREDENTIAL_FILE"\n'
         '  (umask 077; python3 "$BUILD55_AUTH_TOOL" public --require-owner'
     ) in script
@@ -195,6 +195,7 @@ def test_owner_input_wait_is_bounded_and_leaves_validation_to_the_checker(
 set -eu
 scenario=$2
 path=$1
+LEDGER_BUILD=Build66
 ticks=0
 sleep() {
   test "$1" = 1
@@ -343,7 +344,8 @@ set -u
 fault=$1
 BUILD66_APP_WRITERS_STARTED=$2
 ENV_CANDIDATE= VERIFY_DATABASE= EXISTING_POSTGRES_CONTAINER=
-BUILD55_EXACT_TRANSITION=false BUILD66_EXACT_TRANSITION=true PROMOTION_COMPLETE=true
+BUILD55_EXACT_TRANSITION=false TYPED_LEDGER_TRANSITION=true BUILD72_EXACT_TRANSITION=false PROMOTION_COMPLETE=true
+LEDGER_BUILD=Build66
 CODE30_2_CLEANUP_WINDOW_ACTIVE=false CODE30_2_CLEANUP_SUCCEEDED=false
 UPGRADE_SNAPSHOT=$PWD DEPLOY_PROJECT_NAME=synthetic ROLLBACK_STATE_MANIFEST_DIGEST=
 candidate_compose=(compose_stub)
@@ -352,6 +354,7 @@ compose_stub() {
   [ "$fault" != stop ]
 }
 verify_build66_baseline_seal() { return 0; }
+verify_build72_retained_redis() { return 0; }
 docker() {
   case "$1" in
     ps)
