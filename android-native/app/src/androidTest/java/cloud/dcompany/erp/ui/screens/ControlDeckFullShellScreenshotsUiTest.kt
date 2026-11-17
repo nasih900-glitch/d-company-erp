@@ -1,8 +1,11 @@
 package cloud.dcompany.erp.ui.screens
 
 import android.graphics.Bitmap
+import android.graphics.Rect
+import android.os.Build
 import android.view.PixelCopy
 import androidx.activity.ComponentActivity
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,6 +24,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.unit.dp
+import androidx.test.platform.app.InstrumentationRegistry
 import cloud.dcompany.erp.core.auth.PosAccess
 import cloud.dcompany.erp.core.db.LocalShiftEntity
 import cloud.dcompany.erp.core.db.MenuCategoryEntity
@@ -41,6 +45,7 @@ import cloud.dcompany.erp.ui.screens.shift.ShiftDashboardOverview
 import cloud.dcompany.erp.ui.screens.shift.ShiftUiState
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import java.io.File
+import kotlin.math.roundToInt
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
@@ -132,14 +137,21 @@ class ControlDeckFullShellScreenshotsUiTest {
     private fun capture(filename: String) {
         compose.waitForIdle()
         val output = File(requireNotNull(compose.activity.getExternalFilesDir(null)), filename)
-        val bitmap = captureWithSinglePixelCopyTimeoutRetry(
-            beforeRetry = {
-                compose.runOnIdle { compose.activity.window.decorView.invalidate() }
-                compose.waitForIdle()
-            },
-        ) {
-            compose.onNodeWithTag("control-deck-full-shell")
-                .captureToImage().asAndroidBitmap()
+        val bitmap = try {
+            captureWithSinglePixelCopyTimeoutRetry(
+                beforeRetry = {
+                    compose.runOnIdle { compose.activity.window.decorView.invalidate() }
+                    compose.waitForIdle()
+                },
+            ) {
+                compose.onNodeWithTag("control-deck-full-shell")
+                    .captureToImage().asAndroidBitmap()
+            }
+        } catch (error: RuntimeException) {
+            if (!error.isPixelCopyTimeout() || Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                throw error
+            }
+            captureCompositedShell()
         }
         try {
             output.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
@@ -148,6 +160,35 @@ class ControlDeckFullShellScreenshotsUiTest {
             }
         } finally {
             bitmap.recycle()
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    private fun captureCompositedShell(): Bitmap {
+        // SurfaceFlinger can copy the real window layer when HWUI readback times out.
+        val window = compose.activity.window
+        val shell = compose.onNodeWithTag("control-deck-full-shell").fetchSemanticsNode()
+        val (bounds, windowBounds) = compose.runOnIdle {
+            val bounds = shell.boundsInWindow
+            Rect(
+                bounds.left.roundToInt(), bounds.top.roundToInt(),
+                bounds.right.roundToInt(), bounds.bottom.roundToInt(),
+            ) to Rect(0, 0, window.decorView.width, window.decorView.height)
+        }
+        val screenshot = checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot(window)) {
+            "SurfaceFlinger did not capture the workspace window after the PixelCopy timeout."
+        }
+        var cropped: Bitmap? = null
+        try {
+            check(!bounds.isEmpty && windowBounds.contains(bounds) &&
+                screenshot.width == windowBounds.width() && screenshot.height == windowBounds.height()
+            ) {
+                "Cannot map workspace bounds $bounds into the ${screenshot.width}×${screenshot.height} window capture."
+            }
+            return Bitmap.createBitmap(screenshot, bounds.left, bounds.top, bounds.width(), bounds.height())
+                .also { cropped = it }
+        } finally {
+            if (cropped !== screenshot) screenshot.recycle()
         }
     }
 }

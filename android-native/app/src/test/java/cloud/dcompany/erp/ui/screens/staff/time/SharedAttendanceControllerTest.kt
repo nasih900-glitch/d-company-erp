@@ -17,6 +17,8 @@ class SharedAttendanceControllerTest {
     private val terminal = "44444444-4444-4444-8444-444444444444"
     private val b = "55555555-5555-4555-8555-555555555555"
     private val attendance = "66666666-6666-4666-8666-666666666666"
+    // The credential check scans serialized evidence, which contains a random UUID.
+    private val rejectedPassword = "synthetic-wrong-password"
     private fun person(out: Boolean = false) = SharedTimePerson(b, "Synthetic B", out, attendance.takeIf { out })
     private fun receipt(out: Boolean = false, breaks: Int = 0) = SharedTimeReceipt(attendance, b, branch,
         "2026-11-05T08:00:00Z", "2026-11-05T10:00:00Z".takeIf { out }, breaks, out,
@@ -117,13 +119,13 @@ class SharedAttendanceControllerTest {
     @Test fun later401CannotTurnUnknownIntoDiscardableRejection() = runBlocking {
         val store = Store(); val api = Api(store); val c = controller(Env(api), store)
         api.inHook = { throw IOException("lost") }; c.refresh(); c.select(b); c.confirm("password", "")
-        api.inHook = { throw ApiException("bad credentials", 401) }; c.refresh(); c.retry("bad")
+        api.inHook = { throw ApiException("bad credentials", 401) }; c.refresh(); c.retry(rejectedPassword)
         assertNotNull(store.value); assertNull(store.value!!.rejectedStatus)
         c.acknowledgeRejected(); assertEquals(0, store.archived)
     }
     @Test fun firstDefinitiveRejectionRequiresExplicitAcknowledgementAndRetainsEvidence() = runBlocking {
         val store = Store(); val api = Api(store); val c = controller(Env(api), store)
-        api.inHook = { throw ApiException("bad", 401) }; c.refresh(); c.select(b); c.confirm("bad", "")
+        api.inHook = { throw ApiException("bad", 401) }; c.refresh(); c.select(b); c.confirm(rejectedPassword, "")
         assertEquals(401, store.value?.rejectedStatus)
         c.acknowledgeRejected(); assertEquals(1, store.archived); assertNull(store.value)
     }
@@ -175,7 +177,7 @@ class SharedAttendanceControllerTest {
     }
     @Test fun rejectedRetryLostReplyBecomesUnknownBeforeWireAndCannotArchiveAfterRestart() = runBlocking {
         val store = Store(); val api = Api(store); val env = Env(api); val c = controller(env, store)
-        api.inHook = { throw ApiException("Denied", 401) }; c.refresh(); c.select(b); c.confirm("bad", "")
+        api.inHook = { throw ApiException("Denied", 401) }; c.refresh(); c.select(b); c.confirm(rejectedPassword, "")
         val rejected = requireNotNull(store.value); assertEquals(401, rejected.rejectedStatus)
         c.refresh(); api.inHook = {
             assertNull(store.value?.rejectedStatus)
@@ -189,7 +191,7 @@ class SharedAttendanceControllerTest {
     }
     @Test fun rejectedRetryCancelledAfterDispatchRetainsUnknownInRecreatedController() = runBlocking {
         val store = Store(); val api = Api(store); val env = Env(api); val c = controller(env, store)
-        api.inHook = { throw ApiException("Denied", 401) }; c.refresh(); c.select(b); c.confirm("bad", "")
+        api.inHook = { throw ApiException("Denied", 401) }; c.refresh(); c.select(b); c.confirm(rejectedPassword, "")
         val intent = store.value!!.intent
         c.refresh(); api.inHook = { throw kotlinx.coroutines.CancellationException("Process lost") }
         assertTrue(runCatching { c.retry("correct-password") }.exceptionOrNull() is kotlinx.coroutines.CancellationException)
@@ -199,7 +201,7 @@ class SharedAttendanceControllerTest {
     }
     @Test fun retryTransitionStorageFailureNeverResendsAndNewDefiniteDenialCanBeRetained() = runBlocking {
         val store = Store(); val api = Api(store); val c = controller(Env(api), store)
-        api.inHook = { throw ApiException("Denied", 401) }; c.refresh(); c.select(b); c.confirm("bad", "")
+        api.inHook = { throw ApiException("Denied", 401) }; c.refresh(); c.select(b); c.confirm(rejectedPassword, "")
         c.refresh(); store.failPrepare = true; c.retry("correct-password")
         assertEquals(1, api.keys.size); assertEquals(401, store.value?.rejectedStatus)
         store.failPrepare = false; c.retry("still-wrong")
