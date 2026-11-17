@@ -1216,6 +1216,13 @@ def test_caddy_binary_hash_is_coordinated_across_ci_and_release() -> None:
             expected, emulator_action,
             emulator_action + "        env:\n          D_COMPANY_HOSTED_COLD_BOOT: '1'\n",
         )
+        if workflow == CI_WORKFLOW:
+            expected = _replace_once(
+                expected,
+                "          # Pin the reviewed emulator 37.1.11 build used by the bounded host comparison.\n",
+                "          # Pin the official 37.2.13 stable build after the 37.1.11 native crash.\n",
+            )
+        expected = _replace_once(expected, "          emulator-build: 15917651\n", "          emulator-build: 16740729\n")
         assert workflow.read_text(encoding="utf-8") == expected
 
     assert "go 1.26.9" in GO_MOD.read_text(encoding="utf-8")

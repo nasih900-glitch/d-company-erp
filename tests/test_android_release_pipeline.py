@@ -946,6 +946,8 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         self.assertIn('"${boot_id}" != "${original_boot_id}"', cold_boot)
         self.assertIn(""""${cpu_online}" == '0-1'""", cold_boot)
         self.assertIn("configure_tablet_viewport || return 1", cold_boot)
+        self.assertIn("Android emulator version 37.2.13.0 (build_id 16740729)", cold_boot)
+        self.assertIn("Graphics Adapter Android Emulator OpenGL ES Translator (Google SwiftShader)", cold_boot)
         self.assertIn("if ! stop_owned_emulator; then", main)
 
     def test_ci_and_release_request_same_bounded_linux_emulator_quadrant(self) -> None:
@@ -986,7 +988,7 @@ class AndroidReleasePipelineTest(unittest.TestCase):
                     job,
                     flags=re.MULTILINE,
                 )
-                self.assertEqual(emulator_builds, ["15917651"])
+                self.assertEqual(emulator_builds, ["16740729"])
                 options = re.findall(
                     r"^\s*emulator-options:\s*(.+)$",
                     job,

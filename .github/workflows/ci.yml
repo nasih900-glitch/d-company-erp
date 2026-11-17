@@ -251,8 +251,8 @@ jobs:
           # class viewport, matching the 1280x800dp production target closely.
           profile: pixel_c
           disable-animations: true
-          # Pin the reviewed emulator 37.1.11 build used by the bounded host comparison.
-          emulator-build: 15917651
+          # Pin the official 37.2.13 stable build after the 37.1.11 native crash.
+          emulator-build: 16740729
           # Request swiftshader directly with Vulkan disabled. These flags do
           # not prove the selected mode; retained runtime diagnostics must.
           emulator-options: -no-window -gpu swiftshader -feature -Vulkan -no-snapshot -noaudio -no-boot-anim

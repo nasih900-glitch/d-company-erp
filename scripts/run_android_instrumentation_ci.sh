@@ -205,8 +205,8 @@ cold_boot_hosted_emulator() {
   [[ "${boot_completed}" == '1' ]] || return 1
   boot_id="$(timeout 5s adb -s "${device_serial}" shell cat /proc/sys/kernel/random/boot_id | tr -d '\r')" || return 1
   [[ "${boot_id}" =~ ^[[:xdigit:]-]{36}$ && "${boot_id}" != "${original_boot_id}" ]] || return 1
-  grep -Fq 'Android emulator version 37.1.11.0 (build_id 15917651)' "${owned_emulator_log}" || return 1
-  grep -Fq "Feature 'Vulkan' (21) is overridden to 'disabled'" "${owned_emulator_log}" || return 1
+  grep -Fq 'Android emulator version 37.2.13.0 (build_id 16740729)' "${owned_emulator_log}" || return 1
+  grep -Eq "Feature 'Vulkan' \([0-9]+\) is overridden to 'disabled'" "${owned_emulator_log}" || return 1
   grep -Fq 'Graphics Adapter Android Emulator OpenGL ES Translator (Google SwiftShader)' "${owned_emulator_log}" || return 1
 
   select_api_35_emulator >/dev/null || return 1
