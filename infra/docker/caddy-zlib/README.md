@@ -85,8 +85,9 @@ final image acceptance. No authenticated local 1.4 APK/library is available.
 Local tests exercise genuine host-library compression/corruption detection and
 synthetic tar/JSON/command failures; they do not establish vendor 1.4 acceptance.
 
-That hosted run also reported Python 3.14.10 High CVE-2026-119170, with scanner
-fix version 3.14.11. The advisory concerns FIPS `hashlib`; the reviewed official
-Python tags/PSF/official-library artifacts do not yet supply 3.14.11. The genuine
-3.14.10 pin remains, and the High gate remains blocking. There is no version
-spoof, unreviewed backport, downgrade, waiver or deployment admission change.
+That hosted run also reported CVE-2026-119170 in Python 3.14.10. The backend
+build applies the upstream `hashlib` fix to the pinned source and verifies the
+exact installed module and its OpenSSL behavior. The scanner repeats the
+runtime proof on the same immutable image, retains the unfiltered Grype report,
+and permits a `fixed` statement only for the verified backend Python component.
+Both scanner paths retain the high-severity threshold. [Backport and evidence](../cpython/README.md)

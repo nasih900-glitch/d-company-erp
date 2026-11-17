@@ -155,7 +155,7 @@ def test_every_alpine_runtime_installs_and_proves_the_patched_library() -> None:
     assert backend.count(
         "python:3.14.10-alpine3.24@sha256:"
         "eb2c62658b8d51bff0acc408504b76521d02030de56a8a3c1e830083e89b89d2"
-    ) == 3
+    ) == 4
     assert "apk info -v zlib" not in backend
     assert 'printf \'%s\\n\' "$installed_packages" | grep -Fx \'zlib-1.4-r0\'' in backend
     redis = (ROOT / "infra/docker/redis.Dockerfile").read_text()
@@ -1036,3 +1036,70 @@ def test_python_119170_high_remains_blocking_with_the_genuine_31410_pin(tmp_path
     assert 'com.dcompany.python.version="3.14.10"' in source
     assert "python:3.14.10-alpine3.24@sha256:" in source
     assert "3.14.11" not in source
+
+
+@pytest.mark.parametrize("defect", (None, "wrong-image", "wrong-source", "wrong-module", "wrong-component", "extra-high", "extra-detail", "ignored-raw"))
+def test_python_119170_requires_exact_real_backport_and_single_raw_finding(tmp_path, defect):
+    from runpy import run_path
+
+    verifier = run_path(str(VEX_VERIFIER))
+    sbom, report = _backend_r1_evidence()
+    proof = verifier["HASHLIB_PROOF"].copy()
+    match = {
+        "vulnerability": {"id": "CVE-2026-119170", "namespace": "nvd:cpe", "severity": "High",
+                          "fix": {"versions": ["3.14.11"], "state": "fixed"}},
+        "artifact": {"name": "python", "version": "3.14.10", "type": "binary", "purl": "pkg:generic/python@3.14.10",
+                     "cpes": [f"cpe:2.3:a:{vendor}:python:3.14.10:*:*:*:*:*:*:*"
+                              for vendor in ("python_software_foundation", "python")],
+                     "locations": [{"path": path, "accessPath": path, "layerID": IMAGE_ID, "annotations": {"evidence": label}}
+                                   for path, label in (("/usr/local/bin/python3.14", "primary"),
+                                                       ("/usr/local/lib/libpython3.14.so.1.0", "supporting"))]},
+        "relatedVulnerabilities": [],
+    }
+    match["matchDetails"] = [{
+        "type": "cpe-match", "matcher": "stock-matcher",
+        "searchedBy": {"namespace": "nvd:cpe", "cpes": [cpe], "package": {"name": "python", "version": "3.14.10"}},
+        "found": {"vulnerabilityID": "CVE-2026-119170", "versionConstraint": ">= 3.14.10, < 3.14.11 (unknown)",
+                  "cpes": [cpe.replace(":3.14.10:", ":*:")]},
+        "fix": {"suggestedVersion": "3.14.11"},
+    } for cpe in match["artifact"]["cpes"]]
+    report["matches"] = [match]
+    if defect == "wrong-image":
+        report["source"]["target"]["imageID"] = "sha256:" + "b" * 64
+    if defect == "wrong-source":
+        proof["patched_source_sha256"] = "b" * 64
+    if defect == "wrong-module":
+        proof["module_sha256"] = "b" * 64
+    if defect == "wrong-component":
+        match["artifact"]["locations"][0]["path"] = "/unrelated/python"
+    if defect == "extra-high":
+        report["matches"].append({"vulnerability": {"id": "CVE-2026-155555", "severity": "Critical"}})
+    if defect == "extra-detail":
+        match["matchDetails"].append({"type": "other", "found": {"vulnerabilityID": "CVE-2026-155555"}})
+    if defect == "ignored-raw":
+        report["ignoredMatches"] = [match]
+    names = {"raw": tmp_path / "backend-grype-unfiltered.json", "proof": tmp_path / "backend-hashlib-runtime.json",
+             "vex": tmp_path / "backend-hashlib-fixed.openvex.json"}
+    names["raw"].write_text(json.dumps(report))
+    names["proof"].write_text(json.dumps(proof))
+    raw_before = names["raw"].read_bytes()
+    result = subprocess.run([sys.executable, str(VEX_VERIFIER), "--prove-fixed-hashlib", str(names["raw"]),
+                             IMAGE_PRODUCT, IMAGE_ID, str(names["proof"]), str(names["vex"])],
+                            text=True, capture_output=True, check=False)
+    assert names["raw"].read_bytes() == raw_before
+    assert result.returncode == (0 if defect is None else 1), result.stderr
+    if defect is None:
+        assert "backend_hashlib_raw_grype_sha256=" in result.stdout
+        assert json.loads(names["vex"].read_text())["statements"][0]["status"] == "fixed"
+        report["matches"] = []
+        report["ignoredMatches"] = [{**match, "appliedIgnoreRules": [{"namespace": "vex", "vex-status": "fixed"}]}]
+        report_path = tmp_path / "backend-filtered.json"
+        report_path.write_text(json.dumps(report))
+        verifier["validate_hashlib_vex"](names["vex"], IMAGE_PRODUCT, IMAGE_ID)
+        verifier["validate_fixed_report"]("backend", report_path, IMAGE_PRODUCT, IMAGE_ID, hashlib_exception="fixed")
+        report["ignoredMatches"][0]["appliedIgnoreRules"] = [{"namespace": "vex", "vex-status": "not_affected"}]
+        report_path.write_text(json.dumps(report))
+        with pytest.raises(SystemExit, match="exactly the verified hashlib fix"):
+            verifier["validate_fixed_report"]("backend", report_path, IMAGE_PRODUCT, IMAGE_ID, hashlib_exception="fixed")
+    else:
+        assert not names["vex"].exists()

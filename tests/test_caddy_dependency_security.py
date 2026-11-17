@@ -979,7 +979,27 @@ def test_backend_image_changes_only_reviewed_openssl_runtime_controls() -> None:
     )
     historical = expected
     assert _file_at("b9b19bd2462e0f417922849a455e12116e8207e2", BACKEND_DOCKERFILE) == historical
-    assert BACKEND_DOCKERFILE.read_text(encoding="utf-8") == _official_zlib_expected(historical, "backend")
+    expected = _official_zlib_expected(historical, "backend")
+    builder_anchor = "# --- Python dependency builder ---\n"
+    expected = _replace_once(expected, builder_anchor,
+        "# Backport the upstream CVE-2026-119170 fix to the official CPython ABI.\n"
+        "FROM python:3.14.10-alpine3.24@sha256:eb2c62658b8d51bff0acc408504b76521d02030de56a8a3c1e830083e89b89d2 AS hashlib-backport\n"
+        "RUN apk add --no-cache 'gcc=15.2.0-r5' 'musl-dev=1.2.6-r3' 'binutils=2.45.1-r1' \\\n"
+        "      'openssl-dev=3.5.9-r0' 'patch=2.8.1-r0'\n"
+        "WORKDIR /tmp/cpython\n"
+        "COPY infra/docker/cpython/cpython-7d9da920.patch .\n"
+        "COPY infra/docker/cpython/build-hashlib-backport.py .\n"
+        "COPY infra/docker/cpython/verify-hashlib-fips.py ./verify_hashlib_fips.py\n"
+        "RUN python -B /tmp/cpython/build-hashlib-backport.py\n\n" + builder_anchor,
+    )
+    entrypoint = "COPY infra/docker/backend-entrypoint.sh /entrypoint.sh\n"
+    expected = _replace_once(expected, entrypoint,
+        "COPY --from=hashlib-backport /out/_hashlib*.so /usr/local/lib/python3.14/lib-dynload/\n"
+        "COPY --from=hashlib-backport /out/cpython-hashlib-build.json /etc/dcompany/cpython-hashlib-build.json\n"
+        "COPY --chmod=0644 infra/docker/cpython/verify-hashlib-fips.py /usr/local/bin/verify-hashlib-fips.py\n" + entrypoint,
+    )
+    expected = _replace_once(expected, "USER erp\n", "USER erp\nRUN python -I -B /usr/local/bin/verify-hashlib-fips.py\n")
+    assert BACKEND_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
 def test_backend_python_patch_version_is_exact_in_ci_and_release() -> None:

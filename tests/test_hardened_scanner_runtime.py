@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from runpy import run_path
 
 import pytest
 
@@ -71,6 +72,8 @@ elif args[0] == "create":
     label = args[args.index("--label") + 1].split("=", 1)[1]
     if "/usr/local/bin/verify-caddy-zlib" in args:
         kind = "caddy-runtime"
+    elif "/usr/local/bin/verify-hashlib-fips.py" in args:
+        kind = "hashlib-runtime"
     elif "--entrypoint" in args:
         kind = "probe"
     elif any(value.startswith("anchore/syft:") for value in args):
@@ -109,6 +112,8 @@ elif args[0] == "start":
         raise SystemExit(23)
     if kind == "caddy-runtime":
         print(json.dumps(json.loads(os.environ["FAKE_RUNTIME_PROOFS"])[service]))
+    elif kind == "hashlib-runtime":
+        print(os.environ["FAKE_HASHLIB_RUNTIME_PROOF"])
     elif kind == "probe":
         print("scanner_cache_mount_verified=true")
     elif kind == "syft":
@@ -457,6 +462,7 @@ def _run_helper(
         "FAKE_IMAGE_ID": scanner_config_id,
         "FAKE_RUNTIME_IMAGE_ID": runtime_image_id,
         "FAKE_IMAGE_REFS": json.dumps(image_refs),
+        "FAKE_HASHLIB_RUNTIME_PROOF": json.dumps(run_path(str(SCANNER.with_name("verify-zlib-vex.py")))["HASHLIB_PROOF"]),
         "FAKE_RUNTIME_PROOFS": json.dumps({service: {
             **{
             "package": "zlib", "package_version": "1.4-r0",
@@ -504,7 +510,7 @@ def test_batch_scanner_executes_hardened_path_for_every_archive(tmp_path: Path) 
 
     assert completed.returncode == 0, completed.stderr
     creates = [call for call in _docker_calls(state) if call[0] == "create"]
-    assert len(creates) == 16  # mount probe and one runtime proof plus both scanners per image
+    assert len(creates) == 17  # mount probe, zlib proof and two scans per image, plus the backend hashlib probe
     for call in creates:
         assert ["--read-only", "--cap-drop", "ALL"] == call[
             call.index("--read-only") : call.index("--read-only") + 3
@@ -527,7 +533,7 @@ def test_batch_scanner_executes_hardened_path_for_every_archive(tmp_path: Path) 
     )
     assert all(
         "GOMEMLIMIT=256MiB" in call and "GOMAXPROCS=1" in call
-        for call in scanner_creates
+        for call in scanner_creates if "/usr/local/bin/verify-hashlib-fips.py" not in call
     )
     syft_creates = [call for call in scanner_creates if SYFT_IMAGE in call]
     grype_creates = [call for call in scanner_creates if GRYPE_IMAGE in call]
@@ -548,6 +554,8 @@ def test_batch_scanner_executes_hardened_path_for_every_archive(tmp_path: Path) 
     assert all("--vex" not in call and "/scan/zlib.openvex.json" not in call for call in grype_creates)
     assert all(archive.exists() for archive in archives)
     metadata_text = metadata.read_text(encoding="utf-8")
+    assert "backend_hashlib_runtime_proof_sha256=" in metadata_text
+    assert f"backend_hashlib_runtime_config_image_id={IMAGE_ID}" in metadata_text
     assert metadata_text.count("_fixed_sbom_platform_source=verified-docker-archive") == 1
     assert "caddy_fixed_sbom_platform_source=verified-docker-archive" in metadata_text
     for service in ("backend", "frontend", "caddy", "postgres", "redis"):
@@ -934,7 +942,7 @@ def test_grype_severity_failure_summary_never_admits_scan_or_discards_evidence(t
     assert proof["proof"]["service"] == "backend"
     assert proof["proof"]["runtime_version"] == "1.4"
     assert (metadata.parent / "backend-zlib-runtime.raw.json").exists()
-    report = metadata.parent / "backend-grype.json"
+    report = metadata.parent / "backend-grype-unfiltered.json"
     assert report.exists() and "PRIVATE_DESCRIPTION" in report.read_text()
     assert "PRIVATE" not in completed.stdout + completed.stderr
     if bad_binding:

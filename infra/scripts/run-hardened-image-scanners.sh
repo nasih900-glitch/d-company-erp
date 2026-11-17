@@ -439,6 +439,10 @@ run_owned_container() {
     exit 1
   fi
   if [ "$run_status" -ne 0 ]; then
+    if [ "$run_status" -eq 2 ] && [ "$state" != false:2 ]; then
+      echo "Scanner threshold exit was not confirmed by its container state." >&2
+      return 1
+    fi
     return "$run_status"
   fi
   if [ "$state" != false:0 ]; then
@@ -605,6 +609,18 @@ PY
   python3 "$ZLIB_VEX_VERIFIER" --bind-runtime-proof "$service" "$runtime_raw" \
     "$image_ref" "$config_image_id" "$runtime_proof"
 
+  if [ "$service" = backend ]; then
+    hashlib_runtime="$EVIDENCE_ROOT/backend-hashlib-runtime.json"
+    if [ -e "$hashlib_runtime" ] || [ -L "$hashlib_runtime" ]; then
+      echo "Hashlib runtime evidence already exists." >&2; exit 1
+    fi
+    run_owned_container 60s "$hashlib_runtime" offline \
+      --tmpfs "$TMPFS_SPEC" --entrypoint /usr/local/bin/python \
+      "$runtime_image_id" -I -B /usr/local/bin/verify-hashlib-fips.py
+    chmod 0444 "$hashlib_runtime"
+    python3 "$ZLIB_VEX_VERIFIER" --validate-hashlib-runtime "$hashlib_runtime" "$image_ref" "$config_image_id" >> "$METADATA"
+  fi
+
   grype_arguments=(
     --tmpfs "$TMPFS_SPEC" \
     -e "GOMEMLIMIT=$GOMEMLIMIT" \
@@ -619,6 +635,29 @@ PY
   scanner_status=0
   run_owned_container 1200s "$grype_report" online "${grype_arguments[@]}" \
     || scanner_status=$?
+  hashlib_vex_argument=""
+  if [ "$service" = backend ] && [ "$scanner_status" -eq 2 ]; then
+    raw_grype="$EVIDENCE_ROOT/backend-grype-unfiltered.json"
+    hashlib_vex="$EVIDENCE_ROOT/backend-hashlib-fixed.openvex.json"
+    if [ -e "$raw_grype" ] || [ -L "$raw_grype" ]; then
+      echo "Hashlib security evidence already exists." >&2; exit 1
+    fi
+    mv "$grype_report" "$raw_grype"
+    chmod 0444 "$raw_grype"
+    if ! python3 "$ZLIB_VEX_VERIFIER" --prove-fixed-hashlib "$raw_grype" "$image_ref" \
+      "$config_image_id" "$hashlib_runtime" "$hashlib_vex" >> "$METADATA"; then
+      summarize_grype_failure "$raw_grype" "$image_ref" "$config_image_id"
+      exit "$scanner_status"
+    fi
+    if [ "$(docker image inspect --format '{{.Id}}' "$image_ref")" != "$runtime_image_id" ]; then
+      echo "Backend tag changed before the verified fixed CVE rescan." >&2; exit 1
+    fi
+    scanner_status=0
+    run_owned_container 1200s "$grype_report" online \
+      --mount "type=bind,src=$hashlib_vex,dst=/scan/hashlib-fixed.openvex.json,readonly" \
+      "${grype_arguments[@]}" --vex /scan/hashlib-fixed.openvex.json || scanner_status=$?
+    hashlib_vex_argument="--hashlib-vex=$hashlib_vex"
+  fi
   if [ "$scanner_status" -ne 0 ]; then
     echo "Grype failed for $service." >&2
     summarize_grype_failure "$grype_report" "$image_ref" "$config_image_id"
@@ -630,7 +669,8 @@ PY
   fi
   python3 "$ZLIB_VEX_VERIFIER" "--$service-fixed-sbom" "$syft_report" \
     "$image_ref" "$config_image_id" "$service=$grype_report" \
-    "--runtime-proof=$runtime_proof" "--archive-platform=$archive_platform@$config_image_id" >> "$METADATA"
+    "--runtime-proof=$runtime_proof" "--archive-platform=$archive_platform@$config_image_id" \
+    ${hashlib_vex_argument:+"$hashlib_vex_argument"} >> "$METADATA"
   validation=$(python3 - "$grype_report" "$service" "$config_image_id" <<'PY'
 import json
 import sys
@@ -673,7 +713,9 @@ print(f"{service}_grype_db_valid=true")
 print(f"{service}_source_image_id={actual_image_id}")
 PY
   )
-  printf '%s\n' "$validation" >> "$METADATA"
+  # The fixed report verifier above already emits these exact scanner/DB
+  # details. Append only the additional validity and source attestations.
+  printf '%s\n' "$validation" | grep -E "^${service}_(grype_db_valid|source_image_id)=" >> "$METADATA"
   chmod 0444 "$grype_report"
   remaining_bytes=$(df -PB1 "$WORK_ROOT" | awk 'END {print $4}')
   if ! [[ "$remaining_bytes" =~ ^[0-9]+$ ]] || [ "$remaining_bytes" -lt "$MIN_REMAINING_BYTES" ]; then

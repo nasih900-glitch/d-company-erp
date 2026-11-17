@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+from datetime import datetime, timezone
 from pathlib import Path
 import re
 import sys
@@ -41,6 +42,17 @@ SYFT_SCHEMA = {
     "url": "https://raw.githubusercontent.com/anchore/syft/main/schema/json/schema-16.1.3.json",
 }
 GRYPE_VERSION = "0.118.0"
+HASHLIB_CVE = "CVE-2026-119170"
+HASHLIB_PURL = "pkg:generic/python@3.14.10"
+HASHLIB_PROOF = {
+    "schema": 1, "cpython": "3.14.10", "openssl": "3.5.9",
+    "source_sha256": "de414a57119abef52784d8993e341d53aed635fc2b05c2607d9f98a2c5b72032",
+    "patch_sha256": "346c4b31e1cdd87d08cd2e79dbbcc00e6e8c6d47bdb045346be7bbf40c283fed",
+    "patched_source_sha256": "d907bf6b22ddd8a55e271d19f8e1e5eda07f931d3e5143698171904f0970e549",
+    "module_path": "/usr/local/lib/python3.14/lib-dynload/_hashlib.cpython-314-x86_64-linux-musl.so",
+    "module_sha256": "3ea80f99a8d7ba7011b20eeef31ecb120c0914c8241dc209c38515e994a01671",
+    "unpatched_control": True, "named_both_cache_orders": True, "generic_both_cache_orders": True,
+}
 SOURCE_SHA256 = "bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16"
 NULL_GUARD_COMMIT = "e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca"
 NULL_GUARD_SHA256 = "183bc8b9dd078a41a62de5c2d905d9b0196b45bc46f100d7e4147ec228207c74"
@@ -368,6 +380,7 @@ def validate_fixed_report(
     path: Path,
     expected_product: str,
     expected_image_id: str,
+    *, hashlib_exception: str | None = None,
 ) -> None:
     report = load_json(path)
     descriptor = report.get("descriptor")
@@ -403,8 +416,14 @@ def validate_fixed_report(
     ignored = report.get("ignoredMatches", [])
     if not isinstance(matches, list) or not isinstance(ignored, list):
         raise SystemExit(f"{service.capitalize()} Grype report match arrays are invalid")
-    if ignored:
+    if ignored and hashlib_exception != "fixed":
         raise SystemExit(f"{service.capitalize()} fixed zlib report must not contain ignored findings")
+    if hashlib_exception == "fixed" and (
+        len(ignored) != 1 or not exact_hashlib_match(ignored[0])
+        or ignored[0].get("appliedIgnoreRules") != [{"namespace": "vex", "vex-status": "fixed"}]
+    ):
+        raise SystemExit("Filtered backend report did not apply exactly the verified hashlib fix")
+    fixed_raw_matches = 0
     for match in matches:
         if not isinstance(match, dict):
             raise SystemExit(f"{service.capitalize()} Grype report contains an invalid match")
@@ -414,12 +433,121 @@ def validate_fixed_report(
         if vulnerability.get("id") in (CVE, "CVE-2026-4738"):
             raise SystemExit(f"Residual {vulnerability.get('id')} match remains for {service}")
         severity = vulnerability.get("severity")
+        if hashlib_exception is not None and severity not in {"Unknown", "Negligible", "Low", "Medium", "High", "Critical"}:
+            raise SystemExit("Unexpected Grype severity in the verified hashlib assessment")
+        if vulnerability.get("id") == HASHLIB_CVE and hashlib_exception is not None:
+            if hashlib_exception != "raw" or not exact_hashlib_match(match):
+                raise SystemExit("Unexpected residual or inconsistent hashlib finding")
+            fixed_raw_matches += 1
+            continue
         if isinstance(severity, str) and severity.lower() in {"high", "critical"}:
             raise SystemExit(f"{service.capitalize()} Grype report contains a high or critical finding")
+    if hashlib_exception == "raw" and fixed_raw_matches != 1:
+        raise SystemExit("Raw backend report requires exactly one reviewed hashlib finding")
+    if hashlib_exception == "raw":
+        return  # Only the subsequent filtered scan emits final scanner metadata.
+    if hashlib_exception == "fixed":
+        print("backend_hashlib_grype_fixed_ignored_matches=1")
     print(f"{service}_fixed_zlib_ignored_matches=0")
     print(f"{service}_grype_version={GRYPE_VERSION}")
     print(f"{service}_grype_db_built={built}")
     print(f"{service}_grype_db_schema={schema}")
+
+
+def exact_hashlib_match(match: Any) -> bool:
+    if not isinstance(match, dict):
+        return False
+    package, vulnerability = match.get("artifact"), match.get("vulnerability")
+    if not isinstance(package, dict) or not isinstance(vulnerability, dict):
+        return False
+    cpes = package.get("cpes")
+    expected_cpes = [f"cpe:2.3:a:{vendor}:python:3.14.10:*:*:*:*:*:*:*"
+                     for vendor in ("python_software_foundation", "python")]
+    if (vulnerability.get("id"), vulnerability.get("namespace"), vulnerability.get("severity")) != (HASHLIB_CVE, "nvd:cpe", "High"):
+        return False
+    fix = vulnerability.get("fix")
+    if not isinstance(fix, dict) or fix.get("versions") != ["3.14.11"] or fix.get("state") != "fixed":
+        return False
+    if (package.get("name"), package.get("version"), package.get("type"), package.get("purl")) != (
+        "python", "3.14.10", "binary", HASHLIB_PURL,
+    ) or cpes not in (expected_cpes, expected_cpes[::-1]) or match.get("relatedVulnerabilities") != []:
+        return False
+    details = match.get("matchDetails")
+    reviewed_details = [{
+        "type": "cpe-match", "matcher": "stock-matcher",
+        "searchedBy": {"namespace": "nvd:cpe", "cpes": [cpe], "package": {"name": "python", "version": "3.14.10"}},
+        "found": {"vulnerabilityID": HASHLIB_CVE, "versionConstraint": ">= 3.14.10, < 3.14.11 (unknown)",
+                  "cpes": [cpe.replace(":3.14.10:", ":*:")]},
+        "fix": {"suggestedVersion": "3.14.11"},
+    } for cpe in expected_cpes]
+    if details not in (reviewed_details, reviewed_details[::-1]):
+        return False
+    locations = package.get("locations")
+    expected_locations = {"/usr/local/bin/python3.14": "primary", "/usr/local/lib/libpython3.14.so.1.0": "supporting"}
+    if not isinstance(locations, list) or len(locations) != len(expected_locations):
+        return False
+    for location in locations:
+        if not isinstance(location, dict):
+            return False
+        name = location.get("path")
+        if (name not in expected_locations or location.get("accessPath") != name
+                or location.get("annotations") != {"evidence": expected_locations.pop(name)}
+                or not IMAGE_ID.fullmatch(str(location.get("layerID", "")))):
+            return False
+    return not expected_locations
+
+
+def validate_hashlib_proof(path: Path) -> dict[str, Any]:
+    if path.is_symlink() or path.resolve(strict=True) != path.absolute():
+        raise SystemExit("Hashlib proof is linked")
+    proof = load_json(path, maximum_bytes=8192)
+    if (set(proof) != set(HASHLIB_PROOF)
+            or any(type(proof[key]) is not type(value) or proof[key] != value for key, value in HASHLIB_PROOF.items())):
+        raise SystemExit("Hashlib proof lacks the reviewed source, module identity and OpenSSL behavior")
+    return proof
+
+
+def hashlib_statement(product: str, image_id: str, proof: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "vulnerability": {"name": HASHLIB_CVE}, "products": [{"@id": product, "subcomponents": [{"@id": HASHLIB_PURL}]}],
+        "status": "fixed", "status_notes": json.dumps({"image_id": image_id, "proof": proof}, sort_keys=True),
+    }
+
+
+def validate_hashlib_vex(path: Path, product: str, image_id: str) -> None:
+    proof = validate_hashlib_proof(path.with_name("backend-hashlib-runtime.json"))
+    if path.is_symlink() or path.resolve(strict=True) != path.absolute():
+        raise SystemExit("Hashlib VEX is linked")
+    value = load_json(path, maximum_bytes=8192)
+    if (value.get("@context") != "https://openvex.dev/ns/v0.2.0"
+            or value.get("@id") != f"urn:dcompany:openvex:cve-2026-119170:{image_id.removeprefix('sha256:')}"
+            or value.get("version") != 1 or value.get("statements") != [hashlib_statement(product, image_id, proof)]):
+        raise SystemExit("Hashlib VEX does not bind the reviewed fix and image")
+
+
+def prove_fixed_hashlib(arguments: list[str]) -> int:
+    if len(arguments) != 7:
+        raise SystemExit("Hashlib remediation requires raw Grype report, image tag, config ID, runtime proof and VEX output")
+    raw, product, image_id, proof_path, output = arguments[2:7]
+    validate_expected_identity(product, image_id)
+    proof = validate_hashlib_proof(Path(proof_path))
+    # Only the unfiltered threshold failure for this exact, proved-fixed
+    # runtime component can produce a one-CVE VEX statement.
+    validate_fixed_report("backend", Path(raw), product, image_id, hashlib_exception="raw")
+    document = {
+        "@context": "https://openvex.dev/ns/v0.2.0",
+        "@id": f"urn:dcompany:openvex:cve-2026-119170:{image_id.removeprefix('sha256:')}",
+        "author": "D Company ERP", "timestamp": datetime.now(timezone.utc).isoformat(), "version": 1,
+        "statements": [hashlib_statement(product, image_id, proof)],
+    }
+    destination = Path(output)
+    with destination.open("x", encoding="utf-8") as stream:
+        json.dump(document, stream, sort_keys=True)
+        stream.write("\n")
+    destination.chmod(0o444)
+    for name, path in (("raw_grype", raw), ("vex", output)):
+        print(f"backend_hashlib_{name}_sha256={hashlib.sha256(Path(path).read_bytes()).hexdigest()}")
+    return 0
 
 
 def validate_report(
@@ -507,7 +635,7 @@ def bind_official_runtime(arguments: list[str]) -> int:
 def validate_fixed_mode(arguments: list[str], fixed_service: str) -> int:
     usage = (f"Usage: {arguments[0]} --{fixed_service}-fixed-sbom SYFT_REPORT "
              f"IMAGE_PRODUCT IMAGE_ID {fixed_service}=GRYPE_REPORT" +
-             " --runtime-proof=PROOF [--archive-platform=PLATFORM@CONFIG_IMAGE_ID]")
+             " --runtime-proof=PROOF [--archive-platform=PLATFORM@CONFIG_IMAGE_ID] [--hashlib-vex=VEX]")
     if len(arguments) < 6:
         raise SystemExit(usage)
     sbom_path = Path(arguments[2]).resolve(strict=True)
@@ -517,12 +645,19 @@ def validate_fixed_mode(arguments: list[str], fixed_service: str) -> int:
     if service != fixed_service or not separator or not raw_report_path:
         raise SystemExit(f"--{fixed_service}-fixed-sbom requires exactly one {fixed_service} Grype report binding")
     archive_platform_binding = None
+    hashlib_vex = None
     if fixed_service in OFFICIAL_PROFILES:
-        if len(arguments) not in {7, 8} or not arguments[6].startswith("--runtime-proof="):
+        if len(arguments) < 7 or not arguments[6].startswith("--runtime-proof="):
             raise SystemExit(usage)
-        if len(arguments) == 8:
-            flag, separator, archive_platform_binding = arguments[7].partition("=")
-            if flag != "--archive-platform" or not separator:
+        for argument in arguments[7:]:
+            flag, separator, value = argument.partition("=")
+            if not separator or not value:
+                raise SystemExit(usage)
+            if flag == "--archive-platform" and archive_platform_binding is None:
+                archive_platform_binding = value
+            elif flag == "--hashlib-vex" and fixed_service == "backend" and hashlib_vex is None:
+                hashlib_vex = Path(value)
+            else:
                 raise SystemExit(usage)
         proof_path = Path(arguments[6].removeprefix("--runtime-proof="))
         if proof_path.is_symlink() or proof_path.resolve(strict=True) != proof_path.absolute():
@@ -538,7 +673,10 @@ def validate_fixed_mode(arguments: list[str], fixed_service: str) -> int:
         raise SystemExit(usage)
     report_path = Path(raw_report_path).resolve(strict=True)
     validate_fixed_sbom(fixed_service, sbom_path, expected_image_id, archive_platform_binding=archive_platform_binding)
-    validate_fixed_report(fixed_service, report_path, expected_product, expected_image_id)
+    if hashlib_vex is not None:
+        validate_hashlib_vex(hashlib_vex, expected_product, expected_image_id)
+    validate_fixed_report(fixed_service, report_path, expected_product, expected_image_id,
+                          hashlib_exception="fixed" if hashlib_vex else None)
     return 0
 
 
@@ -599,6 +737,17 @@ def scan_failure_summary(path: Path, product: str, image_id: str) -> str:
 
 
 def main(arguments: list[str]) -> int:
+    if len(arguments) > 1 and arguments[1] == "--validate-hashlib-runtime":
+        if len(arguments) != 5:
+            raise SystemExit("Hashlib validation requires proof, image tag and config ID")
+        path = Path(arguments[2])
+        validate_expected_identity(arguments[3], arguments[4])
+        validate_hashlib_proof(path)
+        print(f"backend_hashlib_runtime_proof_sha256={hashlib.sha256(path.read_bytes()).hexdigest()}")
+        print(f"backend_hashlib_runtime_config_image_id={arguments[4]}")
+        return 0
+    if len(arguments) > 1 and arguments[1] == "--prove-fixed-hashlib":
+        return prove_fixed_hashlib(arguments)
     if len(arguments) > 1 and arguments[1] == "--scan-failure-summary":
         if len(arguments) != 5:
             raise SystemExit("Invalid scan failure summary arguments")

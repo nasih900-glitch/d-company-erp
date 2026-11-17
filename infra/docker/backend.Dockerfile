@@ -6,6 +6,16 @@ RUN apk add --no-cache --virtual .zlib-probe-build-deps build-base
 COPY infra/docker/caddy-zlib/runtime-probe.c /tmp/zlib-runtime-probe.c
 RUN cc -O2 -Wall -Wextra -Werror /tmp/zlib-runtime-probe.c -ldl -o /tmp/dcompany-caddy-zlib-probe
 
+# Backport the upstream CVE-2026-119170 fix to the official CPython ABI.
+FROM python:3.14.10-alpine3.24@sha256:eb2c62658b8d51bff0acc408504b76521d02030de56a8a3c1e830083e89b89d2 AS hashlib-backport
+RUN apk add --no-cache 'gcc=15.2.0-r5' 'musl-dev=1.2.6-r3' 'binutils=2.45.1-r1' \
+      'openssl-dev=3.5.9-r0' 'patch=2.8.1-r0'
+WORKDIR /tmp/cpython
+COPY infra/docker/cpython/cpython-7d9da920.patch .
+COPY infra/docker/cpython/build-hashlib-backport.py .
+COPY infra/docker/cpython/verify-hashlib-fips.py ./verify_hashlib_fips.py
+RUN python -B /tmp/cpython/build-hashlib-backport.py
+
 # --- Python dependency builder ---
 FROM python:3.14.10-alpine3.24@sha256:eb2c62658b8d51bff0acc408504b76521d02030de56a8a3c1e830083e89b89d2 AS builder
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
@@ -84,6 +94,9 @@ COPY --from=builder /install /usr/local
 RUN sh /tmp/prune-python-sqlite.sh --after-wheels && rm /tmp/prune-python-sqlite.sh
 COPY backend/ .
 COPY infra/docker/verify-backend-runtime-profile.py /usr/local/bin/verify-backend-runtime-profile.py
+COPY --from=hashlib-backport /out/_hashlib*.so /usr/local/lib/python3.14/lib-dynload/
+COPY --from=hashlib-backport /out/cpython-hashlib-build.json /etc/dcompany/cpython-hashlib-build.json
+COPY --chmod=0644 infra/docker/cpython/verify-hashlib-fips.py /usr/local/bin/verify-hashlib-fips.py
 COPY infra/docker/backend-entrypoint.sh /entrypoint.sh
 COPY infra/docker/write-release-identity.sh /tmp/write-release-identity.sh
 RUN sh /tmp/write-release-identity.sh "$APP_VERSION" "$APP_REVISION" /etc/dcompany/release-identity.json \
@@ -93,6 +106,7 @@ RUN sh /tmp/write-release-identity.sh "$APP_VERSION" "$APP_REVISION" /etc/dcompa
 RUN chmod 755 /entrypoint.sh && chown erp:erp /entrypoint.sh && chown -R erp:erp /app
 RUN /usr/local/bin/verify-caddy-zlib backend
 USER erp
+RUN python -I -B /usr/local/bin/verify-hashlib-fips.py
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=5 \
   CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=4).read()"]
