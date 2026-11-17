@@ -16,6 +16,8 @@ WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json* ./
 COPY frontend/braces-compat ./braces-compat
 COPY frontend/vendor/dcompany-braces-depth-guard ./vendor/dcompany-braces-depth-guard
+COPY frontend/vendor/picomatch-v2 ./vendor/picomatch-v2
+COPY frontend/vendor/picomatch-v4 ./vendor/picomatch-v4
 RUN npm ci --no-audit --no-fund
 COPY frontend/ .
 RUN npm run build

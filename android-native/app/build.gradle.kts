@@ -85,8 +85,8 @@ android {
         // Build 52 is immutable withheld predecessor history. This release keeps
         // Room 58 under a direct version code so CI and upgrade checks cannot
         // produce different identities from a local Gradle property.
-        versionCode = 72
-        versionName = "3.1.65"
+        versionCode = 73
+        versionName = "3.1.66"
         buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "false")
         buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("play"))
 

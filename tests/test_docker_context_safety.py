@@ -23,6 +23,8 @@ class DockerContextSafetyTest(unittest.TestCase):
             "COPY frontend/braces-compat ./braces-compat",
             "COPY frontend/vendor/dcompany-braces-depth-guard "
             "./vendor/dcompany-braces-depth-guard",
+            "COPY frontend/vendor/picomatch-v2 ./vendor/picomatch-v2",
+            "COPY frontend/vendor/picomatch-v4 ./vendor/picomatch-v4",
         ):
             with self.subTest(local_source=local_source):
                 self.assertIn(local_source, dockerfile)

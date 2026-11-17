@@ -1124,7 +1124,14 @@ def test_frontend_image_changes_only_reviewed_security_controls() -> None:
     )
     historical = expected
     assert _file_at("b9b19bd2462e0f417922849a455e12116e8207e2", FRONTEND_DOCKERFILE) == historical
-    assert FRONTEND_DOCKERFILE.read_text(encoding="utf-8") == _official_zlib_expected(historical, "frontend")
+    expected = _replace_once(
+        _official_zlib_expected(historical, "frontend"),
+        "RUN npm ci --no-audit --no-fund\n",
+        "COPY frontend/vendor/picomatch-v2 ./vendor/picomatch-v2\n"
+        "COPY frontend/vendor/picomatch-v4 ./vendor/picomatch-v4\n"
+        "RUN npm ci --no-audit --no-fund\n",
+    )
+    assert FRONTEND_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
 def test_redis_changes_only_reviewed_openssl_packages_before_zlib_overlay() -> None:

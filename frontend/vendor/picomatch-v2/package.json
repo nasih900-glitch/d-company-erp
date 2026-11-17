@@ -1,0 +1,13 @@
+{
+  "name": "@dcompany/picomatch-v2",
+  "version": "2.3.2+dcompany.1",
+  "description": "D Company build-time Picomatch 2 derivative with repeated extglobs disabled",
+  "main": "index.js",
+  "engines": {
+    "node": ">=8.6"
+  },
+  "license": "MIT",
+  "author": "Jon Schlinkert (https://github.com/jonschlinkert)",
+  "repository": "micromatch/picomatch",
+  "private": true
+}
