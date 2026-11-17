@@ -917,6 +917,37 @@ class AndroidReleasePipelineTest(unittest.TestCase):
                 "hw.lcd.width=2560\nhw.lcd.height=1600\nhw.lcd.density=320\n",
             )
 
+    def test_ci_cold_boot_keeps_assembly_and_inventory_before_the_gaming_lane(self) -> None:
+        instrumentation = INSTRUMENTATION_SCRIPT.read_text(encoding="utf-8")
+        assembly = "run: bash scripts/run_android_instrumentation_ci.sh --assemble-only"
+        for workflow in (CI_WORKFLOW, WORKFLOW):
+            with self.subTest(workflow=workflow.name):
+                source = workflow.read_text(encoding="utf-8")
+                self.assertLess(
+                    source.index(assembly),
+                    source.index("uses: reactivecircus/android-emulator-runner@"),
+                )
+                self.assertEqual(source.count("D_COMPANY_HOSTED_COLD_BOOT: '1'"), 1)
+
+        main = instrumentation.split("# Discover the exact runner inventory once", 1)[1]
+        self.assertLess(
+            main.index("if ! discover_instrumentation_tests"),
+            main.index("if ! cold_boot_hosted_emulator"),
+        )
+        self.assertLess(main.index("if ! cold_boot_hosted_emulator"), main.index("'gaming-board'"))
+        self.assertEqual(main.count("if ! cold_boot_hosted_emulator"), 1)
+        cold_boot = instrumentation.split("cold_boot_hosted_emulator() {", 1)[1].split("\n}\n", 1)[0]
+        launch = re.sub(r"\s*\\\n\s*", " ", cold_boot)
+        self.assertIn(
+            "-port 5554 -avd test -no-window -gpu swiftshader -feature -Vulkan "
+            "-no-snapshot -noaudio -no-boot-anim",
+            launch,
+        )
+        self.assertIn('"${boot_id}" != "${original_boot_id}"', cold_boot)
+        self.assertIn(""""${cpu_online}" == '0-1'""", cold_boot)
+        self.assertIn("configure_tablet_viewport || return 1", cold_boot)
+        self.assertIn("if ! stop_owned_emulator; then", main)
+
     def test_ci_and_release_request_same_bounded_linux_emulator_quadrant(self) -> None:
         expected = (
             "-no-window -gpu swiftshader -feature -Vulkan "

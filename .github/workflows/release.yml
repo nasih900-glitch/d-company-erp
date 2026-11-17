@@ -363,8 +363,12 @@ jobs:
           sudo chmod 0666 /dev/kvm
           test -r /dev/kvm
           test -w /dev/kvm
+      - name: Assemble Android instrumentation APKs before emulator startup
+        run: bash scripts/run_android_instrumentation_ci.sh --assemble-only
       - name: Run Android instrumentation tests
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        env:
+          D_COMPANY_HOSTED_COLD_BOOT: '1'
         with:
           api-level: 35
           arch: x86_64

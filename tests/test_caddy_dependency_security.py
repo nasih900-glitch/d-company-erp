@@ -1177,6 +1177,25 @@ def test_caddy_binary_hash_is_coordinated_across_ci_and_release() -> None:
         )
         backend_test_env = backend_test_step + "        env:\n"
         expected = _replace_once(expected, backend_test_env, backend_test_env + "          ENV: test\n")
+        instrumentation_step = "      - name: Run Android instrumentation tests\n"
+        assembly_anchor = (
+            "      # Room migration tests need a real Android SQLite/Room runtime. Keeping\n"
+            if workflow == CI_WORKFLOW
+            else instrumentation_step
+        )
+        assembly = (
+            "      - name: Assemble Android instrumentation APKs before emulator startup\n"
+            "        run: bash scripts/run_android_instrumentation_ci.sh --assemble-only\n"
+        )
+        expected = _replace_once(expected, assembly_anchor, assembly + assembly_anchor)
+        emulator_action = instrumentation_step + (
+            "        uses: reactivecircus/android-emulator-runner@"
+            "a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0\n"
+        )
+        expected = _replace_once(
+            expected, emulator_action,
+            emulator_action + "        env:\n          D_COMPANY_HOSTED_COLD_BOOT: '1'\n",
+        )
         assert workflow.read_text(encoding="utf-8") == expected
 
     assert "go 1.26.9" in GO_MOD.read_text(encoding="utf-8")

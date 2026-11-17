@@ -38,6 +38,8 @@ display_density_override_initial=''
 accelerometer_rotation_initial=''
 user_rotation_initial=''
 tablet_viewport_configured=0
+owned_emulator_pid=''
+owned_emulator_log=''
 
 mkdir -p "${diagnostics_dir}"
 cd "${android_root}"
@@ -50,6 +52,12 @@ run_gradle_ci() {
     '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8' \
     -Pkotlin.compiler.execution.strategy=in-process "$@"
 }
+
+if [[ "${1:-}" == '--assemble-only' && "$#" -eq 1 ]]; then
+  run_gradle_ci :app:assembleDebug :app:assembleDebugAndroidTest \
+    2>&1 | tee "${diagnostics_dir}/preboot-assemble.log"
+  exit
+fi
 
 capture_startup_diagnostics() {
   local phase=$1
@@ -123,6 +131,102 @@ restore_system_setting() {
   fi
 }
 
+stop_owned_emulator() {
+  [[ -n "${owned_emulator_pid}" ]] || return 0
+  local expected_shutdown=0 exit_status=0 attempt
+  if kill -0 "${owned_emulator_pid}" 2>/dev/null; then
+    if timeout 10s adb -s "${device_serial}" emu kill >/dev/null 2>&1; then
+      expected_shutdown=1
+    fi
+    for ((attempt = 0; attempt < 30; attempt++)); do
+      kill -0 "${owned_emulator_pid}" 2>/dev/null || break
+      sleep 1
+    done
+    if kill -0 "${owned_emulator_pid}" 2>/dev/null; then
+      expected_shutdown=0
+      kill -KILL "${owned_emulator_pid}" 2>/dev/null || true
+      for ((attempt = 0; attempt < 5; attempt++)); do
+        kill -0 "${owned_emulator_pid}" 2>/dev/null || break
+        sleep 1
+      done
+      if kill -0 "${owned_emulator_pid}" 2>/dev/null; then
+        echo "Owned emulator did not exit after SIGKILL." >&2
+        return 1
+      fi
+    fi
+  fi
+  wait "${owned_emulator_pid}" || exit_status=$?
+  owned_emulator_pid=''
+  {
+    printf 'expected_shutdown=%s\nprocess_exit_status=%s\n' "${expected_shutdown}" "${exit_status}"
+    grep -E 'Android emulator version|Graphics Adapter |gles_mode_selected|Feature .Vulkan.|Storing crashdata|FATAL|ERROR' \
+      "${owned_emulator_log}" | tail -n 60 || true
+  } >> "${diagnostics_dir}/emulator-cold-boot.txt"
+  [[ "${expected_shutdown}" -eq 1 && "${exit_status}" -eq 0 ]]
+}
+
+cold_boot_hosted_emulator() {
+  local emulator="${ANDROID_HOME:-}/emulator/emulator"
+  local original_name original_pid boot_id original_boot_id boot_completed overlays cpu_online attempt
+  [[ "${device_serial}" == 'emulator-5554' && -x "${emulator}" && -n "${RUNNER_TEMP:-}" ]] || return 1
+  original_name="$(timeout 5s adb -s "${device_serial}" emu avd name | tr -d '\r')" || return 1
+  [[ "${original_name}" == $'test\nOK' ]] || return 1
+  original_boot_id="$(timeout 5s adb -s "${device_serial}" shell cat /proc/sys/kernel/random/boot_id | tr -d '\r')" || return 1
+  [[ "${original_boot_id}" =~ ^[[:xdigit:]-]{36}$ ]] || return 1
+  original_pid="$(ps -eo pid=,comm=,args= | awk '$2 ~ /^qemu-system/ && $0 ~ / -port 5554( |$)/ && $0 ~ / -avd test( |$)/ {print $1}')" || return 1
+  [[ "${original_pid}" =~ ^[1-9][0-9]*$ ]] || return 1
+  cleanup_alarm_environment || return 1
+  timeout 10s adb -s "${device_serial}" emu kill >/dev/null || return 1
+  for ((attempt = 0; attempt < 40; attempt++)); do
+    kill -0 "${original_pid}" 2>/dev/null || break
+    sleep 1
+  done
+  if kill -0 "${original_pid}" 2>/dev/null; then
+    echo "Discovery emulator did not shut down before the planned cold boot." >&2
+    return 1
+  fi
+
+  owned_emulator_log="$(mktemp "${RUNNER_TEMP}/dcompany-emulator-cold-boot.XXXXXX")" || return 1
+  "${emulator}" -port 5554 -avd test -no-window -gpu swiftshader -feature -Vulkan \
+    -no-snapshot -noaudio -no-boot-anim > "${owned_emulator_log}" 2>&1 &
+  owned_emulator_pid=$!
+  local boot_deadline=$((SECONDS + 180))
+  while (( SECONDS < boot_deadline )); do
+    if ! kill -0 "${owned_emulator_pid}" 2>/dev/null; then
+      echo "Cold-boot emulator exited during startup." >&2
+      return 1
+    fi
+    boot_completed="$(timeout 3s adb -s "${device_serial}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" || boot_completed=''
+    if [[ "${boot_completed}" == '1' ]]; then
+      break
+    fi
+    sleep 2
+  done
+  [[ "${boot_completed}" == '1' ]] || return 1
+  boot_id="$(timeout 5s adb -s "${device_serial}" shell cat /proc/sys/kernel/random/boot_id | tr -d '\r')" || return 1
+  [[ "${boot_id}" =~ ^[[:xdigit:]-]{36}$ && "${boot_id}" != "${original_boot_id}" ]] || return 1
+  grep -Fq 'Android emulator version 37.1.11.0 (build_id 15917651)' "${owned_emulator_log}" || return 1
+  grep -Fq "Feature 'Vulkan' (21) is overridden to 'disabled'" "${owned_emulator_log}" || return 1
+  grep -Fq 'Graphics Adapter Android Emulator OpenGL ES Translator (Google SwiftShader)' "${owned_emulator_log}" || return 1
+
+  select_api_35_emulator >/dev/null || return 1
+  cpu_online="$(timeout 5s adb -s "${device_serial}" shell cat /sys/devices/system/cpu/online | tr -d '\r')" || return 1
+  [[ "${cpu_online}" == '0-1' ]] || return 1
+  timeout 5s adb -s "${device_serial}" shell input keyevent 82 || return 1
+  local setting
+  for setting in window_animation_scale transition_animation_scale animator_duration_scale; do
+    timeout 5s adb -s "${device_serial}" shell settings put global "${setting}" 0.0 || return 1
+  done
+  timeout 5s adb -s "${device_serial}" shell cmd overlay enable-exclusive --category \
+    com.android.internal.systemui.navbar.gestural || return 1
+  overlays="$(timeout 5s adb -s "${device_serial}" shell cmd overlay list --user 0 | tr -d '\r' | \
+    sed -n 's/^[[:space:]]*\(\[x\] com\.android\.internal\.systemui\.navbar\..*\)$/\1/p')" || return 1
+  [[ "${overlays}" == '[x] com.android.internal.systemui.navbar.gestural' ]] || return 1
+  configure_tablet_viewport || return 1
+  printf 'cold_boot_verified=true\nguest_cpu_online=%s\nguest_navigation=gestural\n' "${cpu_online}" \
+    > "${diagnostics_dir}/emulator-cold-boot.txt"
+}
+
 configure_tablet_viewport() {
   local effective_size=''
   local effective_density=''
@@ -148,10 +252,10 @@ configure_tablet_viewport() {
   # 2560x1600/320dpi framebuffer required by full-resolution capture and system
   # gesture tests. A post-boot override alone does not change the physical host.
   # Physical-device rendering remains a separate release gate.
-  adb -s "${device_serial}" shell wm size 2560x1600 >/dev/null
-  adb -s "${device_serial}" shell wm density 320 >/dev/null
-  adb -s "${device_serial}" shell settings put system accelerometer_rotation 0 >/dev/null
-  adb -s "${device_serial}" shell settings put system user_rotation 0 >/dev/null
+  adb -s "${device_serial}" shell wm size 2560x1600 >/dev/null || return 1
+  adb -s "${device_serial}" shell wm density 320 >/dev/null || return 1
+  adb -s "${device_serial}" shell settings put system accelerometer_rotation 0 >/dev/null || return 1
+  adb -s "${device_serial}" shell settings put system user_rotation 0 >/dev/null || return 1
 
   effective_size="$(adb -s "${device_serial}" shell wm size | tr -d '\r' | awk -F': ' '/Physical size:/{value=$2} /Override size:/{value=$2} END{print value}')"
   effective_density="$(adb -s "${device_serial}" shell wm density | tr -d '\r' | awk -F': ' '/Physical density:/{value=$2} /Override density:/{value=$2} END{print value}')"
@@ -165,8 +269,8 @@ configure_tablet_viewport() {
     echo "rotation=$(adb -s "${device_serial}" shell settings get system user_rotation | tr -d '\r')"
   } | tee "${report}"
 
-  [[ "${effective_size}" == '2560x1600' ]]
-  [[ "${effective_density}" == '320' ]]
+  [[ "${effective_size}" == '2560x1600' ]] &&
+  [[ "${effective_density}" == '320' ]] &&
   [[ "$(adb -s "${device_serial}" shell settings get system user_rotation | tr -d '\r')" == '0' ]]
 }
 
@@ -581,7 +685,7 @@ install_alarm_test_apks() {
   }
 }
 
-trap cleanup_alarm_environment EXIT
+trap 'cleanup_alarm_environment || true; stop_owned_emulator || true' EXIT
 
 if ! device_serial="$(select_api_35_emulator)"; then
   exit 1
@@ -597,11 +701,20 @@ mkdir -p "${shard_evidence_root}"
 # Discover the exact runner inventory once, without executing test bodies. The
 # later verifier rejects a missing, duplicated or unexpected test across all
 # functional shards and both isolated Gaming and physical-frame lanes.
-capture_startup_diagnostics pre-assembly
-if ! run_gradle_ci :app:assembleDebug :app:assembleDebugAndroidTest \
-  2>&1 | tee "${shard_evidence_root}/assemble.log"; then
-  status=1
+if [[ "${D_COMPANY_HOSTED_COLD_BOOT:-0}" == '1' ]]; then
+  if [[ "${D_COMPANY_REQUIRE_NATIVE_AVD_SIZE:-0}" != '1' || ! -s "${diagnostics_dir}/preboot-assemble.log" ]] ||
+     ! cp "${diagnostics_dir}/preboot-assemble.log" "${shard_evidence_root}/assemble.log"; then
+    echo "Hosted instrumentation requires native tablet geometry and preboot assembly evidence." >&2
+    status=1
+  fi
 else
+  capture_startup_diagnostics pre-assembly
+  if ! run_gradle_ci :app:assembleDebug :app:assembleDebugAndroidTest \
+    2>&1 | tee "${shard_evidence_root}/assemble.log"; then
+    status=1
+  fi
+fi
+if [[ "${status}" -eq 0 ]]; then
   if ! prepare_instrumentation_provenance; then
     status=1
   else
@@ -609,6 +722,14 @@ else
     if ! discover_instrumentation_tests; then
       status=1
     fi
+  fi
+fi
+
+if [[ "${status}" -eq 0 && "${D_COMPANY_HOSTED_COLD_BOOT:-0}" == '1' ]]; then
+  echo "Cold booting the full-resolution emulator after inventory discovery."
+  if ! cold_boot_hosted_emulator; then
+    echo "The planned emulator cold boot failed; instrumentation will not continue." >&2
+    status=1
   fi
 fi
 
@@ -724,6 +845,10 @@ if ! cleanup_alarm_environment; then
   echo "Could not restore the emulator after alarm instrumentation." >&2
   status=1
   capture_diagnostics
+fi
+if ! stop_owned_emulator; then
+  echo "The owned Android emulator did not shut down normally." >&2
+  status=1
 fi
 
 exit "${status}"

@@ -851,7 +851,7 @@ class RequiredLaneOperationsTest(unittest.TestCase):
         connected = source[source.index("clear_connected_outputs() {"):source.index("run_persistence_stage() {")]
         persistence = source[source.index("run_persistence_stage() {"):source.index("run_persistence_chain() {")]
         chain = source[source.index("run_persistence_chain() {"):source.index("install_alarm_test_apks() {")]
-        alarm = source[source.index("install_alarm_test_apks() {"):source.index("trap cleanup_alarm_environment EXIT")]
+        alarm = source[source.index("install_alarm_test_apks() {"):source.index("\ntrap ")]
         loop_start = source.rindex('if [[ "${status}" -eq 0 ]]; then', 0, source.index('  for ((shard_index'))
         loop = source[loop_start:source.index('\n\nif [[ "${status}" -eq 0 ]]; then', loop_start + 1)]
         alarm_start = source.index('  elif ! {\n    reset_emulator_for_instrumentation_lane')
