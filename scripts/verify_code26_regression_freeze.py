@@ -3125,6 +3125,8 @@ REVIEWED_CODE30_4_BUILD72_SHA256 = {'.env.production.example': '3d2da9400f5b233d
  'backend/docs/TENDER_CORRECTIONS_API.md': '0b8f37774a4520787f87074c187f59dbaddc04dfcd8afb71843d6cb4ebb8d53b',
  'backend/pyproject.toml': 'a523328d7e54cb1bead60cc6163e4b3592a0b990d313d34b41438b333c6cbe6f',
  'backend/scripts/physical_audit_fixture.py': 'db40691a92fefa4557ea374d51619609a47850e36a1d04c9306c6009f8b57f26',
+ 'backend/requirements-ci.lock': '00d2bcd11933a3183035c276830b5c4e8bc71f4ea13c577b03e6939d6daf26f1',
+ 'backend/requirements.lock': '83ace6c37e8158251a544f023d48fd55e99c5bd5a1010715f9f24ad1fbd01150',
  'backend/scripts/seed.py': '5bd0e5afa2f15f642448fc6bebca5a689a921cf3b6ea8c6057626e969b1c6f20',
  'backend/tests/integration/fixtures/build71_pg16_restore_catalogue_pairs.json': '6c8b261567343f1db58d7a6a0356e8d76795c665034283362c861567461b4df2',
  'backend/tests/integration/historical_tender_producer.py': '1c62b087a4f51e48b39dad38e86e2463b710d98aae01154ec8b2dbbc2952ec81',
