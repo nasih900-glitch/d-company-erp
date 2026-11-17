@@ -1157,10 +1157,18 @@ def test_caddy_binary_hash_is_coordinated_across_ci_and_release() -> None:
         build69 = _replace_once(build67, BUILD67_BINARY_SHA256, BUILD69_BINARY_SHA256)
         assert _file_at(BUILD69_RELEASE_BASE, workflow) == build69
         expected = _replace_once(build69, BUILD69_BINARY_SHA256, CURRENT_BINARY_SHA256)
-        assert workflow.read_text(encoding="utf-8") == _replace_once(
+        expected = _replace_once(
             expected, "caddy version | grep -F v2.11.4-dcompany.2;",
             "caddy version | grep -F v2.11.4-dcompany.3;",
         )
+        backend_test_step = (
+            "      - name: Tests\n"
+            if workflow == CI_WORKFLOW
+            else "      - name: Run complete backend suite\n        working-directory: backend\n"
+        )
+        backend_test_env = backend_test_step + "        env:\n"
+        expected = _replace_once(expected, backend_test_env, backend_test_env + "          ENV: test\n")
+        assert workflow.read_text(encoding="utf-8") == expected
 
     assert "go 1.26.9" in GO_MOD.read_text(encoding="utf-8")
     assert "github.com/caddyserver/caddy/v2 v2.11.4" in GO_MOD.read_text(

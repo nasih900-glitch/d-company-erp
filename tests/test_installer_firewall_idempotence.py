@@ -34,7 +34,8 @@ def test_exact_existing_rule_is_not_duplicated_and_errors_are_not_hidden(tmp_pat
 
 def test_only_the_three_original_rules_are_requested():
     source = (ROOT / 'infra/scripts/install-on-vm.sh').read_text()
-    calls = [line for line in source.splitlines() if line.startswith('ensure_input_accept ')]
+    lines = (line.lstrip() for line in source.splitlines())
+    calls = [line for line in lines if line.startswith('ensure_input_accept ')]
     assert calls == [
         'ensure_input_accept -p tcp -m state --state NEW -m tcp --dport 80 -j ACCEPT',
         'ensure_input_accept -p tcp -m state --state NEW -m tcp --dport 443 -j ACCEPT',
