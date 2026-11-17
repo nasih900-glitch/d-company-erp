@@ -34,7 +34,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import exists, func, or_, select, text
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import aliased
 
@@ -43,6 +43,9 @@ from app.core.cleanup_replay_fence import (
     refuse_versioned_shift_opening_replay,
 )
 from app.services.finance.tender_corrections import effective_payment_method, corrections_for_payments
+from app.services.pos.receipt_correction_projection import (
+    correction_metadata, corrections_for_orders, require_uncorrected_receipt,
+)
 from app.models import PaymentTenderCorrection
 from app.core.db import SessionDep
 from app.core.errors import (
@@ -74,6 +77,8 @@ from app.models import (
     GamingSessionPackageAmendment,
     GamingVoidAddonLine,
     GamingVoidReceipt,
+    GamingRetainedBillCorrection,
+    StockMovement,
     MembershipBenefitReservation,
     MembershipPayment,
     MembershipPaymentRequest,
@@ -103,6 +108,7 @@ from app.models import (
     Terminal,
     User,
 )
+from app.schemas.paid_bill_amendment import PaidBillReceiptSummary
 from app.schemas.pos import OrderModifierSnapshotRead, OrderVariantSnapshotRead
 from app.services.audit.events import record_operation
 from app.services.customers.deletion_fence import (
@@ -128,6 +134,11 @@ from app.services.pos.checkout_claims import (
     release_checkout_claim,
     validate_checkout_claim,
 )
+from app.services.pos.retained_bill_corrections import (
+    gaming_void_provenance,
+    reject_gaming_void_financial_mutation,
+    retained_bill_snapshot,
+)
 from app.services.pos.customer_identity import resolve_order_customer
 from app.services.pos.loyalty_program import (
     LoadedLoyaltyProgram,
@@ -141,6 +152,13 @@ from app.services.pos.membership_benefits import (
     applied_benefits_for_order,
     consume_membership_benefits,
     reserve_membership_benefits,
+)
+from app.services.pos.refund_requests import (
+    prepare_pos_refund_request,
+    refunded_total as _refunded_total,
+    unresolved_pos_refund_total as _unresolved_pos_refund_total,
+    unresolved_membership_cash_refund_total as _unresolved_membership_cash_refund_total,
+    unresolved_membership_refund_total_for_customer as _unresolved_membership_refund_total_for_customer,
 )
 from app.services.pos.order_validation import require_operational_order
 from app.services.pos.points import (
@@ -273,6 +291,13 @@ class OrderLineRead(BaseModel):
     kitchen_void_acknowledged_by: UUID | None = None
 
 
+class GamingVoidProvenanceRead(BaseModel):
+    original_receipt_id: UUID
+    gaming_session_id: UUID
+    financial_evidence_locked: bool = True
+    mistake_correction_available: bool = False
+
+
 class OrderRead(BaseModel):
     id: UUID
     invoice_no: str | None = None
@@ -311,6 +336,7 @@ class OrderRead(BaseModel):
     checkout_version: int = 1
     lines: list[OrderLineRead] = Field(default_factory=list)
     voided_lines: list[OrderLineRead] = Field(default_factory=list)
+    gaming_void_provenance: GamingVoidProvenanceRead | None = None
 
 
 class ReceiptBusinessRead(BaseModel):
@@ -643,8 +669,24 @@ class ReceiptGamingSessionHistoryRead(BaseModel):
     updated_at: datetime
 
 
+class ReceiptCorrectionRead(BaseModel):
+    id: UUID
+    kind: Literal["payment_not_received_full_mistake"]
+    amount_minor: int = Field(gt=0)
+    accounting_at: datetime
+    payout_minor: Literal[0] = 0
+    label: Literal["Corrected — payment not received; no payout"]
+    stock_restored: bool = False
+    restored_movement_count: int = 0
+    inventory_increase_minor: int = 0
+
+
 class ReceiptHistoryRead(BaseModel):
     """Canonical receipt projection shared by web and native clients."""
+
+    paid_bill_amendment: PaidBillReceiptSummary | None = None
+    receipt_correction: ReceiptCorrectionRead | None = None
+    corrected_minor: int = 0
 
     order_id: UUID
     company_id: UUID
@@ -793,6 +835,13 @@ async def _receipt_history_reads(
         return []
 
     order_ids = [order.id for order in orders]
+    from app.models import PaidBillAmendmentIntent
+    from app.services.pos.paid_bill_projection import paid_bill_states
+    amended_ids = list(await session.scalars(select(PaidBillAmendmentIntent.order_id).where(
+        PaidBillAmendmentIntent.company_id == company_id,
+        PaidBillAmendmentIntent.order_id.in_(order_ids),
+    ).distinct()))
+    paid_bill_metadata = await paid_bill_states(session, company_id=company_id, order_ids=amended_ids)
     line_rows = (
         (
             await session.execute(
@@ -1140,6 +1189,9 @@ async def _receipt_history_reads(
         )
 
     results: list[ReceiptHistoryRead] = []
+    receipt_corrections = await corrections_for_orders(
+        session, company_id=company_id, order_ids=order_ids,
+    )
     for order in orders:
         if (
             order.invoice_no is None
@@ -1159,8 +1211,16 @@ async def _receipt_history_reads(
         paid_minor = sum(int(payment.amount_minor) for payment in order_payments)
         refunded_minor = sum(int(refund.amount_minor) for refund in order_refunds)
         pending_refund_minor = int(reserved_by_order.get(order.id, 0))
+        no_value = receipt_corrections.get(order.id)
+        corrected_minor = no_value.amount_minor if no_value else 0
         results.append(
             ReceiptHistoryRead(
+                paid_bill_amendment=(
+                    {key: paid_bill_metadata[order.id][key] for key in PaidBillReceiptSummary.model_fields}
+                    if order.id in paid_bill_metadata else None
+                ),
+                receipt_correction=correction_metadata(no_value) if no_value else None,
+                corrected_minor=corrected_minor,
                 order_id=order.id,
                 company_id=order.company_id,
                 branch_id=order.branch_id,
@@ -1193,8 +1253,10 @@ async def _receipt_history_reads(
                 paid_minor=paid_minor,
                 refunded_minor=refunded_minor,
                 pending_refund_minor=pending_refund_minor,
-                refundable_minor=max(0, paid_minor - refunded_minor - pending_refund_minor),
-                net_collected_minor=paid_minor - refunded_minor,
+                refundable_minor=max(
+                    0, paid_minor - refunded_minor - pending_refund_minor - corrected_minor,
+                ),
+                net_collected_minor=paid_minor - refunded_minor - corrected_minor,
                 customer_name=order.customer_name,
                 customer_phone=order.customer_phone,
                 customer_gstin=order.customer_gstin,
@@ -2305,120 +2367,6 @@ async def _require_active_order_lines(
         raise BusinessRuleError(f"This direct order has no active items and cannot be {operation}.")
 
 
-async def _refunded_total(session, order_id: UUID) -> int:
-    return int(
-        (
-            await session.execute(
-                select(func.coalesce(func.sum(Refund.amount_minor), 0)).where(
-                    Refund.order_id == order_id
-                )
-            )
-        ).scalar_one()
-        or 0
-    )
-
-
-async def _unresolved_pos_refund_total(
-    session,
-    *,
-    order_id: UUID | None = None,
-    shift_id: UUID | None = None,
-    customer_id: UUID | None = None,
-    cash_only: bool = False,
-    exclude_request_id: UUID | None = None,
-) -> int:
-    """Return accepted POS refunds that have neither settled nor withdrawn."""
-    stmt = (
-        select(func.coalesce(func.sum(PosRefundRequest.amount_minor), 0))
-        .outerjoin(Refund, Refund.request_id == PosRefundRequest.id)
-        .outerjoin(
-            PosRefundWithdrawal,
-            PosRefundWithdrawal.refund_request_id == PosRefundRequest.id,
-        )
-        .where(Refund.id.is_(None), PosRefundWithdrawal.id.is_(None))
-    )
-    if order_id is not None:
-        stmt = stmt.where(PosRefundRequest.order_id == order_id)
-    if shift_id is not None:
-        stmt = stmt.where(PosRefundRequest.shift_id == shift_id)
-    if cash_only:
-        stmt = stmt.where(PosRefundRequest.settlement_method == "cash")
-    if customer_id is not None:
-        stmt = stmt.join(Order, Order.id == PosRefundRequest.order_id).where(
-            Order.customer_id == customer_id
-        )
-    if exclude_request_id is not None:
-        stmt = stmt.where(PosRefundRequest.id != exclude_request_id)
-    return int((await session.execute(stmt)).scalar_one() or 0)
-
-
-async def _unresolved_membership_cash_refund_total(
-    session,
-    *,
-    shift_id: UUID,
-) -> int:
-    """Reserve the same physical drawer for membership and POS payouts."""
-    return int(
-        (
-            await session.execute(
-                select(func.coalesce(func.sum(MembershipRefund.amount_minor), 0))
-                .outerjoin(
-                    MembershipRefundSettlement,
-                    MembershipRefundSettlement.refund_id == MembershipRefund.id,
-                )
-                .outerjoin(
-                    MembershipRefundResolution,
-                    MembershipRefundResolution.refund_id == MembershipRefund.id,
-                )
-                .where(
-                    MembershipRefund.shift_id == shift_id,
-                    MembershipRefund.method == "cash",
-                    MembershipRefundSettlement.id.is_(None),
-                    MembershipRefundResolution.id.is_(None),
-                )
-            )
-        ).scalar_one()
-        or 0
-    )
-
-
-async def _unresolved_membership_refund_total_for_customer(
-    session,
-    *,
-    customer_id: UUID,
-) -> int:
-    """Reserve customer LTV for every accepted membership refund rail."""
-    return int(
-        (
-            await session.execute(
-                select(func.coalesce(func.sum(MembershipRefund.amount_minor), 0))
-                .join(
-                    MembershipPayment,
-                    MembershipPayment.id == MembershipRefund.payment_id,
-                )
-                .join(
-                    CustomerMembership,
-                    CustomerMembership.id == MembershipPayment.membership_id,
-                )
-                .outerjoin(
-                    MembershipRefundSettlement,
-                    MembershipRefundSettlement.refund_id == MembershipRefund.id,
-                )
-                .outerjoin(
-                    MembershipRefundResolution,
-                    MembershipRefundResolution.refund_id == MembershipRefund.id,
-                )
-                .where(
-                    CustomerMembership.customer_id == customer_id,
-                    MembershipRefundSettlement.id.is_(None),
-                    MembershipRefundResolution.id.is_(None),
-                )
-            )
-        ).scalar_one()
-        or 0
-    )
-
-
 def _validated_pos_financial_time(
     *,
     request: Request,
@@ -3297,6 +3245,7 @@ async def _build_order_read(session, order: Order) -> OrderRead:
         type=order.type,
         table_id=order.table_id,
         source_label=await _source_label(session, order),
+        gaming_void_provenance=await gaming_void_provenance(session, order),
         subtotal_minor=order.subtotal_minor,
         discount_minor=order.discount_minor,
         manual_discount_minor=order.manual_discount_minor,
@@ -3509,6 +3458,11 @@ async def _finalize_order(
     order.invoice_issued_at = at
     await _release_table_if_no_active_orders(session, order)
 
+    # The invoice allocator has taken its Branch identity lock. Acquire the
+    # collection fence before inventory, matching receipt stock restoration.
+    from app.services.finance.tender_corrections import lock_sources
+
+    await lock_sources(session, company_id)
     await deduct_for_order(
         session,
         order_id=order.id,
@@ -4457,6 +4411,7 @@ async def apply_order_discount(
         terminal_id=tenant.terminal_id,
         operation="applying a discount to an order",
     )
+    await reject_gaming_void_financial_mutation(session, order)
     _require_private_direct_draft_creator(
         order,
         tenant,
@@ -5873,6 +5828,416 @@ async def void_linked_gaming_charge(
     return response
 
 
+class RetainedMistakeReviewRead(BaseModel):
+    order_id: UUID
+    original_receipt_id: UUID
+    gaming_session_id: UUID
+    expected_checkout_version: int
+    review_hash: str
+    total_minor: int
+    item_count: int
+
+
+class RetainedMistakeCorrectionRequest(BaseModel):
+    original_receipt_id: UUID
+    expected_checkout_version: int = Field(ge=1)
+    review_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    all_items_mistaken_not_supplied: bool = Field(strict=True)
+    reason: str = Field(min_length=3, max_length=500)
+
+    @field_validator("all_items_mistaken_not_supplied")
+    @classmethod
+    def require_explicit_attestation(cls, value: bool) -> bool:
+        if not value:
+            raise ValueError("Confirm every retained item was mistaken and none were supplied")
+        return value
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        clean = value.strip()
+        if len(clean) < 3 or clean in _LEGACY_VOID_REASONS:
+            raise ValueError(
+                "Enter an explicit mistake-correction reason of at least 3 characters"
+            )
+        return clean
+
+
+class RetainedMistakeCorrectionRead(BaseModel):
+    correction_id: UUID
+    order_id: UUID
+    original_receipt_id: UUID
+    gaming_session_id: UUID
+    order_status: Literal["void"] = "void"
+
+
+def _require_retained_correction_owner(tenant: TenantContext) -> None:
+    if not has_owner_role(tenant.roles):
+        raise ForbiddenError("Only an Owner can cancel mistaken retained Gaming items.")
+    if tenant.branch_id is None or tenant.terminal_id is None:
+        raise BusinessRuleError(
+            "Select the exact branch and POS terminal holding this bill."
+        )
+
+
+async def _review_retained_mistake(
+    session, order: Order, tenant: TenantContext, claim_token: str
+):
+    if order.status != "held" or order.type != "session" or order.table_id is not None:
+        raise BusinessRuleError(
+            "Only an unpaid held retained Gaming add-on bill can be corrected."
+        )
+    if any(
+        getattr(order, field, None) is not None
+        for field in (
+            "invoice_no",
+            "invoice_issued_at",
+            "fiscal_year",
+            "irn",
+            "irn_ack_no",
+            "irn_acknowledged_at",
+            "e_invoice_qr",
+            "closed_at",
+            "source_integrity_revision",
+        )
+    ) or any(
+        int(getattr(order, field, 0) or 0) != 0
+        for field in (
+            "tip_minor",
+            "manual_discount_minor",
+            "points_redeemed_minor",
+        )
+    ):
+        raise BusinessRuleError(
+            "This bill has settlement evidence and cannot use mistake correction."
+        )
+    for model in (Payment, Refund, MembershipBenefitReservation):
+        if (
+            await session.execute(
+                select(model.id).where(model.order_id == order.id).limit(1)
+            )
+        ).scalar_one_or_none():
+            raise BusinessRuleError(
+                "This bill has payment, refund, or benefit evidence; correction is blocked."
+            )
+    if (
+        await session.execute(
+            select(StockMovement.id).where(StockMovement.ref_id == order.id).limit(1)
+        )
+    ).scalar_one_or_none():
+        raise BusinessRuleError(
+            "This bill has inventory movement evidence; correction requires reconciliation."
+        )
+    claim = await validate_checkout_claim(
+        session,
+        order=order,
+        claimant_user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+        paid_minor=0,
+        token=claim_token,
+    )
+    shift = (
+        await session.execute(
+            select(Shift)
+            .where(
+                Shift.id == order.shift_id,
+                Shift.company_id == tenant.company_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    require_open_operational_shift(
+        shift,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="correcting mistaken retained Gaming items",
+    )
+    receipt = (
+        await session.execute(
+            select(GamingVoidReceipt).where(
+                GamingVoidReceipt.company_id == tenant.company_id,
+                GamingVoidReceipt.retained_order_id == order.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if (
+        receipt is None
+        or receipt.mode != "unlinked_addons"
+        or receipt.retained_total_minor != order.total_minor
+    ):
+        raise BusinessRuleError(
+            "Only the original unlinked retained add-on bill supports this correction."
+        )
+    source = (
+        await session.execute(
+            select(GamingSession)
+            .where(
+                GamingSession.id == receipt.gaming_session_id,
+                GamingSession.company_id == tenant.company_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    station = (
+        await session.get(Station, source.station_id) if source is not None else None
+    )
+    if (
+        source is None
+        or source.status != "cancelled"
+        or source.order_id is not None
+        or source.retained_addon_order_id != order.id
+        or station is None
+        or station.company_id != tenant.company_id
+        or station.branch_id != tenant.branch_id
+    ):
+        raise BusinessRuleError(
+            "Cancelled session and original retained bill evidence do not match."
+        )
+    # Lock the same lines protected by 0093; the deferred DB guard checks the exact bijection.
+    lines = (
+        (
+            await session.execute(
+                select(OrderLine)
+                .where(OrderLine.order_id == order.id)
+                .order_by(OrderLine.id)
+                .with_for_update()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if (
+        not lines
+        or len(lines) != receipt.addon_count
+        or any(line.voided_at is not None for line in lines)
+    ):
+        raise BusinessRuleError(
+            "Retained item evidence changed; nothing was cancelled."
+        )
+    require_exact_reviewed_order_aggregate(order=order, active_lines=list(lines))
+    bill_snapshot, line_snapshot, review_hash = await retained_bill_snapshot(
+        session, order.id
+    )
+    if any(
+        bill_snapshot.get(field) is not None
+        for field in (
+            "invoice_no",
+            "invoice_issued_at",
+            "fiscal_year",
+            "irn",
+            "irn_ack_no",
+            "irn_acknowledged_at",
+            "e_invoice_qr",
+            "closed_at",
+            "source_integrity_revision",
+        )
+    ):
+        raise BusinessRuleError(
+            "This bill has settlement evidence and cannot use mistake correction."
+        )
+    return receipt, claim, bill_snapshot, line_snapshot, review_hash
+
+
+@router.get(
+    "/orders/{order_id}/retained-mistake-review",
+    response_model=RetainedMistakeReviewRead,
+)
+async def review_retained_mistake(
+    order_id: UUID,
+    session: SessionDep,
+    checkout_claim_token: Annotated[str, Header(alias="X-Checkout-Claim")],
+    tenant: TenantContext = Depends(requires("gaming.write", "pos.void", "pos.write")),
+) -> RetainedMistakeReviewRead:
+    _require_retained_correction_owner(tenant)
+    order = (
+        await session.execute(
+            select(Order)
+            .where(Order.id == order_id, Order.company_id == tenant.company_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    order = require_operational_order(
+        order,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="reviewing mistaken retained Gaming items",
+    )
+    receipt, _claim, _bill, lines, review_hash = await _review_retained_mistake(
+        session, order, tenant, checkout_claim_token
+    )
+    return RetainedMistakeReviewRead(
+        order_id=order.id,
+        original_receipt_id=receipt.id,
+        gaming_session_id=receipt.gaming_session_id,
+        expected_checkout_version=order.checkout_version,
+        review_hash=review_hash,
+        total_minor=order.total_minor,
+        item_count=len(lines),
+    )
+
+
+@router.post(
+    "/orders/{order_id}/retained-mistake-correction",
+    response_model=RetainedMistakeCorrectionRead,
+)
+async def correct_retained_mistake(
+    order_id: UUID,
+    payload: RetainedMistakeCorrectionRequest,
+    session: SessionDep,
+    request: Request,
+    checkout_claim_token: Annotated[str, Header(alias="X-Checkout-Claim")],
+    tenant: TenantContext = Depends(requires("gaming.write", "pos.void", "pos.write")),
+) -> RetainedMistakeCorrectionRead:
+    _require_retained_correction_owner(tenant)
+    key, request_hash = _require_idempotency(request)
+    reviewed_payload = payload.model_dump(mode="json")
+    order = (
+        await session.execute(
+            select(Order).where(
+                Order.id == order_id, Order.company_id == tenant.company_id
+            )
+        )
+    ).scalar_one_or_none()
+    order = require_operational_order(
+        order,
+        company_id=tenant.company_id,
+        branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,
+        operation="correcting mistaken retained Gaming items",
+    )
+    existing = (
+        (
+            await session.execute(
+                select(GamingRetainedBillCorrection).where(
+                    GamingRetainedBillCorrection.company_id == tenant.company_id,
+                    or_(
+                        GamingRetainedBillCorrection.retained_order_id == order.id,
+                        GamingRetainedBillCorrection.idempotency_key == key,
+                    ),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if existing:
+        correction = existing[0]
+        if (
+            len(existing) != 1
+            or correction.retained_order_id != order.id
+            or correction.idempotency_key != key
+            or correction.request_hash != request_hash
+            or correction.actor_user_id != tenant.user_id
+            or correction.terminal_id != tenant.terminal_id
+            or correction.request_payload != reviewed_payload
+        ):
+            raise IdempotencyConflict(
+                "This retained bill already has a different immutable correction."
+            )
+        return RetainedMistakeCorrectionRead.model_validate(correction.response_payload)
+    replay = await check_or_reserve(
+        session,
+        key=key,
+        request_hash=request_hash,
+        user_id=tenant.user_id,
+        terminal_id=tenant.terminal_id,
+    )
+    if replay:
+        return RetainedMistakeCorrectionRead.model_validate(replay["body"])
+    # Reserve the global idempotency key before the Order lock, matching settlement.
+    order = (
+        await session.execute(
+            select(Order)
+            .where(Order.id == order_id, Order.company_id == tenant.company_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    if (
+        await session.execute(
+            select(GamingRetainedBillCorrection.id).where(
+                GamingRetainedBillCorrection.retained_order_id == order.id,
+            )
+        )
+    ).scalar_one_or_none() is not None:
+        raise IdempotencyConflict(
+            "This retained bill already has an immutable correction."
+        )
+    receipt, claim, bill, lines, review_hash = await _review_retained_mistake(
+        session, order, tenant, checkout_claim_token
+    )
+    if (
+        receipt.id != payload.original_receipt_id
+        or int(order.checkout_version) != payload.expected_checkout_version
+        or review_hash != payload.review_hash
+    ):
+        raise ConflictError(
+            "This retained bill changed after review. Reload it; nothing was cancelled."
+        )
+    now = datetime.now(UTC)
+    response = RetainedMistakeCorrectionRead(
+        correction_id=uuid4(),
+        order_id=order.id,
+        original_receipt_id=receipt.id,
+        gaming_session_id=receipt.gaming_session_id,
+    )
+    session.add(
+        GamingRetainedBillCorrection(
+            id=response.correction_id,
+            company_id=tenant.company_id,
+            original_receipt_id=receipt.id,
+            retained_order_id=order.id,
+            gaming_session_id=receipt.gaming_session_id,
+            actor_user_id=tenant.user_id,
+            terminal_id=tenant.terminal_id,
+            expected_checkout_version=payload.expected_checkout_version,
+            all_items_mistaken_not_supplied=True,
+            reason=payload.reason,
+            idempotency_key=key,
+            request_hash=request_hash,
+            review_hash=review_hash,
+            order_snapshot=bill,
+            line_snapshot=lines,
+            request_payload=reviewed_payload,
+            response_payload=response.model_dump(mode="json"),
+            corrected_at=now,
+        )
+    )
+    order.status = "void"
+    await consume_checkout_claim(session, claim)
+    await session.flush()
+    session.add(
+        AuditLog(
+            actor_user_id=tenant.user_id,
+            company_id=tenant.company_id,
+            action="gaming_retained_bill_mistake_correction",
+            entity_type="Order",
+            entity_id=str(order.id),
+            terminal_id=tenant.terminal_id,
+            reason=payload.reason,
+            operation_id=key,
+            source_reference=str(order.id),
+            created_at=now,
+            before={"status": "held", "original_receipt_id": str(receipt.id)},
+            after={
+                **response.model_dump(mode="json"),
+                "all_items_mistaken_not_supplied": True,
+                "review_hash": review_hash,
+                "no_money_collected_or_refunded": True,
+            },
+        )
+    )
+    await store_response(
+        session,
+        key=key,
+        status_code=status.HTTP_200_OK,
+        body=response.model_dump(mode="json"),
+    )
+    return response
+
+
 @router.delete("/orders/{order_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def void_held_order(
     order_id: UUID,
@@ -6026,6 +6391,9 @@ async def get_order(
 
 class OrderListItem(BaseModel):
     """Slim row for the order-history list."""
+
+    corrected_minor: int = 0
+    receipt_correction: ReceiptCorrectionRead | None = None
 
     id: UUID
     invoice_no: str | None
@@ -6200,6 +6568,9 @@ async def list_orders(
     )
 
     out: list[OrderListItem] = []
+    receipt_corrections = await corrections_for_orders(
+        session, company_id=tenant.company_id, order_ids=[o.id for o in rows],
+    )
     for o in rows:
         if o.table_id is not None and o.table_id in codes_by_table:
             label = f"Table {codes_by_table[o.table_id]}"
@@ -6208,8 +6579,12 @@ async def list_orders(
         paid = int(paid_by_order.get(o.id, 0))
         refunded = int(refunded_by_order.get(o.id, 0))
         reserved = int(reserved_by_order.get(o.id, 0))
+        no_value = receipt_corrections.get(o.id)
+        corrected_minor = no_value.amount_minor if no_value else 0
         out.append(
             OrderListItem(
+                corrected_minor=corrected_minor,
+                receipt_correction=correction_metadata(no_value) if no_value else None,
                 id=o.id,
                 invoice_no=o.invoice_no,
                 type=o.type,
@@ -6223,7 +6598,7 @@ async def list_orders(
                 held_at=o.held_at,
                 checkout_version=int(o.checkout_version),
                 paid_minor=paid,
-                refundable_minor=max(0, paid - refunded - reserved),
+                refundable_minor=max(0, paid - refunded - reserved - corrected_minor),
                 pending_refund_minor=reserved,
                 payment_methods=[
                     method
@@ -6236,6 +6611,12 @@ async def list_orders(
 
 
 class ShiftRead(BaseModel):
+    receipt_corrections_minor: int = 0
+    receipt_corrections: list[ReceiptCorrectionRead] = Field(default_factory=list)
+    # Current linked-receipt view; original closure fields below remain history.
+    # UPI is tender-aware receipt value, not bank balance or refund payout value.
+    effective_net_collections_minor: int = 0
+    effective_upi_collections_minor: int = 0
     tender_correction_minor: int = 0
     reconstructed_cash_collections_minor: int | None = None
     reconstructed_upi_collections_minor: int | None = None
@@ -6378,6 +6759,7 @@ async def list_shifts(
     tenant: TenantContext = Depends(requires("pos.read")),
     only_open: bool = False,
     limit: int = 50,
+    shift_id: UUID | None = None,
 ) -> list[ShiftRead]:
     """Return till reconciliation and collection totals without conflating them.
 
@@ -6461,9 +6843,21 @@ async def list_shifts(
         stmt = stmt.where(Shift.branch_id == tenant.branch_id)
     if tenant.terminal_id is not None:
         stmt = stmt.where(Shift.terminal_id == tenant.terminal_id)
+    if shift_id is not None:
+        stmt = stmt.where(Shift.id == shift_id)
     if only_open:
         stmt = stmt.where(Shift.status == "open")
     rows = (await session.execute(stmt)).all()
+    from app.models import PosReceiptCorrection
+
+    no_value_by_shift: dict[UUID, list] = {}
+    if rows:
+        no_value_rows = await session.scalars(select(PosReceiptCorrection).where(
+            PosReceiptCorrection.company_id == tenant.company_id,
+            PosReceiptCorrection.original_shift_id.in_([row[0].id for row in rows]),
+        ))
+        for correction in no_value_rows:
+            no_value_by_shift.setdefault(correction.original_shift_id, []).append(correction)
     correction_totals = dict((await session.execute(select(PaymentTenderCorrection.shift_id,
         func.sum(PaymentTenderCorrection.amount_minor)).where(PaymentTenderCorrection.company_id == tenant.company_id,
         PaymentTenderCorrection.shift_id.in_([row[0].id for row in rows])).group_by(PaymentTenderCorrection.shift_id))).all()) if rows else {}
@@ -6494,12 +6888,20 @@ async def list_shifts(
         pos_refunds = int(pos_refunds_value or 0)
         membership_refunds = int(membership_refunds_value or 0)
         total_refunds = pos_refunds + membership_refunds
+        no_value_minor = sum(row.amount_minor for row in no_value_by_shift.get(s.id, []))
+        reconstructed_upi = upi_collections + int(correction_totals.get(s.id, 0))
         result.append(
             ShiftRead(
+                receipt_corrections_minor=no_value_minor,
+                effective_net_collections_minor=gross_collections - total_refunds - no_value_minor,
+                effective_upi_collections_minor=reconstructed_upi - no_value_minor,
+                receipt_corrections=[
+                    correction_metadata(row) for row in no_value_by_shift.get(s.id, [])
+                ],
                 id=s.id,
                 tender_correction_minor=int(correction_totals.get(s.id, 0)),
                 reconstructed_cash_collections_minor=cash_collections-int(correction_totals.get(s.id, 0)),
-                reconstructed_upi_collections_minor=upi_collections+int(correction_totals.get(s.id, 0)),
+                reconstructed_upi_collections_minor=reconstructed_upi,
                 reconstructed_expected_minor=(int(s.expected_minor)-int(correction_totals.get(s.id, 0))) if s.expected_minor is not None else None,
                 branch_id=s.branch_id,
                 terminal_id=s.terminal_id,
@@ -7486,228 +7888,19 @@ async def create_pos_refund_request(
     if replay:
         return PosRefundRequestRead.model_validate(replay["body"])
 
-    order = (
-        await session.execute(select(Order).where(Order.id == payload.order_id).with_for_update())
-    ).scalar_one_or_none()
-    order = require_operational_order(
-        order,
-        company_id=tenant.company_id,
-        branch_id=tenant.branch_id,
-        terminal_id=tenant.terminal_id,
-        operation="requesting a POS refund",
+    refund_request, order = await prepare_pos_refund_request(
+        session, tenant=tenant, payload=payload, idempotency_key=idempotency_key,
     )
-    if order.status not in {"paid", "refunded"}:
-        raise BusinessRuleError("Only a paid order can be refunded.")
-    if (
-        order.closed_at is None
-        or order.invoice_issued_at is None
-        or not (order.invoice_no or "").strip()
-        or not (order.fiscal_year or "").strip()
-    ):
-        raise BusinessRuleError(
-            "This paid order is missing immutable invoice evidence. Ask a protected "
-            "owner to reconcile the sale before refunding it. No refund task or cash "
-            "handover was created."
-        )
-
-    # The order lock serializes both duplicate client_action_id recovery and
-    # different-key partial refunds, preventing over-reservation.
-    existing_action = (
-        await session.execute(
-            select(PosRefundRequest).where(
-                PosRefundRequest.company_id == tenant.company_id,
-                PosRefundRequest.client_action_id == payload.client_action_id,
-            )
-        )
-    ).scalar_one_or_none()
-    if existing_action is not None:
-        replay_settlement_method = existing_action.settlement_method
-        if (
-            existing_action.order_id != payload.order_id
-            or existing_action.shift_id != payload.shift_id
-            or int(existing_action.amount_minor) != payload.amount_minor
-            or existing_action.mode != payload.mode
-            or existing_action.reason_code != clean_reason_code
-            or existing_action.settlement_method != replay_settlement_method
-            or int(existing_action.order_paid_snapshot_minor) != payload.expected_paid_minor
-            or int(existing_action.order_refundable_snapshot_minor)
-            != payload.expected_refundable_minor
-            or (existing_action.note or None) != (payload.note or None)
-        ):
-            raise BusinessRuleError(
-                "This refund action ID was already used with different details. "
-                "Open the existing refund task instead of creating another."
-            )
-        (
-            handoff,
-            cash_completion,
-            provider_start,
-            provider_completion,
-            refund,
-            withdrawal,
-        ) = await _pos_refund_state_rows(session, refund_request_id=existing_action.id)
-        response = _pos_refund_request_read(
-            existing_action,
-            order=order,
-            handoff=handoff,
-            cash_completion=cash_completion,
-            provider_start=provider_start,
-            provider_completion=provider_completion,
-            refund=refund,
-            withdrawal=withdrawal,
-        )
-        await store_response(
-            session,
-            key=idempotency_key,
-            status_code=status.HTTP_201_CREATED,
-            body=response.model_dump(mode="json"),
-        )
-        return response
-
-    shift = (
-        await session.execute(select(Shift).where(Shift.id == payload.shift_id).with_for_update())
-    ).scalar_one_or_none()
-    shift = require_open_operational_shift(
-        shift,
-        company_id=tenant.company_id,
-        branch_id=tenant.branch_id,
-        terminal_id=tenant.terminal_id,
-        operation="requesting this POS refund",
+    handoff, cash_completion, provider_start, provider_completion, refund, withdrawal = (
+        await _pos_refund_state_rows(session, refund_request_id=refund_request.id)
     )
-    require_shift_opener(
-        shift,
-        user_id=tenant.user_id,
-        protected_access=tenant.protected_access,
-        operation="request this POS refund on the current shift",
-    )
-    original_shift = (
-        await session.execute(select(Shift).where(Shift.id == order.shift_id).with_for_update())
-    ).scalar_one_or_none()
-    original_shift = require_operational_shift_scope(
-        original_shift,
-        company_id=tenant.company_id,
-        branch_id=tenant.branch_id,
-        terminal_id=tenant.terminal_id,
-        operation="requesting a refund for this order",
-        resource_branch_id=order.branch_id,
-        resource_name="order",
-    )
-    require_shift_opener(
-        original_shift,
-        user_id=tenant.user_id,
-        protected_access=tenant.protected_access,
-        operation="refund an order from its original shift",
-    )
-
-    payment_rows = (
-        (
-            await session.execute(
-                select(Payment).where(Payment.order_id == order.id).order_by(Payment.paid_at)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    paid_total = sum(int(row.amount_minor) for row in payment_rows)
-    settled_total = await _refunded_total(session, order.id)
-    reserved_total = await _unresolved_pos_refund_total(session, order_id=order.id)
-    refundable_minor = paid_total - settled_total - reserved_total
-    if payload.expected_paid_minor != paid_total:
-        raise BusinessRuleError(
-            "The order's paid total changed. Refresh the refund screen before "
-            "authorising any payout."
-        )
-    if payload.expected_refundable_minor != refundable_minor:
-        raise BusinessRuleError(
-            "The refundable balance changed, possibly because another employee "
-            "started a refund. Refresh and review the pending task."
-        )
-    if refundable_minor <= 0:
-        raise BusinessRuleError("This order has no unreserved refundable balance.")
-    if payload.amount_minor > refundable_minor:
-        raise BusinessRuleError("Refund amount exceeds the available paid balance.")
-
-    settlement_method = "cash"
-    if payload.mode == "original":
-        corrections = await corrections_for_payments(session, [row.id for row in payment_rows])
-        methods = {corrections[row.id].effective_method if row.id in corrections else row.method for row in payment_rows}
-        if len(methods) != 1:
-            raise BusinessRuleError(
-                "Mixed-payment orders need an explicit cash refund. Review the "
-                "payment history before continuing."
-            )
-        settlement_method = next(iter(methods))
-    server_now = datetime.now(timezone.utc)
-    if settlement_method == "cash":
-        pos_reserved = await _unresolved_pos_refund_total(
-            session, shift_id=shift.id, cash_only=True
-        )
-        membership_reserved = await _unresolved_membership_cash_refund_total(
-            session, shift_id=shift.id
-        )
-        available_drawer = int(shift.expected_minor or 0) - pos_reserved - membership_reserved
-        if payload.amount_minor > available_drawer:
-            raise BusinessRuleError(
-                "This shift does not have enough expected drawer cash after other "
-                "accepted refunds. Settle or withdraw the earlier tasks, use the "
-                "correct shift, or refund to the original non-cash rail."
-            )
-
-    if order.customer_id is not None:
-        customer = await session.get(Customer, order.customer_id, with_for_update=True)
-        if customer is None or customer.company_id != tenant.company_id:
-            raise BusinessRuleError(
-                "The order's customer link is invalid. A protected owner must repair "
-                "it before any refund is authorised."
-            )
-        pending_customer_refunds = await _unresolved_pos_refund_total(
-            session, customer_id=customer.id
-        )
-        pending_membership_refunds = await _unresolved_membership_refund_total_for_customer(
-            session, customer_id=customer.id
-        )
-        if int(customer.total_spent_minor or 0) < (
-            pending_customer_refunds + pending_membership_refunds + payload.amount_minor
-        ):
-            raise BusinessRuleError(
-                "Customer lifetime spend is inconsistent with pending refunds. A "
-                "protected owner must reconcile LTV before authorising another payout."
-            )
-
-    refund_request = PosRefundRequest(
-        id=uuid4(),
-        company_id=tenant.company_id,
-        order_id=order.id,
-        branch_id=shift.branch_id,
-        terminal_id=shift.terminal_id,
-        shift_id=shift.id,
-        approved_by=tenant.user_id,
-        # The authenticated actor is the only approval provenance until a
-        # separate, server-authenticated two-person approval flow exists.
-        manager_override_user_id=None,
-        reason_code=clean_reason_code,
-        amount_minor=payload.amount_minor,
-        mode=payload.mode,
-        settlement_method=settlement_method,
-        order_paid_snapshot_minor=paid_total,
-        order_refundable_snapshot_minor=refundable_minor,
-        accepted_at=server_now,
-        external_reference=None,
-        provider_settled_at=None,
-        client_action_id=payload.client_action_id,
-        idempotency_key=idempotency_key,
-        note=payload.note,
-    )
-    session.add(refund_request)
-    await session.flush()
     response = _pos_refund_request_read(
-        refund_request,
-        order=order,
+        refund_request, order=order, handoff=handoff, cash_completion=cash_completion,
+        provider_start=provider_start, provider_completion=provider_completion,
+        refund=refund, withdrawal=withdrawal,
     )
     await store_response(
-        session,
-        key=idempotency_key,
-        status_code=status.HTTP_201_CREATED,
+        session, key=idempotency_key, status_code=status.HTTP_201_CREATED,
         body=response.model_dump(mode="json"),
     )
     return response
@@ -9631,6 +9824,31 @@ async def list_pos_refund_requests(
     client_action_id: str | None = None,
     limit: int = Query(default=100, ge=1, le=200),
 ) -> list[PosRefundRequestRead]:
+    return await _pos_refund_request_reads(
+        session, tenant=tenant, unresolved=unresolved, shift_id=shift_id,
+        client_action_id=client_action_id, limit=limit,
+    )
+
+
+@router.get("/refund-requests/{refund_request_id}", response_model=PosRefundRequestRead)
+async def get_pos_refund_request(
+    refund_request_id: UUID,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("pos.refund")),
+) -> PosRefundRequestRead:
+    rows = await _pos_refund_request_reads(
+        session, tenant=tenant, unresolved=False, refund_request_id=refund_request_id, limit=1,
+    )
+    if not rows:
+        raise NotFoundError("POS refund request not found in this branch and terminal")
+    return rows[0]
+
+
+async def _pos_refund_request_reads(
+    session, *, tenant: TenantContext, unresolved: bool = True,
+    shift_id: UUID | None = None, client_action_id: str | None = None,
+    limit: int = 100, refund_request_id: UUID | None = None,
+) -> list[PosRefundRequestRead]:
     if tenant.terminal_id is None or tenant.branch_id is None:
         raise BusinessRuleError("Select this tablet's branch and terminal first.")
     stmt = (
@@ -9667,6 +9885,9 @@ async def list_pos_refund_requests(
             PosRefundWithdrawal.refund_request_id == PosRefundRequest.id,
         )
         .where(
+            Order.company_id == tenant.company_id,
+            Order.branch_id == tenant.branch_id,
+            Order.terminal_id == tenant.terminal_id,
             PosRefundRequest.company_id == tenant.company_id,
             PosRefundRequest.branch_id == tenant.branch_id,
             PosRefundRequest.terminal_id == tenant.terminal_id,
@@ -9674,6 +9895,8 @@ async def list_pos_refund_requests(
         .order_by(PosRefundRequest.accepted_at.desc())
         .limit(limit)
     )
+    if refund_request_id is not None:
+        stmt = stmt.where(PosRefundRequest.id == refund_request_id)
     if unresolved:
         stmt = stmt.where(Refund.id.is_(None), PosRefundWithdrawal.id.is_(None))
     if shift_id is not None:
@@ -9751,6 +9974,13 @@ async def open_shift(
         raise BusinessRuleError("X-Terminal-Id header required to open a shift")
     if tenant.branch_id is None:
         raise BusinessRuleError("token has no branch_id")
+    # Share the exact-key retirement fence with atomic Start work; legacy
+    # captures retain their original endpoint/body/time semantics.
+    opening_key = getattr(request.state, "idempotency_key", None) if request else None
+    if opening_key:
+        await session.execute(text("SELECT dcompany_start_work_lock(:key)"), {"key": opening_key})
+        if await session.scalar(text("SELECT 1 FROM shift_start_work_cancellations WHERE action_key=:key"), {"key": opening_key}):
+            raise ConflictError("This exact saved shift start was cancelled by an Owner. Review its retained resolution.")
     # Terminal management locks branch -> terminal. Use the same order here so
     # an archive/configuration change cannot pass its no-open-shift check while
     # this request is creating a shift on the same workspace.

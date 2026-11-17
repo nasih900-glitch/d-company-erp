@@ -21,7 +21,7 @@ from app.core.permissions import (
     _role_allows_permission,
     requires,
 )
-from app.core.roles import PROTECTED_OWNER_ROLE
+from app.core.roles import CO_OWNER_ROLE, FULL_ACCESS_ROLES, PROTECTED_OWNER_ROLE
 from app.core.security import decode_token, issue_audit_token, issue_pricing_token, verify_password
 from app.core.tenant import TenantContext
 from app.models import AuditLog, RolePermissionOverride, User
@@ -527,6 +527,7 @@ class AccessCell(BaseModel):
     effective_permissions: list[str]
     unavailable_permissions: list[str]
     ceiling_limited_permissions: list[str]
+    configurable: bool
 
 
 class AccessControlDTO(BaseModel):
@@ -556,6 +557,10 @@ def _module_access(
     API reports both the effective permission set and its blocked remainder.
     """
     module_permissions = MODULE_PERMISSIONS[module]
+    # The operational owner bypass is applied before per-role module overrides
+    # in _has_permission. Reporting an ineffective block here would mislead an owner.
+    if role_code in FULL_ACCESS_ROLES:
+        return "full", sorted(module_permissions), []
     effective = sorted(
         permission
         for permission in module_permissions
@@ -613,6 +618,7 @@ def _access_cell(
         effective_permissions=effective,
         unavailable_permissions=unavailable,
         ceiling_limited_permissions=ceiling_limited,
+        configurable=role_code not in FULL_ACCESS_ROLES,
     )
 
 
@@ -664,6 +670,8 @@ async def update_access_control(
 ) -> AccessCell:
     if payload.role_code == PROTECTED_OWNER_ROLE:
         raise BusinessRuleError("the protected owner role cannot be restricted")
+    if payload.role_code == CO_OWNER_ROLE:
+        raise BusinessRuleError("the operational override owner role cannot be restricted by module overrides")
     if payload.role_code not in ROLE_PERMISSIONS:
         raise NotFoundError(f"unknown role: {payload.role_code}")
     if payload.module not in MODULE_PERMISSIONS:

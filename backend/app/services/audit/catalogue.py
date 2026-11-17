@@ -13,7 +13,7 @@ from sqlalchemy import and_, case, func, literal, or_
 
 from app.models import AuditLog
 
-CATALOGUE_VERSION = 1
+CATALOGUE_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -28,6 +28,12 @@ class ActionDefinition:
 
 CATALOGUE: tuple[ActionDefinition, ...] = (
     ActionDefinition(
+        "POS-NVC",
+        "No-value receipt corrected; no payout",
+        "pos",
+        ("payment not received", "no-value correction", "no payout"),
+    ),
+    ActionDefinition(
         "STK-RCV", "Stock received", "inventory", ("received", "goods receipt", "grn")
     ),
     ActionDefinition("STK-SAL", "Stock used by sale", "inventory", ("sale", "deducted")),
@@ -35,6 +41,18 @@ CATALOGUE: tuple[ActionDefinition, ...] = (
     ActionDefinition("STK-DMG", "Stock damaged", "inventory", ("damage", "damaged")),
     ActionDefinition("STK-ADJ", "Stock adjusted", "inventory", ("adjustment", "adjusted")),
     ActionDefinition("STK-RTN", "Refunded stock returned", "inventory", ("restock", "returned")),
+    ActionDefinition(
+        "STK-RCR",
+        "Mistaken sale stock restored; no payout",
+        "inventory",
+        ("unsupplied", "mistaken sale", "stock correction", "no payout"),
+    ),
+    ActionDefinition(
+        "POS-MSC",
+        "Mistaken retained Gaming items cancelled",
+        "pos",
+        ("mistake correction", "not supplied", "retained bill cancelled"),
+    ),
     ActionDefinition("POS-PAY", "Payment recorded", "pos", ("paid", "payment", "collection")),
     ActionDefinition("POS-PCM", "Payment method corrected", "pos", ("tender", "method correction")),
     ActionDefinition(
@@ -85,6 +103,12 @@ CATALOGUE: tuple[ActionDefinition, ...] = (
     ),
     ActionDefinition("SHF-OPN", "Shift opened", "pos", ("open shift", "opening float")),
     ActionDefinition(
+        "SHF-SWC",
+        "Uncommitted work start retired by Owner",
+        "pos",
+        ("start work", "cancelled start", "owner review"),
+    ),
+    ActionDefinition(
         "SHF-CLS",
         "Shift close",
         "pos",
@@ -118,7 +142,7 @@ CATALOGUE: tuple[ActionDefinition, ...] = (
     ),
 )
 BY_CODE = {definition.code: definition for definition in CATALOGUE}
-assert len(BY_CODE) == len(CATALOGUE) == 28
+assert len(BY_CODE) == len(CATALOGUE) == 32
 
 # This is also used for old unmapped technical records. Unknown is not System.
 AREA_TYPES: dict[str, tuple[str, ...]] = {
@@ -160,12 +184,21 @@ AREA_TYPES: dict[str, tuple[str, ...]] = {
         "MembershipBenefitReservation",
         "MembershipCustomerSpendApplication",
     ),
-    "staff": ("User", "UserRole", "Role", "Attendance", "PayrollEntry", "StaffAccess", "StaffWorkPolicy"),
+    "staff": (
+        "User",
+        "UserRole",
+        "Role",
+        "Attendance",
+        "PayrollEntry",
+        "StaffAccess",
+        "StaffWorkPolicy",
+    ),
     "inventory": (
         "Ingredient",
         "Supplier",
         "Batch",
         "StockMovement",
+        "PosReceiptStockRestoration",
         "PurchaseOrder",
         "PurchaseOrderLine",
         "GoodsReceiptNote",
@@ -234,6 +267,7 @@ TECHNICAL_COMPANION_ACTIONS = ("create", "update", "delete")
 
 # Codes that can be established from an explicit operation (not arbitrary CRUD).
 EXPLICIT = {
+    "gaming_retained_bill_mistake_correction": ("POS-MSC", "committed", "completed"),
     "android_update_policy_changed": ("UPD-POL", "committed", "completed"),
     "gaming_session_started": ("GAM-STA", "committed", "completed"),
     "gaming_session_start_rejected": ("GAM-STA", "rejected", "failed"),
@@ -250,9 +284,11 @@ EXPLICIT = {
     "gaming_session_sent_to_pos": ("GAM-POS", "committed", "completed"),
     "shift_android_origin_recovery_close": ("SHF-REC", "committed", "completed"),
     "shift_opened": ("SHF-OPN", "committed", "completed"),
+    "start_work_cancelled": ("SHF-SWC", "committed", "completed"),
     "shift_closed": ("SHF-CLS", "committed", "completed"),
     "shift_close_rejected": ("SHF-CLS", "rejected", "failed"),
     "payment_method_corrected": ("POS-PCM", "committed", "completed"),
+    "receipt_corrected_no_value": ("POS-NVC", "committed", "completed"),
     "daily_collections_reconciled": ("FIN-REC", "committed", "completed"),
     "daily_actuals_recorded": ("FIN-REC", "recorded", "unresolved"),
     "staff_access_changed": ("SEC-ROL", "committed", "completed"),
@@ -270,6 +306,7 @@ STOCK_CODES = {
     "damage": "STK-DMG",
     "adjustment": "STK-ADJ",
     "refund_restock": "STK-RTN",
+    "receipt_restore": "STK-RCR",
 }
 REFUNDS = {
     "PosRefundCashHandoffCompletion": ("value_captured", "pending"),
@@ -316,6 +353,10 @@ DETAIL_FIELDS = (
     "invoice_no",
     "reference",
     "order_id",
+    "correction_id",
+    "original_receipt_id",
+    "all_items_mistaken_not_supplied",
+    "no_money_collected_or_refunded",
     "gaming_session_id",
     "station_id",
     "shift_id",

@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.db import SessionDep
@@ -1225,6 +1225,7 @@ async def post_adjustment(
                 qty_delta=-consume,
                 cost_per_unit_minor=int(batch.cost_per_unit_minor),
                 created_by=tenant.user_id,
+                created_at=func.statement_timestamp(),
                 note=payload.note,
             )
             session.add(movement)
@@ -1257,6 +1258,7 @@ async def post_adjustment(
             qty_delta=applied_delta,
             cost_per_unit_minor=int(batch.cost_per_unit_minor),
             created_by=tenant.user_id,
+            created_at=func.statement_timestamp(),
             note=payload.note,
         )
         session.add(movement)

@@ -78,6 +78,9 @@ def serialize_overview_csv(overview: ReportsOverviewV2DTO) -> bytes:
 
     for metric, unit, basis in (
         ("gross_revenue_minor", "paise", overview.accounting_basis),
+        ("effective_gross_revenue_minor", "paise", overview.accounting_basis),
+        ("receipt_corrections_minor", "paise", "no_value_correction_no_payout"),
+        ("effective_upi_received_minor", "paise", "no_value_correction_no_payout"),
         ("orders_count", "count", overview.accounting_basis),
         ("sessions_started_count", "count", overview.sessions_basis),
     ):
@@ -94,6 +97,8 @@ def serialize_overview_csv(overview: ReportsOverviewV2DTO) -> bytes:
         "other_minor",
         "manual_collections_minor",
         "adjustments_minor",
+        "receipt_corrections_minor",
+        "effective_total_minor",
         "positive_source_denominator_minor",
         "total_minor",
     ):

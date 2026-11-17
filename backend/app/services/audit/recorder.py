@@ -53,6 +53,7 @@ from app.models import (
     GamingBooking,
     GamingPackage,
     GamingPlaytimeProgramSettings,
+    GamingRetainedBillCorrection,
     GamingSession,
     GamingSessionExtension,
     GamingSessionPackageAmendment,
@@ -94,6 +95,9 @@ from app.models import (
     Partner,
     Payment,
     PayrollEntry,
+    PaidBillAmendmentIntent,
+    PosReceiptCorrection,
+    PosReceiptStockRestoration,
     PosRefundCashHandoff,
     PosRefundCashHandoffCompletion,
     PosRefundEvidenceReconciliation,
@@ -110,6 +114,8 @@ from app.models import (
     RolePermissionOverride,
     Shift,
     ShiftOperatorHandover,
+    ShiftStartWorkReceipt,
+    ShiftStartWorkCancellation,
     StaffWorkPolicy,
     Station,
     StockMovement,
@@ -200,6 +206,9 @@ def clear_request_context() -> None:
 from app.models import DailyTenderReconciliation, PaymentTenderCorrection
 
 TRACKED: set[type] = {
+    PaidBillAmendmentIntent,
+    PosReceiptCorrection,
+    PosReceiptStockRestoration,
     PaymentTenderCorrection,
     DailyTenderReconciliation,
     Account,
@@ -224,6 +233,7 @@ TRACKED: set[type] = {
     GamingBooking,
     GamingPackage,
     GamingPlaytimeProgramSettings,
+    GamingRetainedBillCorrection,
     GamingSession,
     GamingSessionExtension,
     GamingSessionPackageAmendment,
@@ -281,6 +291,8 @@ TRACKED: set[type] = {
     RolePermissionOverride,
     Shift,
     ShiftOperatorHandover,
+    ShiftStartWorkReceipt,
+    ShiftStartWorkCancellation,
     Station,
     StockMovement,
     Supplier,
@@ -360,6 +372,14 @@ def _serialize(obj: Any) -> dict | None:
         mapper = inspect(obj.__class__)
     except Exception:
         return None
+    if isinstance(obj, PosReceiptCorrection):
+        # Full exact-source evidence stays on its protected receipt, not in
+        # duplicated audit JSON (which has its own browsing/export lifecycle).
+        return {key: json_safe(getattr(obj, key)) for key in (
+            "id", "company_id", "order_id", "payment_id", "branch_id",
+            "original_shift_id", "kind", "amount_minor", "recorded_by",
+            "recorded_at", "accounting_at", "source_fingerprint",
+        )}
     return {
         col.key: _REDACTION_MARKER if _is_redacted_column(col)
         else json_safe(getattr(obj, col.key, None))

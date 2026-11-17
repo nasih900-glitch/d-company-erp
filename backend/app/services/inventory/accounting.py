@@ -116,6 +116,7 @@ async def load_inventory_value_changes(
             expected_sign = {
                 "sale": -1,
                 "refund_restock": 1,
+                "receipt_restore": 1,
                 "waste": -1,
                 "damage": -1,
             }.get(movement.type)
@@ -134,6 +135,7 @@ async def load_inventory_value_changes(
             if movement.type not in {
                 "sale",
                 "refund_restock",
+                "receipt_restore",
                 "waste",
                 "damage",
                 "adjustment",

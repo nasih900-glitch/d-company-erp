@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+POS_DISCOUNT_ROLE = "pos_discount"
 PROTECTED_OWNER_ROLE = "super_owner"
 # A second, narrower owner tier: bypasses the same operational RBAC gates as
 # super_owner (protected recovery, force-stop, membership/refund overrides —
@@ -22,8 +23,14 @@ OWNER_ROLE_CODES = FULL_ACCESS_ROLES | {PUBLIC_OWNER_ROLE}
 
 
 def role_name(code: str) -> str:
+    if code == POS_DISCOUNT_ROLE:
+        return "Manual POS discounts"
     if code == "gaming_cashier":
-        return "Gaming & POS staff"
+        return "Gaming & POS staff (legacy)"
+    if code == "store_staff":
+        return "Store Staff"
+    if code == "auditor":
+        return "Business Viewer"
     return code.title().replace("_", " ")
 
 

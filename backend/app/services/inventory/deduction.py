@@ -11,6 +11,9 @@ we deduct what we can and continue — the cashier still gets to charge
 the customer, but Ingredient.current_qty may go briefly negative,
 which surfaces in the low-stock alert.
 
+Movement creation uses statement time after inventory locks, so a transaction
+that waited for a reviewed receipt restoration cannot backdate later stock.
+
 Money refunds deliberately do not change physical stock or COGS: prepared
 food, consumed gaming time, and opened ingredients have not returned merely
 because money left the business. ``restock_for_refund`` is retained only as a
@@ -28,7 +31,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -238,6 +241,7 @@ async def _deduct_ingredient(
                 qty_delta=-take,
                 cost_per_unit_minor=int(batch.cost_per_unit_minor),
                 created_by=created_by,
+                created_at=func.statement_timestamp(),
                 note=f"Auto-deducted for order {order_id}",
             )
         )
@@ -303,6 +307,7 @@ async def _deduct_ingredient(
                 qty_delta=-remaining,
                 cost_per_unit_minor=cost_per_unit_minor,
                 created_by=created_by,
+                created_at=func.statement_timestamp(),
                 note=f"Negative stock — order {order_id} ({note_suffix})",
             )
         )
@@ -459,6 +464,7 @@ async def _restock_ingredient(
             qty_delta=qty_to_restock,
             cost_per_unit_minor=cost_per_unit_minor,
             created_by=created_by,
+            created_at=func.statement_timestamp(),
             note=f"Restocked from refund on order {order_id}",
         )
     )

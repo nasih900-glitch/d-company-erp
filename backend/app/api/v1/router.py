@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.api.v1.pos.paid_bill_amendments import router as paid_bill_amendments_router
+
 from fastapi import APIRouter
 
 from app.api.v1.accounting.router import router as accounting_router
@@ -24,7 +26,9 @@ from app.api.v1.memberships.router import router as memberships_router
 from app.api.v1.menu.router import router as menu_router
 from app.api.v1.ocr.router import router as ocr_router
 from app.api.v1.pos.operator_handover import router as operator_handover_router
+from app.api.v1.pos.receipt_corrections import router as receipt_corrections_router
 from app.api.v1.pos.router import router as pos_router
+from app.api.v1.pos.start_work import router as start_work_router
 from app.api.v1.public.router import router as public_router
 from app.api.v1.remote_assistance.router import router as remote_assistance_router
 from app.api.v1.reports.router import router as reports_router
@@ -38,6 +42,7 @@ from app.api.v1.tables.router import router as tables_router
 from app.api.v1.ws.router import router as ws_router
 
 api_router = APIRouter()
+api_router.include_router(paid_bill_amendments_router, prefix="/pos/paid-bill-amendments", tags=["pos"])
 api_router.include_router(auth_router, prefix="/auth", tags=["auth"])
 api_router.include_router(
     client_installations_router,
@@ -56,7 +61,11 @@ api_router.include_router(
     tags=["client-diagnostics"],
 )
 api_router.include_router(pos_router, prefix="/pos", tags=["pos"])
+api_router.include_router(start_work_router, prefix="/pos", tags=["pos"])
 api_router.include_router(operator_handover_router, prefix="/pos", tags=["pos"])
+api_router.include_router(
+    receipt_corrections_router, prefix="/pos/receipt-corrections", tags=["pos"],
+)
 api_router.include_router(tables_router, prefix="/tables", tags=["tables"])
 api_router.include_router(menu_router, prefix="/menu", tags=["menu"])
 api_router.include_router(inventory_router, prefix="/inventory", tags=["inventory"])

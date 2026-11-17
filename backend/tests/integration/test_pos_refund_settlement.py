@@ -286,6 +286,9 @@ async def _seed_case(
             session.add(payment)
             await session.flush()
         finally:
+            # PostgreSQL must finish deferred FK events before this fixture
+            # restores DDL; the same boundary fails on the immutable 0096 base.
+            await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
             await session.execute(
                 text(
                     "ALTER TABLE payments ENABLE TRIGGER "
@@ -1922,6 +1925,9 @@ async def test_cash_refund_completion_survives_before_concurrent_finalize(
         assert summary["gross_collections_minor"] == case.amount_minor
         assert summary["settled_pos_refunds_minor"] == case.amount_minor
         assert summary["net_collections_minor"] == 0
+        assert summary["effective_net_collections_minor"] == 0
+        assert summary["receipt_corrections_minor"] == 0
+        assert summary["effective_upi_collections_minor"] == summary["reconstructed_upi_collections_minor"]
 
         async with AsyncSessionLocal() as tamper:
             with pytest.raises(DBAPIError, match="append-only"):
@@ -2118,6 +2124,7 @@ async def test_legacy_unissued_paid_order_stays_consistent_across_reports_and_le
         )
         await session.flush()
     finally:
+        await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
         await session.execute(
             text(
                 "ALTER TABLE order_lines ENABLE TRIGGER "
@@ -3841,6 +3848,7 @@ async def test_legacy_refund_is_visible_reconciled_once_and_append_only(
                 )
             )
             await writer.flush()
+            await writer.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
             await writer.execute(
                 text(
                     "ALTER TABLE refunds ADD CONSTRAINT "
