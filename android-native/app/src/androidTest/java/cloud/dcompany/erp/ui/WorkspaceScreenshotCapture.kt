@@ -34,18 +34,32 @@ internal fun RuntimeException.isPixelCopyTimeout(): Boolean {
     return status == PixelCopy.ERROR_TIMEOUT
 }
 
+private fun Throwable.isPixelCopyCaptureTimeout(): Boolean = when (this) {
+    is RuntimeException -> isPixelCopyTimeout()
+    // Compose 1.7.5 reports a missing callback as a separate plain assertion.
+    is AssertionError -> javaClass == AssertionError::class.java && message == "Failed waiting for PixelCopy!" &&
+        stackTrace.firstOrNull()?.let { frame ->
+            frame.className == "androidx.compose.ui.test.android.WindowCapture_androidKt" &&
+                frame.methodName == "generateBitmapFromPixelCopy" &&
+                frame.fileName == "WindowCapture.android.kt" && frame.lineNumber == 156
+        } == true
+    else -> false
+}
+
 @RequiresApi(Build.VERSION_CODES.O)
 internal fun SemanticsNodeInteraction.captureToImage(): ImageBitmap = try {
     captureComposeImage()
 } catch (failure: RuntimeException) {
     captureActivityWindowAfterPixelCopyTimeout(failure)
+} catch (failure: AssertionError) {
+    captureActivityWindowAfterPixelCopyTimeout(failure)
 }
 
 /** Capture the same Activity-owned region through SurfaceFlinger after HWUI readback times out. */
 internal fun SemanticsNodeInteraction.captureActivityWindowAfterPixelCopyTimeout(
-    failure: RuntimeException,
+    failure: Throwable,
 ): ImageBitmap {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE || !failure.isPixelCopyTimeout()) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE || !failure.isPixelCopyCaptureTimeout()) {
         throw failure
     }
     val instrumentation = InstrumentationRegistry.getInstrumentation()

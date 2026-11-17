@@ -135,6 +135,9 @@ class ControlDeckFullShellScreenshotsUiTest {
         } catch (error: RuntimeException) {
             compose.onNodeWithTag("control-deck-full-shell")
                 .captureActivityWindowAfterPixelCopyTimeout(error).asAndroidBitmap()
+        } catch (error: AssertionError) {
+            compose.onNodeWithTag("control-deck-full-shell")
+                .captureActivityWindowAfterPixelCopyTimeout(error).asAndroidBitmap()
         }
         try {
             output.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
