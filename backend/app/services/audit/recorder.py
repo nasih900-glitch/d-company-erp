@@ -26,6 +26,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+from app.models.grn_commands import GrnActionDecision, GrnCompletionProof
 from sqlalchemy import event, insert
 from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import Session
@@ -98,6 +99,7 @@ from app.models import (
     Payment,
     PayrollEntry,
     PosReceiptCorrection,
+    PosReceiptMistakeReport,
     PosReceiptStockRestoration,
     PosRefundCashHandoff,
     PosRefundCashHandoffCompletion,
@@ -209,9 +211,12 @@ def clear_request_context() -> None:
 from app.models import DailyTenderReconciliation, PaymentTenderCorrection
 
 TRACKED: set[type] = {
+    GrnActionDecision,
+    GrnCompletionProof,
     PaidBillAmendmentIntent,
     PaidBillActionDecision,
     PosReceiptCorrection,
+    PosReceiptMistakeReport,
     PosReceiptStockRestoration,
     PaymentTenderCorrection,
     DailyTenderReconciliation,
@@ -376,6 +381,12 @@ def _serialize(obj: Any) -> dict | None:
         mapper = inspect(obj.__class__)
     except Exception:
         return None
+    if isinstance(obj, (GrnActionDecision, GrnCompletionProof)):
+        return {"id": str(obj.id), "purpose": "inventory_grn_receive"}
+    if isinstance(obj, GRN):
+        return {key: json_safe(getattr(obj, key)) for key in ("id", "purchase_order_id", "received_at", "received_by", "journal_entry_id")}
+    if isinstance(obj, StockMovement) and obj.ref_type == "grn":
+        return {key: json_safe(getattr(obj, key)) for key in ("id", "batch_id", "branch_id", "type", "ref_type", "ref_id", "qty_delta", "cost_per_unit_minor", "created_by")}
     if isinstance(obj, PaidBillActionDecision) and (request_ctx.get() or {}).get("paid_recovery"):
         return {key: json_safe(getattr(obj, key)) for key in (
             "id", "company_id", "recorded_by", "order_id", "branch_id", "terminal_id",
@@ -461,6 +472,8 @@ _REASON_FIELDS = (
 
 
 def _reason_of(obj: Any) -> str | None:
+    if isinstance(obj, (GrnActionDecision, GrnCompletionProof, GRN)) or isinstance(obj, StockMovement) and obj.ref_type == "grn":
+        return None
     if isinstance(obj, PaidBillActionDecision):
         # Recovery reasons stay only in the protected decision, never the general audit reason.
         return "Exact paid-bill command retired"

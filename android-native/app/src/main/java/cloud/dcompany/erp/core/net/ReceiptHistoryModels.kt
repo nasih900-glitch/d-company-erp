@@ -133,6 +133,17 @@ data class CanonicalReceiptGamingSession(
     @SerialName("updated_at") val updatedAt: String,
 )
 
+/** Additive receipt read only. Missing/future metadata must never imply a payout. */
+@Serializable
+data class ReceiptCorrectionMetadata(
+    val id: String = "",
+    val kind: String = "",
+    @SerialName("amount_minor") val amountMinor: Long = 0,
+    @SerialName("accounting_at") val accountingAt: String = "",
+    @SerialName("payout_minor") val payoutMinor: Long? = null,
+    val label: String? = null,
+)
+
 @Serializable
 data class CanonicalReceipt(
     @SerialName("order_id") val orderId: String,
@@ -191,7 +202,21 @@ data class CanonicalReceipt(
     val payments: List<CanonicalReceiptPayment> = emptyList(),
     val refunds: List<CanonicalReceiptRefund> = emptyList(),
     @SerialName("gaming_sessions") val gamingSessions: List<CanonicalReceiptGamingSession> = emptyList(),
+    @SerialName("corrected_minor") val correctedMinor: Long = 0,
+    @SerialName("receipt_correction") val receiptCorrection: ReceiptCorrectionMetadata? = null,
 )
+
+val CanonicalReceipt.hasReceiptCorrection: Boolean get() = correctedMinor != 0L || receiptCorrection != null
+
+/** Recognize only the complete, internally consistent full-mistake/no-payout contract. */
+val CanonicalReceipt.hasVerifiedNoPayoutCorrection: Boolean get() {
+    val correction = receiptCorrection ?: return false
+    return correction.id.isNotBlank() && correction.kind == "payment_not_received_full_mistake" &&
+        correction.payoutMinor == 0L && correction.amountMinor > 0L && correction.amountMinor == correctedMinor &&
+        correctedMinor == paidMinor && correctedMinor == totalMinor && status == "paid" &&
+        refundedMinor == 0L && pendingRefundMinor == 0L && refundableMinor == 0L && netCollectedMinor == 0L &&
+        runCatching { java.time.Instant.parse(correction.accountingAt) }.isSuccess
+}
 
 @Serializable
 data class CanonicalReceiptPage(

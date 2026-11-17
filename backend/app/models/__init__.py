@@ -2,6 +2,7 @@
 
 from app.models.access_control import RolePermissionOverride
 from app.models.audit import AuditLog
+from app.models.grn_commands import GrnActionDecision, GrnCompletionProof, GrnRecoverySession
 from app.models.auth_challenge import AuthOtpChallenge
 from app.models.auth_refresh_session import AuthRefreshSession
 from app.models.base import Base, SoftDeleteMixin, TenantMixin, TimestampMixin
@@ -131,6 +132,7 @@ from app.models.pos import (
     Shift,
 )
 from app.models.pos_receipt_correction import PosReceiptCorrection, PosReceiptStockRestoration
+from app.models.pos_receipt_mistake_report import PosReceiptMistakeReport
 from app.models.remote_assistance import (
     RemoteAssistanceCommand,
     RemoteAssistanceDeviceKey,
@@ -147,6 +149,7 @@ from app.models.user import Attendance, PayrollEntry, Role, User, UserRole
 
 __all__ = [
     "PosReceiptCorrection",
+    "PosReceiptMistakeReport",
     "PosReceiptStockRestoration",
     "Account",
     "AndroidRelease",

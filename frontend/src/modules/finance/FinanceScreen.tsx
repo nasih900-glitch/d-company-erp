@@ -1,3 +1,4 @@
+import { hasExactPermission } from '@/lib/effective-permissions';
 /**
  * Finance screen — tabbed.
  *
@@ -179,6 +180,10 @@ function OverviewTab() {
   const net = data.net_profit_minor;
   const totalGst = tax.total_minor;
   const manualCollections = data.manual_collections_minor;
+  const knownOffset = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+  const correctionOffset = knownOffset(data.receipt_corrections_minor) ? data.receipt_corrections_minor : null;
+  const refundOffset = knownOffset(data.refunds_issued_minor) && knownOffset(data.refunded_tips_minor) && data.refunds_issued_minor >= data.refunded_tips_minor
+    ? data.refunds_issued_minor - data.refunded_tips_minor : null;
   const membershipRevenueLabel = profileMembershipMoneyLabel(
     'revenue',
     rev.memberships_minor,
@@ -299,6 +304,11 @@ function OverviewTab() {
           {rev.rounding_expense_minor > 0 && (
             <Row label="Less: invoice round-down" v={-rev.rounding_expense_minor}/>
           )}
+          <Divider/>
+          <Row label="Recorded gross revenue" v={rev.total_minor} bold/>
+          {correctionOffset !== null && correctionOffset > 0 && <Row label="Less: no-funds receipt corrections" v={-correctionOffset}/>}
+          {refundOffset !== null && refundOffset > 0 && <Row label="Less: recognized refunds (excluding returned tips)" v={-refundOffset}/>}
+          {(correctionOffset === null || refundOffset === null) && <p className="py-2 text-xs text-fg-muted" role="status">Some revenue offset details are unavailable. Net revenue below is the returned server figure; missing details are not confirmed zero.</p>}
           {TAX_COMPLIANCE_UI_ENABLED && gstRegistered ? (
             <>
               <Divider/>
@@ -316,7 +326,7 @@ function OverviewTab() {
               <Divider/>
               <Row label="Net revenue after recorded tax" v={data.net_revenue_minor} bold/>
             </>
-          ) : null}
+          ) : <><Divider/><Row label="Net revenue" v={data.net_revenue_minor} bold/></>}
           <Divider/>
           <Row label="Less: recorded cost of goods sold" v={-data.cogs_minor}
             sub={costing?.is_complete !== true ? 'cost coverage is incomplete or unverified; unknown costs are excluded' : 'what the food/drinks/items you sold actually cost you'}/>
@@ -391,6 +401,7 @@ function OverviewTab() {
 // EXPENSES TAB
 // ============================================================================
 function ExpensesTab() {
+  const canWrite = hasExactPermission(useAuth().me, 'finance.write');
   const requests = useLatestRequest();
   const notifications = useNotifications();
   const [rows, setRows] = useState<ExpenseDTO[]>([]);
@@ -425,6 +436,7 @@ function ExpensesTab() {
   useRealtimeRefresh({ resources: ['finance', 'shifts'], refresh: () => load(true) });
 
   async function confirmVoid(reason: string) {
+    if (!canWrite) return;
     if (!voidExpense || voidBusy) return;
     setVoidBusy(true);
     try {
@@ -455,11 +467,11 @@ function ExpensesTab() {
           </p>
         </div>
         <div className="flex gap-2">
-          <button className="btn btn-ghost" onClick={() => void load()}><RefreshCw size={14}/></button>
-          <button className="btn btn-primary" onClick={() => setAddOpen(true)}
+          <button className="btn btn-ghost" aria-label="Refresh expenses" onClick={() => void load()}><RefreshCw size={14}/></button>
+          {canWrite && <button className="btn btn-primary" onClick={() => { if (canWrite) setAddOpen(true); }}
             disabled={!cats.length || !branches.length}>
             <Plus size={14}/> Add expense
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -519,12 +531,12 @@ function ExpensesTab() {
                     {r.is_corrected ? (
                       <span className="chip border-accent-gold/40 text-accent-gold text-[10px]">Corrected</span>
                     ) : r.paid_via === 'cash' && r.shift_id && r.source_shift_status !== 'open' ? (
-                      <button aria-label="Correct closed-shift expense" onClick={() => setCorrectExpense(r)}
+                      canWrite && <button aria-label="Correct closed-shift expense" onClick={() => { if (canWrite) setCorrectExpense(r); }}
                         className="btn btn-ghost !min-h-[32px] !px-2 !py-1 text-xs">
                         <Ban size={13}/> Correct
                       </button>
                     ) : (
-                      <button aria-label="Void expense" onClick={() => setVoidExpense(r)}
+                      canWrite && <button aria-label="Void expense" onClick={() => { if (canWrite) setVoidExpense(r); }}
                         className="text-fg-muted hover:text-accent-bad">
                         <Trash2 size={14}/>
                       </button>
@@ -570,14 +582,14 @@ function ExpensesTab() {
                   {r.is_corrected ? (
                     <span className="chip border-accent-gold/40 text-accent-gold text-[10px]">Corrected</span>
                   ) : r.paid_via === 'cash' && r.shift_id && r.source_shift_status !== 'open' ? (
-                    <button aria-label="Correct closed-shift expense" onClick={() => setCorrectExpense(r)}
+                    canWrite && <button aria-label="Correct closed-shift expense" onClick={() => { if (canWrite) setCorrectExpense(r); }}
                       className="btn btn-ghost !min-h-[32px] !px-2 !py-1 text-xs">
                       <Ban size={13}/> Correct
                     </button>
                   ) : (
-                    <button
+                    canWrite && <button
                       aria-label="Void expense"
-                      onClick={() => setVoidExpense(r)}
+                      onClick={() => { if (canWrite) setVoidExpense(r); }}
                       className="btn btn-ghost !min-h-[32px] !min-w-[32px] !px-2 !py-1 hover:!text-accent-bad"
                     >
                       <Trash2 size={14}/>
@@ -590,7 +602,7 @@ function ExpensesTab() {
         </div>
       )}
 
-      {addOpen && (
+      {canWrite && addOpen && (
         <ExpenseForm
           cats={cats}
           branches={branches}
@@ -623,7 +635,7 @@ function ExpensesTab() {
           onChanged={() => void load(true)}
         />
       )}
-      {voidExpense && (
+      {canWrite && voidExpense && (
         <PromptModal
           title="Void expense"
           label={`Reason for voiding the ${inr(voidExpense.amount_minor)} expense${voidExpense.vendor_name ? ` from ${voidExpense.vendor_name}` : ''}`}
@@ -637,7 +649,7 @@ function ExpensesTab() {
           onCancel={() => { if (!voidBusy) setVoidExpense(null); }}
         />
       )}
-      {correctExpense && (
+      {canWrite && correctExpense && (
         <ExpenseCorrectionForm
           row={correctExpense}
           openShifts={openShifts.filter((shift) => shift.branch_id === correctExpense.branch_id)}
@@ -684,6 +696,7 @@ function ExpenseCorrectionForm({
   onClose: () => void;
   onSuccess: () => void;
 }) {
+  const canWrite = hasExactPermission(useAuth().me, 'finance.write');
   const [shiftId, setShiftId] = useState(openShifts[0]?.id ?? '');
   const [reason, setReason] = useState('');
   const [key] = useState(newExpenseCorrectionKey);
@@ -692,6 +705,7 @@ function ExpenseCorrectionForm({
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (!canWrite) return;
     if (!shiftId) {
       setErr('Open a same-branch shift and select its drawer before correcting this expense.');
       return;
@@ -772,6 +786,7 @@ function ExpenseForm({
     receiptRequested: boolean;
   }) => void;
 }) {
+  const canWrite = hasExactPermission(useAuth().me, 'finance.write');
   const initialBranchId = branches[0]?.id ?? '';
   const [form, setForm] = useState({
     branch_id: initialBranchId,
@@ -816,7 +831,9 @@ function ExpenseForm({
   }
 
   async function submit(e: React.FormEvent) {
-    e.preventDefault(); setBusy(true); setErr(null);
+    e.preventDefault();
+    if (!canWrite) return;
+    setBusy(true); setErr(null);
     try {
       const result = await persistExpenseWithOptionalReceipt({
         savedExpense,
@@ -961,12 +978,12 @@ function ExpenseForm({
           </Field>
         </fieldset>
 
-        <ReceiptFilePicker
+        {canWrite && <ReceiptFilePicker
           selectedFile={selectedFile}
           disabled={busy}
           onSelect={selectReceipt}
           onClear={() => { setSelectedFile(null); setErr(null); }}
-        />
+        />}
         {err && <ErrorRow text={err}/>}
         <div className="flex flex-col-reverse justify-end gap-2 pt-2 sm:flex-row">
           <button type="button" className="btn btn-ghost" onClick={close} disabled={busy}>
@@ -1081,6 +1098,7 @@ function ExpenseReceiptsModal({
   onClose: () => void;
   onChanged: () => void;
 }) {
+  const canWrite = hasExactPermission(useAuth().me, 'finance.write');
   const notifications = useNotifications();
   const [rows, setRows] = useState<ExpenseReceiptDTO[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1136,6 +1154,7 @@ function ExpenseReceiptsModal({
   }
 
   async function upload() {
+    if (!canWrite) return;
     if (!selectedFile || uploading) return;
     setUploading(true); setErr(null);
     try {
@@ -1182,6 +1201,7 @@ function ExpenseReceiptsModal({
   }
 
   async function saveReview() {
+    if (!canWrite) return;
     if (reviewing) return;
     const reviewError = expenseReceiptReviewError(reviewStatus, reviewNote);
     if (reviewError) {
@@ -1224,13 +1244,13 @@ function ExpenseReceiptsModal({
           </div>
         </div>
 
-        <ReceiptFilePicker
+        {canWrite && <ReceiptFilePicker
           selectedFile={selectedFile}
           disabled={uploading}
           onSelect={selectReceipt}
           onClear={() => { setSelectedFile(null); setErr(null); }}
-        />
-        {selectedFile && (
+        />}
+        {canWrite && selectedFile && (
           <div className="flex justify-end">
             <button type="button" className="btn btn-primary" onClick={() => void upload()}
               disabled={uploading}>
@@ -1291,7 +1311,7 @@ function ExpenseReceiptsModal({
           </section>
         )}
 
-        {!loading && (
+        {canWrite && !loading && (
           <section className="rounded-xl border border-bg-border p-3">
             <p className="text-sm font-semibold">Receipt review</p>
             <p className="mt-0.5 text-xs text-fg-muted">
@@ -1356,6 +1376,7 @@ export function ExpenseReceiptContentPreview({
 // PARTNERS TAB
 // ============================================================================
 function PartnersTab() {
+  const canWrite = hasExactPermission(useAuth().me, 'finance.partner.write');
   const requests = useLatestRequest();
   const notifications = useNotifications();
   const [rows, setRows] = useState<PartnerDTO[]>([]);
@@ -1429,9 +1450,9 @@ function PartnersTab() {
         </p>
         <div className="flex gap-2">
         <button className="btn btn-ghost" onClick={() => void load()} aria-label="Refresh partners"><RefreshCw size={14}/> Refresh</button>
-        <button className="btn btn-primary" onClick={() => setAddOpen(true)}>
+        {canWrite && <button className="btn btn-primary" onClick={() => { if (canWrite) setAddOpen(true); }}>
           <Plus size={14}/> Add partner
-        </button>
+        </button>}
         </div>
       </div>
 
@@ -1561,10 +1582,10 @@ function PartnersTab() {
               </div>
             )}
             <div className="flex gap-1 pt-3 border-t border-bg-border/60">
-              <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs"
-                onClick={() => setCapPartner(p)}>
+              {canWrite && <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs"
+                onClick={() => { if (canWrite) setCapPartner(p); }}>
                 <Banknote size={11}/> Record movement
-              </button>
+              </button>}
               <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs"
                 onClick={() => setLedgerPartner(p)}>
                 <Wallet size={11}/> Ledger
@@ -1575,7 +1596,7 @@ function PartnersTab() {
         {!rows.length && <div className="card text-fg-muted text-sm">No partners yet.</div>}
       </div>
 
-      {addOpen && <PartnerForm
+      {canWrite && addOpen && <PartnerForm
         onClose={() => setAddOpen(false)}
         onSuccess={() => {
           setAddOpen(false);
@@ -1584,7 +1605,7 @@ function PartnersTab() {
           notifications.success(feedback.message, { title: feedback.title });
         }}
       />}
-      {capPartner && <CapitalForm
+      {canWrite && capPartner && <CapitalForm
         partner={capPartner}
         onClose={() => setCapPartner(null)}
         onSuccess={() => {
@@ -1601,6 +1622,7 @@ function PartnersTab() {
 }
 
 function PartnerForm({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
+  const canWrite = hasExactPermission(useAuth().me, 'finance.partner.write');
   const [form, setForm] = useState({
     name: '', share_pct: '50', joined_at: new Date().toISOString().slice(0, 10), notes: '',
   });
@@ -1608,7 +1630,9 @@ function PartnerForm({ onClose, onSuccess }: { onClose: () => void; onSuccess: (
   const [err, setErr] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
-    e.preventDefault(); setBusy(true); setErr(null);
+    e.preventDefault();
+    if (!canWrite) return;
+    setBusy(true); setErr(null);
     try {
       await finance.createPartner({
         name: form.name.trim(),
@@ -1663,6 +1687,7 @@ function newCapitalEntryKey(): string {
 function CapitalForm({
   partner, onClose, onSuccess,
 }: { partner: PartnerDTO; onClose: () => void; onSuccess: () => void }) {
+  const canWrite = hasExactPermission(useAuth().me, 'finance.partner.write');
   const [form, setForm] = useState({
     type: 'invest' as 'invest' | 'withdraw',
     amount_rupees: '',
@@ -1677,6 +1702,7 @@ function CapitalForm({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (!canWrite) return;
     const amountMinor = rupeesToMinor(form.amount_rupees);
     if (amountMinor === null) {
       setErr('Enter an amount greater than 0 with no more than two decimal places.');
@@ -1779,6 +1805,7 @@ function LedgerModal({
   onClose: () => void;
   onChanged: () => void;
 }) {
+  const canWrite = hasExactPermission(useAuth().me, 'finance.partner.write');
   const requests = useLatestRequest();
   const notifications = useNotifications();
   const [rows, setRows] = useState<CapitalEntryDTO[]>([]);
@@ -1854,7 +1881,7 @@ function LedgerModal({
           </>
         )}
       </Modal>
-      {voiding && (
+      {canWrite && voiding && (
         <VoidCapitalEntryForm
           row={voiding}
           onClose={() => setVoiding(null)}
@@ -1872,6 +1899,7 @@ function LedgerModal({
 }
 
 function CapitalLedgerRow({ row, onVoid }: { row: CapitalEntryDTO; onVoid: () => void }) {
+  const canWrite = hasExactPermission(useAuth().me, 'finance.partner.write');
   return (
     <tr className={`border-t border-bg-border/60 ${row.is_voided ? 'opacity-60' : ''}`}>
       <td className="py-3 pr-3 font-mono text-xs">
@@ -1903,8 +1931,8 @@ function CapitalLedgerRow({ row, onVoid }: { row: CapitalEntryDTO; onVoid: () =>
         {row.is_voided ? (
           <span className="chip border-accent-bad/40 text-accent-bad text-[10px]">Voided</span>
         ) : (
-          <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs hover:!text-accent-bad"
-            onClick={onVoid} aria-label={`Void ${row.source_ref || 'capital entry'}`}>
+          canWrite && <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs hover:!text-accent-bad"
+            onClick={() => { if (canWrite) onVoid(); }} aria-label={`Void ${row.source_ref || 'capital entry'}`}>
             <Ban size={12}/> Void
           </button>
         )}
@@ -1914,6 +1942,7 @@ function CapitalLedgerRow({ row, onVoid }: { row: CapitalEntryDTO; onVoid: () =>
 }
 
 function CapitalLedgerCard({ row, onVoid }: { row: CapitalEntryDTO; onVoid: () => void }) {
+  const canWrite = hasExactPermission(useAuth().me, 'finance.partner.write');
   return (
     <div className={`rounded-xl border border-bg-border p-3 ${row.is_voided ? 'opacity-60' : ''}`}>
       <div className="flex items-start justify-between gap-3">
@@ -1939,8 +1968,8 @@ function CapitalLedgerCard({ row, onVoid }: { row: CapitalEntryDTO; onVoid: () =
         {row.is_voided ? (
           <span className="chip border-accent-bad/40 text-accent-bad text-[10px]">Voided</span>
         ) : (
-          <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs hover:!text-accent-bad"
-            onClick={onVoid}>
+          canWrite && <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs hover:!text-accent-bad"
+            onClick={() => { if (canWrite) onVoid(); }}>
             <Ban size={12}/> Void
           </button>
         )}
@@ -1958,12 +1987,14 @@ function VoidCapitalEntryForm({
   onClose: () => void;
   onSuccess: () => void | Promise<void>;
 }) {
+  const canWrite = hasExactPermission(useAuth().me, 'finance.partner.write');
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (!canWrite) return;
     const trimmed = reason.trim();
     if (trimmed.length < 3) {
       setErr('Enter a clear void reason of at least 3 characters.');
@@ -2055,7 +2086,7 @@ function TabBtn({ active, onClick, children }: {
   active: boolean; onClick: () => void; children: React.ReactNode;
 }) {
   return (
-    <button onClick={onClick}
+    <button type="button" onClick={onClick} aria-pressed={active}
       className={`shrink-0 px-4 py-2 text-sm font-medium border-b-2 -mb-px whitespace-nowrap flex items-center gap-1.5
         ${active ? 'border-accent text-accent' : 'border-transparent text-fg-muted hover:text-fg'}`}>
       {children}

@@ -55,6 +55,34 @@ class OperationDispatchTest {
         assertFalse(isHandoverBootstrapRequest(Request.Builder().url(base + "api/v1/settings/terminals").delete().build()))
         assertFalse(isHandoverBootstrapRequest(Request.Builder().url(base + "api/v1/settings/terminals/other").build()))
     }
+    @Test fun exactReceiptReportNeedsAnActivePermitWithoutRecordingUncertainTillMutation() = runBlocking<Unit> {
+        val coordinator = HandoverCoordinator(Store())
+        coordinator.initialize(authority)
+        val gate = CoordinatorOperationDispatchGate(coordinator) { HandoverStartupStatus.Open }
+        val orderId = UUID.randomUUID().toString()
+        val action = UUID.randomUUID().toString()
+        val url = "https://example.test/api/v1/pos/receipts/$orderId/mistake-reports"
+        val request = Request.Builder().url(url).post("{}".toRequestBody()).header("Idempotency-Key", action).build()
+        assertTrue(isReceiptMistakeReportRequest(request))
+        assertFalse(isReceiptMistakeReportRequest(request.newBuilder().url("$url?other=1").build()))
+        assertFalse(isReceiptMistakeReportRequest(request.newBuilder().url("$url/").build()))
+        assertFalse(isReceiptMistakeReportRequest(request.newBuilder().removeHeader("Idempotency-Key").build()))
+        assertFalse(isReceiptMistakeReportRequest(request.newBuilder().addHeader("Idempotency-Key", action).build()))
+        assertThrows(java.io.IOException::class.java) { gate.beforeAttempt(request) }
+
+        val original = binding()
+        val readOnly = request.newBuilder()
+            .tag(OperationDispatchContext::class.java, OperationDispatchContext(original, null)).build()
+        assertThrows(java.io.IOException::class.java) { gate.beforeAttempt(readOnly) }
+
+        val permit = coordinator.admit(authority)
+        val active = request.newBuilder()
+            .tag(OperationDispatchContext::class.java, OperationDispatchContext(original, permit)).build()
+        gate.beforeAttempt(active)
+        coordinator.finish(permit, OperationOutcome.NO_WRITE_SENT)
+        assertTrue(coordinator.state.value.unresolvedOperations.isEmpty())
+        assertThrows(java.io.IOException::class.java) { gate.beforeAttempt(active) }
+    }
     @Test fun contextIsCapturedAtCallCreationAndRetainedAcrossCoroutineThreadChange() = runBlocking {
         MockWebServer().use { server ->
             server.start(); server.enqueue(MockResponse().setBody("{}"))

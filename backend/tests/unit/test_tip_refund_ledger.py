@@ -49,13 +49,13 @@ class _QueuedSession:
         self.results = list(results)
 
     async def scalars(self, statement):
-        # These pre-correction fixtures contain no immutable tender receipts.
+        # These fixtures contain no immutable tender or no-value correction receipts.
         # Keep every legacy query strict and ordered; only these additive
         # model projections have an explicitly empty source in this fixture.
-        from app.models import DailyTenderReconciliation, PaymentTenderCorrection
+        from app.models import DailyTenderReconciliation, PaymentTenderCorrection, PosReceiptCorrection
 
         assert [column["entity"] for column in statement.column_descriptions] in (
-            [PaymentTenderCorrection], [DailyTenderReconciliation],
+            [PaymentTenderCorrection], [DailyTenderReconciliation], [PosReceiptCorrection],
         ), f"Unexpected scalar query: {statement}"
         return _Result(rows=[])
 
@@ -200,6 +200,7 @@ def test_net_revenue_minor_no_longer_double_penalizes_tip_refund() -> None:
     non-tip portion of a refund reduces revenue.
     """
     report = object.__new__(PnLReport)
+    object.__setattr__(report, "receipt_corrections_minor", 0)
     object.__setattr__(report, "revenue", RevenueBreakdown(food_minor=1_000))
     object.__setattr__(report, "tax_collected", TaxBreakdown())
     object.__setattr__(report, "refunds_issued_minor", 1_100)

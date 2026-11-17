@@ -63,11 +63,23 @@ class _Session:
         self.results = list(results)
         self.added = []
         self.statements = []
+        self.start_work_keys = []
 
-    async def execute(self, statement):
+    async def execute(self, statement, parameters=None):
+        if str(statement) == "SELECT dcompany_start_work_lock(:key)":
+            assert isinstance(parameters, dict) and set(parameters) == {"key"}
+            assert isinstance(parameters["key"], str) and parameters["key"].startswith("shift-open:")
+            self.start_work_keys.append(parameters["key"])
+            return _Result()
+        assert parameters is None
         assert self.results, f"Unexpected SQL statement: {statement}"
         self.statements.append(statement)
         return _Result(self.results.pop(0))
+
+    async def scalar(self, statement, parameters):
+        assert str(statement) == "SELECT 1 FROM shift_start_work_cancellations WHERE action_key=:key"
+        assert parameters == {"key": self.start_work_keys[-1]}
+        return None  # This fixture has no Owner-cancelled Start work action.
 
     def add(self, entity) -> None:
         self.added.append(entity)
@@ -244,6 +256,7 @@ async def test_shift_open_cannot_recreate_a_deleted_opening_action() -> None:
     assert session.added == []
     # The durable replay fence is checked before any ordinary Shift lookup.
     assert session.results == []
+    assert session.start_work_keys == [SHIFT_ACTION_KEY]
 
 
 @pytest.mark.asyncio
@@ -294,3 +307,4 @@ async def test_shift_open_checks_replay_fence_before_matching_shift_receipt() ->
 
     # The matching shift result remains unused because the replay fence wins.
     assert session.results == [matching_shift]
+    assert session.start_work_keys == [SHIFT_ACTION_KEY]

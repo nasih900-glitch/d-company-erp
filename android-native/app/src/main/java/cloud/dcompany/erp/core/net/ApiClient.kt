@@ -257,6 +257,21 @@ object ApiClient {
             .create(service)
     }
 
+    internal inline fun <reified T> startWorkReviewApi(
+        permit: cloud.dcompany.erp.core.handover.HandoverCoordinator.StartWorkReviewPermit,
+        accessToken: String? = null, terminalId: String? = null, noinline beforeDispatch: () -> Unit = {},
+    ): T = startWorkReviewApi(T::class.java, permit, accessToken, terminalId, beforeDispatch)
+
+    internal fun <T> startWorkReviewApi(service: Class<T>,
+        permit: cloud.dcompany.erp.core.handover.HandoverCoordinator.StartWorkReviewPermit,
+        accessToken: String?, terminalId: String?, beforeDispatch: () -> Unit): T {
+        val client = ephemeralAuthorityClient(if (permit.mode == "actor_status") accessToken else null,
+            if (permit.mode == "actor_status") terminalId else null, beforeDispatch, singleAttempt = true)
+        return Retrofit.Builder().baseUrl(BuildConfig.API_BASE_URL)
+            .callFactory(cloud.dcompany.erp.core.handover.StartWorkReviewCallFactory(client, permit))
+            .addConverterFactory(cloud.dcompany.erp.ui.screens.shift.work.StartWorkJson.asConverterFactory("application/json".toMediaType())).build().create(service)
+    }
+
     /** A bounded, unauthenticated DB/Redis readiness proof for recovery only. */
     internal suspend fun probeBackendReadiness(): Boolean = withContext(Dispatchers.IO) {
         val url = BuildConfig.API_BASE_URL.toHttpUrl().resolve("/readyz")

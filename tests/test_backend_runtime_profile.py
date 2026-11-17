@@ -164,7 +164,11 @@ def test_psycopg_must_use_the_locked_binary_implementation(profile, monkeypatch,
     ('3.1.63', '3.1.64', None),
     ('3.1.64', '3.1.63', None),
     ('3.1.64', None, None),
-    ('3.1.65', '3.1.65', None),
+    ('3.1.65', '3.1.65', '0105'),
+    ('3.1.64', '3.1.65', None),
+    ('3.1.65', '3.1.64', None),
+    ('3.1.65', None, None),
+    ('3.1.66', '3.1.66', None),
 ])
 def test_runtime_revision_is_bound_to_installed_and_configured_identity(profile, installed, configured, expected):
     if expected is None:
@@ -186,6 +190,8 @@ def test_runtime_revision_is_bound_to_installed_and_configured_identity(profile,
     (None, None, '3.1.62', '0095'), (None, 'revision', '3.1.62', '0094'),
     (None, None, '3.1.63', '0095'), (None, 'revision', '3.1.63', '0094'),
     (None, None, '3.1.64', '0095'), (None, 'revision', '3.1.64', '0094'),
+    (None, None, '3.1.65', '0105'),
+    *[(None, 'revision', '3.1.65', revision) for revision in ('0095', '0096', '0097', '0098', '0099', '0100', '0101', '0102', '0103', '0104', '0106')],
 ])
 def test_each_postgres_query_must_succeed_and_engines_are_disposed(
     profile, monkeypatch, driver, failure, version, actual_revision
@@ -272,14 +278,33 @@ def test_scanner_child_failure_propagates_through_actual_find(tmp_path, before_w
     assert 'UNREACHABLE' not in completed.stdout
 
 
-@pytest.mark.parametrize('version,expected', [('3.1.57', 7), ('3.1.58', 7), ('3.1.59', 7), ('3.1.60', 7), ('3.1.61', 7), ('3.1.62', 7), ('3.1.63', 7), ('3.1.64', 7), ('3.1.44', 0), ('3.1.45', 0), ('3.1.46', 0)])
+@pytest.mark.parametrize('version,expected', [('3.1.57', 7), ('3.1.58', 7), ('3.1.59', 7), ('3.1.60', 7), ('3.1.61', 7), ('3.1.62', 7), ('3.1.63', 7), ('3.1.64', 7), ('3.1.65', 7), ('3.1.44', 0), ('3.1.45', 0), ('3.1.46', 0)])
 def test_new_profile_is_mandatory_only_for_current_runtime(version, expected, tmp_path):
     source = (ROOT / 'infra/scripts/verify-production-runtime-images.sh').read_text()
-    marker = '# The final-image profile is mandatory for Builds 64 through 71.'
+    marker = '# The final-image profile is mandatory for Builds 64 through 72.'
     block = source[source.index(marker):].split('\nfi\n', 1)[0] + '\nfi\n'
     fake = tmp_path / 'compose'
     fake.write_text('#!/bin/sh\nexit 7\n')
     fake.chmod(0o755)
     result = subprocess.run(['bash', '-c', 'set -e\nAPP_VERSION=$1\ncompose=("$2")\n' + block,
                              'runtime-profile-test', version, str(fake)], timeout=10)
+    assert result.returncode == expected
+
+
+def test_build72_requires_both_final_image_trust_and_runtime_profile_gates():
+    source = (ROOT / 'infra/scripts/verify-production-runtime-images.sh').read_text()
+    conditions = [line for line in source.splitlines() if line.startswith('if [ "$APP_VERSION" = 3.1.57 ]')]
+    assert len(conditions) == 2
+    assert all('[ "$APP_VERSION" = 3.1.65 ]' in line for line in conditions)
+
+
+@pytest.mark.parametrize('version,expected', [('3.1.65', 7), ('3.1.66', 0)])
+def test_build72_final_image_trust_failure_cannot_be_skipped(version, expected):
+    source = (ROOT / 'infra/scripts/verify-production-runtime-images.sh').read_text()
+    marker = '# Build55 proves the actual final-image trust stores and image encoders offline.'
+    block = source[source.index(marker):].split('\nfi\n', 1)[0] + '\nfi\n'
+    result = subprocess.run(
+        ['bash', '-c', 'set -e\nAPP_VERSION=$1\ncandidate_images="{}"\npython3() { return 7; }\n' + block,
+         'runtime-trust-test', version], timeout=10,
+    )
     assert result.returncode == expected

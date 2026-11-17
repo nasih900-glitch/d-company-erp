@@ -26,15 +26,56 @@ class WorkspaceBackgroundPolicyTest {
     }
 
     @Test
-    fun presetRegistryHasStableUniqueIdsAndVerifiedFullHdOrBetterAssets() {
-        assertEquals(6, WorkspaceBackgroundPresets.entries.size)
+    fun presetRegistryHasStableUniqueIdsAndVerifiedAssetDimensions() {
+        assertEquals(7, WorkspaceBackgroundPresets.entries.size)
         assertEquals(WorkspaceBackgroundPresets.entries.size, WorkspaceBackgroundPresets.entries.map { it.id }.toSet().size)
         assertEquals(WorkspaceBackgroundPresets.DefaultId, WorkspaceBackgroundPresets.default.id)
         WorkspaceBackgroundPresets.entries.forEach { preset ->
             assertTrue(preset.id.matches(Regex("[a-z0-9_]+")))
-            assertEquals(3_840, preset.width)
-            assertEquals(2_160, preset.height)
+            val dimensions = if (preset.id == WorkspaceBackgroundPresets.VioletGlassId) 1_672 to 941 else 3_840 to 2_160
+            assertEquals(dimensions, preset.width to preset.height)
             assertTrue(preset.contentId.matches(Regex("[0-9a-f]{64}")))
+        }
+    }
+
+    @Test
+    fun violetGlassRequiresCurrentBundledProductionMaterialInNightWorkspace() {
+        val image = bundledWorkspaceBackground(
+            WorkspaceBackgroundSlot.WORKSPACE,
+            generation = 17,
+            presetId = WorkspaceBackgroundPresets.VioletGlassId,
+        )
+        val requested = WorkspaceBackgroundRenderKey(
+            image.slot, image.source, image.generation, image.contentId,
+            viewportWidth = 1280, viewportHeight = 800, decoderIdentity = 27,
+        )
+        fun admitted(
+            imageUnderTest: WorkspaceBackgroundImage = image,
+            actual: WorkspaceBackgroundRenderKey? = requested,
+            request: WorkspaceBackgroundRenderKey = requested,
+            state: DisplayedSceneState = DisplayedSceneState.REQUESTED_READY,
+            production: Boolean = true,
+            night: Boolean = true,
+        ) = workspaceVioletGlassAdmitted(imageUnderTest, actual, request, state, production, night)
+
+        assertTrue(admitted())
+        assertFalse(admitted(night = false))
+        assertFalse(admitted(production = false))
+        assertFalse(admitted(state = DisplayedSceneState.BUNDLED_FALLBACK))
+        assertFalse(admitted(state = DisplayedSceneState.UNAVAILABLE))
+        assertFalse(admitted(actual = null))
+        assertFalse(admitted(actual = requested.copy(generation = 16)))
+        assertFalse(admitted(actual = requested.copy(viewportWidth = 1024)))
+        assertFalse(admitted(actual = requested.copy(decoderIdentity = 28)))
+        assertFalse(admitted(imageUnderTest = image.copy(resource = null)))
+        assertFalse(admitted(imageUnderTest = image.copy(presetId = null)))
+        assertFalse(admitted(imageUnderTest = image.copy(privatePath = "/private/custom.jpg")))
+        listOf(
+            requested.copy(contentId = "f".repeat(64)),
+            requested.copy(slot = WorkspaceBackgroundSlot.HOME),
+            requested.copy(source = WorkspaceBackgroundSource.IMPORTED),
+        ).forEach { wrong ->
+            assertFalse(admitted(actual = wrong, request = wrong))
         }
     }
 
@@ -204,7 +245,7 @@ class WorkspaceBackgroundPolicyTest {
     }
 
     @Test
-    fun bundledDefaultsAndGalleryAreExactVerified3840By2160Files() {
+    fun bundledDefaultsAndGalleryAreExactVerifiedFiles() {
         val root = projectRoot().resolve("src/main/res/drawable-nodpi")
         val expected = mapOf(
             "workspace_home_default.jpg" to "ce0f12e8b46011eaa69161c031d23d10e545f9b89f2f49a6effb11f34640dcfe",
@@ -214,6 +255,7 @@ class WorkspaceBackgroundPolicyTest {
             "workspace_preset_fc27.jpg" to "ab51cde3444c1081e615a84a4305cdb56104d7cbd7d0422389f5bd363036cdd1",
             "workspace_preset_wukong.jpg" to "464620be4c5f5a50a69ef9261666d2c1e1ae274c50863da76a7caddbc539455e",
             "workspace_preset_ghost_of_tsushima.png" to "6ae5b41dfdd4ab381f9a4bd69f5fc121116819552c5561bbfe48d43ea3751bc7",
+            "workspace_preset_violet_glass.jpg" to "4bbb18c70b040b4657c1395de6db3c43196c1c71161e96088925c3724a30cb99",
         )
         expected.forEach { (name, sha) ->
             val file = root.resolve(name)

@@ -1,3 +1,9 @@
+import { validPaidSummary } from '@/lib/paid-bill-contract';
+import { readPaidBillEnvelope } from '@/lib/paid-bill-journal';
+import { currentPaidEndpoint } from '@/lib/paid-bill-api';
+import PaidBillAmendment, { PaidBillSummary } from './PaidBillAmendment';
+import { withoutPaidBillWork } from '@/lib/paid-bill-admission';
+import { useInlineWorkspaceFocus } from '@/lib/use-inline-workspace-focus';
 /**
  * Orders & Shifts — the operations history screen.
  *
@@ -10,7 +16,7 @@
  *   2. Count the cash drawer
  *   3. Close the shift — variance is recorded
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Receipt, Loader2, AlertCircle, RefreshCw, Eye, Lock, ShieldCheck,
@@ -32,7 +38,10 @@ import {
   type ShiftRecoveryCandidateDTO, type ShiftRecoveryCloseDTO,
 } from '@/lib/erp-api';
 import Modal from '@/components/ui/Modal';
+import DailyWorkWorkspace from '@/modules/staff/DailyWorkWorkspace';
+import { hasPendingWork } from '@/lib/start-work';
 import TenderCorrections from '@/modules/finance/TenderCorrections';
+import ReceiptNoValueCorrection from './ReceiptNoValueCorrection';
 import { Link } from 'react-router-dom';
 import { canRecoverOperator } from '@/lib/operator-recovery-api';
 import { ownerScope, ownerWorkspaceGeneration, readOwnerWorkspace, rememberOwnerWorkspace } from '@/lib/owner-workspace';
@@ -40,6 +49,7 @@ import { emptyReceiptFilters, receiptSearchParams, receiptSearchScope, taxPercen
 import { useNotifications } from '@/components/ui/Notifications';
 import { useAuth } from '@/modules/auth/AuthContext';
 import { canAccessRefunds } from '@/modules/refunds/refund-policy';
+import { canUseStaffTime } from '@/modules/staff/staff-time-policy';
 import { subscribeRealtime } from '@/lib/realtime';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
@@ -132,7 +142,8 @@ function ShiftRailBreakdown({ shift }: { shift: ShiftDTO }) {
   return (
     <div className="mt-3 grid grid-cols-2 gap-3 border-t border-bg-border/60 pt-3 md:grid-cols-4">
       <Stat label="Cash collected" value={inr(rails.cash)}/>
-      <Stat label="UPI collected" value={inr(rails.upi)}/>
+      <Stat label={shift.receipt_corrections_minor ? 'Original UPI recorded (historical)' : 'UPI collected'} value={inr(rails.upi)}/>
+      {!!shift.receipt_corrections_minor && <Stat label="Effective UPI receipt value" value={shift.effective_upi_collections_minor==null?'Unavailable':inr(shift.effective_upi_collections_minor)}/>}
       <Stat label="Card collected" value={inr(rails.card)}/>
       <Stat label="Other collected" value={inr(rails.other)}/>
     </div>
@@ -144,7 +155,7 @@ const OPERATIONS_POLL_MS = 120_000;
 
 export default function OrdersAndShiftsScreen() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const {me}=useAuth();
+  const {me,terminalId,terminalReady}=useAuth();
   const [tab, setTab] = useState<Tab>(() => operationsInitialTab(searchParams));
   const requestedTab = operationsInitialTab(searchParams);
 
@@ -173,7 +184,7 @@ export default function OrdersAndShiftsScreen() {
         </TabBtn>
       </div>
 
-      {tab === 'orders' ? <OrdersTab key={me?ownerScope(me):'anonymous'}/> : <ShiftsTab/>}
+      {tab === 'orders' ? <OrdersTab key={me?ownerScope(me):'anonymous'}/> : <ShiftsTab key={JSON.stringify([me?ownerScope(me):'anonymous',terminalId,terminalReady])}/>}
     </div>
   );
 }
@@ -189,7 +200,7 @@ interface ReceiptWorkspaceState {
 }
 function OrdersTab() {
   const workspaceGeneration=useRef(ownerWorkspaceGeneration()).current;
-  const { me } = useAuth();
+  const { me, terminalId } = useAuth();
   const [params] = useSearchParams();
   const scope = me ? ownerScope(me) : 'anonymous';
   const initial = useRef(readOwnerWorkspace<ReceiptWorkspaceState>(scope,'receipt-history'));
@@ -223,10 +234,20 @@ function OrdersTab() {
   const [receiptQuery, setReceiptQuery] = useState(cache?.query ?? '');
   const [operationalView, setOperationalView] = useState<OrderListItemDTO | null>(null);
   const [receiptView, setReceiptView] = useState<{ orderId: string; invoiceNo: string } | null>(() => params.get('receipt') ? {orderId:params.get('receipt')!,invoiceNo:'Linked receipt'} : cache?.selected ?? null);
+  const receiptFocus = useInlineWorkspaceFocus(Boolean(receiptView), JSON.stringify([scope, terminalId]));
+  const requestedPaidReceipt = params.get('paid_bill_recovery') === '1' ? params.get('receipt') : null;
+  useEffect(() => {
+    if (!requestedPaidReceipt || !me?.audit_access || !me.effective_permissions?.includes('finance.receipt.correct')) return;
+    try {
+      const pending = readPaidBillEnvelope().pending;
+      if (pending && pending.body.order_id === requestedPaidReceipt && pending.scope.endpoint === currentPaidEndpoint() && pending.scope.companyId === me.company_id && pending.scope.userId === me.user_id && pending.scope.terminalId === terminalId && (!me.branch_id || me.branch_id === pending.scope.branchId)) setReceiptView({ orderId: requestedPaidReceipt, invoiceNo: pending.expected.invoice_no });
+    } catch { /* Preserve unreadable private work; the generic notice reports it. */ }
+  }, [me, requestedPaidReceipt, terminalId]);
   const [recoveryTarget, setRecoveryTarget] = useState<OrderListItemDTO | null>(null);
   const [recoveryIntent] = useState(() => new StableMutationIntent<DirectOrderRecoveryPayload>({
     prefix: 'pos-direct-recovery:web',
   }));
+  const manualRefreshPending = useRef(false);
   const operationalSequence = useRef(0);
   const receiptSequence = useRef(0);
   const receiptRowsRef = useRef<ReceiptHistoryDTO[]>(cache?.rows ?? []);
@@ -234,7 +255,7 @@ function OrdersTab() {
 
   useEffect(() => { receiptRowsRef.current = receiptRows; }, [receiptRows]);
 
-  const loadOperational = useCallback(async (showLoading: boolean) => {
+  const loadOperational = useCallback(async (showLoading: boolean, throwOnFailure = false) => {
     if (!LIVE_MODE) { setOperationalLoading(false); return; }
     const sequence = ++operationalSequence.current;
     if (showLoading) setOperationalLoading(true);
@@ -244,6 +265,7 @@ function OrdersTab() {
       if (sequence === operationalSequence.current) setOperationalRows(result);
     } catch (error) {
       if (sequence === operationalSequence.current) setOperationalError((error as Error).message);
+      if (throwOnFailure) throw error;
     } finally {
       if (sequence === operationalSequence.current) setOperationalLoading(false);
     }
@@ -252,6 +274,7 @@ function OrdersTab() {
   const loadReceipts = useCallback(async (
     showLoading: boolean,
     requestedMode: 'replace' | 'stage' = 'replace',
+    throwOnFailure = false,
   ) => {
     if (!LIVE_MODE) { setReceiptsLoading(false); return; }
     const currentScope = receiptScopeRef.current;
@@ -325,6 +348,7 @@ function OrdersTab() {
         sequence === receiptSequence.current
         && receiptScopeMatches(receiptScopeRef.current, requestScope)
       ) setReceiptsError((error as Error).message);
+      if (throwOnFailure) throw error;
     } finally {
       if (
         sequence === receiptSequence.current
@@ -500,7 +524,7 @@ function OrdersTab() {
   const refreshing = operationalLoading || receiptsLoading;
 
   return (
-    <div className="space-y-5">
+    <div ref={receiptFocus.fallbackRef} tabIndex={-1} className="space-y-5">
       <div className="flex justify-between items-center flex-wrap gap-3">
         <div>
           <p className="text-sm font-semibold">Live operations and immutable receipts</p>
@@ -511,8 +535,14 @@ function OrdersTab() {
         <button
           type="button"
           className="btn btn-ghost"
-          onClick={() => { void Promise.all([loadOperational(true), loadReceipts(true, 'stage')]); }}
-          disabled={refreshing}
+          onClick={async () => {
+            if (refreshing || manualRefreshPending.current) return;
+            manualRefreshPending.current = true;
+            try { await Promise.all([loadOperational(true), loadReceipts(true, 'stage')]); }
+            finally { manualRefreshPending.current = false; }
+          }}
+          aria-disabled={refreshing}
+          aria-busy={refreshing}
           aria-label="Refresh orders and receipt history"
         >
           <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''}/>
@@ -548,7 +578,11 @@ function OrdersTab() {
         key={receiptView.orderId}
         orderId={receiptView.orderId}
         invoiceNo={receiptView.invoiceNo}
-        onClose={() => setReceiptView(null)}
+        focusHeadingRef={receiptFocus.headingRef}
+        onClose={() => { receiptFocus.closeToInvoker(); setReceiptView(null); }}
+        onCommitted={async () => { await Promise.all([
+          loadOperational(false, true), loadReceipts(false, 'stage', true),
+        ]); }}
       />}
 
       <section className="card !p-0 overflow-hidden">
@@ -627,7 +661,7 @@ function OrdersTab() {
                 : 'A receipt appears here after a successful Cash, UPI or other payment.'}
             </p>
           </div>
-        ) : receiptRows.length ? <ReceiptHistoryList rows={receiptRows} onView={setReceiptView}/> : null}
+        ) : receiptRows.length ? <ReceiptHistoryList rows={receiptRows} onView={(receipt, invoker) => { receiptFocus.openFrom(invoker); setReceiptView(receipt); }}/> : null}
         {hasMore && (
           <div className="border-t border-bg-border p-3 text-center">
             <button type="button" className="btn btn-ghost" onClick={() => { void loadMore(); }} disabled={loadingMore || receiptsLoading}>
@@ -862,7 +896,7 @@ export function RecoverDirectOrderModal({
 
 function ReceiptHistoryList({ rows, onView }: {
   rows: ReceiptHistoryDTO[];
-  onView: (receipt: { orderId: string; invoiceNo: string }) => void;
+  onView: (receipt: { orderId: string; invoiceNo: string }, invoker: HTMLElement) => void;
 }) {
   return (
     <>
@@ -890,16 +924,16 @@ function ReceiptHistoryList({ rows, onView }: {
                 <td className="p-3 text-xs text-fg-muted">{receiptPaymentActorLabel(receipt.payments)}</td>
                 <td className="p-3 text-right">
                   <div className="font-mono font-semibold">{inr(receipt.total_minor)}</div>
-                  {receipt.refunded_minor > 0 && (
+                  {(receipt.refunded_minor > 0 || (receipt.corrected_minor ?? 0)>0) && (
                     <div className="mt-0.5 text-[10px] text-fg-muted">Net {inr(receipt.net_collected_minor)}</div>
                   )}
                 </td>
-                <td className="p-3"><ReceiptStatus status={receipt.status}/></td>
+                <td className="p-3"><ReceiptStatus status={receipt.status} corrected={Boolean(receipt.receipt_correction) || (receipt.corrected_minor ?? 0)>0}/></td>
                 <td className="p-3 text-right">
                   <button
                     type="button"
                     className="rounded-lg p-2 text-fg-muted transition hover:bg-bg-raised hover:text-accent"
-                    onClick={() => onView({ orderId: receipt.order_id, invoiceNo: receipt.invoice_no })}
+                    onClick={event => onView({ orderId: receipt.order_id, invoiceNo: receipt.invoice_no }, event.currentTarget)}
                     aria-label={`Open receipt ${receipt.invoice_no}`}
                   ><Eye size={15}/></button>
                 </td>
@@ -913,7 +947,7 @@ function ReceiptHistoryList({ rows, onView }: {
           <button
             key={receipt.order_id}
             type="button"
-            onClick={() => onView({ orderId: receipt.order_id, invoiceNo: receipt.invoice_no })}
+            onClick={event => onView({ orderId: receipt.order_id, invoiceNo: receipt.invoice_no }, event.currentTarget)}
             className="w-full p-4 text-left transition active:bg-bg-raised/60"
           >
             <div className="flex items-start justify-between gap-3">
@@ -923,7 +957,7 @@ function ReceiptHistoryList({ rows, onView }: {
                   {receiptSourceLabel(receipt.gaming_sessions, receipt.order_type)} · {formatDateTime(receipt.invoice_issued_at)}
                 </div>
               </div>
-              <ReceiptStatus status={receipt.status}/>
+              <ReceiptStatus status={receipt.status} corrected={Boolean(receipt.receipt_correction) || (receipt.corrected_minor ?? 0)>0}/>
             </div>
             <div className="mt-3 flex items-end justify-between gap-3">
               <div className="text-xs text-fg-muted">
@@ -931,7 +965,7 @@ function ReceiptHistoryList({ rows, onView }: {
               </div>
               <div className="text-right">
                 <div className="font-mono font-semibold">{inr(receipt.total_minor)}</div>
-                {receipt.refunded_minor > 0 && (
+                {(receipt.refunded_minor > 0 || (receipt.corrected_minor ?? 0)>0) && (
                   <div className="mt-0.5 text-[10px] text-fg-muted">Net {inr(receipt.net_collected_minor)}</div>
                 )}
               </div>
@@ -962,10 +996,12 @@ function OperationalOrderModal({ order, onClose }: { order: OrderListItemDTO; on
   );
 }
 
-function ReceiptViewModal({ orderId, invoiceNo, onClose }: {
+function ReceiptViewModal({ orderId, invoiceNo, onClose, onCommitted, focusHeadingRef }: {
   orderId: string;
   invoiceNo: string;
   onClose: () => void;
+  onCommitted: () => Promise<void>;
+  focusHeadingRef?: RefObject<HTMLHeadingElement>;
 }) {
   const [receipt, setReceipt] = useState<ReceiptHistoryDTO | null>(null);
   const [investigation,setInvestigation] = useState<ReceiptInvestigationDTO | null>(null);
@@ -985,7 +1021,7 @@ function ReceiptViewModal({ orderId, invoiceNo, onClose }: {
     }
   }, [notifications]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (throwOnFailure = false) => {
     const sequence = ++requestSequence.current;
     setLoading(true);
     setError(null);
@@ -994,6 +1030,7 @@ function ReceiptViewModal({ orderId, invoiceNo, onClose }: {
       if (sequence === requestSequence.current) {setReceipt(result.receipt);setInvestigation(result);}
     } catch (cause) {
       if (sequence === requestSequence.current) setError((cause as Error).message);
+      if (throwOnFailure) throw cause;
     } finally {
       if (sequence === requestSequence.current) setLoading(false);
     }
@@ -1003,7 +1040,7 @@ function ReceiptViewModal({ orderId, invoiceNo, onClose }: {
   useRealtimeRefresh({ resources: ['receipts'], refresh: load, enabled: LIVE_MODE });
 
   return (
-    <section id="receipt-investigation" className="card space-y-4" aria-label="Receipt investigation"><header className="flex items-center justify-between gap-3"><h3 className="text-lg font-semibold">Receipt {receipt?.invoice_no ?? invoiceNo}</h3><button className="btn btn-ghost" onClick={onClose}><X size={14}/> Close receipt details</button></header>
+    <section id="receipt-investigation" className="card space-y-4" aria-label="Receipt investigation"><header className="flex items-center justify-between gap-3"><h3 ref={focusHeadingRef} tabIndex={-1} className="text-lg font-semibold">Receipt {receipt?.invoice_no ?? invoiceNo}</h3><button className="btn btn-ghost" onClick={onClose}><X size={14}/> Close receipt details</button></header>
       {loading && !receipt ? <SkeletonCard/> : error && !receipt ? (
         <InlineLoadError message={error} onRetry={() => { void load(); }}/>
       ) : receipt ? (
@@ -1017,16 +1054,18 @@ function ReceiptViewModal({ orderId, invoiceNo, onClose }: {
               ? () => navigate(`/refunds?order_id=${encodeURIComponent(receipt.order_id)}`)
               : undefined}
           />
+          <PaidBillAmendment receipt={receipt} onCommitted={async () => { await Promise.all([load(true), onCommitted()]); }}/>
+          <ReceiptNoValueCorrection receipt={receipt} onCommitted={async () => {try {await Promise.all([load(true),onCommitted()]);} catch(cause) {notifications.error('Correction saved; receipt/history refresh is pending. Retry refresh; do not apply another correction.');throw cause;}}}/>
           {investigation && <RetainedInvestigation details={investigation}/>}
           {me?.audit_access && <Link className="btn btn-ghost" to={`/audit?reference=${encodeURIComponent(receipt.invoice_no)}`}>Open linked Audit activity</Link>}
-          {me?.audit_access && me.effective_permissions?.includes('finance.tender.correct') && receipt.payments.filter(payment=>payment.method==='cash'&&!payment.tender_correction_id).map(payment=><details key={payment.id} className="rounded-xl border border-bg-border p-4"><summary className="cursor-pointer text-sm font-semibold">Correct this Cash payment to UPI · {inr(payment.amount_minor)}</summary><div className="mt-3"><TenderCorrections paymentId={payment.id} onCommitted={()=>void load()}/></div></details>)}
+          {!receipt.receipt_correction && !(receipt.corrected_minor ?? 0) && me?.audit_access && me.effective_permissions?.includes('finance.tender.correct') && receipt.payments.filter(payment=>payment.method==='cash'&&!payment.tender_correction_id).map(payment=><details key={payment.id} className="rounded-xl border border-bg-border p-4"><summary className="cursor-pointer text-sm font-semibold">Correct this Cash payment to UPI · {inr(payment.amount_minor)}</summary><div className="mt-3"><TenderCorrections paymentId={payment.id} onCommitted={()=>void load()}/></div></details>)}
         </>
       ) : null}
     </section>
   );
 }
 
-function ReceiptDetail({ receipt, refreshing, onCopy, onRefund }: {
+export function ReceiptDetail({ receipt, refreshing, onCopy, onRefund }: {
   receipt: ReceiptHistoryDTO;
   refreshing: boolean;
   onCopy: (label: string, value: string) => void;
@@ -1038,7 +1077,7 @@ function ReceiptDetail({ receipt, refreshing, onCopy, onRefund }: {
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2">
-              <ReceiptStatus status={receipt.status}/>
+              <ReceiptStatus status={receipt.status} corrected={Boolean(receipt.receipt_correction) || (receipt.corrected_minor ?? 0)>0}/>
               {refreshing && <Loader2 className="animate-spin text-fg-muted" size={13}/>}
             </div>
             <h4 className="mt-2 font-mono text-xl font-bold tracking-tight">{receipt.invoice_no}</h4>
@@ -1048,7 +1087,7 @@ function ReceiptDetail({ receipt, refreshing, onCopy, onRefund }: {
             <div className="text-xs uppercase tracking-wider text-fg-muted">Receipt total</div>
             <div className="font-mono text-2xl font-bold">{inr(receipt.total_minor)}</div>
             <div className="mt-1 text-xs text-fg-muted">
-              {receipt.refunded_minor > 0
+              {receipt.refunded_minor > 0 || (receipt.corrected_minor ?? 0)>0
                 ? `Net collected ${inr(receipt.net_collected_minor)}`
                 : `Payments recorded ${inr(receipt.paid_minor)}`}
             </div>
@@ -1071,7 +1110,7 @@ function ReceiptDetail({ receipt, refreshing, onCopy, onRefund }: {
               <Copy size={14}/> Copy session ID
             </button>
           ))}
-          {onRefund && receipt.refundable_minor > 0 && (
+          {onRefund && receipt.refundable_minor > 0 && !receipt.receipt_correction && !(receipt.corrected_minor ?? 0) && (receipt.paid_bill_amendment === null || receipt.paid_bill_amendment === undefined || validPaidSummary(receipt.paid_bill_amendment) && receipt.paid_bill_amendment.protocol === 1 && receipt.paid_bill_amendment.status === 'original') && (
             <button type="button" className="btn btn-primary" onClick={onRefund}>
               <RotateCcw size={14}/> Refund this receipt
             </button>
@@ -1079,6 +1118,8 @@ function ReceiptDetail({ receipt, refreshing, onCopy, onRefund }: {
         </div>
       </section>
 
+      {receipt.receipt_correction && <section className="rounded-xl border border-accent-gold/40 p-4 text-sm" aria-label="No-payout receipt correction"><strong>Payment not received — no payout</strong><p>{inr(receipt.receipt_correction.amount_minor)} offset recorded {formatDateTime(receipt.receipt_correction.accounting_at)}. Original invoice and payments remain historical evidence.</p>{receipt.receipt_correction.stock_restored && <p>Unsupplied stock restored to its original batches; inventory value increased by {inr(receipt.receipt_correction.inventory_increase_minor ?? 0)} at correction time.</p>}</section>}
+      <PaidBillSummary value={receipt.paid_bill_amendment}/>
       <ReceiptLines receipt={receipt}/>
 
       <div className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
@@ -1245,7 +1286,8 @@ function ReceiptTotals({ receipt }: { receipt: ReceiptHistoryDTO }) {
         {receipt.refunded_minor > 0 && <Row label="Refunded" value={`−${inr(receipt.refunded_minor)}`}/>}
         {receipt.pending_refund_minor > 0 && <Row label="Reserved by pending refund" value={`−${inr(receipt.pending_refund_minor)}`}/>}
         <Row label="Available to refund" value={inr(receipt.refundable_minor)} bold/>
-        {receipt.refunded_minor > 0 && <Row label="Net collected" value={inr(receipt.net_collected_minor)} bold/>}
+        {(receipt.corrected_minor ?? 0)>0 && <Row label="No payment received — correction offset (no payout)" value={`−${inr(receipt.corrected_minor ?? 0)}`}/>}
+        {(receipt.refunded_minor > 0 || (receipt.corrected_minor ?? 0)>0) && <Row label="Net collected" value={inr(receipt.net_collected_minor)} bold/>}
       </div>
     </section>
   );
@@ -1300,10 +1342,10 @@ function GamingProvenance({ receipt }: { receipt: ReceiptHistoryDTO }) {
   );
 }
 
-function ReceiptStatus({ status }: { status: string }) {
+export function ReceiptStatus({ status, corrected = false }: { status: string; corrected?: boolean }) {
   return (
-    <span className={`chip text-[10px] ${status === 'paid' ? 'border-accent-good/40 text-accent-good' : 'border-accent-gold/40 text-fg'}`}>
-      {status}
+    <span className={`chip text-[10px] ${status === 'paid' && !corrected ? 'border-accent-good/40 text-accent-good' : 'border-accent-gold/40 text-fg'}`}>
+      {corrected ? 'Corrected · no payment received · no payout' : status}
     </span>
   );
 }
@@ -1481,7 +1523,7 @@ export async function refreshShiftRecoverySurfaces(
 }
 
 /** Turn server/business-rule failures into a next action a new employee can follow. */
-export function shiftActionErrorMessage(error: unknown, action: ShiftAction): string {
+export function shiftActionErrorMessage(error: unknown, action: ShiftAction, hasVerifiedSnapshot = true): string {
   const raw = error instanceof Error ? error.message.trim() : '';
   const message = raw || 'The server did not complete the request.';
   const normalized = message.toLowerCase();
@@ -1489,7 +1531,9 @@ export function shiftActionErrorMessage(error: unknown, action: ShiftAction): st
 
   if (isUnknownShiftMutationOutcome(error)) {
     return action === 'load'
-      ? 'Shift information could not be refreshed. Check the connection; the last confirmed information remains on screen.'
+      ? hasVerifiedSnapshot
+        ? 'Shift information could not be refreshed. Check the connection; the last confirmed information remains on screen.'
+        : 'Shift information could not be verified. Check the connection and refresh before opening or starting work.'
       : action === 'open'
         ? 'Shift opening could not be confirmed because the response was interrupted. Refresh Shifts first. If an open shift appears, use it; otherwise retry the same opening amount once.'
         : action === 'recovery-close'
@@ -1766,6 +1810,15 @@ export function ExistingShiftFeedback({
   );
 }
 
+export function ShiftDailyWorkNotice({ canOpenAttendance }: { canOpenAttendance: boolean }) {
+  return <section className="card mb-4 space-y-2 text-sm" aria-label="Daily work">
+    <h3 className="font-semibold">Attendance, cashier and shop shift</h3>
+    <p className="text-fg-muted">Both staff can be clocked in while one runs the till. Attendance records each person's arrival and departure; changing cashier or closing the shop shift does not record staff departures.</p>
+    <p className="text-fg-muted">Use Change cashier on the tablet's Shift screen for a normal handover. Owner recovery is a separate audited action for a stuck or unavailable tablet.</p>
+    {canOpenAttendance && <Link className="btn btn-ghost" to="/staff/time">Attendance</Link>}
+  </section>;
+}
+
 function ShiftsTab() {
   const { me, terminalId, terminalReady, terminalOptions } = useAuth();
   const notifications = useNotifications();
@@ -1782,6 +1835,10 @@ function ShiftsTab() {
   const requestSequence = useRef(0);
   const recoveryCandidateSequence = useRef(0);
   const initialLoadComplete = useRef(false);
+  const [verifiedSnapshot, setVerifiedSnapshot] = useState(false);
+  const [snapshotFresh, setSnapshotFresh] = useState(false);
+  const freshRows = useRef<ShiftDTO[] | null>(null);
+  const verifiedRows = useRef<ShiftDTO[] | null>(null);
   const recoveryCandidateInitialLoadComplete = useRef(false);
   const canOpenShift = canUseShiftPermission(me, 'pos.shift.open');
   const canCloseShift = canUseShiftPermission(me, 'pos.shift.close');
@@ -1789,6 +1846,8 @@ function ShiftsTab() {
 
   const load = useCallback(async (showRefreshProgress = false): Promise<ShiftDTO[] | null> => {
     const sequence = ++requestSequence.current;
+    freshRows.current = null;
+    setSnapshotFresh(false);
     if (!LIVE_MODE) { setLoading(false); return []; }
     if (!terminalReady || !terminalId) {
       setRows([]);
@@ -1801,12 +1860,17 @@ function ShiftsTab() {
     try {
       const nextRows = await shifts.list();
       if (sequence === requestSequence.current) {
+        freshRows.current = nextRows;
+        verifiedRows.current = nextRows;
         setRows(nextRows);
+        setVerifiedSnapshot(true);
+        setSnapshotFresh(true);
         setErr(null);
+        return nextRows;
       }
-      return nextRows;
+      return null;
     } catch (error) {
-      if (sequence === requestSequence.current) setErr(shiftActionErrorMessage(error, 'load'));
+      if (sequence === requestSequence.current) setErr(shiftActionErrorMessage(error, 'load', verifiedRows.current !== null));
       return null;
     } finally {
       if (sequence === requestSequence.current) {
@@ -1882,7 +1946,10 @@ function ShiftsTab() {
     setRecovering(null);
   }, [canReviewRecoveryCandidates]);
 
-  useEffect(() => { void refreshShiftSurfaces(); }, [refreshShiftSurfaces]);
+  useEffect(() => {
+    void refreshShiftSurfaces();
+    return () => { requestSequence.current += 1; recoveryCandidateSequence.current += 1; freshRows.current = null; };
+  }, [refreshShiftSurfaces]);
 
   const refreshManually = useCallback(async () => {
     setRefreshing(true);
@@ -1948,16 +2015,23 @@ function ShiftsTab() {
     await refreshShiftSurfaces();
   };
   const businessDays = groupShiftsByBusinessDay(rows);
+  const newStartReady = () => freshRows.current !== null && resolveOpenShift({
+    storedShiftId: null, branchId: me?.branch_id ?? null, terminalId, openShifts: freshRows.current,
+  }).kind === 'no_open_shift';
 
   return (
     <div>
+      <DailyWorkWorkspace newStartReady={newStartReady} allowNewStart={snapshotFresh && !openShift && !scopeError} onChanged={() => { void refreshShiftSurfaces(); }}/>
+      <details className="mb-4 text-sm"><summary className="cursor-pointer">About attendance and till handover</summary>
+        <ShiftDailyWorkNotice canOpenAttendance={canUseStaffTime(me)}/>
+      </details>
       <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
         <p className="text-sm text-fg-muted">
-          {businessDays.length} business day{businessDays.length === 1 ? '' : 's'} ·{' '}
+          {!verifiedSnapshot ? 'Shift history and open-shift status are unverified. Use Refresh to retry.' : <>{!snapshotFresh && 'Last verified: '}{businessDays.length} business day{businessDays.length === 1 ? '' : 's'} ·{' '}
           {rows.length} shift record{rows.length === 1 ? '' : 's'} ·{' '}
           {openShift
             ? <span className="text-accent-good">Open shift active</span>
-            : <span>No shift currently open</span>}
+            : <span>{snapshotFresh ? 'No shift currently open' : 'Current open-shift status is unverified'}</span>}</>}
         </p>
         <div className="flex gap-2">
           <button
@@ -1970,8 +2044,8 @@ function ShiftsTab() {
             <RefreshCw className={refreshing ? 'animate-spin' : ''} size={14}/>
             {refreshing ? 'Refreshing…' : 'Refresh'}
           </button>
-          {!openShift && !scopeError && canOpenShift && (
-            <button type="button" className="btn btn-primary" onClick={() => setOpening(true)}>
+          {snapshotFresh && !openShift && !scopeError && canOpenShift && !terminalOptions.some(t => t.id === terminalId && t.online_start_work_supported === true) && (
+            <button type="button" className="btn btn-primary" onClick={() => { if (newStartReady()) setOpening(true); }}>
               <ShieldCheck size={14}/> Open shift
             </button>
           )}
@@ -1992,7 +2066,7 @@ function ShiftsTab() {
       {scopeError && <div className="card border-accent-bad/40 bg-accent-bad/10 text-accent-bad text-sm mb-3 flex items-center gap-2">
         <AlertCircle size={14}/> {scopeError}
       </div>}
-      {!openShift && !scopeError && !canOpenShift && (
+      {snapshotFresh && !openShift && !scopeError && !canOpenShift && (
         <div className="card border-accent-gold/35 bg-accent-gold/5 text-sm mb-3">
           <p className="font-medium text-fg">Shift opening is view only for this account</p>
           <p className="mt-1 text-fg-muted">Ask a staff member with Open shift access. Nothing has been changed.</p>
@@ -2034,9 +2108,9 @@ function ShiftsTab() {
         </Link>
       )}
 
-      {!rows.length ? (
+      {!verifiedSnapshot ? null : !rows.length ? (
         <div className="card text-fg-muted text-sm">
-          No shifts recorded. Open the first shift before taking orders.
+          {snapshotFresh ? 'No shifts recorded. Open the first shift before taking orders.' : 'The last verified history had no shifts. Refresh to check current records.'}
         </div>
       ) : (
         <div className="space-y-3">
@@ -2180,7 +2254,7 @@ function ShiftsTab() {
                           <Stat label={shiftLegacyRefundLabel} value={inr(s.settled_membership_refunds_minor ?? 0)}/>
                         )}
                         <Stat label="Total refunds" value={inr(s.total_refunds_minor ?? 0)}/>
-                        <Stat label="Net collections" value={inr(s.net_collections_minor ?? 0)} tone="good"/>
+                        <Stat label="Effective net collections" value={inr(s.effective_net_collections_minor ?? s.net_collections_minor ?? 0)} tone="good"/>
                       </div>
                       <ShiftRailBreakdown shift={s}/>
                       <ShiftTenderEvidence shift={s}/>
@@ -2208,6 +2282,7 @@ function ShiftsTab() {
       {opening && (
         <OpenShiftForm
           staffName={me?.name || me?.email || 'Current employee'}
+          canSubmit={newStartReady}
           workspaceName={currentWorkspaceName}
           onClose={() => setOpening(false)}
           onSuccess={() => { setOpening(false); void load(false); }}
@@ -2243,12 +2318,14 @@ function ShiftsTab() {
 }
 
 function OpenShiftForm({
+  canSubmit,
   staffName,
   workspaceName,
   onClose,
   onSuccess,
   onError,
 }: {
+  canSubmit?: () => boolean;
   staffName: string;
   workspaceName: string;
   onClose: () => void;
@@ -2269,6 +2346,7 @@ function OpenShiftForm({
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (submissionInFlight.current) return;
+    if (canSubmit && !canSubmit()) { setErr('Refresh Shifts before opening a new shift. Your opening float is kept.'); return; }
     submissionInFlight.current = true;
     setBusy(true);
     setErr(null);
@@ -2278,7 +2356,11 @@ function OpenShiftForm({
       if (openingFloatMinor === null) {
         throw new Error('Opening float must be a non-negative amount with at most two decimals.');
       }
-      await shifts.open(openingFloatMinor);
+      if (hasPendingWork()) throw new Error('Resolve the saved Start work request first.');
+      await withoutPaidBillWork(() => {
+        if (canSubmit && !canSubmit()) throw new Error('Refresh Shifts before opening a new shift.');
+        return shifts.open(openingFloatMinor);
+      });
       notifications.success(
         `The shared shift is ready on ${workspaceName}. Opening float ${inr(openingFloatMinor)} was saved under ${staffName}.`,
         { title: 'Shift opened' },
@@ -2488,7 +2570,7 @@ export function CloseShiftForm({
       return;
     }
     try {
-      const r = await shifts.close(shift.id, countedMinor);
+      const r = await withoutPaidBillWork(() => shifts.close(shift.id, countedMinor));
       setAmbiguousCountedMinor(null);
       setResult(r);
       const completedBy = r.closed_by_name?.trim()
@@ -2634,7 +2716,7 @@ export function CloseShiftForm({
           <div className="mt-2 grid grid-cols-2 gap-3">
             <Stat label="Gross collections" value={inr(reviewedShift.gross_collections_minor)}/>
             <Stat label="Refunds settled" value={inr(reviewedShift.total_refunds_minor)}/>
-            <Stat label="Net collections" value={inr(reviewedShift.net_collections_minor)} tone="good"/>
+            <Stat label="Effective net collections" value={inr(reviewedShift.effective_net_collections_minor ?? reviewedShift.net_collections_minor)} tone="good"/>
             <Stat label="Expected cash" value={reviewedShift.expected_minor == null ? 'Pending server calculation' : inr(reviewedShift.expected_minor)}/>
           </div>
           <ShiftRailBreakdown shift={reviewedShift}/>
@@ -2858,11 +2940,11 @@ export function RecoverAndroidShiftForm({
     setBusy(true);
     setErr(null);
     try {
-      const response = await shifts.recoverAndroidClose(
+      const response = await withoutPaidBillWork(() => shifts.recoverAndroidClose(
         shift.id,
         attempt.payload,
         attempt.idempotencyKey,
-      );
+      ));
       intent.confirmSuccess(attempt);
       setAmbiguousPayload(null);
       setResult(response);
@@ -3030,7 +3112,7 @@ function TabBtn({ active, onClick, children }: {
   active: boolean; onClick: () => void; children: React.ReactNode;
 }) {
   return (
-    <button onClick={onClick}
+    <button type="button" aria-pressed={active} onClick={onClick}
       className={`shrink-0 px-4 py-2 text-sm font-medium border-b-2 -mb-px whitespace-nowrap flex items-center gap-1.5
         ${active ? 'border-accent text-accent' : 'border-transparent text-fg-muted hover:text-fg'}`}>
       {children}
@@ -3076,17 +3158,29 @@ function Stat({ label, value, tone = 'default' }: {
 }
 
 export function ShiftTenderEvidence({shift}:{shift:ShiftDTO}) {
-  if(!shift.tender_correction_minor)return null;
-  return <section className="mt-3 rounded-xl border border-bg-border bg-bg-raised/30 p-3 text-sm" aria-label="Reconstructed bill tender"><h5 className="font-semibold">Recorded close preserved · reconstructed bill tender</h5><p className="mt-1 text-xs text-fg-muted">Original expected cash, physical count and variance stay unchanged. This includes identified bill corrections only; daily unallocated actuals are separate in Finance.</p><div className="mt-3 grid gap-3 sm:grid-cols-3"><Stat label="Reconstructed Cash collected" value={shift.reconstructed_cash_collections_minor==null?'Unavailable':inr(shift.reconstructed_cash_collections_minor)}/><Stat label="Reconstructed UPI collected" value={shift.reconstructed_upi_collections_minor==null?'Unavailable':inr(shift.reconstructed_upi_collections_minor)}/><Stat label="Reconstructed expected cash" value={shift.reconstructed_expected_minor==null?'Unavailable':inr(shift.reconstructed_expected_minor)}/></div></section>;
+  if(!shift.tender_correction_minor && !shift.receipt_corrections_minor)return null;
+  const corrected=Boolean(shift.receipt_corrections_minor);
+  return <section className="mt-3 rounded-xl border border-bg-border bg-bg-raised/30 p-3 text-sm" aria-label="Reconstructed bill tender">
+    <h5 className="font-semibold">Recorded close preserved · reconstructed bill tender</h5>
+    <p className="mt-1 text-xs text-fg-muted">Original expected cash, physical count and variance stay unchanged. This includes identified bill corrections only; daily unallocated actuals are separate in Finance.</p>
+    {corrected && <p className="mt-1 text-xs text-fg-muted">Effective UPI adjusts receipt errors and payment-method corrections; it is not a bank balance or payout total. Original recorded collections remain historical evidence.</p>}
+    <div className="mt-3 grid gap-3 sm:grid-cols-3">
+      <Stat label="Reconstructed Cash collected" value={shift.reconstructed_cash_collections_minor==null?'Unavailable':inr(shift.reconstructed_cash_collections_minor)}/>
+      {corrected ? <><Stat label="Original recorded net" value={typeof shift.net_collections_minor==='number'?inr(shift.net_collections_minor):'Unavailable'}/><Stat label="Effective UPI receipt value" value={shift.effective_upi_collections_minor==null?'Unavailable':inr(shift.effective_upi_collections_minor)}/></> : <Stat label="Reconstructed UPI collected" value={shift.reconstructed_upi_collections_minor==null?'Unavailable':inr(shift.reconstructed_upi_collections_minor)}/>}
+      <Stat label="Reconstructed expected cash" value={shift.reconstructed_expected_minor==null?'Unavailable':inr(shift.reconstructed_expected_minor)}/>
+    </div>
+    {(shift.receipt_corrections??[]).map(c=><p className="mt-2 text-xs" key={c.id}>No payment received: {inr(c.amount_minor)} offset · {formatDateTime(c.accounting_at)} · no payout. Recorded at this later date, not backdated into the original close.</p>)}
+  </section>;
 }
+
 function RetainedInvestigation({details}:{details:ReceiptInvestigationDTO}) {
   const retainedTime = (value: string) => `${shopTime(value, details.shop_timezone ?? 'UTC')} · ${details.shop_timezone ?? 'UTC (shop timezone unavailable)'}`;
   return <section className="space-y-4 rounded-xl border border-bg-border p-4"><h4 className="font-semibold">Retained players, drinks & billing evidence</h4><p className="text-xs text-fg-muted">{details.historical_evidence_note}</p>{details.participant_intervals.length>0&&<div className="space-y-2"><h5 className="text-sm font-semibold">Joining / Leave / rejoin history</h5>{details.participant_intervals.map(interval=><div key={interval.id} className="rounded-lg bg-bg-raised/40 p-3 text-sm"><b>{interval.guest_name || (interval.customer_id?'Recorded customer':'Anonymous player')}</b><p className="mt-1 text-xs text-fg-muted">Joined {retainedTime(interval.joined_at)} · {interval.left_at?`Left ${retainedTime(interval.left_at)}`:'No retained Leave event'}</p><p className="mt-1 text-xs">Play position {Math.floor(interval.joined_play_elapsed_ms/60000)} min → {interval.left_play_elapsed_ms==null?'end of session':`${Math.floor(interval.left_play_elapsed_ms/60000)} min`}. {interval.settlement_line_id?'Charge is listed once per player below, including all rejoins.':'No retained settled player charge.'}</p></div>)}</div>}{details.participant_charges.length>0&&<div className="space-y-2"><h5 className="text-sm font-semibold">One settled charge per player</h5>{details.participant_charges.map(charge=><div key={charge.id} className="flex justify-between gap-3 text-sm"><span>{charge.interval_count} joining interval{charge.interval_count===1?'':'s'} · {Math.floor(charge.play_elapsed_ms/60000)} min accumulated</span><b className="tabular-nums">{inr(charge.charge_minor)}</b></div>)}</div>}{details.addons.length>0&&<div className="space-y-2"><h5 className="text-sm font-semibold">Confirmed drinks & snacks</h5>{details.addons.map(addon=><div key={addon.id} className="rounded-lg bg-bg-raised/40 p-3 text-sm"><div className="flex justify-between gap-3"><b>{addon.qty} × {addon.menu_item_name_snapshot}</b><span className="tabular-nums">{inr(addon.line_total_minor)}</span></div><p className="mt-1 text-xs text-fg-muted">Confirmed {retainedTime(addon.created_at)}{addon.voided_at?` · Voided ${retainedTime(addon.voided_at)} · ${addon.void_reason??'Reason not retained'}`:''}</p></div>)}</div>}{!details.participant_intervals.length&&!details.addons.length&&<p className="text-sm text-fg-muted">No retained player intervals or session add-ons for this receipt. Older missing proof is not reconstructed from the current catalogue.</p>}</section>;
 }
 
 /** Inline shift work preserves its caller's station selection and POS draft. */
-export function InlineShiftWorkspace({onClose}:{onClose:()=>void}) {
+export function InlineShiftWorkspace({onClose,focusHeadingRef}:{onClose:()=>void;focusHeadingRef?:RefObject<HTMLHeadingElement>}) {
   return <section className="mb-5 rounded-xl border border-bg-border bg-bg-surface p-4" aria-label="Shift workspace">
-    <header className="mb-4 flex items-center justify-between gap-3"><div><h3 className="font-semibold">Shift workspace</h3><p className="mt-1 text-sm text-fg-muted">Your current station and bill stay in place while you open or review the shift.</p></div><button type="button" className="btn btn-ghost" onClick={onClose}>Return to work</button></header><ShiftsTab/>
+    <header className="mb-4 flex items-center justify-between gap-3"><div><h3 ref={focusHeadingRef} tabIndex={-1} className="font-semibold">Shift workspace</h3><p className="mt-1 text-sm text-fg-muted">Your current station and bill stay in place while you open or review the shift.</p></div><button type="button" className="btn btn-ghost" onClick={onClose}>Return to work</button></header><ShiftsTab/>
   </section>;
 }

@@ -15,6 +15,7 @@ internal data class WorkspaceBackgroundPreset(
 
 internal object WorkspaceBackgroundPresets {
     const val DefaultId = "gta_vi"
+    const val VioletGlassId = "violet_glass"
 
     val entries: List<WorkspaceBackgroundPreset> = listOf(
         WorkspaceBackgroundPreset(
@@ -70,6 +71,15 @@ internal object WorkspaceBackgroundPresets {
             height = 2_160,
             contentId = "6ae5b41dfdd4ab381f9a4bd69f5fc121116819552c5561bbfe48d43ea3751bc7",
             assetType = "Publisher wallpaper",
+        ),
+        WorkspaceBackgroundPreset(
+            id = VioletGlassId,
+            label = "Violet Glass",
+            resource = R.drawable.workspace_preset_violet_glass,
+            width = 1_672,
+            height = 941,
+            contentId = "4bbb18c70b040b4657c1395de6db3c43196c1c71161e96088925c3724a30cb99",
+            assetType = "Original artwork",
         ),
     )
 

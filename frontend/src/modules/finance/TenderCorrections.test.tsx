@@ -268,7 +268,11 @@ describe('Protected tender workflow in StrictMode', () => {
       resolve({ token: 'old-account-token', expires_in: 300 }),
     );
     expect(mocks.history).not.toHaveBeenCalled();
-    expect(localStorage.length).toBe(0);
+    // Workspace invalidation persists only its nonsecret cross-tab epoch.
+    expect(localStorage.length).toBe(1);
+    expect(localStorage.getItem('dcompany:root-workspace-epoch:v1')).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
   });
   it('never adopts another tab bill request from this bill Confirm action', async () => {
     await render();

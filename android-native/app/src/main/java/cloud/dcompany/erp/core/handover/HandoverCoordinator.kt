@@ -38,6 +38,7 @@ internal data class HandoverCoordinatorState(
     val priorQuiescenceUnverified: Boolean = false,
     val mutationUncertaintySticky: Boolean = false,
     val sameActorResumed: Boolean = false,
+    val startWorkOwnerRecoveryActive: Boolean = false,
 )
 internal sealed interface HandoverDrainResult {
     data class Drained(val actionKey: String) : HandoverDrainResult
@@ -46,7 +47,9 @@ internal sealed interface HandoverDrainResult {
 }
 
 /** Foundation only: callers must register their entire workflow, and still run the domain/outbox gate. */
-internal class HandoverCoordinator(private val store: HandoverIntentStore) {
+internal class HandoverCoordinator(private val store: HandoverIntentStore,
+    private val verifyStartWorkOwnerRecoveryReady: () -> Unit = { error("Verified startup recovery is unavailable.") },
+) {
     internal class Preparation internal constructor(internal val owner: HandoverCoordinator, val action: HandoverAction) {
         override fun toString() = "HandoverPreparation(<redacted>)"
     }
@@ -83,7 +86,16 @@ internal class HandoverCoordinator(private val store: HandoverIntentStore) {
         override fun toString() = "OwnerSupportPermit(<redacted>)"
     }
     private val supportWork = linkedMapOf<String, OwnerSupportPermit>()
-    private fun workEmpty() = work.isEmpty() && supportWork.isEmpty()
+    internal class StartWorkReviewPermit internal constructor(
+        internal val owner: HandoverCoordinator,
+        val reference: cloud.dcompany.erp.ui.screens.shift.work.StartWorkReference,
+        val mode: String, val id: String = UUID.randomUUID().toString(),
+        val recoveryOnly: Boolean = false,
+        internal var wireStarted: Boolean = false, internal var wireEnded: Boolean = false,
+        internal var finishRequested: Boolean = false, internal var checkpointing: Boolean = false,
+    ) { override fun toString() = "StartWorkReviewPermit(<redacted>)" }
+    private val startWorkReviews = linkedMapOf<String, StartWorkReviewPermit>()
+    private fun workEmpty() = work.isEmpty() && supportWork.isEmpty() && startWorkReviews.isEmpty()
     private var authority: HandoverAuthority? = null
     private var lifecycleVersion = 0L
     private var resumption: SameActorResumption? = null
@@ -93,14 +105,15 @@ internal class HandoverCoordinator(private val store: HandoverIntentStore) {
     private fun publish() {
         lifecycleVersion++
         mutable.value = mutable.value.copy(
-            activeOperations = work.filterValues { !it.unresolved }.keys.toSet() + supportWork.keys,
+            activeOperations = work.filterValues { !it.unresolved }.keys.toSet() + supportWork.keys + startWorkReviews.keys,
             unresolvedOperations = work.filterValues { it.unresolved }.keys.toSet(),
+            startWorkOwnerRecoveryActive = startWorkReviews.values.any { it.recoveryOnly },
         )
     }
     private fun current(expected: HandoverAuthority) {
         check(mutable.value.initialized && authority == expected) { "The original operation authority is no longer current." }
     }
-    private fun usable(expected: HandoverAuthority) { current(expected); check(!mutable.value.storageFault) { "Restore verified handover storage before continuing." } }
+    private fun usable(expected: HandoverAuthority) { current(expected); check(startWorkReviews.isEmpty()) { "Finish the exact saved start-work review first." }; check(!mutable.value.storageFault) { "Restore verified handover storage before continuing." } }
     private fun record(permit: Permit): Work {
         check(permit.owner === this)
         return requireNotNull(work[permit.id]).also { check(it.permit === permit) }
@@ -110,8 +123,71 @@ internal class HandoverCoordinator(private val store: HandoverIntentStore) {
         mutable.value = mutable.value.copy(storageFault = true)
         throw error
     }
+    suspend fun beginStartWorkReview(reference: cloud.dcompany.erp.ui.screens.shift.work.StartWorkReference,
+        mode: String): StartWorkReviewPermit = mutex.withLock {
+        reference.validate(); require(mode in setOf("actor_status", "owner_status", "owner_cancel"))
+        check(mutable.value.initialized)
+        persisted { check(store.read() == null) }
+        check(startWorkReviews.isEmpty() && supportWork.isEmpty() && work.values.all { it.unresolved } &&
+            mutable.value.intent == null && preparation == null && workspaceExit == null && !mutable.value.storageFault)
+        StartWorkReviewPermit(this, reference, mode).also { startWorkReviews[it.id] = it; publish() }
+    }
+    /** Owner proof can settle an exact saved action without creating ordinary login authority. */
+    suspend fun beginStartWorkOwnerRecovery(reference: cloud.dcompany.erp.ui.screens.shift.work.StartWorkReference,
+        mode: String): StartWorkReviewPermit = mutex.withLock {
+        verifyStartWorkOwnerRecoveryReady()
+        reference.validate(); require(mode in setOf("owner_status", "owner_cancel"))
+        check(startWorkReviews.isEmpty() && supportWork.isEmpty() && work.values.all { it.unresolved } &&
+            mutable.value.intent == null && preparation == null && workspaceExit == null && !mutable.value.storageFault)
+        persisted { check(store.read() == null) }
+        verifyStartWorkOwnerRecoveryReady()
+        StartWorkReviewPermit(this, reference, mode, recoveryOnly = true).also { startWorkReviews[it.id] = it; publish() }
+    }
+    suspend fun requireStartWorkReview(permit: StartWorkReviewPermit) = mutex.withLock {
+        check(permit.owner === this && startWorkReviews[permit.id] === permit && !permit.finishRequested && !permit.checkpointing)
+    }
+    suspend fun beforeStartWorkReviewWire(permit: StartWorkReviewPermit) = mutex.withLock {
+        check(permit.owner === this && startWorkReviews[permit.id] === permit && !permit.wireStarted && !permit.finishRequested)
+        permit.wireStarted = true
+    }
+    suspend fun endStartWorkReviewWire(permit: StartWorkReviewPermit) = mutex.withLock {
+        if (startWorkReviews[permit.id] === permit) {
+            permit.wireEnded = true
+            if (permit.finishRequested && !permit.checkpointing) startWorkReviews.remove(permit.id)
+            publish()
+        }
+    }
+    suspend fun finishStartWorkReview(permit: StartWorkReviewPermit) = mutex.withLock {
+        check(permit.owner === this)
+        if (startWorkReviews[permit.id] === permit) {
+            check(!permit.checkpointing); permit.finishRequested = true
+            if (!permit.wireStarted || permit.wireEnded) startWorkReviews.remove(permit.id)
+            publish()
+        }
+    }
+    suspend fun checkpointStartWorkReview(permit: StartWorkReviewPermit,
+        proof: ReviewedStartWorkResolution, stillCurrent: () -> Boolean, checkpoint: suspend () -> Unit) {
+        val expected = permit.reference.knownAttempt(); proof.validate(expected)
+        mutex.withLock {
+            check(startWorkReviews[permit.id] === permit && permit.wireStarted && !permit.finishRequested && !permit.checkpointing && stillCurrent())
+            if (permit.recoveryOnly) { verifyStartWorkOwnerRecoveryReady(); persisted { check(store.read() == null) } }
+            check(work.values.none { !it.unresolved || it.checkpointInProgress })
+            permit.checkpointing = true
+        }
+        try {
+            withContext(NonCancellable) {
+                check(stillCurrent()); checkpoint()
+                mutex.withLock {
+                    check(startWorkReviews[permit.id] === permit && stillCurrent())
+                    val exact = work.filter { (id, old) -> old.unresolved && old.knownAttempt == expected &&
+                        work.values.none { it.parentId == id } }.keys
+                    retireWork(aggregateRemovals(exact)); publish()
+                }
+            }
+        } finally { withContext(NonCancellable) { mutex.withLock { permit.checkpointing = false } } }
+    }
     suspend fun admitOwnerSupport(companyId: String, userId: String, originalLoginIsCurrent: () -> Boolean): OwnerSupportPermit = mutex.withLock {
-        check(!mutable.value.storageFault && mutable.value.intent == null && preparation == null && workspaceExit == null && originalLoginIsCurrent())
+        check(startWorkReviews.isEmpty() && !mutable.value.storageFault && mutable.value.intent == null && preparation == null && workspaceExit == null && originalLoginIsCurrent())
         require(companyId.isNotBlank() && userId.isNotBlank())
         persisted { check(store.read() == null) }
         OwnerSupportPermit(this, companyId, userId).also { supportWork[it.id] = it; publish() }
@@ -159,7 +235,7 @@ internal class HandoverCoordinator(private val store: HandoverIntentStore) {
         freshAuthorityIsCurrent: () -> Boolean) = mutex.withLock {
         current(previous); next.validate()
         check(next.scope == previous.scope && next.epoch > previous.epoch && freshAuthorityIsCurrent())
-        check(supportWork.isEmpty() && work.values.all { it.unresolved } && preparation == null && workspaceExit == null)
+        check(startWorkReviews.isEmpty() && supportWork.isEmpty() && work.values.all { it.unresolved } && preparation == null && workspaceExit == null)
         // Reading successfully does not clear a pre-existing storage fault or inherited uncertainty.
         persisted { check(store.read() == mutable.value.intent) { "The retained handover state changed." } }
         check(freshAuthorityIsCurrent())
@@ -671,7 +747,7 @@ internal class HandoverCoordinator(private val store: HandoverIntentStore) {
         }
     }
     private fun exclusiveObservation(observer: Permit?): Boolean = if (observer == null) workEmpty() else
-        supportWork.isEmpty() && work.size == 1 && work[observer.id]?.let { it.permit === observer && !it.dispatched && !it.unresolved &&
+        startWorkReviews.isEmpty() && supportWork.isEmpty() && work.size == 1 && work[observer.id]?.let { it.permit === observer && !it.dispatched && !it.unresolved &&
             observer.purpose in setOf(OperationPurpose.OBSERVE_HANDOVER_STATE, OperationPurpose.OBSERVE_WORKSPACE_EXIT) } == true
 
     private suspend fun reconcilePriorQuiescenceChecked(

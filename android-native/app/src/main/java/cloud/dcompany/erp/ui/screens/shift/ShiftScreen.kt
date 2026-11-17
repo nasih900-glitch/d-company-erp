@@ -174,7 +174,12 @@ internal fun ShiftAccountingBreakdown.hasLegacyPrepaidMoney(): Boolean =
 
 /** Normal Shift and inline entry points share one command/busy owner for this login. */
 @Composable
-internal fun sharedShiftViewModel(): ShiftViewModel = viewModel()
+internal fun sharedShiftViewModel(): ShiftViewModel {
+    val app = cloud.dcompany.erp.DCompanyApp.instance
+    val lease by app.cacheIsolation.activeLeaseFlow.collectAsStateWithLifecycle()
+    val profile by app.shiftCache.profile.collectAsStateWithLifecycle()
+    return viewModel(key = "shift:${lease?.generation}:${profile?.hashCode()}")
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -182,9 +187,14 @@ fun ShiftScreen(
     access: ShiftAccess = ShiftAccess(),
     vm: ShiftViewModel = sharedShiftViewModel(),
     onHandover: ((String) -> Unit)? = null,
+    onAttendance: (() -> Unit)? = null,
+    operatorLabel: String = "Cashier status unavailable",
+    operatorDetail: String = "Refresh to verify the current cashier.",
     presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
 ) {
-    val state by vm.state.collectAsStateWithLifecycle()
+    val original by vm.state.collectAsStateWithLifecycle()
+    val work by vm.startWorkState.collectAsStateWithLifecycle()
+    val state = original.copy(busy = original.busy || work.busy)
     SideEffect { vm.updateAccess(access) }
 
     val openShift = state.open
@@ -195,7 +205,9 @@ fun ShiftScreen(
     }
     key(shiftIdentity) {
         val closeReview = remember { BringIntoViewRequester() }
+        val openReview = remember { BringIntoViewRequester() }
         val scope = rememberCoroutineScope()
+        val confirmedShift = state.open?.takeIf { it.server != null || it.local?.serverShiftId != null }
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
             Column(
                 Modifier.widthIn(max = 1180.dp).fillMaxSize()
@@ -217,6 +229,22 @@ fun ShiftScreen(
                             style = MaterialTheme.typography.labelMedium)
                     }
                 }
+                DailyWorkHub(
+                    operatorLabel = operatorLabel,
+                    operatorDetail = operatorDetail,
+                    onAttendance = onAttendance,
+                    onChangeCashier = if (onHandover != null && confirmedShift != null) {
+                        { onHandover(confirmedShift.shiftId) }
+                    } else null,
+                    onReviewShift = if (state.currentShiftLoaded && (if (openShift == null) access.canOpen else access.canClose)) {
+                        { scope.launch { (if (openShift == null) openReview else closeReview).bringIntoView() }; Unit }
+                    } else null,
+                    hasOpenShopShift = openShift != null,
+                    changeCashierOnline = state.online,
+                    busy = state.busy,
+                )
+                cloud.dcompany.erp.ui.screens.staff.time.InlineSharedAttendance()
+                StartWorkRecovery(vm)
                 state.operationNotice?.let { message ->
                     Column(Modifier.fillMaxWidth().padding(vertical=Spacing.xs),verticalArrangement=Arrangement.spacedBy(Spacing.xs)) {
                         Text("Shift update",style=MaterialTheme.typography.labelMedium)
@@ -232,19 +260,14 @@ fun ShiftScreen(
                             "Shift opening is view only for this account. Ask an authorised cashier or manager.",
                         )
                     }
-                    OpenShiftCard(state, vm, access.canOpen)
+                    Box(Modifier.fillMaxWidth().bringIntoViewRequester(openReview)) {
+                        OpenShiftCard(state, vm, access.canOpen)
+                    }
                 } else {
                     if (!access.canClose) {
                         ViewOnlyNotice(
                             "Shift closing is view only for this account. Ask a staff member with Shift close access.",
                         )
-                    }
-                    val confirmedShift = state.open?.takeIf { it.server != null || it.local?.serverShiftId != null }
-                    if (onHandover != null && state.online && confirmedShift != null) {
-                        TextButton(onClick = { onHandover(confirmedShift.shiftId) }, enabled = !state.busy,
-                            modifier = Modifier.heightIn(min = 48.dp).testTag("open-till-takeover")) {
-                            Text("Hand over till")
-                        }
                     }
                     BoxWithConstraints(Modifier.fillMaxWidth().testTag("shift-open-workspace")) {
                         val overview: @Composable (Modifier) -> Unit = { modifier ->
@@ -328,6 +351,52 @@ fun ShiftScreen(
             title = { Text(shiftCloseResultTitle(r, state.open)) },
             text = { Text(shiftCloseResultMessage(r, state.open)) },
         )
+    }
+}
+
+/** Navigation only: all attendance, handover and shift mutations stay in their existing flows. */
+@Composable
+internal fun DailyWorkHub(
+    operatorLabel: String,
+    operatorDetail: String,
+    onAttendance: (() -> Unit)?,
+    onChangeCashier: (() -> Unit)?,
+    onReviewShift: (() -> Unit)?,
+    hasOpenShopShift: Boolean,
+    busy: Boolean,
+    changeCashierOnline: Boolean = true,
+) {
+    SectionCard(
+        title = "Daily work",
+        subtitle = "Attendance, cashier responsibility and the shop shift are separate.",
+        icon = Icons.Filled.Person,
+        modifier = Modifier.fillMaxWidth().testTag("daily-work-hub"),
+    ) {
+        Text("Current cashier", style = MaterialTheme.typography.labelMedium)
+        Text(operatorLabel, style = MaterialTheme.typography.titleMedium)
+        Text(operatorDetail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            "Both staff can be clocked in while one runs the till. Attendance records each person's arrival and departure. Changing cashier or closing the shop shift does not record staff departures.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+            onAttendance?.let { action ->
+                TextButton(onClick = action, enabled = !busy, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Attendance") }
+            }
+            onChangeCashier?.let { action ->
+                TextButton(onClick = action, enabled = !busy && changeCashierOnline,
+                    modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("open-till-takeover")) { Text("Change cashier") }
+            }
+            onReviewShift?.let { action ->
+                TextButton(onClick = action, enabled = !busy, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) {
+                    Text(if (hasOpenShopShift) "Close shop shift" else "Open shop shift")
+                }
+            }
+        }
+        if (onChangeCashier != null && !changeCashierOnline) {
+            Text("Connect to change cashier", style = MaterialTheme.typography.bodySmall)
+        }
     }
 }
 
@@ -597,7 +666,7 @@ internal fun ShiftDashboardOverview(
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     Text(
-                        "Net collections",
+                        "Effective net collections · last synced",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelMedium,
                     )
@@ -626,7 +695,7 @@ internal fun ShiftDashboardOverview(
                                 modifier = Modifier.fillMaxWidth(),
                             )
                             ShiftOverviewMoneyCard(
-                                label = "UPI",
+                                label = "Effective UPI",
                                 value = accounting?.upiCollectionsMinor?.asRupees() ?: "—",
                                 icon = Icons.Filled.QrCode,
                                 modifier = Modifier.fillMaxWidth(),
@@ -641,7 +710,7 @@ internal fun ShiftDashboardOverview(
                                 modifier = Modifier.weight(1f),
                             )
                             ShiftOverviewMoneyCard(
-                                label = "UPI",
+                                label = "Effective UPI",
                                 value = accounting?.upiCollectionsMinor?.asRupees() ?: "—",
                                 icon = Icons.Filled.QrCode,
                                 modifier = Modifier.weight(1f),
@@ -917,11 +986,12 @@ private fun OpenShiftCard(state: ShiftUiState, vm: ShiftViewModel, canOpen: Bool
         Spacer(Modifier.height(14.dp))
     }
 
+    val work by vm.startWorkState.collectAsStateWithLifecycle()
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val opening: @Composable () -> Unit = {
             OpenShiftForm(online=state.online, busy=state.busy, canOpen=canOpen,
-                blockedByRejectedShift=state.rejectedShift != null,
-                offlineGamingSupported=state.offlineGamingSupported, onOpenShift=vm::openShift)
+                blockedByRejectedShift=state.rejectedShift != null || !work.ready || work.pending.isNotEmpty() || work.busy,
+                offlineGamingSupported=state.offlineGamingSupported, onOpenShift=vm::openShift, startWorkName=vm.onlineStartWorkName())
         }
         if (maxWidth >= 900.dp) Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(Spacing.lg),verticalAlignment=Alignment.Top) {
             Box(Modifier.weight(1f)) { opening() }
@@ -946,6 +1016,7 @@ internal fun OpenShiftForm(
     blockedByRejectedShift: Boolean,
     onOpenShift: (Long) -> Unit,
     offlineGamingSupported: Boolean = false,
+    startWorkName: String? = null,
 ) {
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -961,7 +1032,7 @@ internal fun OpenShiftForm(
         val compact = maxWidth < 440.dp
         val submit: @Composable () -> Unit = {
             ErpButton(
-                text = "Open shift with ${floatMinor.asRupees()}",
+                text = if (startWorkName != null) "Start work with ${floatMinor.asRupees()}" else "Open shift with ${floatMinor.asRupees()}",
                 onClick = {
                     keyboardController?.hide()
                     focusManager.clearFocus(force = true)
@@ -977,8 +1048,9 @@ internal fun OpenShiftForm(
             )
         }
         SectionCard(
-            title = "Open shift",
-            subtitle = "Record the drawer cash before accepting the first payment.",
+            title = if (startWorkName != null) "Start work · $startWorkName" else "Open shift",
+            subtitle = if (startWorkName != null) "Open a new shift and clock in $startWorkName. An existing clock-in is preserved. Till verification stays separate."
+                else "Record the drawer cash before accepting the first payment. This captured opening does not clock anyone in.",
             icon = Icons.Filled.AccountBalanceWallet,
             modifier = Modifier.fillMaxWidth(),
             action = if (compact) null else { { submit() } },
@@ -1973,6 +2045,7 @@ private fun HistoryRow(s: ShiftHistoryRow) {
             style = MaterialTheme.typography.labelSmall,
             color = if (s.varianceMinor == 0L) MaterialTheme.colorScheme.operationalGood else MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        Text("Collection figures use the last synced server view; recorded drawer close is unchanged.", style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         Text("Recorded expected drawer ${s.expectedMinor?.asRupees() ?: "Not retained"} · recorded count / variance above remain unchanged.",
             style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         if ((s.tenderCorrectionMinor ?: 0L) != 0L) {
@@ -1988,7 +2061,7 @@ private fun HistoryRow(s: ShiftHistoryRow) {
             )
         } else if (s.netCollectionsMinor != null) {
             Text(
-                "net collections ${s.netCollectionsMinor.asRupees()}",
+                "effective net collections ${s.netCollectionsMinor.asRupees()} · last synced",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -2006,7 +2079,7 @@ private fun HistoryRow(s: ShiftHistoryRow) {
                 Text(
                     "cash ${s.cashCollectionsMinor.asRupees()} · " +
                         "card ${s.cardCollectionsMinor.asRupees()} · " +
-                        "UPI ${s.upiCollectionsMinor.asRupees()}$other",
+                        "effective UPI ${s.upiCollectionsMinor.asRupees()}$other",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

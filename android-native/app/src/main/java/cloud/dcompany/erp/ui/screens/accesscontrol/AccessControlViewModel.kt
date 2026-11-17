@@ -116,6 +116,7 @@ class AccessControlViewModel(
     fun dismissNotice() { _state.value = _state.value.copy(notice = null) }
 
     private fun setCell(roleCode: String, module: String, allowed: JsonElement) {
+        if (_state.value.cells.firstOrNull { it.roleCode == roleCode && it.module == module }?.configurable != true) return
         val key = "$roleCode:$module"
         if (key in _state.value.busyKeys) return
         if (_state.value.authorityUnknown) {

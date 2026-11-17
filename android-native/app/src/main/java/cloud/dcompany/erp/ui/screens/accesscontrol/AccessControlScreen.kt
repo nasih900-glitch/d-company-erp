@@ -437,6 +437,7 @@ private fun AccessCellToggle(
                     contentDescription = "$roleLabel, $moduleLabel access"
                     stateDescription = when {
                         busy -> "Updating"
+                        !cell.configurable -> "Operational owner override; module switches cannot restrict this role"
                         !enabled -> "Refreshing server permissions"
                         cell.accessLevel == "full" -> "Full access"
                         cell.accessLevel == "partial" -> "Partial access"
@@ -445,7 +446,7 @@ private fun AccessCellToggle(
                 }
                 .toggleable(
                     value = cell.accessLevel != "blocked",
-                    enabled = enabled && !busy,
+                    enabled = enabled && !busy && cell.configurable,
                     role = Role.Switch,
                     onValueChange = { onToggle() },
                 ),
@@ -480,7 +481,7 @@ private fun AccessCellToggle(
         // Only shown when this cell has an explicit override — an
         // unmodified cell is just following the role's static default and
         // has nothing to reset.
-        if (cell.override != null) {
+        if (cell.override != null && cell.configurable) {
             IconButton(onClick = onReset, enabled = enabled && !busy, modifier = Modifier.size(48.dp)) {
                 Icon(
                     Icons.Filled.Refresh,
@@ -493,8 +494,5 @@ private fun AccessCellToggle(
     }
 }
 
-internal fun roleDisplayName(roleCode: String): String = when (roleCode) {
-    "co_owner" -> "Co-owner"
-    "gaming_supervisor" -> "Gaming supervisor"
-    else -> roleCode.replace('_', ' ').replaceFirstChar(Char::uppercase)
-}
+internal fun roleDisplayName(roleCode: String): String =
+    cloud.dcompany.erp.core.auth.roleDisplayLabel(roleCode, exactOwnerAccess = true)

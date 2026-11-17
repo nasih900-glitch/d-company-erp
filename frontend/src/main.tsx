@@ -1,46 +1,11 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, HashRouter } from 'react-router-dom';
-
-// HashRouter works under file:// (double-click index.html), Tauri webview,
-// and Capacitor without requiring server-side rewrites. BrowserRouter is
-// reserved for cloud-hosted web deployments where the server can rewrite
-// any path back to index.html.
-const Router = import.meta.env.VITE_ROUTER_MODE === 'hash' ? HashRouter : BrowserRouter;
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-
-import App from '@/app/App';
-import ErrorBoundary from '@/app/ErrorBoundary';
-import { NotificationProvider } from '@/components/ui/Notifications';
-import { AuthProvider } from '@/modules/auth/AuthContext';
-import { registerServiceWorker } from '@/registerServiceWorker';
-import { initAlarms } from '@/lib/alarm';
+import RootRecoveryGate from '@/app/RootRecoveryGate';
 import './styles/index.css';
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false },
-  },
-});
-
+// The ordinary auth subtree must not even evaluate on a cold recovery route.
+const Router = import.meta.env.VITE_ROUTER_MODE === 'hash' ? HashRouter : BrowserRouter;
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <ErrorBoundary>
-      <NotificationProvider>
-        <QueryClientProvider client={queryClient}>
-          <Router>
-            <AuthProvider>
-              <App />
-            </AuthProvider>
-          </Router>
-        </QueryClientProvider>
-      </NotificationProvider>
-    </ErrorBoundary>
-  </React.StrictMode>,
+  <React.StrictMode><Router><RootRecoveryGate/></Router></React.StrictMode>,
 );
-
-registerServiceWorker();
-
-// Register the high-importance alarm notification channel up front (native
-// builds only; a no-op in the browser).
-initAlarms();

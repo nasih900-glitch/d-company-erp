@@ -61,7 +61,9 @@ function prepare(activeSession?: GameSessionDTO) {
 }
 it('returns from the real inline Shift form to an authoritative ready Gaming board without realtime', async () => {
   prepare(); await settle();
+  button('Open shift here').focus();
   act(() => button('Open shift here').click()); await settle();
+  expect(document.activeElement?.textContent).toBe('Shift workspace');
   act(() => button('Open shift').click()); await settle();
   const form=document.querySelector('form')!;
   await act(async () => form.dispatchEvent(new Event('submit', {bubbles:true,cancelable:true}))); await settle();
@@ -70,6 +72,7 @@ it('returns from the real inline Shift form to an authoritative ready Gaming boa
   expect(document.body.textContent).not.toContain('Open a shift before starting a session');
   expect(document.body.textContent).toContain('Test Station');
   expect(document.querySelector('[aria-label="Shift workspace"]')).toBeNull();
+  expect(document.activeElement?.contains(document.querySelector('header'))).toBe(true);
 });
 it('refreshes the Gaming shift blocker for another staff member\'s shift event', async () => {
   const state=prepare(); await settle();

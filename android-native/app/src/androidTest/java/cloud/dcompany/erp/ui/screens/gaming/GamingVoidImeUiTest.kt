@@ -10,6 +10,25 @@ import android.view.Choreographer
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.ViewRootForTest
@@ -22,13 +41,19 @@ import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -36,10 +61,14 @@ import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
+import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.components.VoidReasonInput
+import cloud.dcompany.erp.ui.components.VOID_REASON_OTHER_ID
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
+import kotlin.math.floor
 import kotlinx.serialization.json.JsonArray
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -161,6 +190,184 @@ class GamingVoidImeUiTest {
         compose.runOnIdle {
             assertEquals(VoidImeReason to target.shiftId, submitted)
         }
+    }
+
+    @Test
+    fun retainedAddonLongMultilineReasonKeepsBoundedOwnerAndExactSubmission() {
+        val reason = "Reviewed retained item detail.\n".repeat(20).take(499) + "Z"
+        val target = retainedVoidTarget()
+        var submitted: Pair<String, String?>? = null
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, 1.3f)) {
+                DCompanyTheme {
+                    CancelUnbilledSessionDialog(
+                        stationName = "Reviewed retained items", amountMinor = 15_000,
+                        activeAddons = listOf(retainedVoidAddon()), eligibleTargets = listOf(target),
+                        onDismiss = {}, onConfirm = {},
+                        onConfirmWithTarget = { text, shift -> submitted = text to shift },
+                    )
+                }
+            }
+        }
+        assertRequestedHost()
+        withInteractiveWindows {
+            val custom = openRetainedCustomReason()
+            val before = awaitIme(custom)
+            before.assertImeAndCompleteTouchOwner("Empty multiline owner")
+            before.assertFitsMeasuredViewport()
+            custom.performTextReplacement(reason)
+            custom.assertTextContains(reason).assertIsFocused()
+            val typed = awaitIme(custom)
+            typed.assertImeAndCompleteTouchOwner("Long multiline owner")
+            typed.assertFitsMeasuredViewport()
+            assertEquals(before.bounds.height, typed.bounds.height, 1f)
+            // Move within the retained text so native internal text scrolling is exercised.
+            custom.performSemanticsAction(SemanticsActions.SetSelection) { it(0, 0, false) }
+            custom.performSemanticsAction(SemanticsActions.SetSelection) { it(500, 500, false) }
+            custom.assertTextContains(reason).assertIsFocused()
+            awaitIme(custom).assertImeAndCompleteTouchOwner("Internally scrolled multiline owner")
+            val targetOwner = compose.onNode(hasText("${target.terminalName} · ${target.openedByName}") and hasClickAction())
+                .performScrollTo()
+            awaitIme(targetOwner).assertImeAndCompleteTouchOwner("Retained target after long reason")
+            targetOwner.performTouchInput { click(center) }
+            custom.assertTextContains(reason)
+            val confirm = compose.onNode(hasText("Void session") and hasClickAction())
+                .bringIntoViewIfNeeded().assertIsEnabled()
+            awaitIme(confirm).assertImeAndCompleteTouchOwner("Long reason confirmation")
+            confirm.performTouchInput { click(center) }
+        }
+        compose.runOnIdle { assertEquals(reason to target.shiftId, submitted) }
+    }
+
+    @Test
+    fun constrainedFrameReleasesChromeWithoutRecreatingFocusedReason() {
+        val frameHeight = mutableStateOf(500.dp)
+        val draft = "Focused reason survives chrome release"
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, 1.3f)) {
+                DCompanyTheme {
+                    var reason by remember { mutableStateOf("") }
+                    var owner by remember { mutableStateOf(IntSize.Zero) }
+                    var viewport by remember { mutableStateOf(IntSize.Zero) }
+                    Box(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
+                        Box(Modifier.width(480.dp).height(frameHeight.value).testTag("calibrated-void-frame")) {
+                            GamingDialogFrameContent(
+                                title = "Void session",
+                                adaptiveChrome = true, minimumBodyHeightPx = owner.height,
+                                text = { body ->
+                                    Column(if (body.scrollsChrome) Modifier else Modifier.heightIn(max = 440.dp)
+                                        .onSizeChanged { viewport = it }.testTag("gaming-void-form-viewport")
+                                        .verticalScroll(rememberScrollState())) {
+                                        VoidReasonInput(
+                                            selectedId = VOID_REASON_OTHER_ID, customReason = reason,
+                                            onPresetSelected = {}, onCustomReasonChange = { reason = it },
+                                            parentOwnsScrolling = true,
+                                            parentViewportSize = if (body.scrollsChrome) body.viewportSize else viewport,
+                                            parentScrollOwnerIsFrame = body.scrollsChrome,
+                                            onCustomOwnerSizeChanged = { owner = it },
+                                        )
+                                    }
+                                },
+                                confirmButton = { TextButton(onClick = {}, modifier = Modifier.heightIn(min = 48.dp).testTag("fallback-confirm")) { Text("Void session") } },
+                                dismissButton = { TextButton(onClick = {}, modifier = Modifier.heightIn(min = 48.dp)) { Text("Keep session") } },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        assertRequestedHost()
+        withInteractiveWindows {
+            val custom = compose.onNodeWithContentDescription("Custom cancellation reason")
+            val initial = awaitIme(custom)
+            // Initial geometry records the finite system-bar/IME-safe host before calibration.
+            custom.assertIsFocused()
+            compose.onNodeWithTag("gaming-dialog-scroll-viewport").assertDoesNotExist()
+            val frame = compose.onNodeWithTag("calibrated-void-frame").readImeEvidence()
+            val initialViewport = checkNotNull(initial.viewportBounds)
+            val title = checkNotNull(initial.titleBounds)
+            val footer = checkNotNull(initial.footerBounds)
+            val ownerHeight = initial.bounds.height
+            val gapTop = initialViewport.top - title.bottom
+            val gapBottom = footer.top - initialViewport.bottom
+            val chrome = title.height + footer.height + gapTop + gapBottom
+            val padding = 2f * Spacing.xl.value * initial.density
+            val safeBottom = minOf(initial.visibleFrame.bottom, checkNotNull(initial.imeBounds).top.toFloat())
+            val available = safeBottom - frame.bounds.top
+            val margin = 2f
+            assertTrue("Frame must start inside the visible window: $frame", frame.bounds.top >= initial.visibleFrame.top - 1f)
+            assertTrue("Measured chrome/gaps must be positive: $initial", chrome > margin * 2 && gapTop >= 0 && gapBottom >= 0)
+            val viewportHeight = floor(minOf(
+                initialViewport.height, available - padding - chrome - margin, ownerHeight + chrome / 2f,
+            ))
+            assertTrue("Window cannot support this equal-viewport transition: $initial",
+                viewportHeight >= ownerHeight + margin && viewportHeight < ownerHeight + chrome - margin)
+            val largeHeight = viewportHeight + chrome + padding
+            val smallHeight = viewportHeight + padding
+            assertTrue("Calibrated frame must fit the actual safe window", largeHeight <= available - margin)
+            Log.i(VoidImeLogTag, "equalViewport ownerPx=$ownerHeight chromePx=$chrome paddingPx=$padding viewportPx=$viewportHeight availablePx=$available initialViewport=$initialViewport title=$title footer=$footer")
+            compose.runOnIdle { frameHeight.value = (largeHeight / initial.density).dp }
+            val calibrated = awaitIme(custom)
+            calibrated.assertImeAndCompleteTouchOwner("Calibrated pinned owner")
+            calibrated.assertFitsMeasuredViewport()
+            compose.onNodeWithTag("gaming-dialog-scroll-viewport").assertDoesNotExist()
+            custom.assertIsFocused().performTextReplacement(draft)
+            val pinned = awaitIme(custom)
+            pinned.assertImeAndCompleteTouchOwner("Calibrated edited pinned owner")
+            pinned.assertFitsMeasuredViewport()
+            val ownerId = custom.fetchSemanticsNode().id
+            val pinnedViewport = checkNotNull(pinned.viewportBounds)
+            assertEquals(viewportHeight, pinnedViewport.height, 1f)
+            var previousViewportSize = checkNotNull(pinned.viewportSize)
+            fun assertOwner(frameOwnsScroll: Boolean, label: String) {
+                val evidence = awaitIme(custom)
+                evidence.assertImeAndCompleteTouchOwner(label)
+                evidence.assertFitsMeasuredViewport()
+                val viewport = checkNotNull(evidence.viewportBounds)
+                assertEquals(pinnedViewport.width, viewport.width, 1f)
+                assertEquals(viewportHeight, viewport.height, 1f)
+                val viewportSize = checkNotNull(evidence.viewportSize)
+                assertEquals(previousViewportSize, viewportSize)
+                previousViewportSize = viewportSize
+                if (frameOwnsScroll) compose.onNodeWithTag("gaming-dialog-scroll-viewport").assertIsDisplayed()
+                else compose.onNodeWithTag("gaming-dialog-scroll-viewport").assertDoesNotExist()
+                assertEquals(ownerId, custom.fetchSemanticsNode().id)
+                custom.assertTextContains(draft).assertIsFocused()
+            }
+            fun assertFooter(frameOwnsScroll: Boolean, label: String) {
+                val confirm = compose.onNodeWithTag("fallback-confirm")
+                if (frameOwnsScroll) confirm.performScrollTo() else confirm.assertIsDisplayed()
+                awaitIme(confirm).assertImeAndCompleteTouchOwner(label)
+                custom.assertTextContains(draft).assertIsFocused()
+            }
+            // Deliberate owner replacements, not retries; viewport dimensions stay equal.
+            repeat(2) { cycle ->
+                compose.runOnIdle { frameHeight.value = (smallHeight / initial.density).dp }
+                assertOwner(true, "Fallback owner $cycle")
+                assertFooter(true, "Manually scrolled fallback footer $cycle")
+                compose.runOnIdle { frameHeight.value = (largeHeight / initial.density).dp }
+                assertOwner(false, "Restored pinned owner $cycle")
+                assertFooter(false, "Pinned footer $cycle")
+            }
+            compose.runOnIdle { frameHeight.value = (smallHeight / initial.density).dp }
+            assertOwner(true, "Repeated fallback owner")
+            assertFooter(true, "Repeated manually scrolled footer")
+        }
+    }
+
+    private fun openRetainedCustomReason(): SemanticsNodeInteraction {
+        compose.onNodeWithContentDescription("Cancellation reason: Other or add details")
+            .performScrollTo().performTouchInput { click(center) }
+        val custom = compose.onNodeWithContentDescription("Custom cancellation reason")
+            .performScrollTo().assertIsDisplayed()
+        custom.performTouchInput { click(center) }
+        if (awaitImeOrNull(custom, timeoutMillis = 2_000) == null) {
+            awaitKeyboardRecoveryDisplayed(custom).assertCompleteTouchOwnerWithoutIme()
+                .performTouchInput { click(center) }
+        }
+        return custom.assertIsFocused()
     }
 
     private fun assertRequestedHost() {
@@ -304,7 +511,21 @@ class GamingVoidImeUiTest {
     private fun SemanticsNodeInteraction.readImeEvidence(): VoidImeEvidence {
         val node = fetchSemanticsNode()
         val root = node.root as ViewRootForTest
+        val geometry = compose.onAllNodes(
+            hasTestTag("gaming-void-form-viewport") or hasTestTag("gaming-dialog-scroll-viewport") or
+                hasTestTag("gaming-dialog-title") or hasTestTag("gaming-dialog-footer"),
+            useUnmergedTree = true,
+        ).fetchSemanticsNodes()
         return compose.runOnIdle {
+            fun geometryValue(tag: String): Pair<Rect, IntSize>? = geometry.firstOrNull {
+                it.config.contains(androidx.compose.ui.semantics.SemanticsProperties.TestTag) &&
+                    it.config[androidx.compose.ui.semantics.SemanticsProperties.TestTag] == tag
+            }?.let {
+                val p = it.positionOnScreen
+                val size = it.size
+                Rect(p.x, p.y, p.x + size.width, p.y + size.height) to size
+            }
+            val viewport = geometryValue("gaming-void-form-viewport") ?: geometryValue("gaming-dialog-scroll-viewport")
             val view = root.view
             val activityDisplayId = checkNotNull(compose.activity.display).displayId
             val rootDisplayId = checkNotNull(view.display).displayId
@@ -360,6 +581,10 @@ class GamingVoidImeUiTest {
                 rootHeight = view.height,
                 windowFocused = view.hasWindowFocus(),
                 layoutPending = root.hasPendingMeasureOrLayout || view.isLayoutRequested,
+                viewportBounds = viewport?.first,
+                viewportSize = viewport?.second,
+                titleBounds = geometryValue("gaming-dialog-title")?.first,
+                footerBounds = geometryValue("gaming-dialog-footer")?.first,
             )
         }
     }
@@ -422,7 +647,17 @@ private data class VoidImeEvidence(
     val rootHeight: Int,
     val windowFocused: Boolean,
     val layoutPending: Boolean,
+    val viewportBounds: Rect?,
+    val viewportSize: IntSize?,
+    val titleBounds: Rect?,
+    val footerBounds: Rect?,
 ) {
+    fun assertFitsMeasuredViewport() {
+        val viewport = checkNotNull(viewportBounds) { "Actual form viewport unavailable: $this" }
+        assertTrue("Complete owner must fit actual viewport: $this", bounds.height <= viewport.height + 1f)
+        assertTrue("Complete owner must be inside actual viewport: $this",
+            bounds.top >= viewport.top - 1f && bounds.bottom <= viewport.bottom + 1f)
+    }
     val imeReady: Boolean
         get() = imeBounds?.isEmpty == false && imeInsetBottom > 0 && imeVisibleByInsets &&
             windowFocused && !layoutPending

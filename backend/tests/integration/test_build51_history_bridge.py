@@ -9,10 +9,10 @@ from uuid import uuid4
 
 import psycopg
 import pytest
-import pytest_asyncio
 from psycopg.types.json import Jsonb
 
 from tests.integration.test_cafe_workflow_migration import _disposable_database, _run_alembic
+from tests.integration.historical_tender_producer import BUILD51, seed_historical_tender_history
 
 ROOT = Path(__file__).resolve().parents[3]
 COMPANY = "8f323fba-4358-45fe-9d3b-a8e0fae52993"
@@ -452,88 +452,19 @@ def test_guard_owner_and_schema_are_bound_independently_of_function_body(bridge_
         c.rollback()
 
 
-@pytest_asyncio.fixture
-async def tender_history_0091(monkeypatch):
-    """The frozen51 reader is exercised against its actual0091 schema."""
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
-    from app.api.v1.public import router as public
-    from app.core import db
-
+@pytest.fixture
+def tender_history_0091(tmp_path):
+    """Actual frozen Build51 API produces receipts on its real0091 schema."""
     with _disposable_database("erp_build51_nonempty_tender") as url:
         migration = _run_alembic(url, "upgrade", "0091")
         assert migration.returncode == 0, migration.stderr
-        engine = create_async_engine(
-            url.replace("postgresql+psycopg://", "postgresql+asyncpg://", 1)
-        )
-        factory = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
-        monkeypatch.setattr(db, "AsyncSessionLocal", factory)
-        monkeypatch.setattr(public, "AsyncSessionLocal", factory)
-        try:
-            yield factory, url.replace("postgresql+psycopg://", "postgresql://", 1)
-        finally:
-            await engine.dispose()
+        evidence = seed_historical_tender_history(url, tmp_path / "build51", revision=BUILD51)
+        yield url.replace("postgresql+psycopg://", "postgresql://", 1), evidence
 
 
-@pytest_asyncio.fixture
-async def session(tender_history_0091):
-    factory, _dsn = tender_history_0091
-    async with factory() as connection:
-        yield connection
-        await connection.rollback()
-
-
-@pytest.mark.asyncio
-async def test_current_legacy_history_preserves_real_nonempty_tender_ledgers(
-    client, session, seed_owner, tender_history_0091
-):
-    """Valid public commands populate both ledgers with every guard enabled."""
-    from tests.integration.test_build55_transition_state_query import _current_finance_seed_shift_columns
-    from tests.integration.test_tender_corrections import case, unlock
-
-    _factory, dsn = tender_history_0091
-    _current_finance_seed_shift_columns(dsn, enable=True)
-    headers, day, order, payment, _ = await case(session, seed_owner)
-    protected = await unlock(client, seed_owner, headers, "payment")
-    preview = await client.post(
-        "/api/v1/finance/tender-corrections/payment/prepare",
-        headers=protected,
-        json={"payment_id": str(payment.id)},
-    )
-    assert preview.status_code == 200, preview.text
-    corrected = await client.post(
-        "/api/v1/finance/tender-corrections/payment/commit",
-        headers={**protected, "Idempotency-Key": "bridge-payment:" + str(uuid4())},
-        json={
-            "payment_id": str(payment.id),
-            "source_fingerprint": preview.json()["source_fingerprint"],
-            "reason": "Synthetic owner confirms full Cash to UPI for history proof",
-        },
-    )
-    assert corrected.status_code == 201, corrected.text
-    protected = await unlock(client, seed_owner, headers, "daily")
-    preview = await client.post(
-        "/api/v1/finance/tender-corrections/daily/prepare",
-        headers=protected,
-        json={"branch_id": str(order.branch_id), "business_date": str(day)},
-    )
-    assert preview.status_code == 200, preview.text
-    actuals = await client.post(
-        "/api/v1/finance/tender-corrections/daily/commit",
-        headers={**protected, "Idempotency-Key": "bridge-daily:" + str(uuid4())},
-        json={
-            "branch_id": str(order.branch_id),
-            "business_date": str(day),
-            "source_fingerprint": preview.json()["source_fingerprint"],
-            "actual_cash_minor": 1,
-            "actual_upi_minor": 27000,
-            "reason": "Synthetic unresolved actuals are retained without posting",
-        },
-    )
-    assert actuals.status_code == 201, actuals.text
-    assert actuals.json()["financial_effect"] is False
-    await session.rollback()
-    _current_finance_seed_shift_columns(dsn, enable=False)
+def test_current_legacy_history_preserves_real_nonempty_tender_ledgers(tender_history_0091):
+    """Current frozen reader retains guarded receipts from the exact producer."""
+    dsn, evidence = tender_history_0091
     module = verifier()
     with psycopg.connect(dsn) as c:
         c.execute("SET LOCAL dcompany.build51_fresh_lineage='true'")
@@ -543,8 +474,8 @@ async def test_current_legacy_history_preserves_real_nonempty_tender_ledgers(
         assert before["finance_history"]["daily_reconciliation_count"] >= 1
         c.rollback()
         for table, identity in [
-            ("payment_tender_corrections", corrected.json()["id"]),
-            ("daily_tender_reconciliations", actuals.json()["id"]),
+            ("payment_tender_corrections", evidence["payment_correction"]),
+            ("daily_tender_reconciliations", evidence["daily_reconciliation"]),
         ]:
             # Model a wrong restore missing one retained receipt. Restore the
             # immutable guard before reading; exact inventory remains valid.

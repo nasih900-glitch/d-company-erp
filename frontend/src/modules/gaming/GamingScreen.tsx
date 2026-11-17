@@ -1,3 +1,4 @@
+import { useInlineWorkspaceFocus } from '@/lib/use-inline-workspace-focus';
 import { gamingCancellationBlock, gamingVoidReview, matchesCancellationIdentity, isConfirmedCancellation, removeConfirmedCancelledSession, participantVoidMetadataReady, participantVoidRequestHash } from './GamingCancellation';
 import { InlineShiftWorkspace } from '@/modules/pos/OrdersAndShiftsScreen';
 /**
@@ -752,6 +753,8 @@ export default function GamingScreen() {
   }
   const [stations, setStations] = useState<StationDTO[]>([]);
   const [inlineShift,setInlineShift]=useState(false);
+  const shiftFocus = useInlineWorkspaceFocus(inlineShift,
+    JSON.stringify([me?.company_id, me?.user_id, me?.branch_id, terminalId]));
   const [loading, setLoading] = useState(true);
   const [foregroundRefreshing, setForegroundRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -766,6 +769,7 @@ export default function GamingScreen() {
     ReadonlySet<string>
   >(new Set());
   const [currentShiftId, setCurrentShiftId] = useState<string | null>(null);
+  const [shiftContextVerified, setShiftContextVerified] = useState(false);
   const [shiftContextError, setShiftContextError] = useState<string | null>(null);
   const [pendingDuration, setPendingDuration] = useState<Record<string, number | null>>({});
   const [customDurationFor, setCustomDurationFor] = useState<string | null>(null);
@@ -1219,6 +1223,7 @@ export default function GamingScreen() {
         if (incompleteMessage && hasVerifiedBoardRef.current) {
           throw new Error(incompleteMessage);
         }
+        setShiftContextVerified(!shiftContext.refreshIncomplete);
         setCurrentShiftId(shiftContext.shiftId);
         setShiftContextError(shiftContext.error);
         setStations(nextStations);
@@ -1366,6 +1371,9 @@ export default function GamingScreen() {
   useEffect(() => {
     invalidateGamingRefresh(refreshGenerationRef);
     hasVerifiedBoardRef.current = false;
+    setShiftContextVerified(false);
+    setCurrentShiftId(null);
+    setShiftContextError(null);
     setLastVerifiedLoadAt(null);
     setRefreshFailure(null);
     setError(null);
@@ -3636,12 +3644,12 @@ export default function GamingScreen() {
   );
 
   return (
-    <div>
+    <div ref={shiftFocus.fallbackRef} tabIndex={-1}>
       <header className="flex items-end justify-between mb-6 flex-wrap gap-4">
         <div>
           <h2 className="text-2xl font-bold">Gaming lounge</h2>
           <p className="text-fg-muted text-sm">
-            {stations.length} stations · {activeCount} active session{activeCount === 1 ? '' : 's'}
+            {lastVerifiedLoadAt === null ? 'Station and session counts are unverified' : <>{stations.length} stations · {activeCount} active session{activeCount === 1 ? '' : 's'}</>}
           </p>
           <p className="mt-1 text-xs text-fg-subtle">
             {lastVerifiedLoadAt === null
@@ -3736,7 +3744,8 @@ export default function GamingScreen() {
         </div>
       )}
 
-      {inlineShift && <InlineShiftWorkspace onClose={() => {
+      {inlineShift && <InlineShiftWorkspace focusHeadingRef={shiftFocus.headingRef} onClose={() => {
+          shiftFocus.closeToInvoker();
         setInlineShift(false);
         // The child owns its own query state. Re-read this board's authoritative
         // shift even when realtime delivery is unavailable; retain station drafts.
@@ -3744,7 +3753,7 @@ export default function GamingScreen() {
       }}/>}
 
       {LIVE_MODE && !loading && canManageStations && terminalReady
-        && canStartOnSelectedTerminal && !currentShiftId && (
+        && shiftContextVerified && canStartOnSelectedTerminal && !currentShiftId && (
         <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm flex items-start gap-3" role="status">
           <AlertCircle size={16} className="mt-0.5 shrink-0 text-fg"/>
           <div className="min-w-0 flex-1">
@@ -3754,7 +3763,7 @@ export default function GamingScreen() {
             </div>
           </div>
           <button type="button" className="btn btn-ghost shrink-0 !py-1.5 text-xs"
-            onClick={() => setInlineShift(true)}>
+            onClick={event => { shiftFocus.openFrom(event.currentTarget); setInlineShift(true); }}>
             Open shift here
           </button>
         </div>
@@ -3885,6 +3894,8 @@ export default function GamingScreen() {
 
       {loading ? (
         <SkeletonCard />
+      ) : !stations.length && lastVerifiedLoadAt === null ? (
+        <div className="card text-fg-muted text-sm" role="status">The station board has not been verified. Use Refresh Gaming to retry.</div>
       ) : !stations.length ? (
         <div className="card text-fg-muted text-sm">
           {canManageStations

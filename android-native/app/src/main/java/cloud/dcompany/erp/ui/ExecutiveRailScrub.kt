@@ -20,21 +20,15 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.max
 
-internal const val ExecutiveRailTargetDwellMillis = 190L
-
 /** Null in production; native accessibility tests can deterministically exercise the fallback. */
 internal val LocalExecutiveRailTouchExplorationOverride = compositionLocalOf<Boolean?> { null }
 
 internal data class ExecutiveRailScrubPolicy(
-    val targetDwellMillis: Long = ExecutiveRailTargetDwellMillis,
     val boundaryHysteresisPx: Float,
     val edgeZonePx: Float,
     val maximumEdgeStepPx: Float,
 ) {
     init {
-        require(targetDwellMillis in 160L..220L) {
-            "Rail target dwell must remain deliberate without making live following sluggish"
-        }
         require(boundaryHysteresisPx >= 0f)
         require(edgeZonePx > 0f)
         require(maximumEdgeStepPx > 0f)
@@ -92,6 +86,7 @@ internal enum class ExecutiveRailScrubStopReason {
     UNEXPECTED_ACKNOWLEDGEMENT,
     MULTIPLE_POINTERS,
     POINTER_MISSING,
+    POINTER_CONSUMED,
     PRECLAIM_ROUTE_CHANGED,
     POINTER_UP,
     PRECLAIM_CONSUMED,
@@ -127,9 +122,7 @@ internal data class ExecutiveRailScrubState(
     val activationSnapshot: WorkspaceRouteSnapshot,
     val lastAcknowledged: WorkspaceRouteSnapshot,
     val candidate: Destination? = null,
-    val candidateSinceMillis: Long? = null,
     val leftOrigin: Boolean = false,
-    val requireStableTargetAfterScroll: Boolean = false,
 ) {
     val lastCommitted: Destination get() = lastAcknowledged.destination
 }
@@ -187,7 +180,6 @@ internal fun cancelExecutiveRailScrub(
 ): ExecutiveRailScrubState = state.copy(
     phase = ExecutiveRailScrubPhase.Ended,
     candidate = null,
-    candidateSinceMillis = null,
 )
 
 internal fun executiveRailObservedSnapshotBelongsToStream(
@@ -199,7 +191,6 @@ internal fun acknowledgeExecutiveRailScrub(
     state: ExecutiveRailScrubState,
     proposedTarget: Destination,
     accepted: WorkspaceRouteSnapshot,
-    nowMillis: Long,
 ): ExecutiveRailScrubState? {
     if (accepted.destination != proposedTarget ||
         accepted.revision != state.lastAcknowledged.revision + 1L
@@ -209,60 +200,22 @@ internal fun acknowledgeExecutiveRailScrub(
     return state.copy(
         lastAcknowledged = accepted,
         candidate = proposedTarget,
-        candidateSinceMillis = nowMillis,
     )
 }
 
 internal fun updateExecutiveRailScrubTarget(
     state: ExecutiveRailScrubState,
     target: Destination?,
-    nowMillis: Long,
-    policy: ExecutiveRailScrubPolicy,
-    autoScrollMoved: Boolean = false,
+    enteredByPointer: Boolean,
 ): ExecutiveRailScrubUpdate {
     if (state.phase != ExecutiveRailScrubPhase.Scrubbing) return ExecutiveRailScrubUpdate(state)
-    if (autoScrollMoved) {
-        return ExecutiveRailScrubUpdate(
-            state.copy(
-                candidate = null,
-                candidateSinceMillis = null,
-                requireStableTargetAfterScroll = true,
-            ),
-        )
-    }
-
     val leftOrigin = state.leftOrigin || (target != null && target != state.origin)
-    if (target == null || target !in state.modelKey || (!leftOrigin && target == state.origin)) {
-        return ExecutiveRailScrubUpdate(
-            state.copy(
-                candidate = null,
-                candidateSinceMillis = null,
-                leftOrigin = leftOrigin,
-            ),
-        )
-    }
-
-    if (state.requireStableTargetAfterScroll || state.candidate != target) {
-        return ExecutiveRailScrubUpdate(
-            state.copy(
-                candidate = target,
-                candidateSinceMillis = nowMillis,
-                leftOrigin = leftOrigin,
-                requireStableTargetAfterScroll = false,
-            ),
-        )
-    }
-
-    val candidateSince = state.candidateSinceMillis ?: nowMillis
-    if (target == state.lastAcknowledged.destination ||
-        nowMillis - candidateSince < policy.targetDwellMillis
-    ) {
-        return ExecutiveRailScrubUpdate(state.copy(leftOrigin = leftOrigin))
-    }
-
+    val candidate = target?.takeIf { it in state.modelKey && (leftOrigin || it != state.origin) }
+    val next = if (candidate == state.candidate && leftOrigin == state.leftOrigin) state
+        else state.copy(candidate = candidate, leftOrigin = leftOrigin)
     return ExecutiveRailScrubUpdate(
-        state = state.copy(leftOrigin = leftOrigin),
-        navigateTo = target,
+        state = next,
+        navigateTo = candidate?.takeIf { enteredByPointer && it != state.lastCommitted },
     )
 }
 
@@ -306,13 +259,14 @@ internal fun executiveRailScrubEnabled(touchExplorationEnabled: Boolean): Boolea
 private data class ActiveExecutiveRailScrub(
     var state: ExecutiveRailScrubState,
     var pointerInRoot: Offset,
+    var waitingForInterior: Boolean = false,
 )
 
 /**
  * Owns input only inside the wide rail viewport. Vertical motion claims on touch slop, while
  * ordinary taps and horizontal hide gestures remain unconsumed. A stationary long press also
- * activates the same stream. Dwell only proposes a route; the owner must acknowledge an exact revision
- * before the gesture advances its local state.
+ * activates the same stream. Entering a target proposes its route on that MOVE; the owner must
+ * acknowledge the exact revision before the gesture advances its local state.
  */
 internal fun Modifier.executiveRailLiveScrub(
     enabled: Boolean,
@@ -324,7 +278,7 @@ internal fun Modifier.executiveRailLiveScrub(
     routeAuthority: ExecutiveRailRouteAuthority,
     onRouteBeforeCommit: (Destination) -> Unit,
     onRouteAfterCommit: (Destination) -> Unit,
-    onCandidateDescription: (String?) -> Unit,
+    onCandidate: (Destination?) -> Unit,
     trace: ExecutiveRailScrubTraceSink? = null,
 ): Modifier {
     if (!enabled || modelKey.isEmpty()) return this
@@ -335,6 +289,12 @@ internal fun Modifier.executiveRailLiveScrub(
             var active: ActiveExecutiveRailScrub? = null
             var liveFollower: Job? = null
             var traceSequence = 0
+            var displayedCandidate: Destination? = null
+            fun publishCandidate(candidate: Destination?) {
+                if (candidate == displayedCandidate) return
+                displayedCandidate = candidate
+                onCandidate(candidate)
+            }
             fun emitTrace(
                 kind: ExecutiveRailScrubTraceKind,
                 state: ExecutiveRailScrubState,
@@ -379,162 +339,121 @@ internal fun Modifier.executiveRailLiveScrub(
                 active = null
                 liveFollower?.cancel()
                 liveFollower = null
-                onCandidateDescription(null)
+                publishCandidate(null)
             }
-            fun startLiveFollower() {
-                liveFollower?.cancel()
+            fun moveToTarget(
+                session: ActiveExecutiveRailScrub,
+                previousPointer: Offset,
+                nowMillis: Long,
+            ) {
+                val previousCandidate = session.state.candidate
+                val targets = targetBoundsInRoot()
+                fun targetAt(position: Offset) = executiveRailTargetAt(
+                    x = position.x,
+                    y = position.y,
+                    targets = targets,
+                    currentCandidate = previousCandidate,
+                    hysteresisPx = policy.boundaryHysteresisPx,
+                )
+                val target = targetAt(session.pointerInRoot)
+                val entered = session.waitingForInterior ||
+                    (target != null && target != session.state.lastCommitted && targetAt(previousPointer) != target)
+                session.waitingForInterior = false
+                val update = updateExecutiveRailScrubTarget(session.state, target, enteredByPointer = entered)
+                session.state = update.state
+                val next = update.state.candidate
+                if (next != previousCandidate) {
+                    emitTrace(
+                        kind = if (next == null) ExecutiveRailScrubTraceKind.CANDIDATE_RESET
+                            else ExecutiveRailScrubTraceKind.CANDIDATE_STARTED,
+                        state = update.state,
+                        nowMillis = nowMillis,
+                        proposedTarget = target,
+                    )
+                }
+                if (target == null) emitTrace(
+                    kind = ExecutiveRailScrubTraceKind.TARGET_BOUNDS_MISS,
+                    state = update.state,
+                    nowMillis = nowMillis,
+                )
+                publishCandidate(next)
+                val destination = update.navigateTo ?: return
+                val expected = session.state.lastAcknowledged
+                emitTrace(ExecutiveRailScrubTraceKind.COMMIT_REQUESTED, session.state, nowMillis,
+                    proposedTarget = destination)
+                when (val result = routeAuthority.request(
+                    target = destination,
+                    expected = expected,
+                    beforeCommit = { onRouteBeforeCommit(destination) },
+                    afterCommit = { onRouteAfterCommit(destination) },
+                )) {
+                    is WorkspaceRouteRequestResult.Accepted -> {
+                        val acknowledged = acknowledgeExecutiveRailScrub(session.state, destination, result.snapshot)
+                        if (acknowledged == null) {
+                            stopActiveScrub(ExecutiveRailScrubStopReason.UNEXPECTED_ACKNOWLEDGEMENT, nowMillis)
+                        } else {
+                            session.state = acknowledged
+                            emitTrace(ExecutiveRailScrubTraceKind.REQUEST_ACCEPTED, acknowledged, nowMillis,
+                                proposedTarget = destination, expectedRevision = expected.revision,
+                                observedSnapshot = result.snapshot)
+                        }
+                    }
+                    is WorkspaceRouteRequestResult.Rejected -> {
+                        emitTrace(ExecutiveRailScrubTraceKind.REQUEST_REJECTED, session.state, nowMillis,
+                            proposedTarget = destination, observedSnapshot = result.current, rejection = result.reason)
+                        stopActiveScrub(ExecutiveRailScrubStopReason.REQUEST_REJECTED, nowMillis)
+                    }
+                }
+            }
+            fun edgeScrollDelta(session: ActiveExecutiveRailScrub, viewport: Rect): Float =
+                executiveRailEdgeScrollDelta(
+                    pointerY = session.pointerInRoot.y,
+                    viewportTop = viewport.top,
+                    viewportBottom = viewport.bottom,
+                    canScrollBackward = scrollState.canScrollBackward,
+                    canScrollForward = scrollState.canScrollForward,
+                    policy = policy,
+                )
+
+            fun startEdgeScroll() {
+                if (liveFollower?.isActive == true) return
                 liveFollower = gestureScope.launch {
                     while (isActive) {
                         delay(16L)
                         val session = active ?: break
-                        val nowMillis = SystemClock.uptimeMillis()
-                        val observedSnapshot = routeAuthority.snapshot()
-                        emitTrace(
-                            kind = ExecutiveRailScrubTraceKind.OWNER_SNAPSHOT_OBSERVED,
-                            state = session.state,
-                            nowMillis = nowMillis,
-                            observedSnapshot = observedSnapshot,
-                        )
-                        val currentBelongsToThisStream = executiveRailObservedSnapshotBelongsToStream(
-                            state = session.state,
-                            observedSnapshot = observedSnapshot,
-                        )
-                        if (!currentBelongsToThisStream) {
-                            stopActiveScrub(
-                                ExecutiveRailScrubStopReason.OWNER_ROUTE_MISMATCH,
-                                nowMillis,
-                            )
-                            continue
+                        val viewport = viewportBoundsInRoot()
+                        if (viewport == null) {
+                            stopActiveScrub(ExecutiveRailScrubStopReason.VIEWPORT_MISSING)
+                            break
                         }
-                        val viewport = viewportBoundsInRoot() ?: continue
-                        val edgeDelta = executiveRailEdgeScrollDelta(
-                            pointerY = session.pointerInRoot.y,
-                            viewportTop = viewport.top,
-                            viewportBottom = viewport.bottom,
-                            canScrollBackward = scrollState.canScrollBackward,
-                            canScrollForward = scrollState.canScrollForward,
-                            policy = policy,
-                        )
-                        val actualScroll = if (edgeDelta != 0f) scrollState.scrollBy(edgeDelta) else 0f
-                        if (actualScroll != 0f) {
-                            emitTrace(
-                                kind = ExecutiveRailScrubTraceKind.AUTO_SCROLL_RESET,
-                                state = session.state,
-                                nowMillis = nowMillis,
-                                scrollDeltaPx = actualScroll,
-                            )
-                            session.state = updateExecutiveRailScrubTarget(
-                                state = session.state,
-                                target = null,
-                                nowMillis = nowMillis,
-                                policy = policy,
-                                autoScrollMoved = true,
-                            ).state
-                            onCandidateDescription(null)
-                            continue
+                        val observed = routeAuthority.snapshot()
+                        if (!executiveRailObservedSnapshotBelongsToStream(session.state, observed)) {
+                            stopActiveScrub(ExecutiveRailScrubStopReason.OWNER_ROUTE_MISMATCH)
+                            break
                         }
-
-                        val target = executiveRailTargetAt(
-                            x = session.pointerInRoot.x,
-                            y = session.pointerInRoot.y,
-                            targets = targetBoundsInRoot(),
-                            currentCandidate = session.state.candidate,
-                            hysteresisPx = policy.boundaryHysteresisPx,
-                        )
-                        val update = updateExecutiveRailScrubTarget(
-                            state = session.state,
-                            target = target,
-                            nowMillis = nowMillis,
-                            policy = policy,
-                        )
-                        if (target == null) {
-                            if (session.state.candidate != null && update.state.candidate == null) {
-                                emitTrace(
-                                    kind = ExecutiveRailScrubTraceKind.CANDIDATE_RESET,
-                                    state = update.state,
-                                    nowMillis = nowMillis,
-                                )
-                            }
-                            emitTrace(
-                                kind = ExecutiveRailScrubTraceKind.TARGET_BOUNDS_MISS,
-                                state = session.state,
-                                nowMillis = nowMillis,
-                            )
-                        } else if (update.state.candidate != session.state.candidate) {
-                            emitTrace(
-                                kind = if (update.state.candidate == null) {
-                                    ExecutiveRailScrubTraceKind.CANDIDATE_RESET
-                                } else {
-                                    ExecutiveRailScrubTraceKind.CANDIDATE_STARTED
-                                },
-                                state = update.state,
-                                nowMillis = nowMillis,
-                                proposedTarget = target,
-                            )
-                        }
-                        session.state = update.state
-                        onCandidateDescription(
-                            update.state.candidate?.let { "Hold on ${executiveRailVisibleLabel(it)} to open" },
-                        )
-                        update.navigateTo?.let { targetDestination ->
-                            emitTrace(
-                                kind = ExecutiveRailScrubTraceKind.COMMIT_REQUESTED,
-                                state = update.state,
-                                nowMillis = nowMillis,
-                                proposedTarget = targetDestination,
-                            )
-                            val expected = session.state.lastAcknowledged
-                            when (
-                                val result = routeAuthority.request(
-                                    target = targetDestination,
-                                    expected = expected,
-                                    beforeCommit = { onRouteBeforeCommit(targetDestination) },
-                                    afterCommit = { onRouteAfterCommit(targetDestination) },
-                                )
-                            ) {
-                                is WorkspaceRouteRequestResult.Accepted -> {
-                                    val acknowledged = acknowledgeExecutiveRailScrub(
-                                        state = session.state,
-                                        proposedTarget = targetDestination,
-                                        accepted = result.snapshot,
-                                        nowMillis = nowMillis,
-                                    )
-                                    if (acknowledged == null) {
-                                        stopActiveScrub(
-                                            ExecutiveRailScrubStopReason.UNEXPECTED_ACKNOWLEDGEMENT,
-                                            nowMillis,
-                                        )
-                                    } else {
-                                        session.state = acknowledged
-                                        emitTrace(
-                                            kind = ExecutiveRailScrubTraceKind.REQUEST_ACCEPTED,
-                                            state = acknowledged,
-                                            nowMillis = nowMillis,
-                                            proposedTarget = targetDestination,
-                                            expectedRevision = expected.revision,
-                                            observedSnapshot = result.snapshot,
-                                        )
-                                    }
-                                }
-
-                                is WorkspaceRouteRequestResult.Rejected -> {
-                                    emitTrace(
-                                        kind = ExecutiveRailScrubTraceKind.REQUEST_REJECTED,
-                                        state = session.state,
-                                        nowMillis = nowMillis,
-                                        proposedTarget = targetDestination,
-                                        expectedRevision = expected.revision,
-                                        observedSnapshot = result.current,
-                                        rejection = result.reason,
-                                    )
-                                    stopActiveScrub(
-                                        ExecutiveRailScrubStopReason.REQUEST_REJECTED,
-                                        nowMillis,
-                                    )
-                                }
-                            }
+                        val delta = edgeScrollDelta(session, viewport)
+                        if (delta == 0f) break
+                        val scrolled = scrollState.scrollBy(delta)
+                        if (scrolled != 0f && active === session) {
+                            emitTrace(ExecutiveRailScrubTraceKind.AUTO_SCROLL_RESET, session.state,
+                                SystemClock.uptimeMillis(), scrollDeltaPx = scrolled)
                         }
                     }
+                }
+            }
+            fun handleMove(session: ActiveExecutiveRailScrub, viewport: Rect, previous: Offset, current: Offset) {
+                session.pointerInRoot = current
+                if (edgeScrollDelta(session, viewport) != 0f) {
+                    session.waitingForInterior = true
+                    session.state = updateExecutiveRailScrubTarget(session.state, null, enteredByPointer = false).state
+                    publishCandidate(null)
+                    startEdgeScroll()
+                    return
+                }
+                val inEdgeZone = current.y < viewport.top + policy.edgeZonePx ||
+                    current.y > viewport.bottom - policy.edgeZonePx
+                if (previous != current && !(session.waitingForInterior && inEdgeZone)) {
+                    moveToTarget(session, previous, SystemClock.uptimeMillis())
                 }
             }
             try {
@@ -564,7 +483,15 @@ internal fun Modifier.executiveRailLiveScrub(
                             stopActiveScrub(ExecutiveRailScrubStopReason.POINTER_MISSING)
                             break
                         }
+                        if (claimed && change.isConsumed) {
+                            stopActiveScrub(ExecutiveRailScrubStopReason.POINTER_CONSUMED)
+                            break
+                        }
                         val observedSnapshot = routeAuthority.snapshot()
+                        if (trace != null && claimed) active?.state?.let { state ->
+                            emitTrace(ExecutiveRailScrubTraceKind.OWNER_SNAPSHOT_OBSERVED, state,
+                                SystemClock.uptimeMillis(), observedSnapshot = observedSnapshot)
+                        }
                         val allowedObserved = if (claimed) {
                             val session = active?.state
                             session != null && executiveRailObservedSnapshotBelongsToStream(
@@ -588,7 +515,11 @@ internal fun Modifier.executiveRailLiveScrub(
                             break
                         }
 
-                        val latestViewport = viewportBoundsInRoot() ?: break
+                        val latestViewport = viewportBoundsInRoot()
+                        if (latestViewport == null) {
+                            stopActiveScrub(ExecutiveRailScrubStopReason.VIEWPORT_MISSING)
+                            break
+                        }
                         val inRoot = Offset(
                             latestViewport.left + change.position.x,
                             latestViewport.top + change.position.y,
@@ -617,14 +548,16 @@ internal fun Modifier.executiveRailLiveScrub(
                             if (decision == ExecutiveRailPressDecision.Pending) continue
                             claimed = true
                             pressing = claimExecutiveRailScrub(pressing)
-                            active = ActiveExecutiveRailScrub(pressing, inRoot)
+                            val session = ActiveExecutiveRailScrub(pressing, inRoot)
+                            active = session
                             emitTrace(
                                 kind = ExecutiveRailScrubTraceKind.CLAIMED,
                                 state = pressing,
                                 nowMillis = SystemClock.uptimeMillis(),
                             )
-                            startLiveFollower()
                             change.consume()
+                            handleMove(session, latestViewport,
+                                Offset(latestViewport.left + down.position.x, latestViewport.top + down.position.y), inRoot)
                             continue
                         }
 
@@ -635,7 +568,13 @@ internal fun Modifier.executiveRailLiveScrub(
                             stopActiveScrub(ExecutiveRailScrubStopReason.POINTER_EXITED)
                             break
                         }
-                        active?.pointerInRoot = inRoot
+                        active?.let { session ->
+                            val previous = Offset(
+                                latestViewport.left + change.previousPosition.x,
+                                latestViewport.top + change.previousPosition.y,
+                            )
+                            handleMove(session, latestViewport, previous, inRoot)
+                        }
                     }
                 }
             } finally {

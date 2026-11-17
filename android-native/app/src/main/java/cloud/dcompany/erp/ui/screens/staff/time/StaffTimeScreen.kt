@@ -38,8 +38,7 @@ internal fun StaffTimeScreen(profile: MeResponse) {
     val app = DCompanyApp.instance
     val lease by app.cacheIsolation.activeLeaseFlow.collectAsStateWithLifecycle()
     val online by app.connectivity.online.collectAsStateWithLifecycle()
-    val factory = remember(profile, lease) { viewModelFactory { initializer { StaffTimeViewModel(profile, lease) } } }
-    val vm: StaffTimeViewModel = viewModel(key = "staff-time:${profile.userId}:${lease?.generation}:${profile.hashCode()}", factory = factory)
+    val vm = requireNotNull(LocalSharedStaffTime.current)
     val state by vm.state.collectAsStateWithLifecycle()
     val shared by vm.sharedState.collectAsStateWithLifecycle()
     val canClockShared = EffectivePermissions.from(profile).has(ErpPermission.StaffAttendanceWrite)

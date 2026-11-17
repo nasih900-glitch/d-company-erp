@@ -74,6 +74,8 @@ class PhysicalComponentFrameStressUiTest {
     @get:Rule
     val compose = createAndroidComposeRule<ComponentActivity>()
 
+    private lateinit var auditActivity: ComponentActivity
+
     @Test
     fun workspaceChromeAndGamingCardsHaveBoundedFramesAndStableGeometry() {
         val inputs = PhysicalAuditInputs()
@@ -322,6 +324,7 @@ class PhysicalComponentFrameStressUiTest {
     }
 
     private fun setAuditContent(inputs: PhysicalAuditInputs) {
+        auditActivity = compose.activity
         compose.setContent {
             DCompanyTheme {
                 // Match MainActivity's edge-to-edge contract so the system
@@ -359,9 +362,10 @@ class PhysicalComponentFrameStressUiTest {
     private fun writeScreenshot(filename: String) {
         val output = auditDirectory().resolve(filename)
         output.outputStream().use { stream ->
-            val bitmap = compose.onRoot()
-                .captureToImage()
-                .asAndroidBitmap()
+            val bitmap = captureWithFailureObservation(
+                capture = { compose.onRoot().captureToImage() },
+                observe = { observePhysicalCaptureFailure(auditActivity, filename, it) },
+            ).asAndroidBitmap()
             try {
                 check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream)) {
                     "Could not encode physical component-audit screenshot $filename"

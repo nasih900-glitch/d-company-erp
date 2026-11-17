@@ -7,6 +7,7 @@
  * All methods raise a normalized Error with .code (see /lib/api.ts).
  */
 import { api, readAccessToken } from './api';
+import type { PaidBillSummary } from './paid-bill-contract';
 import { checkoutClientInstance } from './checkout-client-instance';
 import {
   buildRemoteAssistanceCommand,
@@ -132,6 +133,7 @@ export interface MenuCategoryDTO {
 }
 
 export interface OrderLineDTO {
+  id?: string;
   menu_item_id: string;
   variant_id: string | null;
   modifiers: Array<Record<string, unknown>> | null;
@@ -147,6 +149,32 @@ export interface OrderLineDTO {
   sgst_minor: number;
   igst_minor: number;
   note: string | null;
+}
+
+export interface RetainedMistakeReviewDTO {
+  order_id: string;
+  original_receipt_id: string;
+  gaming_session_id: string;
+  expected_checkout_version: number;
+  review_hash: string;
+  total_minor: number;
+  item_count: number;
+}
+
+export interface RetainedMistakeCorrectionRequest {
+  original_receipt_id: string;
+  expected_checkout_version: number;
+  review_hash: string;
+  all_items_mistaken_not_supplied: true;
+  reason: string;
+}
+
+export interface RetainedMistakeCorrectionDTO {
+  correction_id: string;
+  order_id: string;
+  original_receipt_id: string;
+  gaming_session_id: string;
+  order_status: 'void';
 }
 
 export interface OrderDTO {
@@ -186,6 +214,12 @@ export interface OrderDTO {
   held_at: string | null;
   checkout_version: number;
   lines: OrderLineDTO[];
+  gaming_void_provenance?: {
+    original_receipt_id: string;
+    gaming_session_id: string;
+    financial_evidence_locked: boolean;
+    mistake_correction_available: boolean;
+  } | null;
 }
 
 export interface CheckoutClaimDTO {
@@ -517,6 +551,15 @@ export const pos = {
         headers: { 'Idempotency-Key': idempotencyKey },
       })
       .then((r) => r.data),
+  reviewRetainedMistake: (orderId: string, claimToken: string) =>
+    api.get<RetainedMistakeReviewDTO>(`/pos/orders/${orderId}/retained-mistake-review`, {
+      headers: { 'X-Checkout-Claim': claimToken },
+    }).then((r) => r.data),
+  correctRetainedMistake: (
+    orderId: string, body: RetainedMistakeCorrectionRequest, claimToken: string, key: string,
+  ) => api.post<RetainedMistakeCorrectionDTO>(`/pos/orders/${orderId}/retained-mistake-correction`, body, {
+    headers: { 'X-Checkout-Claim': claimToken, 'Idempotency-Key': key },
+  }).then((r) => r.data),
   voidOrder: (orderId: string, reason: string, checkoutClaimToken?: string) =>
     api.delete(`/pos/orders/${orderId}`, {
       data: { reason },
@@ -623,6 +666,7 @@ export interface UserDTO {
   roles: string[];
   /** Exact internal role assignment, returned only to the protected audit owner. */
   managed_roles?: string[] | null;
+  manual_discount_allowed?: boolean;
   last_login_at: string | null;
 }
 
@@ -637,6 +681,7 @@ export const staff = {
   getUser: (id: string) => api.get<UserDTO>(`/staff/users/${id}`).then((r) => r.data),
   updateUser: (id: string, body: {
     name?: string; phone?: string | null; status?: 'active' | 'suspended'; role_code?: string;
+    manual_discount_allowed?: boolean;
   }) => api.patch<UserDTO>(`/staff/users/${id}`, body).then((r) => r.data),
   deleteUser: (id: string) => api.delete(`/staff/users/${id}`),
   listRoles: () => api.get<RoleDTO[]>('/staff/roles').then((r) => r.data),
@@ -1322,6 +1367,9 @@ export interface BranchDTO extends BranchReferenceDTO {
 }
 
 export interface TerminalDTO {
+  paid_bill_amendment_protocol?: number | null;
+  paid_bill_action_outcome_protocol?: number | null;
+  online_start_work_supported?: boolean;
   id: string;
   branch_id: string;
   name: string;
@@ -1857,6 +1905,12 @@ export interface AccessCellDTO {
   default_allowed: boolean;
   override: boolean | null;
   allowed: boolean;
+  default_access_level?: 'blocked' | 'partial' | 'full';
+  access_level?: 'blocked' | 'partial' | 'full';
+  effective_permissions?: string[];
+  unavailable_permissions?: string[];
+  ceiling_limited_permissions?: string[];
+  configurable?: boolean;
 }
 
 export interface AccessControlDTO {
@@ -2737,6 +2791,10 @@ export interface TenderReclassificationDTO {
   total_difference_minor: number; basis: 'unallocated_owner_attestation'; recorded_at: string;
 }
 export interface ReportDataDTO {
+  receipt_corrections_minor?: number;
+  receipt_corrections_count?: number;
+  effective_gross_revenue_minor?: number;
+  effective_upi_received_minor?: number;
   tender_reclassifications?: TenderReclassificationDTO[];
   accounting_basis: 'operational_receipt';
   period: string;
@@ -2967,7 +3025,85 @@ export interface ReceiptGamingSessionHistoryDTO {
 }
 
 /** Immutable, server-authoritative receipt shared by web and native clients. */
+export interface ReceiptCorrectionDTO {
+  id: string;
+  kind: 'payment_not_received_full_mistake';
+  amount_minor: number;
+  accounting_at: string;
+  payout_minor: 0;
+  label: string;
+  stock_restored?: boolean;
+  restored_movement_count?: number;
+  inventory_increase_minor?: number;
+}
+export interface ReceiptCorrectionPreviewDTO {
+  kind: 'payment_not_received_full_mistake';
+  order_id: string;
+  invoice_no: string | null;
+  payment_id: string | null;
+  amount_minor: number;
+  eligible: boolean;
+  blockers: string[];
+  source_fingerprint: string;
+  lines: Array<{line_id: string; name: string; quantity: string; total_minor: number}>;
+  financial_effect: false;
+  payout_minor: 0;
+  commit_available: boolean;
+}
+export interface ReceiptStockCorrectionPreviewDTO extends ReceiptCorrectionPreviewDTO {
+  stock_fingerprint: string;
+  stock_movements: Array<{movement_id: string; batch_id: string; ingredient_id: string; ingredient_name: string; base_unit: "ml" | "g" | "unit"; quantity: string; cost_per_unit_minor: number}>;
+  inventory_increase_minor: number;
+}
+export interface ReceiptCorrectionCommitDTO {
+  order_id: string;
+  source_fingerprint: string;
+  no_funds_received: true;
+  all_items_not_supplied: true;
+  acknowledges_no_payout: true;
+  reason: string;
+}
+export interface ReceiptStockCorrectionCommitDTO extends ReceiptCorrectionCommitDTO {
+  restore_stock: true;
+  stock_never_consumed: true;
+  stock_fingerprint: string;
+}
+export interface ReceiptStockCorrectionResultDTO extends ReceiptCorrectionResultDTO {
+  stock_restored: true;
+  restored_movement_count: number;
+  inventory_increase_minor: number;
+}
+export interface ReceiptCorrectionResultDTO {
+  id: string;
+  order_id: string;
+  payment_id: string;
+  original_shift_id: string;
+  invoice_no: string;
+  kind: 'payment_not_received_full_mistake';
+  amount_minor: number;
+  accounting_at: string;
+  payout_minor: 0;
+  original_records_unchanged: true;
+}
+export const receiptCorrections = {
+  stockPreview: (orderId: string) => api.post<ReceiptStockCorrectionPreviewDTO>(
+    '/pos/receipt-corrections/stock/preview', {order_id: orderId},
+  ).then(r => r.data),
+  stockCommit: (body: ReceiptStockCorrectionCommitDTO, key: string, token: string) => api.post<ReceiptStockCorrectionResultDTO>(
+    '/pos/receipt-corrections/stock/commit', body, {headers: {'Idempotency-Key': key, 'X-Tender-Token': token}},
+  ).then(r => r.data),
+  preview: (orderId: string) => api.post<ReceiptCorrectionPreviewDTO>(
+    '/pos/receipt-corrections/preview', {order_id: orderId},
+  ).then(r => r.data),
+  commit: (body: ReceiptCorrectionCommitDTO, key: string) => api.post<ReceiptCorrectionResultDTO>(
+    '/pos/receipt-corrections/commit', body, {headers: {'Idempotency-Key': key}},
+  ).then(r => r.data),
+};
+
 export interface ReceiptHistoryDTO {
+  paid_bill_amendment?: PaidBillSummary | null;
+  corrected_minor?: number;
+  receipt_correction?: ReceiptCorrectionDTO | null;
   order_id: string;
   company_id: string;
   branch_id: string;
@@ -3034,6 +3170,10 @@ export interface ReceiptHistoryPageDTO {
 }
 
 export interface ShiftDTO {
+  receipt_corrections_minor?: number;
+  receipt_corrections?: ReceiptCorrectionDTO[];
+  effective_net_collections_minor?: number;
+  effective_upi_collections_minor?: number;
   collection_basis?: 'original_recorded_shift'; tender_correction_minor?: number;
   reconstructed_cash_collections_minor?: number | null; reconstructed_upi_collections_minor?: number | null;
   reconstructed_expected_minor?: number | null;
@@ -3263,6 +3403,7 @@ export function refundActionHeaders(
 }
 
 export const refunds = {
+  getRequest: (id: string) => api.get<PosRefundRequestDTO>(`/pos/refund-requests/${encodeURIComponent(id)}`).then(r => r.data),
   listOrders: () => orders.list({ status: ['paid', 'refunded'], limit: 500 }),
   listRequests: (params: {
     unresolved: boolean;
@@ -4426,7 +4567,7 @@ export const settings = {
 };
 
 // Owner corrections are online commands; callers retain one exact action key/body.
-export type TenderScopeDTO = 'payment' | 'daily' | 'history';
+export type TenderScopeDTO = 'payment' | 'daily' | 'history' | 'receipt_stock';
 export interface PaymentTenderPreviewDTO {
   payment_id: string; order_id: string; invoice_no: string; branch_id: string;
   business_date: string; business_timezone: string; source_fingerprint: string; amount_minor: number;

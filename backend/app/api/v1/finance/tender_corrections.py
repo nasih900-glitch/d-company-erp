@@ -265,7 +265,12 @@ async def require_confirmation(session, tenant, token, *, branch_id, scope):
         raise AuthError("Owner confirmation expired or belongs to another action/branch.")
 
 
-async def require_protected_owner(session, tenant):
+async def require_protected_owner(
+    session,
+    tenant,
+    *,
+    denied_message="Only the designated protected owner may correct tenders.",
+):
     # Signed legacy access flags must not turn an ordinary owner into the
     # designated owner. Check current role assignment in addition to claims.
     permitted = await session.scalar(
@@ -279,7 +284,7 @@ async def require_protected_owner(session, tenant):
         )
     )
     if not tenant.audit_access or not permitted:
-        raise ForbiddenError("Only the designated protected owner may correct tenders.")
+        raise ForbiddenError(denied_message)
 
 
 async def payment_context(session, tenant, payment_id, *, lock=False):

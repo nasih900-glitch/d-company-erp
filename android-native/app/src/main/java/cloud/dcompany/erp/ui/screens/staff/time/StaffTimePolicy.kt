@@ -24,15 +24,23 @@ import kotlinx.serialization.json.longOrNull
 
 internal const val STAFF_PAYROLL_WRITE = ErpPermission.StaffPayrollWrite
 internal data class StaffTimeAccess(val canRead: Boolean, val canManage: Boolean)
-internal fun staffIdentityAccess(profile: MeResponse, access: StaffAccess): StaffAccess =
-    if (profile.protectedAccess || profile.auditAccess) access.copy(canUseAttendance = false)
-    else StaffAccess(false, false, false)
+internal fun staffIdentityAccess(profile: MeResponse, access: StaffAccess): StaffAccess {
+    val legacyReadAudience = profile.roles.any { it in setOf("owner", "co_owner", "super_owner", "manager", "partner", "auditor") }
+    val canRead = EffectivePermissions.from(profile).has(ErpPermission.StaffRead) &&
+        (profile.effectivePermissions != null || legacyReadAudience)
+    return StaffAccess(
+        canReadDirectory = access.canReadDirectory && canRead,
+        canManageDirectory = access.canManageDirectory && profile.effectivePermissions?.contains(ErpPermission.StaffWrite) == true,
+        canUseAttendance = false,
+    )
+}
 
 internal fun staffTimeAccess(profile: MeResponse): StaffTimeAccess {
     val permission = EffectivePermissions.from(profile)
+    val ownerPayroll = profile.roles.hasNormalizedOwnerRole() && profile.effectivePermissions?.contains(STAFF_PAYROLL_WRITE) == true
     return StaffTimeAccess(
-        permission.hasAny(ErpPermission.StaffAttendanceWrite, STAFF_PAYROLL_WRITE),
-        profile.roles.hasNormalizedOwnerRole() && permission.has(STAFF_PAYROLL_WRITE),
+        permission.has(ErpPermission.StaffAttendanceWrite) || ownerPayroll,
+        ownerPayroll,
     )
 }
 

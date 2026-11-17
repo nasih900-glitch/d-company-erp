@@ -112,7 +112,7 @@ class ShiftOverviewUiTest {
         compose.setContent { ShiftFixture(width = 872, height = 400, onReview = {}) }
         val readiness = compose.onNodeWithText("Close review").assertIsDisplayed().getUnclippedBoundsInRoot()
         val review = compose.onNodeWithText("Review & close shift").assertIsDisplayed().getUnclippedBoundsInRoot()
-        val collections = compose.onNodeWithText("Net collections").getUnclippedBoundsInRoot()
+        val collections = compose.onNodeWithText("Effective net collections · last synced").getUnclippedBoundsInRoot()
         assertTrue(readiness.top < review.top)
         assertTrue("The next action precedes financial detail", review.bottom <= collections.top)
     }

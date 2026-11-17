@@ -1,7 +1,10 @@
 export function registerServiceWorker() {
   if (!import.meta.env.PROD || !('serviceWorker' in navigator)) return;
 
-  window.addEventListener('load', () => {
+  let started = false;
+  const cleanup = () => {
+    if (started) return;
+    started = true;
     navigator.serviceWorker.getRegistrations()
       .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
       .then(async () => {
@@ -16,5 +19,7 @@ export function registerServiceWorker() {
       .catch(() => {
         // Cache cleanup is best-effort; app startup must not depend on it.
       });
-  });
+  };
+  if (document.readyState === 'complete') cleanup();
+  else window.addEventListener('load', cleanup, { once: true });
 }

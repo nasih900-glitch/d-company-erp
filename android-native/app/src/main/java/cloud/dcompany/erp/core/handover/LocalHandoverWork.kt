@@ -11,7 +11,7 @@ import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeout
 
-internal enum class LocalHandoverWorkKind { ROOM, STAFF_TIME, SHARED_ATTENDANCE, FINANCE, TENDER, REMOTE }
+internal enum class LocalHandoverWorkKind { ROOM, START_WORK, STAFF_TIME, SHARED_ATTENDANCE, FINANCE, TENDER, REMOTE }
 internal data class LocalHandoverWork(
     val verified: Boolean,
     val blockers: Set<LocalHandoverWorkKind>,
@@ -33,6 +33,9 @@ internal suspend fun inspectLocalHandoverWork(app: DCompanyApp): LocalHandoverWo
         if (groups.isNotEmpty()) blockers += LocalHandoverWorkKind.ROOM
         checking = LocalHandoverWorkKind.STAFF_TIME
         val root = app.noBackupFilesDir.canonicalFile
+        checking = LocalHandoverWorkKind.START_WORK
+        val starts = cloud.dcompany.erp.ui.screens.shift.work.AtomicStartWorkStore(File(root, "start-work-intents-v1")).readiness()
+        if (starts.pending) blockers += LocalHandoverWorkKind.START_WORK
         val ownTime = AtomicStaffTimePendingStore(File(root, "staff-time-intents-v1")).inspectRetainedWork(StaffTimePendingPurpose.PERSONAL_AND_OWNER)
         checking = LocalHandoverWorkKind.SHARED_ATTENDANCE
         val sharedTime = AtomicStaffTimePendingStore(File(root, SHARED_ATTENDANCE_DIRECTORY)).inspectRetainedWork(StaffTimePendingPurpose.SHARED)
@@ -41,6 +44,7 @@ internal suspend fun inspectLocalHandoverWork(app: DCompanyApp): LocalHandoverWo
         checking = LocalHandoverWorkKind.REMOTE
         val remote = app.remoteAssistance.inspectRetainedWork()
         val unverified = buildSet {
+            if (!starts.verified) add(LocalHandoverWorkKind.START_WORK)
             if (!ownTime.verified) add(LocalHandoverWorkKind.STAFF_TIME)
             if (!sharedTime.verified) add(LocalHandoverWorkKind.SHARED_ATTENDANCE)
             if (!tender.verified) add(LocalHandoverWorkKind.TENDER)

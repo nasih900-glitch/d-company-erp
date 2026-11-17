@@ -158,3 +158,9 @@ def issue_paid_bill_recovery_token(claims: dict[str, Any]) -> str:
         {**claims, "type": "paid_bill_recovery", "purpose": "paid_bill_action_recovery"},
         _signing_key(), algorithm=s.jwt_algorithm,
     )
+
+
+def issue_grn_recovery_token(claims: dict[str, Any]) -> str:
+    """Nonrefreshable GRN-only credential, never ordinary access."""
+    s = get_settings()
+    return jwt.encode({**claims, "type": "grn_recovery", "purpose": "inventory_grn_recovery"}, _signing_key(), algorithm=s.jwt_algorithm)

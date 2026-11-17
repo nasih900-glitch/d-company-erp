@@ -203,7 +203,7 @@ class GamingInlineShiftWorkspaceUiTest {
                             state = state, access = GamingAccess(canManageSessions = true),
                             filters = listOf(StationFilter("all", "All"), StationFilter("ps5", "PS5")),
                             selectedFilter = "all", visibleStations = stations, selectedStationId = "ps5-2",
-                            showDetail = false, focusStationId = null, focusRequested = false,
+                            showDetail = true, focusStationId = null, focusRequested = false,
                             startTerminalBlockMessage = null,
                             wallClock = remember { mutableLongStateOf(1_779_989_200_000L) }, attentionCount = 0,
                             onSelectFilter = {}, onSelectStation = {}, onBackToBoard = {}, onOpenAttention = {},

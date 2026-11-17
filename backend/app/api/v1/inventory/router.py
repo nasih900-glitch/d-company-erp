@@ -12,6 +12,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
+from app.api.v1.inventory.grn_commands import GrnCommandRoute
+from app.services.inventory import grn_commands
+from app.services.inventory.receipt_cache import receive_summary
 from app.core.db import SessionDep
 from app.core.errors import (
     BusinessRuleError,
@@ -45,7 +48,7 @@ from app.services.accounting.purchases import (
 )
 from app.services.inventory.valuation import remaining_batch_totals
 
-router = APIRouter()
+router = APIRouter(route_class=GrnCommandRoute)
 _INVENTORY_QUANTITY_QUANTUM = Decimal("0.0001")
 
 
@@ -933,13 +936,16 @@ async def post_grn(
     Accounts Payable, or the source-linked journal.
     """
     idempotency_key, request_hash = _require_idempotency(request)
+    fresh, raw = await grn_commands.create_authority(session, request, tenant)
 
     existing_response = await check_or_reserve(
         session, key=idempotency_key, request_hash=request_hash,
         user_id=tenant.user_id, terminal_id=tenant.terminal_id,
     )
     if existing_response is not None:
-        return existing_response["body"]
+        response = await grn_commands.cached_response(session, idempotency_key, tenant, existing_response["body"], raw is not None)
+        await fresh()
+        return response
 
     # The GRN itself retains replay identity after generic response-cache
     # pruning. When the generic lookup had to reserve a fresh cache row, this
@@ -964,7 +970,8 @@ async def post_grn(
                 "Idempotency-Key reused with different GRN payload or actor",
                 details={"key": idempotency_key},
             )
-        response = await _grn_post_response(session, existing_grn)
+        response = await grn_commands.retained_response(session, existing_grn, tenant, raw is not None)
+        await fresh()
         await store_response(
             session,
             key=idempotency_key,
@@ -978,10 +985,14 @@ async def post_grn(
     if payload.supplier_id is None:
         raise BusinessRuleError("supplier_id is required to record a GRN")
     await _require_writable_branch(session, tenant, payload.branch_id)
-    supplier = await session.get(Supplier, payload.supplier_id)
+    supplier = await session.scalar(
+        select(Supplier).where(Supplier.id == payload.supplier_id)
+        .with_for_update(read=True).execution_options(populate_existing=True)
+    )
     if not supplier or supplier.company_id != tenant.company_id or supplier.deleted_at:
         raise NotFoundError("supplier not found")
 
+    await fresh()
     received_at = payload.received_at or datetime.now(timezone.utc)
     total_minor = received_total_minor(payload.lines)
     require_invoice_matches_capitalised_total(
@@ -1022,6 +1033,10 @@ async def post_grn(
     # reversed order acquire those locks in the same canonical order instead
     # of deadlocking (A holds flour, waits on sugar; B holds sugar, waits on
     # flour). Order within a payload has no other meaning, so this is free.
+    incoming_quantities = {}
+    for line in payload.lines:
+        incoming_quantities[line.ingredient_id] = incoming_quantities.get(line.ingredient_id, Decimal(0)) + line.qty
+    checked_ingredients = set()
     for ln in sorted(payload.lines, key=lambda line: str(line.ingredient_id)):
         ing = (
             await session.execute(
@@ -1084,12 +1099,13 @@ async def post_grn(
         session.add(mv)
 
         # Rolling avg-cost + current-qty update
-        prev_qty = float(ing.current_qty or 0)
-        prev_val = prev_qty * int(ing.avg_cost_minor or 0)
-        new_qty = prev_qty + float(ln.qty)
-        new_val = prev_val + float(ln.qty) * int(ln.unit_cost_minor)
-        ing.current_qty = new_qty
-        ing.avg_cost_minor = int(new_val / new_qty) if new_qty > 0 else int(ln.unit_cost_minor)
+        if ing.id not in checked_ingredients:
+            if Decimal(str(ing.current_qty or 0)) + incoming_quantities[ing.id] > Decimal("9999999999.9999"):
+                raise BusinessRuleError("Resulting ingredient quantity exceeds NUMERIC(14,4).")
+            checked_ingredients.add(ing.id)
+        ing.current_qty, ing.avg_cost_minor = receive_summary(
+            ing.current_qty or 0, ing.avg_cost_minor, ln.qty, ln.unit_cost_minor,
+        )
 
     journal = await post_two_sided_operational_journal(
         session,
@@ -1109,7 +1125,10 @@ async def post_grn(
     )
     grn.journal_entry_id = journal.id if journal else None
     await session.flush()
+    await fresh()
+    await grn_commands.add_producer_proof(session, grn, tenant, raw)
     response = await _grn_post_response(session, grn)
+    await fresh()
     await store_response(
         session, key=idempotency_key,
         status_code=status.HTTP_201_CREATED, body=response,

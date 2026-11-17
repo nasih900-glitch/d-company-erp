@@ -1,6 +1,7 @@
 package cloud.dcompany.erp.ui.screens.gaming
 
 import cloud.dcompany.erp.core.net.ApiClient
+import cloud.dcompany.erp.core.checkout.CheckoutClaimWindow
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.Order
 import cloud.dcompany.erp.core.net.OrderLine
@@ -355,7 +356,8 @@ class GamingVoidV2ContractTest {
             claimId = "claim-1",
             orderId = review.order.id,
             claimToken = review.claimToken,
-            expiresAt = "2100-01-01T00:00:00Z",
+            expiresAt = "2026-10-26T08:10:00Z",
+            serverTime = "2026-10-26T08:09:00Z",
             orderTotalMinor = review.order.totalMinor,
             paidMinor = review.order.paidMinor,
             dueMinor = review.order.dueMinor,
@@ -364,12 +366,16 @@ class GamingVoidV2ContractTest {
             terminalId = requireNotNull(review.scopeLease.scope.terminalId),
         )
 
-        assertNull(linkedGamingVoidClaimError(review.order, claim, review.scopeLease, 0L))
+        val proof = CheckoutClaimWindow.from(claim, 0L)
+        assertNull(linkedGamingVoidClaimError(review.order, claim, review.scopeLease, proof, 0L))
+        assertTrue(linkedGamingVoidClaimError(review.order, claim, review.scopeLease, proof, 30_000L) != null)
+        assertTrue(linkedGamingVoidClaimError(review.order, claim, review.scopeLease, null, 0L) != null)
         assertTrue(
             linkedGamingVoidClaimError(
                 review.order,
                 claim.copy(claimantUserId = "owner-2"),
                 review.scopeLease,
+                proof,
                 0L,
             ) != null,
         )
@@ -378,6 +384,7 @@ class GamingVoidV2ContractTest {
                 review.order,
                 claim.copy(terminalId = "terminal-2"),
                 review.scopeLease,
+                proof,
                 0L,
             ) != null,
         )
@@ -641,7 +648,7 @@ class GamingVoidV2ContractTest {
 
     @Test
     fun `expired linked claim replays only an exact owned durable receipt`() = runBlocking {
-        val review = linkedReview().copy(claimExpiresAtMillis = 0L)
+        val review = linkedReview()
         val attempt = linkedGamingVoidAttempt(review, "Reviewed operator mistake", review.scopeLease)
         val canonical = completedLinkedVoid(attempt)
         val response = linkedVoidResponse(attempt)
@@ -661,7 +668,7 @@ class GamingVoidV2ContractTest {
                 postCalls += 1
                 response
             },
-            nowMillis = { 1L },
+            nowElapsedMillis = { 30_000L },
         )
         assertEquals(response, actual)
         assertEquals(0, paymentChecks)
@@ -690,7 +697,7 @@ class GamingVoidV2ContractTest {
                     postedTokens += token
                     throw ApiException("response lost")
                 },
-                nowMillis = { 0L },
+                nowElapsedMillis = { 0L },
             )
         }
         assertTrue(first.exceptionOrNull() is ApiException)
@@ -706,7 +713,7 @@ class GamingVoidV2ContractTest {
                 postedTokens += token
                 response
             },
-            nowMillis = { Long.MAX_VALUE },
+            nowElapsedMillis = { Long.MAX_VALUE },
         )
         val failedRetainedRead = runCatching {
             loadVerifiedLinkedGamingVoidResult(
@@ -729,7 +736,7 @@ class GamingVoidV2ContractTest {
                 postedTokens += token
                 response
             },
-            nowMillis = { Long.MAX_VALUE },
+            nowElapsedMillis = { Long.MAX_VALUE },
         )
         val (verifiedSession, retained) = loadVerifiedLinkedGamingVoidResult(
             attempt,
@@ -752,7 +759,7 @@ class GamingVoidV2ContractTest {
 
     @Test
     fun `expired linked claim never dispatches for missing wrong actor or edited receipt proof`() = runBlocking {
-        val review = linkedReview().copy(claimExpiresAtMillis = 0L)
+        val review = linkedReview()
         val attempt = linkedGamingVoidAttempt(review, "Reviewed operator mistake", review.scopeLease)
         val candidates = listOf(
             review.session,
@@ -769,7 +776,7 @@ class GamingVoidV2ContractTest {
                     { canonical },
                     { false },
                     { _, _, _, _ -> postCalls += 1; linkedVoidResponse(attempt) },
-                    { 1L },
+                    { 30_000L },
                 )
             }
             assertTrue(outcome.exceptionOrNull() is IllegalStateException)
@@ -779,7 +786,7 @@ class GamingVoidV2ContractTest {
 
     @Test
     fun `linked replay stops when lease changes after canonical GET`() = runBlocking {
-        val review = linkedReview().copy(claimExpiresAtMillis = 0L)
+        val review = linkedReview()
         val attempt = linkedGamingVoidAttempt(review, "Reviewed operator mistake", review.scopeLease)
         var leaseReads = 0
         var postCalls = 0
@@ -803,7 +810,8 @@ class GamingVoidV2ContractTest {
             claimId = "claim-1",
             orderId = review.order.id,
             claimToken = review.claimToken,
-            expiresAt = "2100-01-01T00:00:00Z",
+            expiresAt = "2026-10-26T08:10:00Z",
+            serverTime = "2026-10-26T08:09:00Z",
             orderTotalMinor = review.order.totalMinor,
             paidMinor = review.order.paidMinor,
             dueMinor = review.order.dueMinor,
@@ -818,6 +826,7 @@ class GamingVoidV2ContractTest {
                 invalidClaim,
                 review.scopeLease,
                 0L,
+                0L,
                 { review.scopeLease },
                 { orderId, token -> releases += orderId to token },
             )
@@ -831,6 +840,7 @@ class GamingVoidV2ContractTest {
                 review.order,
                 invalidClaim,
                 review.scopeLease,
+                0L,
                 0L,
                 { lease(2) },
                 { orderId, token -> releases += orderId to token },
@@ -1001,7 +1011,22 @@ class GamingVoidV2ContractTest {
             ),
             activeAddons = listOf(addon),
             claimToken = "claim-token",
-            claimExpiresAtMillis = Long.MAX_VALUE,
+            confirmationWindow = requireNotNull(CheckoutClaimWindow.from(
+                CheckoutClaimResult(
+                    claimId = "claim-1",
+                    orderId = "order-1",
+                    claimToken = "claim-token",
+                    expiresAt = "2026-10-26T08:10:00Z",
+                    orderTotalMinor = 0L,
+                    paidMinor = 0L,
+                    dueMinor = 0L,
+                    orderVersion = 1L,
+                    claimantUserId = "fixture",
+                    terminalId = "fixture",
+                    serverTime = "2026-10-26T08:09:00Z",
+                ),
+                0L,
+            )),
             scopeLease = lease(),
         )
     }

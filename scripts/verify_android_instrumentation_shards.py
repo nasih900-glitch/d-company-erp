@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import math
 from collections import Counter
 from pathlib import Path
 import re
@@ -140,6 +142,395 @@ def _read_lane(lane: Path) -> tuple[list[str], set[str], list[str]]:
                     detail = (node.text or node.get("message") or outcome).strip()
                     failures.append(f"{lane.name}: {identity}: {detail.splitlines()[0]}")
     return observed, skipped, failures
+
+
+# Diagnostics never participate in coverage admission. Print no arbitrary XML text,
+# properties, system-out, exception messages, host errors, process args or paths.
+_DIAGNOSTIC_ID = re.compile(r"cloud\.dcompany\.erp\.[A-Za-z0-9_.$]{1,200}#[A-Za-z0-9_$]{1,200}")
+_DIAGNOSTIC_FRAME = re.compile(
+    r"\s*at ((?:cloud\.dcompany\.erp|androidx\.compose|androidx\.test|org\.junit|"
+    r"java|android|kotlin|kotlinx\.coroutines)\.[A-Za-z0-9_.$<>]{1,250})"
+    r"\(([A-Za-z0-9_$.-]{1,120}\.(?:kt|java)):(\d{1,7})\)\s*"
+)
+_DIAGNOSTIC_EXCEPTION = re.compile(
+    r"(?:Caused by: |Suppressed: )?((?:java\.lang|androidx\.compose\.ui\.test|"
+    r"androidx\.test|org\.junit)\.[A-Za-z0-9_.$]{1,160})(?::.*)?"
+)
+_DIAGNOSTIC_HOST = re.compile(
+    r"(?:phase=(?:before|after) utc=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"
+    r"|(?:MemAvailable|SwapFree):\s+\d{1,20} kB"
+    r"|memory\.(?:current|max)=(?:\d{1,20}|max)"
+    r"|cgroup_(?:oom|oom_kill|oom_group_kill) \d{1,20}"
+    r"|process\s+\d{1,10}\s+\d{1,10}\s+\d{1,20}\s+"
+    r"(?:qemu|emulator)[A-Za-z0-9_.-]{0,40})"
+)
+
+
+_RAIL_TEST = "cloud.dcompany.erp.ui.WorkspaceScaffoldUiTest#largeTextEdgeScrollSuppressesTransitRoutesAndCommitsStableSettings"
+_RAIL_PREFIX = "Suppressed: java.lang.AssertionError: DCOMPANY_RAIL_FAILURE_V1="
+_RAIL_DESTINATIONS = frozenset("Dashboard Pos Gaming Tables Reservations Kitchen Shift Customers Menu Staff Inventory Reports Analytics Finance Events Memberships Refunds AuditLog AccessControl Settings SupportInbox Help".split())
+
+
+def rail_failure_projection(line: str, identity: str) -> str | None:
+    """Accept only the selected fixture's closed numeric/enum observer schema."""
+    if identity != _RAIL_TEST or not line.strip().startswith(_RAIL_PREFIX) or len(line) > 12_000:
+        return None
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate diagnostic key")
+            result[key] = value
+        return result
+    def obj(value, schema):
+        return isinstance(value, dict) and set(value) == set(schema) and all(check(value[key]) for key, check in schema.items())
+    def nullable(check):
+        return lambda value: value is None or check(value)
+    def integer(value):
+        return type(value) is int and 0 <= value <= 10**16
+    def number(value):
+        return type(value) in (int, float) and math.isfinite(value) and abs(value) <= 10**12
+    def boolean(value):
+        return type(value) is bool
+    def enum(options):
+        return lambda value: isinstance(value, str) and value in options
+    destination = enum(_RAIL_DESTINATIONS)
+    event = {
+        "sequence": integer, "uptime_ms": integer,
+        "kind": enum("CLAIMED OWNER_SNAPSHOT_OBSERVED CANDIDATE_STARTED CANDIDATE_RESET TARGET_BOUNDS_MISS AUTO_SCROLL_RESET COMMIT_REQUESTED REQUEST_ACCEPTED REQUEST_REJECTED STOPPED".split()),
+        "phase": enum(("Pressing", "Scrubbing", "Ended")),
+        "candidate": nullable(destination), "target": nullable(destination), "committed": destination,
+        "observed": nullable(destination), "scroll_delta": number,
+        "stop": nullable(enum("OWNER_ROUTE_MISMATCH REQUEST_REJECTED UNEXPECTED_ACKNOWLEDGEMENT MULTIPLE_POINTERS POINTER_MISSING PRECLAIM_ROUTE_CHANGED POINTER_UP PRECLAIM_CONSUMED PRECLAIM_MOVED VIEWPORT_MISSING POINTER_EXITED MODEL_OR_EFFECT_DISPOSED".split())),
+    }
+    input_event = {"action": lambda value: type(value) is int and 0 <= value <= 12,
+                   "event_ms": integer, "down_ms": integer, "wall_ms": integer,
+                   "x": number, "y": number, "pointers": lambda value: type(value) is int and 0 <= value <= 16}
+    bounds = {"bounds": lambda value: isinstance(value, list) and len(value) == 4 and all(number(n) for n in value),
+              "attached": boolean, "placed": boolean}
+    sample = {"status": enum(("READY",)), "route": destination,
+              **{key: boolean for key in ("focused", "resumed", "attached", "laid_out", "layout_requested", "pending_compose_layout", "touch_exploration", "accessibility_enabled")},
+              "decor_width": integer, "decor_height": integer,
+              **{key: nullable(lambda value: obj(value, bounds)) for key in ("root", "dashboard", "viewport", "settings")},
+              "scroll": nullable(lambda value: obj(value, {"value": nullable(number), "max": nullable(number), "reverse": boolean}))}
+    schema = {
+        "stage": enum(("settings-visibility", "settings-exposed-capture", "settings-stable", "settings-settled-capture", "route-commit")),
+        "failure_wall_ms": integer, "failure_uptime_ms": integer, "pointer_held": boolean,
+        "last_predicate_class": lambda value: isinstance(value, str) and (value == "NONE" or re.fullmatch(r"(?:java\.lang|androidx\.compose\.ui\.test|androidx\.test)\.[A-Za-z0-9_.$]{1,160}", value) is not None),
+        "last_predicate_kind": enum(("NONE", "DISPLAY_ASSERTION", "COMPOSE_TIMEOUT", "OTHER")),
+        "trace": lambda value: obj(value, {"stored": lambda n: type(n) is int and 0 <= n <= 512,
+                                           "dropped": integer, "latest": nullable(lambda v: obj(v, event)),
+                                           "last_stopped": nullable(lambda v: obj(v, event))}),
+        "input": lambda value: obj(value, {"count": integer, "first": nullable(lambda v: obj(v, input_event)),
+                                          "latest": nullable(lambda v: obj(v, input_event))}),
+        "sample": lambda value: obj(value, sample) or obj(value, {"status": enum(("TIMEOUT", "ERROR", "POST_REJECTED"))}),
+    }
+    try:
+        value = json.loads(line.strip().removeprefix(_RAIL_PREFIX), object_pairs_hook=unique)
+        if obj(value, schema):
+            return "rail_failure=" + json.dumps(value, separators=(",", ":"), sort_keys=True)
+    except (ValueError, TypeError, RecursionError):
+        pass
+    return None
+
+
+_CAPTURE_PREFIX = "Suppressed: java.lang.AssertionError: DCOMPANY_CAPTURE_FAILURE_V1="
+_CAPTURE_SCREENSHOTS = {
+    "workspaceChromeAndGamingCardsHaveBoundedFramesAndStableGeometry": frozenset((
+        "01-gaming-online.png", "02-gaming-server-issue.png", "03-gaming-after-connectivity-stress.png")),
+    "gamingTimersAtProductionCadenceHaveStableGeometry": frozenset((
+        "component-gaming-timer-1hz-before.png", "component-gaming-timer-1hz-after.png")),
+    "connectivityAtRecoveryCadenceHasStableGeometry": frozenset((
+        "component-connectivity-only-3s-before.png", "component-connectivity-only-3s-after.png")),
+}
+
+
+def capture_failure_projection(line: str, identity: str) -> str | None:
+    """Only the component fixture's closed AFTER-failure window facts may leave XML."""
+    class_name, _, method = identity.partition("#")
+    if (class_name != "cloud.dcompany.erp.ui.PhysicalComponentFrameStressUiTest"
+            or method not in _CAPTURE_SCREENSHOTS
+            or not line.strip().startswith(_CAPTURE_PREFIX) or len(line) > 4096):
+        return None
+
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate diagnostic key")
+            result[key] = value
+        return result
+
+    def obj(value, schema):
+        return type(value) is dict and set(value) == set(schema) and all(check(value[key]) for key, check in schema.items())
+
+    boolean = lambda value: type(value) is bool
+    integer = lambda value: type(value) is int and 0 <= value <= 100_000
+    enum = lambda options: lambda value: type(value) is str and value in options
+    window = {"lifecycle": enum(("DESTROYED", "INITIALIZED", "CREATED", "STARTED", "RESUMED")),
+              "visibility": enum(("VISIBLE", "INVISIBLE", "GONE")),
+              "window_visibility": enum(("VISIBLE", "INVISIBLE", "GONE")),
+              **{key: boolean for key in ("finishing", "destroyed", "attached", "shown", "focused", "hardware_accelerated")},
+              "width": integer, "height": integer}
+    schema = {
+        "schema_version": lambda value: type(value) is int and value == 1,
+        "stage": enum(("capture_failure",)), "surface": enum(("physical_component_harness",)),
+        "screenshot": enum(_CAPTURE_SCREENSHOTS[method]),
+        "failure_kind": enum(("COMPOSE_TIMEOUT", "ASSERTION", "OTHER")),
+        "after_failure": lambda value: value is True,
+        "atomic_observation": lambda value: value is False,
+        "caller_is_main": boolean, "post_accepted": boolean, "wait_finished": boolean,
+        "wait_budget_ms": lambda value: type(value) is int and value == 150,
+        "status": enum(("COMPLETED", "WAIT_EXPIRED", "POST_REJECTED", "COLLECTION_FAILED")),
+        "window": lambda value: value is None or obj(value, window),
+    }
+    try:
+        value = json.loads(line.strip().removeprefix(_CAPTURE_PREFIX), object_pairs_hook=unique)
+        if not obj(value, schema):
+            return None
+        if ((value["status"] == "COMPLETED") != (value["window"] is not None)
+                or (value["wait_finished"] and not value["post_accepted"])
+                or (value["status"] == "POST_REJECTED" and value["post_accepted"])
+                or (value["status"] == "WAIT_EXPIRED" and (not value["post_accepted"] or value["wait_finished"]))):
+            return None
+        return "capture_failure=" + json.dumps(value, separators=(",", ":"), sort_keys=True)
+    except (ValueError, TypeError, RecursionError):
+        return None
+
+
+_BACKGROUND_TEST = "cloud.dcompany.erp.ui.theme.WorkspaceBackgroundUiTest#settingsCardIsReachableAtCompactFontScaleInDayAndNight"
+_BACKGROUND_PREFIX = "Suppressed: java.lang.AssertionError: DCOMPANY_BACKGROUND_LIFECYCLE_FAILURE_V1="
+_BACKGROUND_BODY_PHASES = (
+    "RULE_ENTER", "OWNER_BOUND", "CONTENT_READY",
+    "DAY_GALLERY_DONE", "DAY_NORMAL_DONE", "DAY_BUSY_DONE", "DAY_CANCELLING_DONE", "DAY_ERROR_DONE",
+    "NIGHT_GALLERY_DONE", "NIGHT_NORMAL_DONE", "NIGHT_BUSY_DONE", "NIGHT_CANCELLING_DONE", "NIGHT_ERROR_DONE",
+    "LEGACY_CUSTOM_SUBMITTED", "FINAL_ASSERT_PASSED", "BODY_RETURNED", "RULE_RETURNED",
+)
+_BACKGROUND_CALLBACK_PHASES = frozenset((
+    "ACTIVITY_STARTED", "ACTIVITY_RESUMED", "ACTIVITY_PAUSED", "ACTIVITY_STOPPED",
+    "ACTIVITY_PRE_DESTROY", "ACTIVITY_DESTROYED",
+))
+
+
+def background_lifecycle_projection(line: str, identity: str) -> str | None:
+    """Closed exact-case facts only; absent/partial records are not crash survival proof."""
+    if identity != _BACKGROUND_TEST or not line.strip().startswith(_BACKGROUND_PREFIX) or len(line) > 12_000:
+        return None
+
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate diagnostic key")
+            result[key] = value
+        return result
+
+    def integer(value, maximum):
+        return type(value) is int and 0 <= value <= maximum
+
+    try:
+        value = json.loads(line.strip().removeprefix(_BACKGROUND_PREFIX), object_pairs_hook=unique)
+        if (type(value) is not dict or set(value) != {"schema_version", "surface", "atomic_observation", "dropped", "events"}
+                or type(value["schema_version"]) is not int or value["schema_version"] != 1
+                or value["surface"] != "workspace_background_settings" or value["atomic_observation"] is not False
+                or not integer(value["dropped"], 1_000_000) or type(value["events"]) is not list
+                or len(value["events"]) > 32 or (value["dropped"] and len(value["events"]) != 32)):
+            return None
+        last_time = last_phase = -1
+        for index, event in enumerate(value["events"]):
+            if (type(event) is not dict or set(event) != {"sequence", "uptime_ms", "phase", "lifecycle", "finishing", "destroyed"}
+                    or not integer(event["sequence"], 32) or event["sequence"] != index + 1
+                    or not integer(event["uptime_ms"], 86_400_000) or event["uptime_ms"] < last_time
+                    or type(event["phase"]) is not str or last_phase == len(_BACKGROUND_BODY_PHASES) - 1):
+                return None
+            phase = event["phase"]
+            if phase == "RULE_RETURNED":
+                # This marker is pass-channel logcat only, never a caught failure.
+                return None
+            if index == 0 and phase != "RULE_ENTER":
+                return None
+            if phase in _BACKGROUND_BODY_PHASES:
+                rank = _BACKGROUND_BODY_PHASES.index(phase)
+                if rank <= last_phase or any(event[key] is not None for key in ("lifecycle", "finishing", "destroyed")):
+                    return None
+                last_phase = rank
+            elif phase in _BACKGROUND_CALLBACK_PHASES:
+                if (type(event["lifecycle"]) is not str or event["lifecycle"] not in {"DESTROYED", "INITIALIZED", "CREATED", "STARTED", "RESUMED"}
+                        or type(event["finishing"]) is not bool or type(event["destroyed"]) is not bool):
+                    return None
+            else:
+                return None
+            last_time = event["uptime_ms"]
+        return "background_lifecycle_failure=" + json.dumps(value, separators=(",", ":"), sort_keys=True)
+    except (ValueError, TypeError, RecursionError):
+        return None
+
+
+_ENTRY_BACK_TEST = "cloud.dcompany.erp.ui.screens.ExecutiveEntryPresentationUiTest#freshLoginBackUsesTheSameBoundedCosmeticContinuation"
+_ENTRY_BACK_PREFIX = "Suppressed: java.lang.AssertionError: DCOMPANY_ENTRY_BACK_FAILURE_V1="
+
+
+def entry_back_failure_projection(line: str, identity: str) -> str | None:
+    """Cached after-failure facts; late callbacks/acks do not establish acceptance."""
+    if identity != _ENTRY_BACK_TEST or not line.strip().startswith(_ENTRY_BACK_PREFIX) or len(line) > 4096:
+        return None
+
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate diagnostic key")
+            result[key] = value
+        return result
+
+    def integer(value, maximum):
+        return type(value) is int and 0 <= value <= maximum
+
+    def nullable_integer(value, maximum):
+        return value is None or integer(value, maximum)
+
+    def boolean(value):
+        return value is None or type(value) is bool
+
+    def dispatch(value):
+        return value is None or (type(value) is dict and set(value) == {
+            "has_enabled_callbacks", "lifecycle", "finishing", "destroyed", "window_focus",
+        } and all(boolean(value[key]) for key in ("has_enabled_callbacks", "finishing", "destroyed", "window_focus"))
+            and (value["lifecycle"] is None or type(value["lifecycle"]) is str and value["lifecycle"] in {
+                "DESTROYED", "INITIALIZED", "CREATED", "STARTED", "RESUMED"}))
+
+    try:
+        value = json.loads(line.strip().removeprefix(_ENTRY_BACK_PREFIX), object_pairs_hook=unique)
+        if (type(value) is not dict or set(value) != {
+                "schema_version", "surface", "stage", "atomic_observation", "before_dispatch", "after_dispatch",
+                "auto_advance", "clock_before_ms", "clock_first_poll_ms", "clock_last_poll_ms",
+                "poll_virtual_elapsed_ms", "poll_wall_elapsed_ms", "polls", "ack_state", "ack_count",
+                "callback_seen", "callback_on_main"}
+                or type(value["schema_version"]) is not int or value["schema_version"] != 1
+                or value["surface"] != "fresh_login_back" or value["stage"] != "after_failure"
+                or value["atomic_observation"] is not False
+                or not all(dispatch(value[key]) for key in ("before_dispatch", "after_dispatch"))
+                or not all(boolean(value[key]) for key in ("auto_advance", "callback_seen", "callback_on_main"))
+                or not all(nullable_integer(value[key], 10**12) for key in ("clock_before_ms", "clock_first_poll_ms", "clock_last_poll_ms"))
+                or not all(nullable_integer(value[key], 86_400_000) for key in ("poll_virtual_elapsed_ms", "poll_wall_elapsed_ms"))
+                or not integer(value["polls"], 1_000_000)):
+            return None
+        first, last = value["clock_first_poll_ms"], value["clock_last_poll_ms"]
+        expected = last - first if first is not None and last is not None and 0 <= last - first <= 86_400_000 else None
+        if value["poll_virtual_elapsed_ms"] != expected:
+            return None
+        if (value["polls"] == 0 and any(value[key] is not None for key in (
+                "clock_first_poll_ms", "clock_last_poll_ms", "poll_virtual_elapsed_ms", "poll_wall_elapsed_ms"))
+                or value["polls"] == 1 and (first != last or value["poll_wall_elapsed_ms"] not in (None, 0))):
+            return None
+        state, count = value["ack_state"], value["ack_count"]
+        if not (state == "UNAVAILABLE" and count is None or type(count) is int and (
+                state == "EMPTY" and count == 0 or state in ("EXACT_94", "OTHER_SINGLE") and count == 1
+                or state == "MULTIPLE" and 2 <= count <= 1_000_000)):
+            return None
+        return "entry_back_failure=" + json.dumps(value, separators=(",", ":"), sort_keys=True)
+    except (ValueError, TypeError, RecursionError):
+        return None
+
+
+def failure_diagnostics(lane: Path) -> str:
+    """Bounded console projection of preserved evidence, never a test verdict."""
+    lines = ["Android instrumentation failure diagnostics (not coverage proof)"]
+    # Keep both host samples visible even if a large stack reaches the output budget.
+    host = lane / "host-health.txt"
+    try:
+        if host.is_symlink():
+            raise ValueError
+        with host.open("rb") as source:
+            data = source.read(32 * 1024 + 1)
+        if len(data) > 32 * 1024:
+            raise ValueError
+        accepted = [line for line in data.decode("ascii").splitlines()
+                    if _DIAGNOSTIC_HOST.fullmatch(line)]
+        lines.extend("host " + line for line in accepted[:40])
+    except (OSError, UnicodeError, ValueError):
+        lines.append("host=unavailable-or-oversized")
+    files_seen = cases_seen = bytes_seen = 0
+    results = lane / "results"
+    if not results.is_dir() or results.is_symlink():
+        lines.append("xml=unavailable")
+    else:
+        for xml_file in results.rglob("*.xml"):
+            files_seen += 1
+            if files_seen > 64 or cases_seen >= 8:
+                lines.append("xml=limit-reached")
+                break
+            try:
+                # Refuse symlink files/parents and cap before reading/parsing.
+                relative = xml_file.relative_to(results)
+                if any((results / parent).is_symlink() for parent in (relative, *relative.parents)):
+                    raise ValueError
+                size = xml_file.stat().st_size
+                bytes_seen += size
+                if size > 8 * 1024 * 1024 or bytes_seen > 16 * 1024 * 1024:
+                    raise ValueError
+                with xml_file.open("rb") as source:
+                    data = source.read(8 * 1024 * 1024 + 1)
+                if len(data) > 8 * 1024 * 1024 or b"<!DOCTYPE" in data or b"<!ENTITY" in data:
+                    raise ValueError
+                root = ET.fromstring(data)
+            except (ET.ParseError, OSError, ValueError):
+                lines.append("xml=omitted-invalid-or-oversized")
+                continue
+            for testcase in root.iter("testcase"):
+                failure = testcase.find("failure")
+                if failure is None:
+                    failure = testcase.find("error")
+                if failure is None:
+                    continue
+                if cases_seen >= 8:
+                    lines.append("failures=limit-reached")
+                    break
+                cases_seen += 1
+                identity = f"{testcase.get('classname', '')}#{testcase.get('name', '')}"
+                if not _DIAGNOSTIC_ID.fullmatch(identity):
+                    lines.append("test=omitted-invalid-identity")
+                    continue
+                lines.append("failed_test=" + identity)
+                duration = testcase.get("time", "")
+                if re.fullmatch(r"\d{1,7}(?:\.\d{1,6})?", duration):
+                    lines.append("test_seconds=" + duration)
+                frames = 0
+                rail_emitted = False
+                capture_emitted = False
+                background_emitted = False
+                entry_back_emitted = False
+                for line in (failure.text or "").splitlines():
+                    if not rail_emitted and (projection := rail_failure_projection(line, identity)):
+                        lines.append(projection)
+                        rail_emitted = True
+                    elif not capture_emitted and (projection := capture_failure_projection(line, identity)):
+                        lines.append(projection)
+                        capture_emitted = True
+                    elif not background_emitted and (projection := background_lifecycle_projection(line, identity)):
+                        lines.append(projection)
+                        background_emitted = True
+                    elif not entry_back_emitted and (projection := entry_back_failure_projection(line, identity)):
+                        lines.append(projection)
+                        entry_back_emitted = True
+                    elif match := _DIAGNOSTIC_FRAME.fullmatch(line):
+                        if frames >= 48:
+                            if frames == 48:
+                                lines.append("stack=limit-reached")
+                                frames += 1
+                            continue
+                        lines.append(f"  at {match[1]}({match[2]}:{match[3]})")
+                        frames += 1
+                    elif match := _DIAGNOSTIC_EXCEPTION.fullmatch(line.strip()):
+                        # Type only; the exception's message may contain private UI data.
+                        if frames >= 48:
+                            continue
+                        lines.append("exception_type=" + match[1])
+                        frames += 1
+        lines.append(f"failed_cases_sampled={cases_seen}")
+    # One final byte budget also bounds repeated frame/identity combinations.
+    output = "\n".join(lines) + "\n"
+    return output[:30_000] + ("\ndiagnostics=output-limit-reached\n" if len(output) > 30_000 else "")
 
 
 def verify(args: argparse.Namespace) -> str:
@@ -288,6 +679,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     single = subparsers.add_parser("single")
     single.add_argument("--log", type=Path, required=True)
     single.add_argument("--expected-test", required=True)
+    diagnostics = subparsers.add_parser("failure-diagnostics")
+    diagnostics.add_argument("--lane", type=Path, required=True)
     verify_parser = subparsers.add_parser("verify")
     verify_parser.add_argument("--expected-tests", type=Path, required=True)
     verify_parser.add_argument("--evidence-root", type=Path, required=True)
@@ -311,6 +704,8 @@ def main(argv: list[str] | None = None) -> int:
             args.expected_tests.parent.mkdir(parents=True, exist_ok=True)
             args.expected_tests.write_text("\n".join(identities) + "\n", encoding="utf-8")
             print(f"discovered={len(identities)}")
+        elif args.command == "failure-diagnostics":
+            sys.stdout.write(failure_diagnostics(args.lane))
         elif args.command == "single":
             print(parse_single_test_log(args.log, args.expected_test))
         else:

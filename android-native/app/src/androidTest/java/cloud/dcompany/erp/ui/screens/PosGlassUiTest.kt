@@ -588,7 +588,7 @@ class PosGlassUiTest {
                                     onRetryRejectedSale = {}, onRetryHeldPayment = {}, onPrepareHeldOrder = {},
                                     onUpdateHeldOrderDiscount = { _, _ -> }, onContinueHeldOrder = {},
                                     onConfirmHeldOrder = { _, _, _ -> true }, onConfirmHeldOrderSplit = { _, _ -> true },
-                                    onConfirmHeldOrderZero = {}, onVoidOrder = { _, _ -> },
+                                    onConfirmHeldOrderZero = {}, onVoidOrder = { _, _, _ -> },
                                     onDismissHeldOrderReview = {}, onDismissHeldOrder = {}, onDismissNotice = {},
                                     onAcknowledgeReceipt = {}, onRefreshReceiptHistory = {}, onLoadMoreReceiptHistory = {},
                                     onOpenCanonicalReceipt = {}, onFocusOldestOverdue = {}, onSnoozeOverdue = {},

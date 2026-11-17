@@ -19,6 +19,14 @@ import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.components.LiquidAlertDialog
 import cloud.dcompany.erp.ui.components.SectionCard
 
+internal class SharedAttendancePresentation {
+    var picker by mutableStateOf(false)
+    var retry by mutableStateOf(false)
+    var reviewRejection by mutableStateOf(false)
+    fun dismiss() { picker = false; retry = false; reviewRejection = false }
+}
+internal val LocalSharedAttendancePresentation = staticCompositionLocalOf<SharedAttendancePresentation?> { null }
+
 @Composable
 internal fun SharedAttendanceCard(
     state: SharedAttendanceState,
@@ -31,9 +39,12 @@ internal fun SharedAttendanceCard(
     onRetry: (String) -> Unit,
     onAcknowledge: () -> Unit,
 ) {
-    var picker by remember { mutableStateOf(false) }
-    var retry by remember { mutableStateOf(false) }
-    var reviewRejection by remember { mutableStateOf(false) }
+    val hosted = LocalSharedAttendancePresentation.current
+    val presentation = hosted ?: remember { SharedAttendancePresentation() }
+    var picker by presentation::picker
+    var retry by presentation::retry
+    var reviewRejection by presentation::reviewRejection
+    DisposableEffect(presentation) { onDispose { presentation.dismiss(); onDismiss() } }
     LaunchedEffect(online) {
         if (!online) { picker = false; retry = false; onDismiss() }
     }
@@ -57,6 +68,16 @@ internal fun SharedAttendanceCard(
             busy = state.busy, intent = ActionIntent.Secondary, modifier = Modifier.fillMaxWidth())
         if (!online) Text("Online verification is required. Nothing is queued for automatic replay.")
     }
+    if (hosted == null) SharedAttendanceDialogHost(state, online, presentation, onMore, onSelect, onDismiss, onConfirm, onRetry, onAcknowledge)
+}
+
+@Composable
+internal fun SharedAttendanceDialogHost(state: SharedAttendanceState, online: Boolean, presentation: SharedAttendancePresentation,
+    onMore: () -> Unit, onSelect: (String) -> Unit, onDismiss: () -> Unit,
+    onConfirm: (String, String) -> Unit, onRetry: (String) -> Unit, onAcknowledge: () -> Unit) {
+    var picker by presentation::picker
+    var retry by presentation::retry
+    var reviewRejection by presentation::reviewRejection
     if (picker) LiquidAlertDialog(onDismissRequest = { picker = false }, title = { Text("Who is clocking in or out?") },
         confirmButton = {}, dismissButton = { TextButton({ picker = false }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Close") } },
         text = {

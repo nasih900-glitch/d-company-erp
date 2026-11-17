@@ -234,6 +234,8 @@ CODE30_4_BUILD67_BASE = "6224fccac9be7f32c0119ef73b8ed66f9c1aec3c"
 CODE30_4_BUILD68_BASE = "a207fc4df01d021c2f447fe31d2aaac550311946"
 CODE30_4_BUILD69_BASE = "0b15b6a87516125b4ef2628b7b89b84853f3058b"
 CODE30_4_BUILD70_BASE = "ab5db9dab901cab31a97899ac8a6789ad4819c89"
+# Immutable deployed Build 71; Build 72 overlays the complete new source delta.
+CODE30_4_BUILD71_BASE = "b9b19bd2462e0f417922849a455e12116e8207e2"
 CODE30_2_FREEZE_CONTROL_PATHS = frozenset({
     "scripts/verify_code26_regression_freeze.py",
     "tests/test_code26_regression_freeze.py",
@@ -2914,6 +2916,416 @@ REVIEWED_CODE30_4_BUILD71_SHA256 = {
     "tests/test_verified_pip_bootstrap.py": "336a8bc8ee7971220e84acdbd0c2becebb17e67817d200dbb75b3a26bee89062",
 }
 
+REVIEWED_CODE30_4_BUILD72_SHA256 = {'.env.production.example': '3d2da9400f5b233d04d486bade4430ecb5fc29c2349dcbd343f9286d32847ac9',
+ '.github/actions/scan-production-images/action.yml': 'd40b6baecf5ebc32bd4919c3ede5c5eef096957ff31343e4d5f3e079013fe696',
+ 'PROJECT_STATE.md': '58349b18c1ef790b197745ab9c14b3e50c938708696d385730cd781d9f67d46d',
+ 'README.md': '7ec678e641494d4d11ae95a175369f12b8f49443c7945c3d1af6b29a14a2b9e5',
+ 'android-native/app/build.gradle.kts': 'e61c7cc3c9ff9d4d7d1bfb43ae3ba7d4c41f3cf6b7cc9a94f47a13319b0ebd2e',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/CaptureFailureDiagnostics.kt': '55efc382ec1e59862fdbda7262f0d78231cd33e470eea2a04eb6d3ef32a89c0e',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/PhysicalSmoothnessUiTest.kt': 'c71590279e9b9269d5481a788331729586334a7df9c70de8a96b82ecb2ddc5d4',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/TillTakeoverBlockerUiTest.kt': 'b9aecb3417460e043248a3835767eff26428c8d5770713b3cbeb3ec5c8a3b67a',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/WorkspaceScaffoldUiTest.kt': '40eff9f4f1b499701812bcc61674c02e667a889d30064ee8143981c7aecb4ec3',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/ControlDeckFullShellScreenshotsUiTest.kt': '51276c9b899491b74f757e863b62276033edf5003ec5d96144e55ed4b39f7ee7',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/EntryBackFailureObservation.kt': '68be18b97303a28b7458014db6a1b0bdf3c6efc48ad9adbc08665edb5ab14def',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/ExecutiveEntryPresentationUiTest.kt': '43bd75b7fe16d4c6d8b9308464f4718685f5f1522f9af06bc9f718856fe7c2fa',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosEmptyCatalogueUiTest.kt': '92f520c52e4bc9101609c5f7bfcaded54a20f7f5e0018ab943320276a9770af6',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosGlassUiTest.kt': 'f49c93e672d02b7770917b23e6b25ab4052e3e7f1b1d94435307c721f524b480',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/ReceiptCorrectionUiTest.kt': 'affc4fe7abb352d3b7e5b4eda9dfe69e09a41eb1de1b919a9f29e050ff388f1b',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingBoardUiTest.kt': 'a44698e358a5148e136f919948c7db8eacb1dc3a9d8000e3114b89c92c21d14e',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDraftRecreationUiTest.kt': '6791f824974fd82471b469c6b67f9553a1980da24e57a231b2173c9694dc1757',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingGlassUiTest.kt': '9506d645ea8b10294edd3fe5f19159affccbb389941f23b31e2a22a2500ca5e5',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingInlineShiftWorkspaceUiTest.kt': '2803ed11052ebe35ae12f4e08c803927df78e3f327096ebef80f2fd07c207a98',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingVoidImeUiTest.kt': '9df7770b4071ff88336c54e12b6fcd839515128b6f9bff57f0bdbaa9ce88d338',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/home/StaffHomeTillUiTest.kt': 'a8bcd8a1d6d327e3a86a7f5333fd020c6e6a7fba62e3f00b44e51e30ab55d7c4',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/shift/DailyWorkHubUiTest.kt': '8b44173a8fc9fc656cd64a6d7f29055a178649830f502e812cb7467bbd4d2682',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/shift/ShiftOverviewUiTest.kt': 'b9d74de7263d571f58e6733dfea38ef1dd82bec07a99e25a5c91465240478703',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/shift/work/AtomicStartWorkStoreTest.kt': 'a9dfabbd8089ec3cfd06ec51e92e82700c023524fc4ddcd0fec7d1c0fd0e8803',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/BackgroundLifecycleTraceRule.kt': '546efbcd285f8a2e75c322924444125f98b052992c59d9730f1da57ff1021b64',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundUiTest.kt': 'b9921ca1b9b15fa336d016530166f7bf6873ba3ef2047ba57c14fe92fda20d82',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceGlassUiTest.kt': 'dba732f59bf9c78c95dbbe4b3db9c26f0fc74d0fd129110db52b0e698a95ba30',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/MainActivity.kt': '2065dd2b089feb076c892792088c58d90f669d0e61acb73c9d1fd2b8966283a6',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/auth/EffectivePermissions.kt': '5f9a71ffff0f92e29a8c1955e77562a37e8d816a50b364f1156054053a29d41b',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/auth/RolePresentation.kt': 'f36d3097a1849ad7500e3d33d5e82636611ba7dd94050e7f0fac5317fe049526',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/auth/TerminalStore.kt': 'f61157906972d468d8009988278cb959c14e044f138b22e8e093209ae7eb2310',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/checkout/HeldOrderClaimPolicy.kt': '912b60e74899eedcb1bfa2580833b4a35830acbc7bdbacd3dfd99b19aec308c0',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/db/ShiftDao.kt': '4535cc8421de86506e4567f8f8d96ab25f0cb0b7e32028131e405452b494b20c',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/HandoverCoordinator.kt': '9216182904b63733160956d7acdf277aa2268c6a8989017c467a1a5b1b35f0f2',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/HandoverOperations.kt': '19d311952c123bf8bd05b7d03146d64a9c16501a8f46070f98bfb93a595cf9c8',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/KnownJournalAttempt.kt': '609f30737cb723db71528817fc9b8e416b49c3e0835d9a13286f15a3dfacb3b6',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/LocalHandoverWork.kt': 'cc60144c3d17253db616b2405b76f094c3c505cd31e6da3348124b0fe7654dfa',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/OperationDispatch.kt': '19732a4f41e18005d9c1e1a3e244c1bb00e829c255627f8264fe27b891bdd12a',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/StartWorkReview.kt': '589bdb7dc85049a7a14381c1aae2100f7c20e6c5825338cf178cc5c816e5d20d',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/TillPreparationTrace.kt': 'da85b27dccbb3d5bd7420f688be9ccdcefa1336349ff830fecee29532ed2946a',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/net/ApiClient.kt': 'b74838c6a18f9a7aa4065228e11c46503dc086ffcf812f9d009608686a05a16c',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/net/ErpApi.kt': '48cef3674be9c7996330955eb72e61a1d9fc4fd616afd6835977fb8a357be3a7',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/net/Models.kt': 'e202912e942ddfca9ed63a15475ea80da7144ab15d80619a340234d126aff05a',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/net/ReceiptHistoryModels.kt': '8018e54270b112f31bdbb2d3310d9a569c200fb12290c0849b67b03d46b8f0f5',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/net/ReceiptMistakeModels.kt': '2f6c32a7bcc642d675ad0356a21f9715c6f4bb52084879ca8e1673aa9520f922',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/sync/ShiftMapping.kt': '7f2888bed226fc644a54fc63f575a55629db2e756508a2f5bd4e94ee94bb811c',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/sync/SyncEngine.kt': '403ca60fdd48e484e591ee4ea01847654c4f9e3fe567ef8224020d097dad74b8',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/CashierSignOutGuard.kt': '280dd07f1349587d307d849c7ed44d84380a7d3f1bf4a2a3d9d3382257f303d4',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/ExecutiveRailScrub.kt': '42682d2ec949ccd8d7990248c35a8e72e5500489dca5d65d7f8546009137669c',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/ExecutiveRailVisibility.kt': '56f494a8d085463df20708a7be394a15bd2f1a2759034bd5d5de0476e6fd407e',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/Nav.kt': '471bf007cfc66337bf09faca632dec31a4a268f4cac2df04b9299c014cea304c',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/NavigationAccess.kt': '250257923e94f671232997fdcde9b58626d38ebf9f236486549382db31dbe6a2',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/SessionViewModel.kt': '4edbc7e9883550395aa051e2fb3131291c7ab2ae9febe294cfae64e926f147f1',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/TillCompletionNotice.kt': 'fae4d395dccc8ca7803d54fe1e3f233c72f09ebdd7b1bdf61004d0b5c4a0e3d8',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/TillOperatorDisplay.kt': 'ae2b718a18b4b4e0a8f0c7d0fe69b09c0143bfebb2c85705d9772572c56683f2',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/TillTakeoverUi.kt': '7470839e8b8dab6de6c3295cdc360d72c6aa9da6705b8814b43d72f7b94cc57f',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/components/VoidReasonInput.kt': '8529da9c8a0fc5555173b3c69b91af2d28e53e0845ed6ec02add3e16520d3389',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/CanonicalReceiptHistoryDialog.kt': 'bac0422cb882111414b1c1d52a4368e85db0f8405e4458c02dac8be18a38a73c',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosFavourites.kt': 'c8df5deee35979860f446f0f4027e3500037a758bf3ed62538cc1aae8efe1122',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosScreen.kt': '6597c377567900541b3665ba0cd62829643d7012f8f9971b80e52a02fe1af17b',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosViewModel.kt': '7b025f00cb2638079a366705d069b395b6bd03f0e2641c4b64cce00c269feda3',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/ReceiptMistakeJournal.kt': 'cde635c73b946036e81bdbe8be172930c208b0dcaaf3943a3d3da841c9509cc1',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/ReceiptMistakeReports.kt': '278285814af04fe8cbdb65ea52b6f1e0b5d8ab9d27e5d33444e96c3d011df9f1',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/accesscontrol/AccessControlApi.kt': '92111bbbfeba3a00cd920abd3a7acdfd45e1982d7282cfbe7af17501bc480f55',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/accesscontrol/AccessControlScreen.kt': '88edbb7d0b7f18dddb844f47719f64faf9dea3eb6ee6927aed80080e1e15d7db',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/accesscontrol/AccessControlViewModel.kt': '864d6aa5025f910a8769d2fc47266b319c3f4e07b93722021ec319d7ca5f3e4f',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/FileTenderJournalStorage.kt': '35c8e2b5f60886caa137452718686896c0be22d4dcae4a5a2199947e0314a85c',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogBodyFit.kt': 'd5aa083cced6c7d52e9614458ba4d34c7f4eb0e5ff3392bde5ffee2c14320910',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt': '65f1cade7a81616839fd9ff11ed1ef989c40915a8f641744e55032624cb273f0',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt': '7bf1d9bba56e2239328bc2d1b6b2693abe58e66fe16cc00c224cf5000c067bc0',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/home/ExecutiveHomeScreen.kt': '2000e066b4aae2f211878d9453bf15f40148083b403895b5648642bebb4e4b22',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/InlineShiftOpeningWorkspace.kt': 'c8501a7e08922fb9383fcbb868b01e7c2e866c6f2aab6335199c1ebcff37081f',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftApi.kt': '883c481c3d43223a830589a1b4fe35125a8984471f67f8234198f39aeb899f76',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftScreen.kt': '2207824cc0c81f09bfbdad193b9eda397ce85ce610ce0c6e780808d410374fea',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftViewModel.kt': '934d332bd3ca274d31160c16d4b9a114755aabba557a9bbfb7214838a0396973',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/StartWorkRecovery.kt': '54c9d9bd2fe8f79185c837a07b06a33bc34e2c18404c318062f44972439782cb',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/work/AndroidStartWorkRuntime.kt': 'd2de993be44a839da932ff0b03f3b390ccdebce7e5705a333074393339431bfb',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/work/SavedStartWorkRecovery.kt': '454536a954c092c4c205324bfbf6b799aa1398b257d264a2ce502348b05eb2cb',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/work/StartWorkApi.kt': 'ae91f0be38f4d89956f2831dc1f15893f04eec5e3b9e10ec35e1868cda0b2adc',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/work/StartWorkController.kt': '64a2fe75c4dccdc54e40d80175805691f9e8fac95a99c5a92dfd8e8f85d24166',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/work/StartWorkPolicy.kt': '1dfe55a9ff2e2b12b79e5dad21365bd80f3923a0664a8516503c78d828512fe9',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/work/StartWorkStore.kt': 'a8ed0aeba63808d8b4ed63201b2091cfedd29dbf488bdf975d560cd58ce111cc',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/StaffApi.kt': 'ee5f11549c657faa18e738a644cf1946bad140b755e9911a201e0c6d9d136f24',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/StaffRolePolicy.kt': '058198cc3f739f99b1fc72d4aebe872090914537bab9b7f6d6b519f8eb59c2ba',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/StaffScreen.kt': 'e23f7fcbf6db33e40c562d14a3c715a550f5602d12b3af086ac635f354906fe0',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/StaffViewModel.kt': 'fc6aa02c0356038484784053d24a548342ce4d5b5f702e68429cd3ba8e383438',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/SharedAttendanceCard.kt': 'ba67cf2d29cfb7a71a530ccc39bc53a333ae9f52d332a9e5943ad645bce9f003',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/SharedStaffTimeWorkspace.kt': 'c15fa1e3f37ff8be8e12ce92f48e6e483cb415e04308c4dc500eb5d757be1af1',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimePolicy.kt': '4d1979b8a0368b8c0ca40b6ecf946f4824ae10bb25ae8e4fcd7dcdd81d999a20',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeScreen.kt': '3a8c8a4c3e933be6e89f69412833dfbf48feac2dd16ba398012f12789f790bb5',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundPresets.kt': '3b9f4221ff6fb31884ab55712199563a561cfee8216be43436937416a838dfae',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundRenderer.kt': 'de08426faf8eed9ed0abc6398627c2a1526a2c037cb529ef006d3c3e3f5e3c94',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/WorkspaceGlass.kt': '7cd6a7c2aa58c45109ccde4c624408866b632dd9c915255e79d44259419890e4',
+ 'android-native/app/src/main/res/drawable-nodpi/workspace_preset_violet_glass.jpg': '4bbb18c70b040b4657c1395de6db3c43196c1c71161e96088925c3724a30cb99',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': '5a9d8d880defa28ebc45ce852121234d1ea1deb44b003448f3472af9a09dda85',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/checkout/DirectOrderPublishContractTest.kt': '18028a0f71201c1c9a09b61c41d7827c570b9941d2c38b0cfb3844e7b919f424',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/checkout/HeldOrderClaimPolicyTest.kt': '893f024c24622a6aa83097d5682cb2175675c3e1633f3503474d8b22b7fa0cac',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/db/CanonicalReceiptMappingTest.kt': '6751b1348a4928ff6052d702759f0a0e34a802f29925390cd4e26abe64d76332',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/OperationDispatchTest.kt': 'e70ece039a0d9da12540254ac6a640eee84f38574e2febe6b30a0b906df6f928',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/StartWorkReviewTest.kt': 'b00fcadc0a7a0e26aa04527904fba0bd4b412b08ebc5e4198e662de1ddca8ca2',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/TillPreparationBlockerTest.kt': '80c0bae82b2743147d4058b894393731170515825441f5dfab5bae1053b87ae1',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/net/PaymentBundleApiContractTest.kt': 'b1a6c82b0fd588de74a3f0c08a2ea7f438815f68ad6576eac848b38ee2743a5d',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/sync/ShiftAccountingContractTest.kt': '664c587b3b9cf8f8dd4c46bbb6dbd504ecdbc8e0597479d41ba212fb9ef1a0ec',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/sync/SyncResourceLockCoverageTest.kt': '1250ca7337b6d48bc0fb3d7be804436f35ccca772f80b369879c3dd3f05d9b9d',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/CaptureFailureProbeTest.kt': 'bdf84ad15c4d2ac4eee4a88cf8433b84c604cb0d9e2873ec0100f26e5daf7cfe',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/CashierSignOutGuardTest.kt': '19b4c9ffe8b1b22e564ca7ee44698b5226406ed4290a69743d39808c5aa545a0',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/ExecutiveRailScrubTest.kt': 'a7b65d3bc22eae508e89c6aee55ff71a4005e0ed4a19b823f7cce4199a127c1d',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/FiniteEntryAcknowledgementWaitTest.kt': '41776acbebc6088f179b7616f8fead637178a3582281483f9d73dd040215c4c9',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/GamingCentreFeatureProfileTest.kt': '4eefae8d1818a094a744a804b5ff79630cbdac5a4695d623dff810eea795b217',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/NavigationAccessTest.kt': '6051ecffc0b5c5101f9311cf06d23bbac4c8de249693259c2f5ee8351f609957',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/StoreStaffNavigationTest.kt': 'e2119dcb208f379f9bdd30e2eec52cb556c2fd3349f01dd11d831a40de9f77a8',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/TillCompletionNoticeTest.kt': '5358cf79c7b1802af6855a1a928088eab3eabeff77d652660e69a2a2f21ad30b',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/TillOperatorDisplayTest.kt': 'cc8d03994798af641f2b2a71d9c6e6229bfdfeb826f3a663376b5ec12406392e',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/TillTakeoverPresentationTest.kt': 'b91fde4fdf31d185966ce1b921837b40a17f7a1493b6e65e3d13e16ff1a34450',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/WallPacedRailWaitTest.kt': '6a49cba0cee41cbc9e0218c57cf27c89f426d38f855de58c7dfe48d8bc6c3d0f',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/WorkspaceLeaseFeedbackContractTest.kt': '931b5130f63308cbad1c54af7b1b9ce3f0e214ea0830167f307f5f63cb05a456',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/WorkspaceRouteAuthorityTest.kt': '0298d41192e5197cd4bddc3c2a05690af9da522b6924a8c69186ac92f1b68f78',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/components/VoidReasonInputTest.kt': '8934a81fcf4264716f249559d033fe326cb453123e79134abb28eb96af1da396',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/PosPresentationPolicyTest.kt': '038bd0d17849d8a165cd9412340be42c675faf80efdd6f63577052f236adf023',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/PosRetainedMistakeContractTest.kt': 'bf5a4e00a1d307f8084ccf2386497474a266c92e7f2e2785cfbf2232115e7ecb',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/ReceiptMistakeReportsTest.kt': '569a31480eea16c278704328b373d3c2b2f7510fdf617124b15035f4b445e325',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/accesscontrol/AccessControlContractTest.kt': 'adb5941232863ee70b0187767a32d47ffef6f822bd9a80346729c9ed63c4a771',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialGeometryContractTest.kt': '4b8314a43f51929090ea1b31defedb3e40ba6719adacaefda73a56210dba2102',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogBodyFitTest.kt': '56255f6b8b4a80e40e1c00375e4ace94d8d72857d28af3834341a32c5337cee4',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingVoidV2ContractTest.kt': '96ec1b4e147337d6b7b3b82558526713d610b620bdfe8cec8c1fe0c8dfccb285',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/home/StaffHomeTillPolicyTest.kt': '5f2701b5daf2af4603dc462a4cd377cd40be41808602ce1f88b3fe9d0cd68905',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/shift/work/StartWorkControllerTest.kt': '308f3b25e16efe8d8ce558e95cbceaa6a0b1b043ab3b06d476241dc4f51b0c48',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/StaffRolePolicyTest.kt': '45aa5ed82c771412632c1f49257ee6efee1efab4c0aa21f46fe3c22a7723425d',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeNavigationTest.kt': '4ad630638ced96512605743ab40818c3e21548dd15abd81e2d9a80c920ade89a',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimePolicyTest.kt': 'b56013727a2e9404da90286faddf083ebfede7aed44d6f5b1c1d645b29621841',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/theme/BackgroundLifecycleTraceTest.kt': '2d46e72f0950f9204f999dd52092b076a0b69ceca57f4dc78c3e5d73e649875a',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundPolicyTest.kt': '953c3834acbd6399bf1a7594fa3d7375dd44672f92d902b6baedca681a3f48f6',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/theme/WorkspaceGlassPolicyTest.kt': '54e8311d3f7c74843dfd359a468a794c38ab3f4b2ba987162fea11703d135678',
+ 'android-native/app/src/testShared/java/cloud/dcompany/erp/ui/CaptureFailureProbe.kt': 'a66ea926302467179607f909e8e7ba5fb24cd1d5026236f903d8048fa390bf0d',
+ 'android-native/app/src/testShared/java/cloud/dcompany/erp/ui/FiniteEntryAcknowledgementWait.kt': '445b9ee7b07c100d290e1c142c4e854f6dcdbf480573e68bef3dab59f1acdc74',
+ 'android-native/app/src/testShared/java/cloud/dcompany/erp/ui/WallPacedRailWait.kt': 'f2bd0d4d7c98a0b53bd58cfa29557c5e899ea8e8f250ae72ae380808c4086898',
+ 'android-native/app/src/testShared/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialGeometryContract.kt': 'bce9736f14f7e700b5a758e490e1527b7e1101a72bf618dc5734af49fb669433',
+ 'android-native/app/src/testShared/java/cloud/dcompany/erp/ui/theme/BackgroundLifecycleTrace.kt': '02a248863ddfd03f24ac58656ac57f2ffe5b77509d93bbbd808cf44a33773e49',
+ 'backend/alembic/versions/0096_gaming_retained_bill_corrections.py': '1d1022487147f55657eda2297cb6499fbf306159afc11621a7222330775e8c5c',
+ 'backend/alembic/versions/0097_pos_receipt_corrections.py': '945a984b9bbe94b24ed1a1c232782b69e7c7f1fb2208d56204742ffa22f8f9bc',
+ 'backend/alembic/versions/0098_pos_receipt_stock_restoration.py': '1c2b136129d3b8e535d8b0754b033c08c51e6a9ee2535bd6729f36b1ce5040eb',
+ 'backend/alembic/versions/0099_shift_start_work.py': 'b2787243c08ded6cb85facde933d0902e04d59c9e51cc0ff57e1e3c3e89792a0',
+ 'backend/alembic/versions/0100_paid_bill_amendment_intents.py': 'e9eff2b66a954472ee8208802dcbe8b6578930092546dd0c0fdf55eaf7b3686b',
+ 'backend/alembic/versions/0101_paid_bill_action_decisions.py': '565b468eeed2d25b8bd54c6b4e76a96f2a2e6d47d5ee9be0fc4e8a360b2d1a48',
+ 'backend/alembic/versions/0102_paid_bill_recovery_sessions.py': '2d3485e39add2dffc873236c6c7fc29d45b94bd937fd656669803fca76f8528c',
+ 'backend/alembic/versions/0103_grn_durable_commands.py': '0308772fb704ef2d3e25800d07c627839b63d855ef3897831c93d05dcb07e432',
+ 'backend/alembic/versions/0104_receipt_stock_timezone.py': 'c5cc094de62be34d6e93903612ed26aeef00d3d5533d59baaccae1884589f63e',
+ 'backend/alembic/versions/0105_pos_receipt_mistake_reports.py': '1c20e477853a2660303da6a03a0be2b4e986b310a6f8d7d842d50fe83e59b0fa',
+ 'backend/app/__init__.py': '8476f7cfa95cc62280e1a08641e03c9c2107e3736780bbed789e355751ca691a',
+ 'backend/app/api/v1/admin/router.py': 'dd134423e15fc8664f3eef258ec5e1563a198cc5c05dc9e45d0a8b427dbfa232',
+ 'backend/app/api/v1/analytics/router.py': 'f66ab1aebb25aa9e438ac03a06c20574f9fc3eac304e2a0ed52f7c39bc07bcf4',
+ 'backend/app/api/v1/finance/tender_corrections.py': '7214dcaa98715fa23d33cb755f1dc9316642e07efa20511811b9e089f9ed7044',
+ 'backend/app/api/v1/insights/router.py': '1cfe484747554d3f640ba1a91c60dd2ac4abe18de5b8ac4eaad922bb2166ef0e',
+ 'backend/app/api/v1/inventory/grn_commands.py': '20d111ac6e431ea6bcd44752b64ac767b55b335239d1a9c5fea076f4767a65c4',
+ 'backend/app/api/v1/inventory/router.py': 'c784b9f57ccb9d3394c2e2c9fc09f8e4e561ba540aebab2db6eebe4a4bef1cf4',
+ 'backend/app/api/v1/pos/paid_bill_amendments.py': '6f9c522828360f741488baca870d604489546acd666ad3ac7b8483c5782bf3b7',
+ 'backend/app/api/v1/pos/paid_bill_decision_route.py': '20a5f54bd4b84195bc5fd787d188ddd10688f32389d200b0c2b7c788e48e4af9',
+ 'backend/app/api/v1/pos/paid_bill_recovery.py': 'ab479f8911ecf3e4172c823a33d2873e749ccc3172ddd792dcee82150e7d1849',
+ 'backend/app/api/v1/pos/receipt_corrections.py': '13267f942ae13fc3f6aca0d58ccacf5fa7ba06cc06f7821cc6e2e376a924b2a0',
+ 'backend/app/api/v1/pos/receipt_mistake_reports.py': '754da4b164a8a581ae875589bb9816873570a776250b7bb867a59daf67e7fb0d',
+ 'backend/app/api/v1/pos/router.py': 'a880e274457d61292b633d7fd424c7feb9519259ff3f1064efda8b552888f7ee',
+ 'backend/app/api/v1/pos/start_work.py': '90bea5aa650106791a5fac22e761b01b51097d483793037a49f0c5300250e6a9',
+ 'backend/app/api/v1/reports/router.py': 'df8977513c25c1e8f95bdcc343393d0ca468ffa8696b0c67c21e2dc6f1876605',
+ 'backend/app/api/v1/router.py': '924e8a6705e9d0092fa501233f5d45a62dbc5b8ef11e19de74bcecf64a7e38ad',
+ 'backend/app/api/v1/settings/router.py': 'e7b4cd84db2332dc1982881a6ffa1648a4ad06b1198d14e4ba64da1b28d5ca73',
+ 'backend/app/api/v1/staff/router.py': '250d963e7a41923765e8f7c75f44b8645bea4b2527e0ee0b3ab62ff9cbbfde8d',
+ 'backend/app/core/middleware.py': '67e2c1b72daaa4502b84b6ac5ce3a789499bf9362b8a73103f1eb2f11047928c',
+ 'backend/app/core/permissions.py': '707140c0516af174fdf98d31499e1cbded856ff53af1737d100b3936e252eafd',
+ 'backend/app/core/roles.py': '77f568ac3335c2b304b4c537b3dbeece1b01a92fc1ff2e77ba902b43a0dcd977',
+ 'backend/app/core/security.py': 'a4db954015a66157111f4cbdd83d0db114c8d7cec32628bad9203772aba9c3a5',
+ 'backend/app/models/__init__.py': '0f62525ec04c52dcdb53ba2e151ce27df1f2b2c2d83c3a8b4b2bdf23b17df3f4',
+ 'backend/app/models/gaming.py': 'a7ec8e23ac44f767a224a1fd723ad7fe5264ff7ee69650e3908d3e54bfa1bc87',
+ 'backend/app/models/grn_commands.py': '05e70b80bf1485e66548beadfe2ef7bc39acf85d412f2beca250b7cf7c496699',
+ 'backend/app/models/paid_bill_action_decision.py': 'c9858a0ea4b0c273ca149c0289ec58fc8f51fe9b4641895610300baca1fa7c5a',
+ 'backend/app/models/paid_bill_amendment.py': '3942e1076b6c57785f82108f0ac03a58ff637484c35ec15c44fb2cd05198ffab',
+ 'backend/app/models/paid_bill_recovery_session.py': '1ed22d731e2a5db5fd749f5224ec04c8123edea89c73717bf619ca2856c63a9c',
+ 'backend/app/models/pos_receipt_correction.py': 'b302019079746ad1618b9f52d1c442c7a81b68af82a4b5af30cb0bec91ac4a6e',
+ 'backend/app/models/pos_receipt_mistake_report.py': 'fa9dff84d7df586183ddc3668adb24a1be6b67a6a6b4c896cf9ffde2aa0936d1',
+ 'backend/app/models/shift_start_work.py': 'fe0b89bcf1b19e40b1bc1a1703e501d7615b4c251bfa0e2387013c391dee2fec',
+ 'backend/app/schemas/grn_commands.py': '5b8b6a81a8f7988974625d3432be50cb4d064e41ccdf5413f2806d9743bc2fa4',
+ 'backend/app/schemas/paid_bill_action_decision.py': '9e5e9cd52a0db616b2961ed658b3b0c8bd17ca62d10ea18a9604e41aeab653c8',
+ 'backend/app/schemas/paid_bill_amendment.py': 'd8e39ef161d03d1cf463a00b14f831e148bc714814aab955c607b32a77877d42',
+ 'backend/app/schemas/paid_bill_recovery.py': 'b1a4314575974a694175e1d4db27ccf343bf43c1d66e7cd142eb702beb2e0848',
+ 'backend/app/services/accounting/ledger.py': '8b60a90bac21ae506d0bc0c35c3ad525b03e0c3d119e528f02f8890f847341f2',
+ 'backend/app/services/analytics/home_read_model.py': '4c3d029ea2228c95a90c4f8c36dbce53afc9a41b7c73493575d9425da4db6775',
+ 'backend/app/services/audit/catalogue.py': '9a72ec0cd91e83f027d4f6749a0b9879efdb07d7eca58d1120b7a564a7bae2ce',
+ 'backend/app/services/audit/recorder.py': '6eda31d8b6aaefb695ffd21d09999526c8c6d51a4c7c97bb870d332db036ad0e',
+ 'backend/app/services/integrations/google_sheets_collections.py': 'd37a33992f6253bbe5e389501d75738832f58fb8a1a02e2e247125f75e8fee05',
+ 'backend/app/services/inventory/accounting.py': '26ae4b9e3fbb0f175cf7478c62feec7e1f05ddd40c51b962df600c0e79284f53',
+ 'backend/app/services/inventory/deduction.py': '5f2ce99b7e91c90cfe69e642ef05ce830df1126a26a4523c3709627de7a398fe',
+ 'backend/app/services/inventory/grn_commands.py': '453b04d30be848886804a12e319fe556679719b60444c5870fcebafad0db0854',
+ 'backend/app/services/inventory/grn_recovery.py': 'c8fbe1558a0f1f063b1fc14cb90fd040045a1f94ab461ef3ea3f619d8945f01a',
+ 'backend/app/services/inventory/receipt_cache.py': '726bc570f173ebe58c1a3c9ee465e63c7def86c0a2e919a1b73f6a206ed901cd',
+ 'backend/app/services/pos/paid_bill_action_decisions.py': 'b451dd462a1f541feaca775072d9efeaffe03c44b2402ae4d67a33e1a56ff874',
+ 'backend/app/services/pos/paid_bill_amendments.py': '46761c9841e6377779d17ebd20675fe43994170d5ed10bf52d4be4065d7db67b',
+ 'backend/app/services/pos/paid_bill_projection.py': '075ea46e28e0ccf0f2dfee168cd4d21184bf63dedb65ab1d13f2df05c1abc268',
+ 'backend/app/services/pos/paid_bill_recovery.py': '9de840612f6f287701acbd2bba357177f3e4ea2fe54aed32a132f2b61776d2ec',
+ 'backend/app/services/pos/receipt_correction_projection.py': '814ec4d3cd8f83e6b87a47cedf4dab5809064c15e56f1c618786d5f91836b587',
+ 'backend/app/services/pos/receipt_corrections.py': '299d5bca64ae3227f7ac1ac143cfca51910f3947a18544665fd19385427e99c7',
+ 'backend/app/services/pos/receipt_stock.py': 'f37e4b2b2c8e53cb838a64af59d4f98d21cc60c51a5654afe186ea11f3d049d1',
+ 'backend/app/services/pos/refund_requests.py': '0e75e207caf3d2c15cd35075b8451bbd9690e420a9fb29cc2fe10aae6681b95f',
+ 'backend/app/services/pos/retained_bill_corrections.py': '19e4a7cb3c84a565696f92b1fc0e78bbad42bdf6a5d77fa21cde248d7511ffc4',
+ 'backend/app/services/reports/aggregator.py': 'c39bfcf66eb0b34e15bbd3e0a6151a819eac016719e5266d851858d40f4f62fd',
+ 'backend/app/services/reports/overview.py': '70904d094cc2fe35e7a355ebd05bda67459cceab042380728c4580a21372b16c',
+ 'backend/app/services/reports/overview_csv.py': '8f0880247b604eb6135979167ec3994a6d6936dbfb314eeda6bb745244452fc1',
+ 'backend/docs/POS_START_WORK.md': '8972fc3f7a14401a5ae3bdf8bf5d531030f8ec0414fc2cf40f3f06445092dfe7',
+ 'backend/docs/TENDER_CORRECTIONS_API.md': '0b8f37774a4520787f87074c187f59dbaddc04dfcd8afb71843d6cb4ebb8d53b',
+ 'backend/pyproject.toml': 'a523328d7e54cb1bead60cc6163e4b3592a0b990d313d34b41438b333c6cbe6f',
+ 'backend/scripts/physical_audit_fixture.py': 'db40691a92fefa4557ea374d51619609a47850e36a1d04c9306c6009f8b57f26',
+ 'backend/scripts/seed.py': '5bd0e5afa2f15f642448fc6bebca5a689a921cf3b6ea8c6057626e969b1c6f20',
+ 'backend/tests/integration/fixtures/build71_pg16_restore_catalogue_pairs.json': '6c8b261567343f1db58d7a6a0356e8d76795c665034283362c861567461b4df2',
+ 'backend/tests/integration/historical_tender_producer.py': '1c62b087a4f51e48b39dad38e86e2463b710d98aae01154ec8b2dbbc2952ec81',
+ 'backend/tests/integration/test_audit_business_events.py': 'f3b4d14205b1209f0758b880d96261c7cb8fe32dbefe74ba275cad322b2f1b35',
+ 'backend/tests/integration/test_build51_history_bridge.py': 'b939d01ad148660c1d8eabca65ca827ac138ed5f7ab157ae7975374f93c32bf2',
+ 'backend/tests/integration/test_build55_transition_state_query.py': '2d44b6dd9e1c13223c2451f6a1e9b57d271368892a8f8a817f4e874132f6f98f',
+ 'backend/tests/integration/test_build71_candidate_migration.py': 'f76a68f378df854e95f013ce8d232942cd69f1d612b152c76a6520da21747bd6',
+ 'backend/tests/integration/test_checkout_claim_contention.py': 'bfc8d81aa277b230672ecc5540f4403a32f7bd5fe03c9067bda50fdddb4a2314',
+ 'backend/tests/integration/test_gaming_cashier_provisioning.py': '8afd4c7b7f970e49c540239f6544794b730240116817c5c2cecee1911ace9bb0',
+ 'backend/tests/integration/test_grn_command_migration.py': '0289ef7bdee88233ef0e7f8ebe55a294a0b5604002445e81126976196fe6fc87',
+ 'backend/tests/integration/test_grn_command_races.py': 'd378b7d2cde9459e0c7feb2ce3d69b8764b24ba1704932c4aa2e5ea9bbebbcc7',
+ 'backend/tests/integration/test_grn_command_recovery.py': '79611a891ebbe36878eb66f283e2f3178d335f567d34d8df9c1b27bcc4a21831',
+ 'backend/tests/integration/test_paid_bill_action_decisions.py': 'f9cf4a5122c6c35fe77b9122c38bc2b238c8402d334df8610c52eb2c790e1ced',
+ 'backend/tests/integration/test_paid_bill_amendments.py': 'dcec6904effd6c2d1f79aafebbb120fcca3095ab75be1b48bec7acf82c6442ab',
+ 'backend/tests/integration/test_paid_bill_historical_recovery.py': '096a6a3c0b14ea81dccd0aebb1cea3c22a4462fdecde5bd09685d29964561e62',
+ 'backend/tests/integration/test_paid_bill_historical_recovery_migration.py': 'aa0fe8e383db7e06c259d18b6e2a14feb146bc30932138886b0ba7f61fa63fef',
+ 'backend/tests/integration/test_pos_receipt_correction_http.py': 'e25bae362e581dc2deb9df01fee0dbb2b985ddf5029ec1d5f5dd78ca4f93cbd3',
+ 'backend/tests/integration/test_pos_receipt_correction_preview.py': 'ea73ce88e421c4deb100c94271b7392d84e05642941ba2c723e34f377f9dd7c5',
+ 'backend/tests/integration/test_pos_receipt_corrections.py': '38e4f75b8ee09a3babf22b18f06b9afdca2eb4addaf5803285aa9cf3c57fb1cb',
+ 'backend/tests/integration/test_pos_receipt_mistake_reports.py': 'ef903365a3a246518846b26fa5c221702327db0554f200ace7ed9b4a2cb9ad12',
+ 'backend/tests/integration/test_pos_receipt_stock_corrections.py': '0055e5b299b3866c7c4798f2d6ddb0c262421f61ea39d79f1cea2bd82b8b1dd9',
+ 'backend/tests/integration/test_receipt_stock_timezone_migration.py': 'da28ec9866a86bb0e9279d9ea2e5c81c2fd970e6e80d93ad39a7f7346da68cfd',
+ 'backend/tests/integration/test_pos_receipt_stock_lock_order.py': '9f2afacfcf165566bd112ad6f80d636401fed27756e855bccfa4d740ffcca96c',
+ 'backend/tests/integration/test_pos_refund_settlement.py': 'ea91437bc3307ce0657ca944b77b839b3ee9f8d531f3a38276971fe40d4f6913',
+ 'backend/tests/integration/test_production_redis_acl.py': '3ecb5ba11de5f61035008f16145e2713c33c12391241796cf604cf83ca5bb15d',
+ 'backend/tests/integration/test_reports_overview.py': '325fef58f4bad0c602c097b568c668690be30017c258ba63d5d8b918c6e5b4bb',
+ 'backend/tests/integration/test_retained_bill_correction_migration.py': '36f3ed20665f4458c2d510daa7fa12b9139fc7c791ab09cf4a90a2fc5549b4d5',
+ 'backend/tests/integration/test_retained_bill_mistake_correction.py': '64ab6ef8292a64e13bbde6c16d76bb529ff09587d9ea09e408f80e8864ea18e4',
+ 'backend/tests/integration/test_shift_start_work.py': '9e268192c5c64a6e4eb1d051ff0ddb7da99e1fa81991340169909a992a3f6a9a',
+ 'backend/tests/integration/test_tender_correction_edges.py': 'c67a2e8c15d4455c74321f55f2e78fe93b9ad5c1af37159a5d0b3764251ea93b',
+ 'backend/tests/integration/test_tender_corrections.py': 'a6c6b5e86bb8c3bbafe4c5f37c3c049dbacd15a577c4eeeb9b8228f18bee62a5',
+ 'backend/tests/unit/test_access_control_owner_presentation.py': '78a0f51dada51fea99d4b15d8a9f44b12f0f5f5cc46994f0dcf83ad192b9bfeb',
+ 'backend/tests/unit/test_accounting_provenance.py': '88d1702bb47f75464a1d89fca615fd417d4dd7c70b87fb1845ab9f2257c857b0',
+ 'backend/tests/unit/test_audit_business_catalogue.py': 'a70a7d7336b91ecab7f0438cf7fdf241fab838dfb7d5eeb5a2f80e96c7af3067',
+ 'backend/tests/unit/test_cafe_active_line_consumers.py': '9aab35e9135c77d083185908c295c01b263a721213864e640493d763a5a47b5d',
+ 'backend/tests/unit/test_cleanup_replay_fence.py': 'b4f0b64db26a56f8913202ef395697949ab4efc1b0a5420ddcc6586985b9508e',
+ 'backend/tests/unit/test_depreciation.py': 'ca418f6b688484d6358efcc871c6011433de4ed9eecf316e816199e133344d87',
+ 'backend/tests/unit/test_event_ticket_report_integrity.py': 'cc4d9881edc1da7865f8005fb8afdbb4b73c6e81e113e452b3c228e737b7b7cf',
+ 'backend/tests/unit/test_gaming_cashier_access.py': 'cafac9ef5b9f79cc2e6d5a82ebe30bae2694dd68e94abfdff333519a2dd1a6a1',
+ 'backend/tests/unit/test_grn_command_contract.py': '6369981fc1d51a4e28bd4430b0c593c85a0d6a9acea948779922a7f3cc0daf3e',
+ 'backend/tests/unit/test_inventory_router_idempotency.py': 'f888121177e41e44920b96229d037d7ee11514722d5b67feb8e0537e15df4f10',
+ 'backend/tests/unit/test_manual_collections.py': 'f1d5656532c343066afb83bc1e6bd2217d10d40a5bc6df545883a948227ee6eb',
+ 'backend/tests/unit/test_membership_benefits.py': '83b1c963172ebdc9dc7ffd09ca80f2c91d7eba0191df85536b8d9858f56e7c7c',
+ 'backend/tests/unit/test_operational_route_integrity.py': 'ff074e97fde11f1d49d704eb057a11a207e35696922841704bf45d90677eaeaa',
+ 'backend/tests/unit/test_paid_bill_action_decision_contract.py': '04801072e9a7999e86b18acd69c53367f0f2a696318d11acf4b3c161ea1b490a',
+ 'backend/tests/unit/test_paid_bill_amendment_contract.py': '96acb0535c06592f932b173f4508aa0efefda41daa5028d37df28fba66157b45',
+ 'backend/tests/unit/test_paid_bill_historical_recovery_contract.py': '6873fe6d01f812bc007dc6a2197bd73338bb9246c67e7fc626653aedff4fd4d2',
+ 'backend/tests/unit/test_permissions.py': '1d7ca5ecee1c310aa8c602f1b87d1dbcce99444eee8ec101f55e4af2619a26b0',
+ 'backend/tests/unit/test_pos_receipt_corrections.py': '16b4ae912f4e3609714488c6a35f6476bb16b9834bc05d443473f4bb190d6117',
+ 'backend/tests/unit/test_pos_receipt_stock_review.py': 'a67f605299c587ddda489d086fe675cd7a320edd6b122d574ac911585bdacf5b',
+ 'backend/tests/unit/test_release_contracts.py': '6e5ff113ce031bf3e47344269b33e1c05a247821c927cc517cb28507f788936d',
+ 'backend/tests/unit/test_remote_assistance_contract.py': '76c704b15848949129e72121765f937daeae30e562692902bede2af713f754c2',
+ 'backend/tests/unit/test_report_defaults.py': '36089fa651f3e6f4b9ad9f155bad6e4b9df0e39586dec66fc8040623332998a7',
+ 'backend/tests/unit/test_report_roundoff_reconciliation.py': '76030cd80aee4846a2e9d3a4597b52fe7e906cc4891722a3041ca9f585388c31',
+ 'backend/tests/unit/test_retained_bill_correction_contract.py': '5a947f8ad87a44a488d10b0159265e71aed30bf472dca7abcc18573983fc5876',
+ 'backend/tests/unit/test_staff_discount_access.py': 'a244e41a725d6e7e1ec3d582f6b79ba9857e4b480ca8544d6a75b49d6f6acc07',
+ 'backend/tests/unit/test_staff_role_security.py': '9648479c3dad74c86982719b5e76eb406433fee266a587be98729dd324e827d7',
+ 'backend/tests/unit/test_store_staff_access.py': 'dd34974fcd09f3512ec4971d503c6a6b40f23eabe43f4c607826b8d92eeee0b1',
+ 'backend/tests/unit/test_tip_payouts.py': '8c2f04e3459a899c3ffab66f87da9616114fb746cc0fe2b904fec9cd7b8a3832',
+ 'backend/tests/unit/test_tip_refund_ledger.py': '9483678f26cbbc724f4699fb8003cade7da18ce21686b87a5fad0d1e7073cef1',
+ 'backend/tests/unit/test_versioned_cleanup_replay_fence.py': 'ba72a4f85af7f8991108bdb4e3a55a7344f52fd2fea9dc10d9c3757aee0d12dd',
+ 'docker-compose.prod.yml': '496947fef06bd5dc20d4e07321504a919b8ffec1a583fdd80c0a078eb38b8792',
+ 'docs/V3_1_65_RELEASE_CANDIDATE.md': '76066f6d9cbfef2af874364642abe2822ea2f48578e75f3f3bb15f622442313b',
+ 'frontend/.env.example': '163b2dc23bc840126d3fcf156b1e293553f5779e082d947e047a3241156f4e61',
+ 'frontend/package-lock.json': '657e5d1de6ef9ddc510c0cabb60b601b97fcb9cfb555d8c98b1b23720e0e2a8f',
+ 'frontend/package.json': '942d0cd69d7c13033cf1b983b84d73a2a773966d22e093d7276dfd30c8fa2b53',
+ 'frontend/src/app/App.tsx': '6ebfc58e507bbb5625eda53b08db25cf14f62595e35bbf888331be0b0ce75ce8',
+ 'frontend/src/app/OrdinaryApplication.tsx': 'c6bad6c19476beb1f4cc6389a2a00614b68b2020700b876877273f9de8098a2b',
+ 'frontend/src/app/RootRecoveryGate.tsx': 'e12ca573fb4739eb0ffa985d052f6b57163c45e686389a0c919468f0e1c69864',
+ 'frontend/src/app/cold-recovery-boot.test.tsx': 'a8ce55503873e564ba0eab6de4b713653564b54ea2800337bc57504949a6e816',
+ 'frontend/src/app/staff-time-route.test.tsx': 'a69304134d614766cb5ea1365d7b3ef6e69ddd424841462e6104be025ad7bdbe',
+ 'frontend/src/components/layout/AppShell.tsx': 'ebac23e0f3c53905a156581ade6f7f1f3cfd9d1355f5ec92ac66180d10f9c0f8',
+ 'frontend/src/components/ui/PaidBillWorkNotice.tsx': 'b982a4695e523a4060ab01d24a4b77aca307699f9fa761ef1fc23a71b5a14e9f',
+ 'frontend/src/components/ui/SavedOwnerRecoveryLink.tsx': 'b758f1bfeb90571bad797b085b1f422abab21f527e67944fe37122247d050bba',
+ 'frontend/src/lib/api.ts': '8dd9ed8c059344bacea990dba86ae690751879ae1bd6b7819f31f2b53800c5ea',
+ 'frontend/src/lib/configured-api-base.ts': '96cd7917744f65fded3e3111cb6a08878f9576ce87b6823ffcfab77db4b2fbec',
+ 'frontend/src/lib/effective-permissions.test.ts': '0dc3a92e052ce4c32fe6371913b8558529abfbdc25a582b37c0e8194f1a5eeb2',
+ 'frontend/src/lib/effective-permissions.ts': 'eef55880a00601b9b7aade6b570e4d10004ecaf6f2c509662006678a92b81414',
+ 'frontend/src/lib/erp-api.ts': '2e0af17b0b61334ca2a5aa03caa5998e62e8f2e3c73c8929309c9b7b168e4af1',
+ 'frontend/src/lib/operational-context.ts': '68eca76c2c1a8eab09c2b4cb4677a4d6894796dfb16000bfbf78c70982645137',
+ 'frontend/src/lib/owner-workspace.ts': '021b1efe8f67bb5f42717ea3576a45016e1c0f38e6734feeaab4e66c04a10313',
+ 'frontend/src/lib/paid-bill-admission.test.ts': '41791322b8452f6c40e3c52a4b9d4fab2304354c1bd7d256799e4d78b2bb117b',
+ 'frontend/src/lib/paid-bill-admission.ts': '9424bd172fdb0b8484a3285ac11815ac888f0e1fd3e7fef1fe6ce472333bd6b1',
+ 'frontend/src/lib/paid-bill-api.test.ts': '2e04d15f87fac94644df393bc64935f9258eb5f7cf8e399ec12040fd00768653',
+ 'frontend/src/lib/paid-bill-api.ts': 'b163c3c446ac638ae2ff080362f8034232b1e7b63757b4168a40fdf4fe928cce',
+ 'frontend/src/lib/paid-bill-context.test.ts': 'd144b4e141bfa14816b3948aa5212adfa59796809f291dd8e3e608bc549e9076',
+ 'frontend/src/lib/paid-bill-context.ts': '34a45a5e5f0ec53da23517cf36091f8def0697bdc05f42843af028d4e5101e16',
+ 'frontend/src/lib/paid-bill-contract.test.ts': 'ee11000bd7b58a78e3624266a6e87d367a8c13604fe38e1c742673c222afec80',
+ 'frontend/src/lib/paid-bill-contract.ts': '324d89f555250525c6a4fef652eef711f5161bc3d70c40e4d26db8a2d71e6e2b',
+ 'frontend/src/lib/paid-bill-historical-api.test.ts': '70ba8d40607872a3e904e038776df78b0a946b012947bc525f02f52c92943531',
+ 'frontend/src/lib/paid-bill-historical-api.ts': '99391feb33b5b4e04a0f6faa6157751c57087c1caef7aa1f275e197588d1ff75',
+ 'frontend/src/lib/paid-bill-historical-controller.test.ts': '089602550e3f309523d32ca07868fc286e4df2a46ad95477f75994b9bdc0a733',
+ 'frontend/src/lib/paid-bill-historical-controller.ts': '95000b021bbcdffb5a825347de678ade60258bfe3fda27f2ee373c6045279930',
+ 'frontend/src/lib/paid-bill-historical-lease.test.ts': '4b27debc3213aaf78942247aac865d67f3e3117bc1db9911ba6b79be164a776b',
+ 'frontend/src/lib/paid-bill-historical-lease.ts': 'feb8bbd58eddbdfca2c157ba7df4939bc2836cd37509f1f258abf368d64ebc0c',
+ 'frontend/src/lib/paid-bill-journal.test.ts': '91e3a2fe92ed1c4a85c19ce03907053c09860501497b528b62864e9da5985fd1',
+ 'frontend/src/lib/paid-bill-journal.ts': '84e0d736fc48b00cf9fa84e2871e673ecc637a2d8b151085ca057e60fa626a1b',
+ 'frontend/src/lib/product-profile.test.ts': '0db34b8c415f5f7c9d3604ec7c457c5d9a33a3bbb9009a82678a2039302a37fd',
+ 'frontend/src/lib/product-profile.ts': '879bb4adcbe207d23dc3b26cf22422f090dffb96e64f8a0648303d648d7f912a',
+ 'frontend/src/lib/roles.test.ts': '24c1c8c9561931dc66c99c998a09353c803c4aced370ebddac8edb2c2b5d26c2',
+ 'frontend/src/lib/roles.ts': 'b2a9d9fa8e0cdc17ea09ad6349f005034cc0876db9f1332448307799eb5bf22f',
+ 'frontend/src/lib/root-workspace-epoch.ts': 'aaf0101d61e9f6ed0807ea7e6edab638ba2b336e93acb5675d25ffa30dec8b7f',
+ 'frontend/src/lib/start-work.test.ts': '173b48e38d9a97288884527842c0100f684e18d91551d4cfb9c3a17c76c4620d',
+ 'frontend/src/lib/start-work.ts': 'f385319a9c31fd8cc514f6dfd05dc065add0abde788d9121f976b0799e320583',
+ 'frontend/src/lib/use-inline-workspace-focus.test.tsx': 'eb333e7b44522ba7806b50ba8bd4a3c00f6d53b25f4189a1d0ce293032060117',
+ 'frontend/src/lib/use-inline-workspace-focus.ts': '566cb20997ab6d11d06cd60efe0f1b9d33da2d38ce365b474ef715d26de0dfaa',
+ 'frontend/src/main.tsx': '9b12df42e2445776e4dc5d3ed8e10c13be2bfb79d3662d32ab41ecdc728353a3',
+ 'frontend/src/modules/auth/AuthContext.tsx': 'b237400c2f107187f8643ada9b469ea8fcaaab05d4f642b9024c8723a04db9b9',
+ 'frontend/src/modules/auth/Login.tsx': 'b5a7e1edd76a3a50ba3c666ab6fcc3d0b7b2fb6db73b1d66753678cf90983356',
+ 'frontend/src/modules/customers/CustomersScreen.focus.test.tsx': '736a4e48f6522082149f2ec928660fdd5dd0cdd552cfe590c62ef5b7aa73bf41',
+ 'frontend/src/modules/customers/CustomersScreen.tsx': '9c55f71848622e2e63a07e55e5c19daf72543c23e7dc919aba60bef2233d8779',
+ 'frontend/src/modules/finance/AssetsTab.tsx': '273e7a55717ad76c74464756ae5eba2c37916cb4e0bcfa229a83740c960b6c1b',
+ 'frontend/src/modules/finance/BusinessViewerControls.test.tsx': 'd25e874a3c95f23232d8f38ba06322a748aa8037228802db020533461e9fe3b6',
+ 'frontend/src/modules/finance/FinanceOverview.test.tsx': '44c3ed0c9e7fdda16792e34718716570d2911953aedd3f26c1b75d238e0e01c9',
+ 'frontend/src/modules/finance/FinanceScreen.tsx': 'cab17f4c79005f91e4ebcfc3b89cff388ddba9fd93d0d98cc46020ce8b675912',
+ 'frontend/src/modules/finance/ManualCollectionsTab.test.tsx': 'be56328cb81864680e1d003b1c8b7b56cb5fdd92c8cecf816d9e437fad8122da',
+ 'frontend/src/modules/finance/ManualCollectionsTab.tsx': '492e4e7ee7a937b07f27c23f2d20a2498c11e54aaecba3c5247e2017936acd22',
+ 'frontend/src/modules/finance/TenderCorrections.test.tsx': 'c7cdd43b42b2d4391b26594213aece092735febed98ce3dbf9b1f539a725e089',
+ 'frontend/src/modules/finance/TipPayoutsTab.tsx': '521f319f5bc00ac5341899ce415cb86b2b6ed03322a677088d4b52be34341fc6',
+ 'frontend/src/modules/gaming/GamingInlineShift.test.tsx': 'adabffa565e72f3d7c1cff3dc540049ef379fbd92ca36801a53114771da231a3',
+ 'frontend/src/modules/gaming/GamingReadState.test.tsx': '7e21f8826a98a7634627d1cce00294119c53081dfc8c26fae5b0dc1d104fa042',
+ 'frontend/src/modules/gaming/GamingScreen.tsx': '2a2a7fedc6791abae7d9aa21f3fb86b470fcfaf0dc8b991c4ef17d258a1220c2',
+ 'frontend/src/modules/inventory/InventoryScreen.test.tsx': '98adcf4b39b9be511e8e8d4cb82969c43ac711d2592b00603694b115643e8374',
+ 'frontend/src/modules/inventory/InventoryScreen.tsx': 'dfef4c0f4c0c9c68abca0bf8d97ca5704c10311d2c448e00181648e2dd60142d',
+ 'frontend/src/modules/pos/HistoricalPaidBillRecovery.tsx': 'ab804bde48582118639f34add1f3a1001d57133de5798911ca950d84e13a3a66',
+ 'frontend/src/modules/pos/LivePOSScreen.tsx': '01590068a39841850851250a61329a26157792700d6aae2abc0130eb067261f3',
+ 'frontend/src/modules/pos/OperationsReadState.test.tsx': '9cdb0c66be9661d64eb8c906d204e99a54b75abc1c6485730633498f4068f747',
+ 'frontend/src/modules/pos/OperatorRecoveryScreen.tsx': '85a6bf4e91dc866a80eff5407eb9b5ed57b4ebf9077e91d8861a96bb5cc041ff',
+ 'frontend/src/modules/pos/OrdersAndShiftsScreen.test.tsx': '69e77baa61b26dcc51af462d2585ee9f7df117856130e5113f3f9d7e2afd0b66',
+ 'frontend/src/modules/pos/OrdersAndShiftsScreen.tsx': '65d049d21f8eda5350d5a0cf0424fac93aafd4007d178ebc4d469df1093457ab',
+ 'frontend/src/modules/pos/PaidBillAmendment.test.tsx': '8c8082e83fdb73403b6ac1a941ed091c35c7d18b91f14122bb226aafe6b53e2d',
+ 'frontend/src/modules/pos/PaidBillAmendment.tsx': 'e1a7f8da5a226cefb92e7d19cac2ef9dc5df36d9239d7bb8d6967d4b387c01da',
+ 'frontend/src/modules/pos/PosPermissions.test.tsx': '6c03b055a2a29d1b48bd943148928d2f5da7c2a2448deb2d1bc38a61ae75e555',
+ 'frontend/src/modules/pos/PosWorkspace.tsx': 'bfc09ed9d39141caa439dd3ac3d94c4bc2629c7e3a5057ace3c892668f01edc0',
+ 'frontend/src/modules/pos/ReceiptNoValueCorrection.test.tsx': 'eec44ab5d207715abad99db3ea97e32379e311661cd1c448ca44b79ca5bb0af3',
+ 'frontend/src/modules/pos/ReceiptNoValueCorrection.tsx': '25ffadb95507c7ffadc50f8ee29e116b648e4f743dc999b120ba58b7826df1d8',
+ 'frontend/src/modules/pos/RetainedMistakeCorrectionDialog.test.tsx': 'e7cf53dac56c551163300c663704b567d1ddafde9a5f4c4ca16530aa7e27ea48',
+ 'frontend/src/modules/pos/RetainedMistakeCorrectionDialog.tsx': '309b1f0af8e58ae13a8a2cbf2c0b4ba87daf6e0edfb6730497fce4250d14065d',
+ 'frontend/src/modules/pos/receipt-correction-journal.test.ts': '8fc27482e7ce2b2cc1a7d1587e9210cd18b081e80081541a22e5abe75da79c8c',
+ 'frontend/src/modules/pos/receipt-correction-journal.ts': '7771ad32a52b7b4005728f631e30238a69e978ad1ee20eb388993c7af1500fcf',
+ 'frontend/src/modules/pos/receipt-paid-summary.test.tsx': 'affde64f9ec1f57dd235ed9f409e4f905adda85e4272eb210cea55e40810d66b',
+ 'frontend/src/modules/pos/use-paid-focused-field.test.tsx': '18aa3a8bb433b4ab0b4c827c0c22da9bae6d2da258b5377519d47e9c37cbd38c',
+ 'frontend/src/modules/pos/use-paid-focused-field.ts': '1db65f564675f68fabe001f04829a8c23b8a606e4200fedcd3a441914518664f',
+ 'frontend/src/modules/refunds/RefundsScreen.tsx': '4725b000add8d5b584119fb3243fe7612b9d602dab42c4ac3c9925241eae6998',
+ 'frontend/src/modules/refunds/exact-refund-task-screen.test.tsx': 'a36f651cdc2b588425674bdd79d2a6a09afe1328ba3fb2b35cd01da91fdf34c7',
+ 'frontend/src/modules/refunds/exact-refund-task.test.ts': '309a3f222930ed86fde8ee6a3059131a557f25bf1014d0c79caaaa2843ebb80d',
+ 'frontend/src/modules/refunds/exact-refund-task.ts': 'e1dda8b3dbe2042eabceeebe0a0f3102616f1a88c13a47bed905482826960eba',
+ 'frontend/src/modules/reports/ReportsScreen.tsx': '007d38d896e0e83321528715a5f7e3fa7d23f31fae34bff6943ab2838789508a',
+ 'frontend/src/modules/settings/SettingsScreen.tsx': '1f8de5cd62b93ff2c18d676431286af963927080bdc15ac43b7fd2f162a53cf0',
+ 'frontend/src/modules/settings/tabs/AccessControlTab.tsx': '90b6f25c46945ca3d8e1c3370dc78d88b237cee66dac3f7f38325c71025e23a5',
+ 'frontend/src/modules/settings/tabs/AccountTab.tsx': 'f7bffae30ff8dbe9eab3613e4cf9e6bf00566768f64eaedb623c5524b010eaf6',
+ 'frontend/src/modules/settings/tabs/CompanyTab.test.tsx': 'ab44b0666e1e0ec938f231d4f394d240394c223c199418a219687c8999f8f96e',
+ 'frontend/src/modules/settings/tabs/CompanyTab.tsx': '3536d94812e42265984a80bde107685dd50d5ef86d54625d4c15b92f99d91195',
+ 'frontend/src/modules/settings/tabs/access-control-policy.test.ts': '43235be33955e51ec56c2ddfedd1c50d15d0742a7b0f8086ae41dc23259eaee0',
+ 'frontend/src/modules/settings/tabs/access-control-policy.ts': 'cea9f9cbf243ea30da6e8af070f73a3c0f9730dd06e44c7f9dd17b2559afb8f3',
+ 'frontend/src/modules/staff/DailyWorkPanel.tsx': 'a3f6a5685020bd7b0e15c804f340f2559b65ddde48b96d648b2da934e373d426',
+ 'frontend/src/modules/staff/DailyWorkWorkspace.tsx': '96ad7650c0f05217a0b22073055524c69c85421ee733baa47b88c13c6ab6181c',
+ 'frontend/src/modules/staff/SharedAttendancePanel.test.tsx': 'c8e53fd6f3e56dd80bd55d34b19bd45d312a26f8936e7528339080ccc45bdcdc',
+ 'frontend/src/modules/staff/SharedAttendancePanel.tsx': '6192684da851a22edcf4291c8ef0409a799a8d172c30693a5445548e71db84d1',
+ 'frontend/src/modules/staff/StaffScreen.tsx': '6906f432d2ef019bdb1aaa90573da467a1cc5b98fbf4729c37847f216f69587e',
+ 'frontend/src/modules/staff/StaffTimeScreen.test.tsx': '9a65ec3513fbb1cebc87fc7bc9942c3fec685754e5a62acb22a129401a32954d',
+ 'frontend/src/modules/staff/StaffTimeScreen.tsx': '30e5ad86f48e55d93fcb54b10950a50ebebbc05ea8a39fde268b9a1f673a73de',
+ 'frontend/src/modules/staff/staff-edit-policy.test.ts': '0b78aed7dd290a9126cc2ebf92b1afff3aa0f1fe70ec5eda1e3e8f028085d1cd',
+ 'frontend/src/modules/staff/staff-edit-policy.ts': 'a49ff80bd8093d43c369f604ba89ea6134157a18d5a78bbca456d3812eb8a89b',
+ 'frontend/src/modules/staff/staff-password-paid-admission.test.tsx': 'e7279835dd548fc625ccf61c8c0780b9a28b6e2bcbf63637dc543b822f7c2d4e',
+ 'frontend/src/modules/staff/staff-time-policy.test.ts': 'ab928d64e2eafc85494f942ea46bf3fd0c6c53f515aaf76259fd5eaf061e5b21',
+ 'frontend/src/modules/staff/staff-time-policy.ts': 'e8101eabdfc39157777428b8e026f619480d830545f2b4adb0e08b2515bfed2f',
+ 'frontend/src/registerServiceWorker.test.ts': '3e3b7a250304d02636e0e553100de46992e3e02494db7ce00267227bf4273dfc',
+ 'frontend/src/registerServiceWorker.ts': '0cba9ee2ad0a86a3d49b53ba5fd9aa06a116e5ab38036b6a871a7ae2ca8c2b94',
+ 'frontend/src/test-fixtures/paid-bill.ts': '68598b5b80db0a50ab19f7362dd124007e8e3fd95eb0569c0faa96c6d8ce4bc5',
+ 'frontend/src/test-fixtures/root-recovery.ts': '6a8a9bb41f25d513361ee2123e6fb0413086b64a22487fd2bc7c696b60323248',
+ 'infra/docker/backend.Dockerfile': '1838c3aab47a782937c61ebf35ffb4c28886d13afe7ec710afbbcbc4c64ff392',
+ 'infra/docker/caddy-zlib/README.md': 'cbf53551576237f3037b5837ca13d89b57e9516405cb13718490a7bfd48a4d13',
+ 'infra/docker/caddy-zlib/runtime-probe.c': '5add619f241be021a6bae5bde641266e672c45fac821aae4508c417277c47cab',
+ 'infra/docker/caddy-zlib/verify-official-zlib.sh': 'a673cb4dd14417cdf527d4300847d02dbaa333a955077163ba5f25a890fa173a',
+ 'infra/docker/caddy.Dockerfile': '5acf0c8d434e68fad9a388fce0d1f7877a37b082db08c0dbdbb71404691f730d',
+ 'infra/docker/frontend.Dockerfile': 'ef73e061c5b1fbdef6c50a65d1a94a54863818126c161643a95304586f796707',
+ 'infra/docker/postgres.Dockerfile': 'aeba0de3319aeb9bab261a0bd3f1e8f6b1d00fbd87be11dbb4a68b9f68c7c6ef',
+ 'infra/docker/redis.Dockerfile': 'd88f5607d18ce708011356dcf373ba4fed643be9365c13b5d67a9eeeacfd722a',
+ 'infra/docker/verify-backend-runtime-profile.py': '47050fc151188f655f0af8c2d38b90b4fe07cf1d776829412c3d6a2a55017aca',
+ 'infra/scripts/install-on-vm.sh': '6f46e7ffc4729cfbdf1497443cf3ec5e562e772ae724ab34e099e1cbec58d6e2',
+ 'infra/scripts/run-hardened-image-scanners.sh': '1efba44c4fe2f704da1e0bdcba567af94230c2cacdae03c255e226e07befd867',
+ 'infra/scripts/verify-production-runtime-images.sh': '73271faac5decb05871193c2bf5f98e0c87be02a275ff70dc5f85ca8f0ab2ba0',
+ 'infra/scripts/verify-zlib-vex.py': 'c4979c9a1a2af7a596a2da3f90d7596c68c3c9c10a9a6ef13beecd00ae5b5073',
+ 'scripts/run_android_instrumentation_ci.sh': '2612f2fe93df210d40201906f9df0aaa05cb9ea01a884f2725fa981a17794126',
+ 'scripts/verify_android_instrumentation_shards.py': 'fa04552ffcc5902aabb0eb636dc13cf911b88e68e1364f17c74c71d6a123d8e9',
+ 'tests/test_android_instrumentation_shards.py': '37bf7f5dc3b6e46676b6e16a74b8caf615a59b877ecc663738124ddb9f9f1314',
+ 'tests/test_backend_runtime_profile.py': '66795c9ee919f560e4cb75ade9367dca72036d67abe2ff86592866bafa79928c',
+ 'tests/test_build42_pending_compatibility.py': '811c8569352103b35a5ed7733afd320881ec825e761027d8e5d49c61ac24bcd0',
+ 'tests/test_caddy_dependency_security.py': 'b21f5d91931bd3a63a2c56078522844e7f785a37e37451af1b695b6d531b0829',
+ 'tests/test_ci_docker_connection.py': '244caae5654b1073b7cabd2ec6a4855932ad42387b74954d4ceec5c3f0842fae',
+ 'tests/test_code26_physical_audit_lane.py': 'd2b0abe0aa2d102bd251327b488cf3a8fda06d0aff5f01cdb1dc6a7e31365a70',
+ 'tests/test_docker_context_safety.py': '58abab3e346acbc97b33c37078c9667d183d16865820a9761ff7f79e27ab49db',
+ 'tests/test_hardened_scanner_runtime.py': '02e2fa3dbc4dc84fedd6bb22dde7426aa1ffbe398566b56ebd61f3dcd818f1dc',
+ 'tests/test_official_zlib_runtime.py': 'd9882f8752e522a471daebb103e8892f924479d32974e340bc70727ebbc56701',
+ 'tests/test_production_installer_safety.py': 'd3fb609a15f4c3c8f0b666c26077ca3640f24cb8f03151a1717c489a19ccea29',
+ 'tests/test_unreviewed_build72_hold.py': 'b3f226172ad024f492c0f8e2a8ab55bc2e098ba7ce487219f6e0289d701e890c',
+ 'tests/test_verified_pip_bootstrap.py': '43e9829a713577dbf7b550eaba03abc9f3c5fb6f99e9c5934158b5974d8ab30a',
+ 'tests/test_zlib_security_remediation.py': '576aad07e14ceb7745253fc8f3994370b27c2fb2e321e7f2f5ac1e17d323116d',
+ 'tests/verify_production_installer_lock_metadata.py': '912d8c7cad665f81a8c3919f944ff894e08082ed6db196b6e441ef2c2a7b1877'}
+
 REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
     path
     for path in (
@@ -2950,13 +3362,14 @@ REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
         | REVIEWED_CODE30_4_BUILD69_SHA256
         | REVIEWED_CODE30_4_BUILD70_SHA256
         | REVIEWED_CODE30_4_BUILD71_SHA256
+        | REVIEWED_CODE30_4_BUILD72_SHA256
     )
     if path.startswith(("backend/app/", "frontend/src/", "android-native/app/src/main/"))
 )
 
 
 def _current_code30_4_sha256(path: str, fallback: str | None = None) -> str | None:
-    return REVIEWED_CODE30_4_BUILD71_SHA256.get(path) or REVIEWED_CODE30_4_BUILD70_SHA256.get(path) or REVIEWED_CODE30_4_BUILD69_SHA256.get(path) or REVIEWED_CODE30_4_BUILD68_SHA256.get(path) or REVIEWED_CODE30_4_BUILD67_SHA256.get(path) or REVIEWED_CODE30_4_BUILD66_SHA256.get(path) or REVIEWED_CODE30_4_BUILD65_SHA256.get(path) or REVIEWED_CODE30_4_BUILD64_SHA256.get(path) or REVIEWED_CODE30_4_BUILD63_SHA256.get(path) or REVIEWED_CODE30_4_BUILD62_SHA256.get(path) or REVIEWED_CODE30_4_BUILD61_SHA256.get(path) or REVIEWED_CODE30_4_BUILD60_SHA256.get(path) or REVIEWED_CODE30_4_BUILD59_SHA256.get(path) or REVIEWED_CODE30_4_BUILD58_SHA256.get(path) or REVIEWED_CODE30_4_BUILD57_SHA256.get(path) or REVIEWED_CODE30_4_BUILD56_SHA256.get(path) or REVIEWED_CODE30_4_BUILD55_SHA256.get(path) or REVIEWED_CODE30_4_BUILD54_SHA256.get(path) or REVIEWED_CODE30_4_BUILD53_SHA256.get(path) or REVIEWED_CODE30_4_BUILD52_SHA256.get(path) or REVIEWED_CODE30_4_BUILD51_SHA256.get(path) or REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
+    return REVIEWED_CODE30_4_BUILD72_SHA256.get(path) or REVIEWED_CODE30_4_BUILD71_SHA256.get(path) or REVIEWED_CODE30_4_BUILD70_SHA256.get(path) or REVIEWED_CODE30_4_BUILD69_SHA256.get(path) or REVIEWED_CODE30_4_BUILD68_SHA256.get(path) or REVIEWED_CODE30_4_BUILD67_SHA256.get(path) or REVIEWED_CODE30_4_BUILD66_SHA256.get(path) or REVIEWED_CODE30_4_BUILD65_SHA256.get(path) or REVIEWED_CODE30_4_BUILD64_SHA256.get(path) or REVIEWED_CODE30_4_BUILD63_SHA256.get(path) or REVIEWED_CODE30_4_BUILD62_SHA256.get(path) or REVIEWED_CODE30_4_BUILD61_SHA256.get(path) or REVIEWED_CODE30_4_BUILD60_SHA256.get(path) or REVIEWED_CODE30_4_BUILD59_SHA256.get(path) or REVIEWED_CODE30_4_BUILD58_SHA256.get(path) or REVIEWED_CODE30_4_BUILD57_SHA256.get(path) or REVIEWED_CODE30_4_BUILD56_SHA256.get(path) or REVIEWED_CODE30_4_BUILD55_SHA256.get(path) or REVIEWED_CODE30_4_BUILD54_SHA256.get(path) or REVIEWED_CODE30_4_BUILD53_SHA256.get(path) or REVIEWED_CODE30_4_BUILD52_SHA256.get(path) or REVIEWED_CODE30_4_BUILD51_SHA256.get(path) or REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
         path,
         REVIEWED_CODE30_4_BUILD41_SHA256.get(
             path,
@@ -3171,6 +3584,7 @@ def _normalise_release_identity(path: str, text: str) -> str:
         return text
     normalised = text
     for current, baseline in (
+        ("3.1.65", "3.1.14"),
         ("3.1.64", "3.1.14"),
         ("3.1.63", "3.1.14"),
         ("3.1.62", "3.1.14"),
@@ -3279,10 +3693,10 @@ def _normalise_release_identity(path: str, text: str) -> str:
     ):
         normalised = normalised.replace(current, baseline)
     normalised = re.sub(
-        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71)\b", "version_code=25", normalised
+        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71|72)\b", "version_code=25", normalised
     )
     normalised = re.sub(
-        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71),\s*BuildConfig\.VERSION_CODE\)",
+        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71|72),\s*BuildConfig\.VERSION_CODE\)",
         "assertEquals(25, BuildConfig.VERSION_CODE)",
         normalised,
     )
@@ -3537,9 +3951,19 @@ def _code30_4_build70_delta_paths(root: Path) -> set[str]:
 
 
 def _code30_4_build71_delta_paths(root: Path) -> set[str]:
-    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD70_BASE).splitlines())
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD70_BASE, CODE30_4_BUILD71_BASE).splitlines())
+
+
+def _code30_4_build72_delta_paths(root: Path) -> set[str]:
+    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD71_BASE).splitlines())
     changed.update(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
     return {path for path in changed if path}
+
+
+def _verify_public_checkout(root: Path, errors: list[str]) -> None:
+    archive = root / "docs/cloud-migration"
+    if archive.exists() or archive.is_symlink():
+        errors.append("Private transfer data is forbidden in the public checkout.")
 
 
 def _is_canonical_regular_file(path: Path) -> bool:
@@ -4215,6 +4639,16 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
     for path in sorted(current_build71_paths - expected_build71_paths):
         errors.append(f"unreviewed path entered the Code30.4 build-71 delta: {path}")
 
+    _verify_public_checkout(root, errors)
+    if set(REVIEWED_CODE30_4_BUILD72_SHA256) & set(CODE30_4_FREEZE_CONTROL_PATHS):
+        errors.append("Code30.4 build-72 product overlay overlaps freeze controls")
+    expected_build72_paths = set(REVIEWED_CODE30_4_BUILD72_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build72_paths = _code30_4_build72_delta_paths(root)
+    for path in sorted(expected_build72_paths - current_build72_paths):
+        errors.append(f"reviewed Code30.4 build-72 delta path disappeared: {path}")
+    for path in sorted(current_build72_paths - expected_build72_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-72 delta: {path}")
+
     # Post-release Code30.3 maintenance tools are pinned by their own map.
     expected_paths = set(REVIEWED_CODE30_4_SHA256) | set(
         CODE30_4_FREEZE_CONTROL_PATHS
@@ -4224,7 +4658,7 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         REVIEWED_CODE30_4_BUILD41_SHA256
     ) | set(
         REVIEWED_CODE30_4_BUILD42_SHA256
-    ) | set(REVIEWED_CODE30_4_BUILD43_SHA256) | set(REVIEWED_CODE30_4_BUILD44_SHA256) | set(REVIEWED_CODE30_4_BUILD45_SHA256) | set(REVIEWED_CODE30_4_BUILD46_SHA256) | set(REVIEWED_CODE30_4_BUILD47_SHA256) | set(REVIEWED_CODE30_4_BUILD48_SHA256) | set(REVIEWED_CODE30_4_BUILD49_SHA256) | set(REVIEWED_CODE30_4_BUILD50_SHA256) | set(REVIEWED_CODE30_4_BUILD51_SHA256) | set(REVIEWED_CODE30_4_BUILD52_SHA256) | set(REVIEWED_CODE30_4_BUILD53_SHA256) | set(REVIEWED_CODE30_4_BUILD54_SHA256) | set(REVIEWED_CODE30_4_BUILD55_SHA256) | set(REVIEWED_CODE30_4_BUILD56_SHA256) | set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256) | set(REVIEWED_CODE30_4_BUILD70_SHA256) | set(REVIEWED_CODE30_4_BUILD71_SHA256)
+    ) | set(REVIEWED_CODE30_4_BUILD43_SHA256) | set(REVIEWED_CODE30_4_BUILD44_SHA256) | set(REVIEWED_CODE30_4_BUILD45_SHA256) | set(REVIEWED_CODE30_4_BUILD46_SHA256) | set(REVIEWED_CODE30_4_BUILD47_SHA256) | set(REVIEWED_CODE30_4_BUILD48_SHA256) | set(REVIEWED_CODE30_4_BUILD49_SHA256) | set(REVIEWED_CODE30_4_BUILD50_SHA256) | set(REVIEWED_CODE30_4_BUILD51_SHA256) | set(REVIEWED_CODE30_4_BUILD52_SHA256) | set(REVIEWED_CODE30_4_BUILD53_SHA256) | set(REVIEWED_CODE30_4_BUILD54_SHA256) | set(REVIEWED_CODE30_4_BUILD55_SHA256) | set(REVIEWED_CODE30_4_BUILD56_SHA256) | set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256) | set(REVIEWED_CODE30_4_BUILD70_SHA256) | set(REVIEWED_CODE30_4_BUILD71_SHA256) | set(REVIEWED_CODE30_4_BUILD72_SHA256)
     current_paths = _code30_4_delta_paths(root)
     for path in sorted(expected_paths - current_paths):
         errors.append(f"reviewed Code30.4 delta path disappeared: {path}")
@@ -4265,6 +4699,7 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         | REVIEWED_CODE30_4_BUILD69_SHA256
         | REVIEWED_CODE30_4_BUILD70_SHA256
         | REVIEWED_CODE30_4_BUILD71_SHA256
+        | REVIEWED_CODE30_4_BUILD72_SHA256
     )
     for path, expected_sha256 in current_hashes.items():
         # These files define the freeze itself and cannot carry a current-tree
@@ -4372,7 +4807,8 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
             path, candidate_normalised
         )
         reviewed_test_sha256 = (
-            REVIEWED_CODE30_4_BUILD71_SHA256.get(path)
+            REVIEWED_CODE30_4_BUILD72_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD71_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD70_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD69_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD68_SHA256.get(path)

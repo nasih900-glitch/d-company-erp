@@ -286,6 +286,9 @@ async def _seed_case(
             session.add(payment)
             await session.flush()
         finally:
+            # PostgreSQL must finish deferred FK events before this fixture
+            # restores DDL; the same boundary fails on the immutable 0096 base.
+            await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
             await session.execute(
                 text(
                     "ALTER TABLE payments ENABLE TRIGGER "
@@ -1922,6 +1925,9 @@ async def test_cash_refund_completion_survives_before_concurrent_finalize(
         assert summary["gross_collections_minor"] == case.amount_minor
         assert summary["settled_pos_refunds_minor"] == case.amount_minor
         assert summary["net_collections_minor"] == 0
+        assert summary["effective_net_collections_minor"] == 0
+        assert summary["receipt_corrections_minor"] == 0
+        assert summary["effective_upi_collections_minor"] == summary["reconstructed_upi_collections_minor"]
 
         async with AsyncSessionLocal() as tamper:
             with pytest.raises(DBAPIError, match="append-only"):
@@ -2118,6 +2124,7 @@ async def test_legacy_unissued_paid_order_stays_consistent_across_reports_and_le
         )
         await session.flush()
     finally:
+        await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
         await session.execute(
             text(
                 "ALTER TABLE order_lines ENABLE TRIGGER "
@@ -3841,6 +3848,7 @@ async def test_legacy_refund_is_visible_reconciled_once_and_append_only(
                 )
             )
             await writer.flush()
+            await writer.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
             await writer.execute(
                 text(
                     "ALTER TABLE refunds ADD CONSTRAINT "
@@ -4054,3 +4062,65 @@ async def test_refund_request_rejects_untrusted_approval_and_missing_action_prov
             assert requests == []
     finally:
         await _cleanup(case, keys=keys)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("foreign", ["current", "original"])
+async def test_real_refund_creation_permission_does_not_bypass_either_shift_opener(
+    client, session, seed_owner, foreign
+):
+    from app.core.security import hash_password
+    from app.models import Role,User,UserRole
+
+    case=await _seed_case(session,seed_owner,payment_method="cash")
+    actor=User(id=uuid4(),company_id=case.company_id,email=f"refund-opener-{uuid4().hex}@test.local",
+        name="Refund operator",password_hash=hash_password("fixture-password-123"),status="active")
+    session.add(actor)
+    await session.flush()
+    role=await session.scalar(select(Role).where(Role.company_id==case.company_id,Role.code=="owner"))
+    session.add(UserRole(id=uuid4(),user_id=actor.id,role_id=role.id,branch_id=case.branch_id,
+        granted_by=case.owner_id))
+    await session.commit()
+    settlement_id=case.shift_id
+    if foreign=="original":
+        original=await session.get(Shift,case.shift_id)
+        original.status="closed"
+        original.closed_at=datetime.now(UTC)
+        original.closed_by=case.owner_id
+        await session.commit()
+        current=Shift(id=uuid4(),company_id=case.company_id,branch_id=case.branch_id,
+            terminal_id=case.terminal_id,opened_by=actor.id,opened_at=datetime.now(UTC),
+            opening_float_minor=100_000,status="open")
+        session.add(current)
+        await session.commit()
+        settlement_id=current.id
+    login=await client.post("/api/v1/auth/login",json={"email":actor.email,"password":"fixture-password-123"})
+    assert login.status_code==200,login.text
+    action="guard-create:"+str(uuid4())
+    headers={**_headers(case,action),"Authorization":"Bearer "+login.json()["access_token"]}
+    me=await client.get("/api/v1/auth/me",headers=headers)
+    assert me.status_code==200,me.text
+    assert "pos.refund" in me.json()["effective_permissions"]
+    assert me.json()["protected_access"] is False
+    async def evidence():
+        return (await session.execute(text("""SELECT to_jsonb(o),
+          (SELECT jsonb_agg(to_jsonb(p) ORDER BY p.id) FROM payments p WHERE p.order_id=o.id),
+          (SELECT jsonb_agg(to_jsonb(s) ORDER BY s.id) FROM shifts s WHERE s.company_id=o.company_id),
+          (SELECT count(*) FROM pos_refund_requests WHERE order_id=o.id),
+          (SELECT count(*) FROM refunds WHERE order_id=o.id),
+          (SELECT count(*) FROM pos_refund_cash_handoffs h JOIN pos_refund_requests r
+           ON r.id=h.refund_request_id WHERE r.order_id=o.id)
+          FROM orders o WHERE o.id=:id"""),{"id":case.order_id})).one()
+    before=await evidence()
+    await session.rollback()
+    payload=_request_payload(case,action_id=action,mode="cash")
+    payload["shift_id"]=str(settlement_id)
+    result=await client.post("/api/v1/pos/refund-requests",json=payload,headers=headers)
+    assert result.status_code==422,result.text
+    operation="current shift" if foreign=="current" else "original shift"
+    assert "Only the staff member who opened this shift" in result.text and operation in result.text
+    assert await evidence()==before
+    assert await session.scalar(select(IdempotencyKey.key).where(IdempotencyKey.key==action)) is None
+    await session.rollback()
+    await _cleanup(case,keys=(action,))

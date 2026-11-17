@@ -59,6 +59,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.content.FileProvider
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -114,7 +117,9 @@ import cloud.dcompany.erp.ui.screens.gaming.gamingDraftAuthority
 import cloud.dcompany.erp.ui.screens.shift.ShiftScreen
 import cloud.dcompany.erp.ui.screens.LoginScreen
 import cloud.dcompany.erp.ui.screens.ExecutiveEntrySplash
+import cloud.dcompany.erp.ui.screens.PosFavouritesStore
 import cloud.dcompany.erp.ui.screens.PosScreen
+import cloud.dcompany.erp.ui.screens.posFavouritesScope
 import cloud.dcompany.erp.ui.screens.PosViewModel
 import cloud.dcompany.erp.ui.screens.TerminalSelectionScreen
 import cloud.dcompany.erp.ui.theme.Brand
@@ -326,6 +331,17 @@ private fun AppRoot(
     appUpdate: AppUpdateViewModel = viewModel(),
     workspaceBackgrounds: WorkspaceBackgroundController = viewModel(),
 ) {
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle, session) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) session.clearFreshIncomingTillCredentials()
+        }
+        lifecycle.addObserver(observer)
+        onDispose {
+            session.clearFreshIncomingTillCredentials()
+            lifecycle.removeObserver(observer)
+        }
+    }
     val compatibility = DCompanyApp.instance.clientCompatibility
     val compatibilityState by compatibility.state.collectAsStateWithLifecycle()
     val appUpdateState by appUpdate.state.collectAsStateWithLifecycle()
@@ -653,7 +669,27 @@ private fun AppRoot(
                         AppHealthRecorder.deactivateScope(s.me.companyId, s.me.userId)
                     }
                 }
+                val tillOperator by session.tillOperator.collectAsStateWithLifecycle()
+                val tillTakeover by session.tillTakeover.collectAsStateWithLifecycle()
+                val tillCompletion by session.tillCompletion.collectAsStateWithLifecycle()
+                val operatorLifecycle = LocalLifecycleOwner.current.lifecycle
+                DisposableEffect(operatorLifecycle, session) {
+                    val observer = LifecycleEventObserver { _, event ->
+                        if (event == Lifecycle.Event.ON_RESUME) session.refreshTillOperator()
+                    }
+                    operatorLifecycle.addObserver(observer)
+                    onDispose { operatorLifecycle.removeObserver(observer) }
+                }
                 val permissions = remember(s.me) { EffectivePermissions.from(s.me) }
+                val dailyShift = if (permissions.has(ErpPermission.PosShiftOpen)) cloud.dcompany.erp.ui.screens.shift.sharedShiftViewModel() else null
+                val dailyWork = dailyShift?.startWorkState?.collectAsStateWithLifecycle()?.value
+                val attendanceWorkspace = cloud.dcompany.erp.ui.screens.staff.time.LocalSharedStaffTime.current
+                LaunchedEffect(dailyWork?.completion) {
+                    if (dailyWork?.completion != null) {
+                        session.refreshTillOperator()
+                        if (permissions.has(ErpPermission.StaffAttendanceWrite)) attendanceWorkspace?.refreshShared()
+                    }
+                }
                 val destinations = remember(s.me) { allowedDestinations(s.me) }
                 val bugReportVm: BugReportViewModel = viewModel(
                     factory = BugReportViewModel.factory(
@@ -768,6 +804,17 @@ private fun AppRoot(
                         }
                     }
                 }
+                val validTillCompletion = tillCompletion?.takeIf { session.currentTillCompletion(s.me) === it }
+                LaunchedEffect(validTillCompletion) {
+                    val notice = validTillCompletion ?: return@LaunchedEffect
+                    if (session.currentTillCompletion(s.me) === notice && Destination.Dashboard in destinations &&
+                        workspaceHomeMode(s.me, permissions = permissions) == WorkspaceHomeMode.STAFF) {
+                        acceptWorkspaceNavigation(Destination.Dashboard, beforeCommit = {
+                            finishShellNavigation(Destination.Dashboard)
+                            remoteAssistance.uiGateway.markRouteTransition()
+                        })
+                    }
+                }
                 val visibleDestination = resolveWorkspaceDestination(currentDestination, destinations)
                 LaunchedEffect(visibleDestination) {
                     AppHealthRecorder.setScreen(visibleDestination.name)
@@ -876,6 +923,7 @@ private fun AppRoot(
                     staffAttendanceOnly = permissions.staffAccess().let { !it.canReadDirectory && !it.canManageDirectory },
                     currentDestination = currentDestination,
                     employeeName = s.me.name,
+                    tillOperator = tillOperator,
                     locationLabel = locationLabel,
                     connectivityProblem = syncAvailability,
                     outboxWorkStatus = outboxWorkStatus,
@@ -972,8 +1020,10 @@ private fun AppRoot(
                                     title = { Text("Sign out of this tablet?") },
                                     text = {
                                         Text(
-                                            "The open shift stays open. Unsaved carts and form edits will be " +
-                                                "discarded; saved offline work remains safely on this tablet.",
+                                            (if (cloud.dcompany.erp.ui.hasCashierDuty(s.me)) {
+                                                "Close the shop shift or use Change cashier before signing out of cashier duty. " +
+                                                    "Attendance is separate; record staff departures from Attendance. "
+                                            } else "") + "Unsaved carts and form edits will be discarded; saved work stays on this tablet.",
                                         )
                                     },
                                     confirmButton = {
@@ -1036,6 +1086,16 @@ private fun AppRoot(
                                     },
                                 ) }
                             }
+                            tillTakeover?.takeIf { session.mayPresentTillTakeover(it, s.me) }?.let { expected ->
+                                TillTakeoverDialog(expected,
+                                    onDismiss = {
+                                        if (session.mayPresentTillTakeover(expected, s.me)) session.dismissTillTakeover()
+                                    },
+                                    onMore = {
+                                        if (session.mayPresentTillTakeover(expected, s.me)) session.moreTillCandidates()
+                                    },
+                                    onConfirm = session::confirmTillTakeover)
+                            }
                             rootOverlays()
                         }
                     },
@@ -1053,6 +1113,23 @@ private fun AppRoot(
                                     locationLabel = locationLabel,
                                     destinations = destinations,
                                     navigateTo = navigateTo,
+                                    dailyWork = {
+                                        cloud.dcompany.erp.ui.screens.staff.time.InlineSharedAttendance()
+                                        if (Destination.Shift in destinations) cloud.dcompany.erp.ui.screens.shift.InlineShiftOpeningWorkspace(
+                                            permissions.shiftAccess(), { navigateTo(Destination.Shift) })
+                                    },
+                                    tillOperator = tillOperator,
+                                    online = effectiveOnline,
+                                    onAttendance = if (Destination.Staff in destinations &&
+                                        cloud.dcompany.erp.ui.screens.staff.time.staffTimeAccess(s.me).canRead) {
+                                        { navigateTo(Destination.Staff) }
+                                    } else null,
+                                    onHandover = if (permissions.has(ErpPermission.PosWrite)) {
+                                        { tillOperator?.let { session.showTillTakeoverFromHome(s.me, it) } }
+                                    } else null,
+                                    onRefreshTill = session::refreshTillOperator,
+                                    completionMessage = validTillCompletion?.message,
+                                    onDismissCompletion = tillCompletion?.let { notice -> { session.dismissTillCompletion(notice) } },
                                 )
                                 null -> Unit
                             }
@@ -1076,6 +1153,29 @@ private fun AppRoot(
                                 val eligibleRewardCatalog by
                                     pos.eligibleRewardCatalog.collectAsStateWithLifecycle()
                                 val unacknowledgedPosReceipt by pos.unacknowledgedReceipt.collectAsStateWithLifecycle()
+                                val posAccess = permissions.posAccess()
+                                val app = DCompanyApp.instance
+                                val cacheIsolation = app.cacheIsolation
+                                val posLease by cacheIsolation.activeLeaseFlow.collectAsStateWithLifecycle()
+                                val capturedLease = posLease
+                                val favouriteScope = posFavouritesScope(s.me, capturedLease, activeTerminal)
+                                val favouritesStore = remember { PosFavouritesStore(app) }
+                                var favouriteIds by remember(posLease, favouriteScope) {
+                                    mutableStateOf(favouriteScope?.let(favouritesStore::load).orEmpty())
+                                }
+                                val toggleFavourite: ((String) -> Unit)? = if (
+                                    favouriteScope != null && posAccess.canCreateAndCollect
+                                ) {
+                                    { itemId: String ->
+                                        val currentProfile = (session.state.value as? AuthState.SignedIn)?.me
+                                        if (currentProfile == s.me && cacheIsolation.currentLease() == capturedLease &&
+                                            posFavouritesScope(s.me, capturedLease, app.terminalStore.activeValidatedTerminal.value) == favouriteScope &&
+                                            pos.state.value.operationalItems.any { it.id == itemId }
+                                        ) {
+                                            favouriteIds = favouritesStore.toggle(favouriteScope, itemId)
+                                        }
+                                    }
+                                } else null
                                 val heldFocus = operationalFocus
                                     as? OperationalNotificationTarget.HeldOrder
                                 LaunchedEffect(heldFocus?.orderId) {
@@ -1092,7 +1192,9 @@ private fun AppRoot(
                                     receiptFilterChoices = receiptFilterChoices,
                                     eligibleRewardCatalog = eligibleRewardCatalog,
                                     unacknowledgedReceipt = unacknowledgedPosReceipt,
-                                    access = permissions.posAccess(),
+                                    access = posAccess,
+                                    favouriteItemIds = favouriteIds,
+                                    onToggleFavourite = toggleFavourite,
                                     shiftAccess = permissions.shiftAccess(),
                                     onAccessChanged = pos::updateAccess,
                                     onAdd = pos::add,
@@ -1210,11 +1312,12 @@ private fun AppRoot(
                             )
                             Destination.Shift -> {
                                 ShiftScreen(access = permissions.shiftAccess(),
+                                    operatorLabel = tillOperator?.operatorLabel ?: "Cashier status unavailable",
+                                    operatorDetail = tillOperator?.detail ?: "Signed in: ${s.me.name}",
+                                    onAttendance = if (Destination.Staff in destinations && cloud.dcompany.erp.ui.screens.staff.time.staffTimeAccess(s.me).canRead) {
+                                        { navigateTo(Destination.Staff) }
+                                    } else null,
                                     onHandover = (session::showTillTakeover).takeIf { permissions.has(ErpPermission.PosWrite) })
-                                val takeover by session.tillTakeover.collectAsStateWithLifecycle()
-                                takeover?.takeIf { it.intent == null }?.let {
-                                    TillTakeoverDialog(it, session::dismissTillTakeover, session::moreTillCandidates, session::confirmTillTakeover)
-                                }
                             }
                             Destination.Customers -> CustomersScreen(access = permissions.customersAccess())
                             Destination.Menu -> MenuScreen(access = permissions.menuAccess())
@@ -1276,6 +1379,16 @@ private fun AppRoot(
             }
         }
     }
+
+    val recoveryState by androidx.compose.runtime.rememberUpdatedState(state)
+    val recoverySigningIn by androidx.compose.runtime.rememberUpdatedState(signingIn)
+    val expectedRecoveryState = state
+    cloud.dcompany.erp.ui.screens.shift.work.SavedStartWorkRecoveryHost(
+        workspaceKey = state,
+        available = !signingIn && (state is AuthState.SignedOut || state is AuthState.Blocked ||
+            state is AuthState.Unreachable || state is AuthState.SelectTerminal || state is AuthState.SignOutFailed),
+        stillVisible = { !recoverySigningIn && recoveryState === expectedRecoveryState },
+    )
 
     if (state !is AuthState.SignedIn && state !is AuthState.SignedOut &&
         state !is AuthState.SelectTerminal) {
@@ -1410,7 +1523,10 @@ private fun SessionViewModelScope(
     DisposableEffect(owner) {
         onDispose { owner.viewModelStore.clear() }
     }
-    CompositionLocalProvider(LocalViewModelStoreOwner provides owner, content = content)
+    CompositionLocalProvider(LocalViewModelStoreOwner provides owner) {
+        if (sessionKey is cloud.dcompany.erp.core.net.MeResponse) cloud.dcompany.erp.ui.screens.staff.time.SharedStaffTimeWorkspace(sessionKey, content)
+        else content()
+    }
 }
 
 internal fun optionalUpdateMayDismiss(

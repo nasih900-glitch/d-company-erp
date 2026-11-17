@@ -52,6 +52,24 @@ internal data class WorkspaceBackgroundRenderKey(
     val decoderIdentity: Int,
 )
 
+internal fun workspaceVioletGlassAdmitted(
+    image: WorkspaceBackgroundImage,
+    actual: WorkspaceBackgroundRenderKey?,
+    requested: WorkspaceBackgroundRenderKey,
+    state: DisplayedSceneState?,
+    productionDecoder: Boolean,
+    nightWorkspace: Boolean,
+): Boolean {
+    if (!productionDecoder || !nightWorkspace || state != DisplayedSceneState.REQUESTED_READY ||
+        actual == null || actual != requested
+    ) return false
+    val preset = WorkspaceBackgroundPresets.find(WorkspaceBackgroundPresets.VioletGlassId) ?: return false
+    return actual.slot == WorkspaceBackgroundSlot.WORKSPACE &&
+        actual.source == WorkspaceBackgroundSource.BUNDLED &&
+        actual.contentId == preset.contentId &&
+        image.presetId == preset.id && image.resource == preset.resource && image.privatePath == null
+}
+
 internal data class WorkspaceBackgroundCropPlan(
     val sourceLeft: Int,
     val sourceTop: Int,
@@ -343,8 +361,18 @@ internal fun WorkspaceBackgroundRenderer(
         (frame.state == DisplayedSceneState.REQUESTED_READY && frame.actualKey == key) ||
             (frame.state == DisplayedSceneState.BUNDLED_FALLBACK && fallbackForKey == key)
     }
-    LaunchedEffect(materialFrame?.actualKey, materialFrame?.epoch) {
-        val frame = materialFrame ?: run {
+    val inheritedColors = MaterialTheme.colorScheme
+    val violetGlass = workspaceVioletGlassAdmitted(
+        image = image,
+        actual = materialFrame?.actualKey,
+        requested = key,
+        state = materialFrame?.state,
+        productionDecoder = decoder === ProductionWorkspaceBackgroundDecoder,
+        nightWorkspace = applyWorkspaceSceneGrade && adaptNightGlassForegrounds &&
+            inheritedColors.background.luminance() < .5f,
+    )
+    LaunchedEffect(materialFrame?.actualKey, materialFrame?.epoch, violetGlass) {
+        val frame = materialFrame?.takeUnless { violetGlass } ?: run {
             softenedDerivative = null
             return@LaunchedEffect
         }
@@ -420,7 +448,7 @@ internal fun WorkspaceBackgroundRenderer(
     ) {
         displayedBitmap?.let { bitmap ->
             Image(
-                bitmap = bitmap.asImageBitmap(),
+                bitmap = remember(bitmap) { bitmap.asImageBitmap() },
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
@@ -439,10 +467,10 @@ internal fun WorkspaceBackgroundRenderer(
                     .testTag("$testTagPrefix-background-fallback-${image.slot.name.lowercase()}"),
             )
         }
-        if (materialFrame != null &&
+        val materialReady = violetGlass || (materialFrame != null &&
             softenedDerivative?.key?.actualKey == materialFrame.actualKey &&
-            softenedDerivative?.key?.frameEpoch == materialFrame.epoch
-        ) {
+            softenedDerivative?.key?.frameEpoch == materialFrame.epoch)
+        if (materialReady) {
             Box(
                 Modifier.fillMaxSize()
                     .testTag("$testTagPrefix-glass-ready-${image.slot.name.lowercase()}"),
@@ -460,19 +488,17 @@ internal fun WorkspaceBackgroundRenderer(
             val coordinates = rootCoordinates ?: return@let null
             WorkspaceGlassScene(
                 frame = frame,
-                derivative = softenedDerivative,
+                derivative = softenedDerivative.takeUnless { violetGlass },
                 rootCoordinates = coordinates,
                 rootBoundsInRoot = rootBounds,
                 layoutEpoch = layoutEpoch,
                 applyWorkspaceSceneGrade = applyWorkspaceSceneGrade,
+                violetGlass = violetGlass,
             )
         }
-        val inheritedColors = MaterialTheme.colorScheme
         val inheritedTypography = MaterialTheme.typography
         val inheritedShapes = MaterialTheme.shapes
-        val glassReady = materialFrame != null && scene != null &&
-            scene.softenedKey?.actualKey == scene.frame.actualKey &&
-            scene.softenedKey?.frameEpoch == scene.frame.epoch
+        val glassReady = materialReady && scene != null
         val nightGlassColors = remember(inheritedColors, adaptNightGlassForegrounds) {
             if (adaptNightGlassForegrounds && inheritedColors.background.luminance() < .5f) {
                 inheritedColors.copy(

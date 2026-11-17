@@ -2,12 +2,17 @@ package cloud.dcompany.erp.ui.screens
 
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.Rect as AndroidRect
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -16,6 +21,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
@@ -31,6 +37,7 @@ import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasContentDescription
@@ -56,6 +63,9 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import cloud.dcompany.erp.core.auth.PosAccess
 import cloud.dcompany.erp.core.checkout.SplitPaymentPlan
@@ -288,6 +298,46 @@ class PosEmptyCatalogueUiTest {
         compose.runOnIdle {
             assertEquals(listOf("add:crisps", "increment:cola-line", "clear", "pay"), actions)
         }
+    }
+
+    @Test
+    fun favouriteStarPromotesAndUnpinsWithoutAddingToTheOrder() {
+        val category = MenuCategoryEntity("audit", "Audit menu", 0, false)
+        val cola = menuItem("cola", "Audit Cola", 5_000L)
+        val crisps = menuItem("crisps", "Audit Crisps", 3_000L)
+        val favourites = mutableStateOf(emptySet<String>())
+        val actions = mutableListOf<String>()
+        renderDynamic(
+            state = mutableStateOf(
+                PosUiState(
+                    operationalCategories = listOf(category),
+                    operationalItems = listOf(cola, crisps),
+                    online = true,
+                ),
+            ),
+            onAddItem = { actions += "add:${it.id}" },
+            favouriteItemIds = favourites,
+            onToggleFavourite = { id ->
+                actions += "pin:$id"
+                favourites.value = if (id in favourites.value) favourites.value - id else favourites.value + id
+            },
+        )
+
+        val colaTile = compose.onNodeWithTag("pos-product-cola")
+        val crispsTile = compose.onNodeWithTag("pos-product-crisps")
+        val star = compose.onNodeWithContentDescription("Pin Audit Crisps to favourites")
+            .assertIsEnabled().assertHeightIsAtLeast(48.dp)
+        assertTrue(colaTile.getUnclippedBoundsInRoot().left < crispsTile.getUnclippedBoundsInRoot().left)
+        star.performTouchInput { click() }
+        compose.waitForIdle()
+        assertTrue(crispsTile.getUnclippedBoundsInRoot().left < colaTile.getUnclippedBoundsInRoot().left)
+        compose.runOnIdle { assertEquals(listOf("pin:crisps"), actions) }
+
+        crispsTile.performTouchInput { click() }
+        compose.onNodeWithContentDescription("Unpin Audit Crisps from favourites").performTouchInput { click() }
+        compose.waitForIdle()
+        assertTrue(colaTile.getUnclippedBoundsInRoot().left < crispsTile.getUnclippedBoundsInRoot().left)
+        compose.runOnIdle { assertEquals(listOf("pin:crisps", "add:crisps", "pin:crisps"), actions) }
     }
 
     @Test
@@ -625,7 +675,11 @@ class PosEmptyCatalogueUiTest {
             ),
         )
 
-        render(state, onUpdateHeldOrderDiscount = { id, amount -> appliedDiscounts += id to amount })
+        renderDynamic(
+            state = mutableStateOf(state),
+            onUpdateHeldOrderDiscount = { id, amount -> appliedDiscounts += id to amount },
+            productionWindowInsets = true,
+        )
 
         compose.onNodeWithText("Review PS5 Station 2").assertIsDisplayed()
         compose.onNodeWithText("PS5 Station 2 · Dual · 60 min").assertIsDisplayed()
@@ -634,13 +688,33 @@ class PosEmptyCatalogueUiTest {
             .assertIsDisplayed()
             .assertIsEnabled()
         compose.onNode(hasSetTextAction()).performClick().performTextReplacement("30")
-        // Root IME handling must not leave the primary footer below the
-        // keyboard; semantic presence alone is not enough for this assertion.
-        compose.onNodeWithText("CONTINUE TO PAYMENT · 180.00")
-            .assertIsDisplayed().assertIsNotEnabled()
+        fun keyboardVisible(): Boolean = compose.runOnIdle {
+            val insets = ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+            (insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0) > 0
+        }
+        compose.waitUntil(5_000) { keyboardVisible() }
+        val discountAction = compose.onNodeWithTag("pos-held-review-apply-discount")
+            .assertIsDisplayed().assertIsEnabled().assertHeightIsAtLeast(48.dp).fetchSemanticsNode()
+        val unappliedMessage = compose.onNodeWithText("Apply this edited amount or restore", substring = true)
+        unappliedMessage.assertDoesNotExist()
+        compose.runOnIdle {
+            val visibleWindow = AndroidRect()
+            compose.activity.window.decorView.getWindowVisibleDisplayFrame(visibleWindow)
+            val coordinates = discountAction.layoutInfo.coordinates
+            val screenTop = coordinates.localToScreen(Offset.Zero).y
+            assertTrue(
+                "The complete Apply discount target must fit above the keyboard",
+                screenTop >= visibleWindow.top && screenTop + coordinates.size.height <= visibleWindow.bottom &&
+                    discountAction.boundsInRoot.height >= coordinates.size.height - 1f,
+            )
+        }
+        compose.onNodeWithTag("pos-held-review-continue").assertDoesNotExist()
         compose.onNode(hasSetTextAction()).performImeAction()
+        compose.waitUntil(5_000) { !keyboardVisible() }
         compose.onNode(hasSetTextAction()).assertIsNotFocused()
-        compose.onNodeWithText("Apply discount").performScrollTo()
+        unappliedMessage.assertIsDisplayed()
+        compose.onNodeWithTag("pos-held-review-continue").assertIsDisplayed().assertIsNotEnabled()
+        compose.onNodeWithTag("pos-held-review-apply-discount")
             .assertIsDisplayed().assertIsEnabled().performClick()
         compose.runOnIdle { assertEquals(listOf("held-gaming-1" to 3_000L), appliedDiscounts) }
     }
@@ -1160,7 +1234,16 @@ class PosEmptyCatalogueUiTest {
         viewportSize: State<Pair<Int, Int>>? = null,
         workspaceDestination: MutableState<Destination>? = null,
         screenWidthDpOverride: Int? = null,
+        productionWindowInsets: Boolean = false,
+        favouriteItemIds: State<Set<String>>? = null,
+        onToggleFavourite: ((String) -> Unit)? = null,
     ) {
+        if (productionWindowInsets) {
+            compose.activityRule.scenario.onActivity { activity ->
+                WindowCompat.setDecorFitsSystemWindows(activity.window, false)
+                activity.window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+            }
+        }
         compose.setContent {
             DCompanyTheme {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -1170,7 +1253,10 @@ class PosEmptyCatalogueUiTest {
                     // Surface propagates its full-window minimum constraints to its
                     // direct child. A loose parent lets this test exercise the
                     // requested content viewport instead of silently using 1280x900.
-                    Box(Modifier.fillMaxSize()) {
+                    val rootModifier = if (productionWindowInsets) {
+                        Modifier.windowInsetsPadding(WindowInsets.safeDrawing)
+                    } else Modifier
+                    Box(Modifier.fillMaxSize().then(rootModifier)) {
                     Box(
                         viewportModifier.background(MaterialTheme.colorScheme.background)
                             .testTag("pos-layout-root"),
@@ -1215,7 +1301,7 @@ class PosEmptyCatalogueUiTest {
                             onConfirmHeldOrder = onConfirmHeldOrder,
                             onConfirmHeldOrderSplit = onConfirmHeldOrderSplit,
                             onConfirmHeldOrderZero = onConfirmHeldOrderZero,
-                            onVoidOrder = { _, _ -> },
+                            onVoidOrder = { _, _, _ -> },
                             onDismissHeldOrderReview = {},
                             onDismissHeldOrder = {},
                             onDismissNotice = onDismissNotice,
@@ -1229,6 +1315,8 @@ class PosEmptyCatalogueUiTest {
                             onDismissHeldFocus = {},
                             eligibleRewardCatalog = eligibleRewardCatalog,
                             presentation = presentation,
+                            favouriteItemIds = favouriteItemIds?.value.orEmpty(),
+                            onToggleFavourite = onToggleFavourite,
                         )
                         }
                         val posScreen: @Composable () -> Unit = {
@@ -1318,7 +1406,7 @@ class PosEmptyCatalogueUiTest {
             .performScrollTo().assertIsEnabled().performClick()
         compose.onNodeWithContentDescription("Digit 0")
             .performScrollTo().assertIsEnabled().performClick()
-        compose.onNodeWithText("Apply discount").performScrollTo()
+        compose.onNodeWithTag("pos-held-review-apply-discount")
             .assertIsDisplayed().assertIsEnabled().performClick()
         compose.runOnIdle {
             assertEquals(listOf("held-notice-1" to 2_000L), updates)
@@ -1358,7 +1446,7 @@ class PosEmptyCatalogueUiTest {
                 AnnotatedString("20"),
             ),
         ).assertIsEnabled()
-        compose.onNodeWithText("Apply discount").performScrollTo()
+        compose.onNodeWithTag("pos-held-review-apply-discount")
             .assertIsDisplayed().assertIsNotEnabled()
         compose.onNodeWithText("CONTINUE TO PAYMENT · 210.00")
             .assertIsDisplayed().assertIsEnabled()

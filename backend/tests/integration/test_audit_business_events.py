@@ -136,7 +136,16 @@ async def test_semantic_read_filters_snapshot_legacy_compatibility_and_scope(
     assert all("before" in row and "after" in row for row in old.json())
     catalogue = await client.get("/api/v1/admin/audit/catalogue", headers=headers)
     assert catalogue.status_code == 200
-    assert len(catalogue.json()["actions"]) == 28
+    vocabulary = catalogue.json()
+    assert vocabulary["version"] == 5
+    assert len(vocabulary["actions"]) == 32
+    definitions = {action["code"]: action for action in vocabulary["actions"]}
+    assert len(definitions) == 32
+    for code, category in (("POS-NVC", "pos"), ("POS-MSC", "pos"),
+                           ("STK-RCR", "inventory"), ("SHF-SWC", "pos")):
+        assert definitions[code]["category"] == category
+        assert definitions[code]["stages"] == ["committed"]
+        assert definitions[code]["outcomes"] == ["completed"]
     for query in (
         {"code": "PIK"},
         {"category": "not-real"},

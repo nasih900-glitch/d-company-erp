@@ -54,6 +54,62 @@ class WorkspaceGlassPolicyTest {
     }
 
     @Test
+    fun brightestBoundPreservesClippedGridAdmissionAndDarkForegroundFallback() {
+        val grid = WorkspaceGlassSafetyGrid(
+            columns = 2,
+            rows = 2,
+            maxima = listOf(Color.Black, Color.White, Color(0xFF102040), Color.Cyan)
+                .map { it.toArgb() }.toIntArray(),
+        )
+        val clippedBounds = Rect(-40f, 120f, 1280f, 920f)
+        val darkColumn = Rect(-40f, 120f, 320f, 920f)
+        val panel = workspaceGlassRoleStyle(WorkspaceGlassRole.PANEL, day = false)
+        val modalWithDarkIcon = workspaceGlassRoleStyle(WorkspaceGlassRole.MODAL, day = false)
+            .copy(iconContent = Color.Black)
+
+        fun admitted(
+            bounds: Rect,
+            grade: Boolean,
+            role: WorkspaceGlassRole = WorkspaceGlassRole.PANEL,
+            style: WorkspaceGlassRoleStyle = panel,
+        ): Float? = workspaceGlassAdmittedTintAlpha(
+            grid, derivativeKey(), bounds, 1280, 800, role, style, applySceneGrade = grade,
+        )
+
+        assertEquals(.58f, admitted(clippedBounds, grade = true))
+        assertEquals(.62f, admitted(clippedBounds, grade = false))
+        assertEquals(.58f, admitted(darkColumn, grade = false))
+        assertEquals(
+            "A bright bound can pass a black icon while the actual dark cell fails",
+            null,
+            admitted(clippedBounds, grade = false, role = WorkspaceGlassRole.MODAL, style = modalWithDarkIcon),
+        )
+        assertEquals(null, admitted(Rect(-80f, 120f, -40f, 760f), grade = true))
+    }
+
+    @Test
+    fun violetFillStaysTranslucentAndReadableWithSolidProtectedRoleFallbacks() {
+        val translucent = WorkspaceGlassNeutralNightRoles +
+            setOf(WorkspaceGlassRole.SELECTED, WorkspaceGlassRole.SELECTED_OUTLINE)
+        WorkspaceGlassRole.entries.forEach { role ->
+            val style = workspaceGlassRoleStyle(role, day = false)
+            val fill = workspaceVioletGlassFill(role, style, inWorkspace = true)
+            assertEquals(style.fallback, workspaceVioletGlassFill(role, style, inWorkspace = false))
+            if (role in translucent) {
+                assertTrue("$role stays translucent", fill.alpha in 0.5f..0.95f)
+            } else {
+                assertEquals("$role keeps its solid palette", style.fallback, fill)
+            }
+            listOf(Color.Black, Color.White).forEach { backdrop ->
+                val material = fill.compositeOver(backdrop)
+                assertTrue("$role primary text", workspaceGlassContrastRatio(style.primaryContent, material) >= 4.8)
+                assertTrue("$role secondary text", workspaceGlassContrastRatio(style.secondaryContent, material) >= 4.8)
+                assertTrue("$role icon", workspaceGlassContrastRatio(style.iconContent, material) >= 3.2)
+            }
+        }
+    }
+
+    @Test
     fun derivativeKeyTracksEveryDisplayedPixelIdentityField() {
         val base = WorkspaceBackgroundRenderKey(
             WorkspaceBackgroundSlot.HOME,

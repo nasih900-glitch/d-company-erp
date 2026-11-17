@@ -72,42 +72,23 @@ class ExecutiveRailScrubTest {
     }
 
     @Test
-    fun `dwell follows deliberate targets before contact ends without duplicates`() {
+    fun `each entered target is proposed before contact ends without duplicates`() {
         var state = claimExecutiveRailScrub(
             beginExecutiveRailPress(Destination.Dashboard, snapshot(Destination.Dashboard), targets),
         )
+        val gaming = updateExecutiveRailScrubTarget(state, Destination.Gaming, enteredByPointer = true)
+        assertEquals(Destination.Gaming, gaming.navigateTo)
+        state = acknowledgeExecutiveRailScrub(gaming.state, Destination.Gaming, snapshot(Destination.Gaming, 1L))!!
+        assertNull(updateExecutiveRailScrubTarget(state, Destination.Gaming, enteredByPointer = false).navigateTo)
+        assertNull(updateExecutiveRailScrubTarget(state, Destination.Gaming, enteredByPointer = true).navigateTo)
 
-        var update = updateExecutiveRailScrubTarget(state, Destination.Gaming, 1_000L, policy)
-        assertNull(update.navigateTo)
-        state = update.state
-        update = updateExecutiveRailScrubTarget(state, Destination.Gaming, 1_189L, policy)
-        assertNull(update.navigateTo)
-        update = updateExecutiveRailScrubTarget(update.state, Destination.Gaming, 1_190L, policy)
-        assertEquals(Destination.Gaming, update.navigateTo)
-
-        state = acknowledgeExecutiveRailScrub(
-            update.state,
-            Destination.Gaming,
-            snapshot(Destination.Gaming, 1L),
-            1_190L,
-        )!!
-        update = updateExecutiveRailScrubTarget(state, Destination.Gaming, 1_900L, policy)
-        assertNull("Holding the committed row must not navigate twice", update.navigateTo)
-        state = update.state
-        update = updateExecutiveRailScrubTarget(state, Destination.Pos, 2_000L, policy)
-        update = updateExecutiveRailScrubTarget(update.state, Destination.Pos, 2_190L, policy)
-        assertEquals(Destination.Pos, update.navigateTo)
-
-        state = acknowledgeExecutiveRailScrub(
-            update.state,
-            Destination.Pos,
-            snapshot(Destination.Pos, 2L),
-            2_190L,
-        )!!
+        val pos = updateExecutiveRailScrubTarget(state, Destination.Pos, enteredByPointer = true)
+        assertEquals(Destination.Pos, pos.navigateTo)
+        state = acknowledgeExecutiveRailScrub(pos.state, Destination.Pos, snapshot(Destination.Pos, 2L))!!
 
         val ended = cancelExecutiveRailScrub(state)
         assertEquals(ExecutiveRailScrubPhase.Ended, ended.phase)
-        assertNull("Ending contact adds no final navigation", ended.candidate)
+        assertNull(ended.candidate)
     }
 
     @Test
@@ -117,18 +98,10 @@ class ExecutiveRailScrubTest {
         )
         assertTrue(executiveRailObservedSnapshotBelongsToStream(state, snapshot(Destination.Dashboard)))
 
-        state = updateExecutiveRailScrubTarget(state, Destination.Gaming, 100L, policy).state
-        val proposal = updateExecutiveRailScrubTarget(state, Destination.Gaming, 290L, policy)
-        state = acknowledgeExecutiveRailScrub(
-            proposal.state,
-            Destination.Gaming,
-            snapshot(Destination.Gaming, 1L),
-            290L,
-        )!!
+        val proposal = updateExecutiveRailScrubTarget(state, Destination.Gaming, enteredByPointer = true)
+        state = acknowledgeExecutiveRailScrub(proposal.state, Destination.Gaming, snapshot(Destination.Gaming, 1L))!!
         assertEquals(Destination.Gaming, state.lastCommitted)
-        assertFalse(
-            executiveRailObservedSnapshotBelongsToStream(state, snapshot(Destination.Dashboard, 0L)),
-        )
+        assertFalse(executiveRailObservedSnapshotBelongsToStream(state, snapshot(Destination.Dashboard, 0L)))
         assertTrue(executiveRailObservedSnapshotBelongsToStream(state, snapshot(Destination.Gaming, 1L)))
         assertFalse(
             "Destination-equal ABA must be visible through its newer owner revision",
@@ -137,74 +110,48 @@ class ExecutiveRailScrubTest {
     }
 
     @Test
-    fun `fast crossing never constructs an intermediate destination`() {
-        var state = claimExecutiveRailScrub(
-            beginExecutiveRailPress(Destination.Dashboard, snapshot(Destination.Dashboard), targets),
-        )
-        state = updateExecutiveRailScrubTarget(state, Destination.Gaming, 100L, policy).state
-        val crossed = updateExecutiveRailScrubTarget(state, Destination.Pos, 180L, policy)
-        assertNull(crossed.navigateTo)
-        val committed = updateExecutiveRailScrubTarget(crossed.state, Destination.Pos, 370L, policy)
-        assertEquals(Destination.Pos, committed.navigateTo)
-    }
-
-    @Test
     fun `origin requires leaving before it can become a live target`() {
         var state = claimExecutiveRailScrub(
             beginExecutiveRailPress(Destination.Gaming, snapshot(Destination.Dashboard), targets),
         )
-        var update = updateExecutiveRailScrubTarget(state, Destination.Gaming, 100L, policy)
-        update = updateExecutiveRailScrubTarget(update.state, Destination.Gaming, 500L, policy)
-        assertNull(update.navigateTo)
+        val origin = updateExecutiveRailScrubTarget(state, Destination.Gaming, enteredByPointer = true)
+        assertNull(origin.navigateTo)
 
-        state = updateExecutiveRailScrubTarget(update.state, Destination.Pos, 600L, policy).state
-        val posProposal = updateExecutiveRailScrubTarget(state, Destination.Pos, 790L, policy)
-        state = acknowledgeExecutiveRailScrub(
-            posProposal.state,
-            Destination.Pos,
-            snapshot(Destination.Pos, 1L),
-            790L,
-        )!!
-        update = updateExecutiveRailScrubTarget(state, Destination.Gaming, 900L, policy)
-        update = updateExecutiveRailScrubTarget(update.state, Destination.Gaming, 1_090L, policy)
-        assertEquals(Destination.Gaming, update.navigateTo)
+        val pos = updateExecutiveRailScrubTarget(origin.state, Destination.Pos, enteredByPointer = true)
+        state = acknowledgeExecutiveRailScrub(pos.state, Destination.Pos, snapshot(Destination.Pos, 1L))!!
+        assertEquals(
+            Destination.Gaming,
+            updateExecutiveRailScrubTarget(state, Destination.Gaming, enteredByPointer = true).navigateTo,
+        )
     }
 
     @Test
     fun `model filters targets and cancellation cannot emit navigation`() {
         val restricted = listOf(Destination.Dashboard, Destination.Pos)
-        var state = claimExecutiveRailScrub(
+        val state = claimExecutiveRailScrub(
             beginExecutiveRailPress(Destination.Dashboard, snapshot(Destination.Dashboard), restricted),
         )
-        var update = updateExecutiveRailScrubTarget(state, Destination.Gaming, 100L, policy)
-        update = updateExecutiveRailScrubTarget(update.state, Destination.Gaming, 500L, policy)
-        assertNull(update.navigateTo)
-        state = cancelExecutiveRailScrub(update.state)
-        update = updateExecutiveRailScrubTarget(state, Destination.Pos, 1_000L, policy)
+        val blocked = updateExecutiveRailScrubTarget(state, Destination.Gaming, enteredByPointer = true)
+        assertNull(blocked.navigateTo)
+        val ended = cancelExecutiveRailScrub(blocked.state)
+        val update = updateExecutiveRailScrubTarget(ended, Destination.Pos, enteredByPointer = true)
         assertNull(update.navigateTo)
         assertEquals(ExecutiveRailScrubPhase.Ended, update.state.phase)
     }
 
     @Test
-    fun `real auto scroll resets dwell and requires a stable post scroll target`() {
-        var state = claimExecutiveRailScrub(
+    fun `moving rail bounds beneath a stationary pointer cannot navigate`() {
+        val state = claimExecutiveRailScrub(
             beginExecutiveRailPress(Destination.Dashboard, snapshot(Destination.Dashboard), targets),
         )
-        state = updateExecutiveRailScrubTarget(state, Destination.Settings, 100L, policy).state
-        val moved = updateExecutiveRailScrubTarget(
-            state,
+        val shifted = updateExecutiveRailScrubTarget(state, Destination.Gaming, enteredByPointer = false)
+        assertNull(shifted.navigateTo)
+        val scrolled = updateExecutiveRailScrubTarget(shifted.state, Destination.Settings, enteredByPointer = false)
+        assertNull(scrolled.navigateTo)
+        assertEquals(
             Destination.Settings,
-            400L,
-            policy,
-            autoScrollMoved = true,
+            updateExecutiveRailScrubTarget(scrolled.state, Destination.Settings, enteredByPointer = true).navigateTo,
         )
-        assertNull(moved.navigateTo)
-        var stable = updateExecutiveRailScrubTarget(moved.state, Destination.Settings, 500L, policy)
-        assertNull(stable.navigateTo)
-        stable = updateExecutiveRailScrubTarget(stable.state, Destination.Settings, 689L, policy)
-        assertNull(stable.navigateTo)
-        stable = updateExecutiveRailScrubTarget(stable.state, Destination.Settings, 690L, policy)
-        assertEquals(Destination.Settings, stable.navigateTo)
     }
 
     @Test

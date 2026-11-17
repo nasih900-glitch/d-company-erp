@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.screens
 
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.room.withTransaction
@@ -7,6 +8,7 @@ import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.alarm.overdueHeldOrderIds
 import cloud.dcompany.erp.core.alarm.overdueHeldOrderFingerprint
 import cloud.dcompany.erp.core.alarm.shouldShowOverdueHeldOrderBanner
+import cloud.dcompany.erp.core.checkout.CheckoutClaimWindow
 import cloud.dcompany.erp.core.checkout.CheckoutClientInstancePolicy
 import cloud.dcompany.erp.core.checkout.CheckoutClientInstanceUnavailableException
 import cloud.dcompany.erp.core.checkout.DirectOrderPublishPolicy
@@ -222,6 +224,8 @@ data class PreparedHeldCheckout(
     val claimToken: String,
     val claimExpiresAtMillis: Long,
     val claimOrderVersion: Long,
+    val retainedMistakeReview: cloud.dcompany.erp.core.net.RetainedMistakeReview? = null,
+    val confirmationWindow: CheckoutClaimWindow? = null,
 ) {
     val allowsGenericVoid: Boolean
         get() = type == "dine_in" || type == "takeaway" || type == "delivery"
@@ -248,6 +252,7 @@ data class HeldOrderReview(
     val checkoutVersion: Long,
     val maxManualDiscountMinor: Long,
     val lines: List<HeldOrderReviewLine>,
+    val gamingVoidProvenance: cloud.dcompany.erp.core.net.GamingVoidProvenance? = null,
 ) {
     val lineOrMembershipDiscountMinor: Long
         get() = (discountMinor - manualDiscountMinor - pointsRedeemedMinor).coerceAtLeast(0L)
@@ -343,6 +348,7 @@ internal fun authoritativeHeldOrderReview(
         checkoutVersion = order.checkoutVersion,
         maxManualDiscountMinor = maxManualDiscountMinor,
         lines = lines,
+        gamingVoidProvenance = order.gamingVoidProvenance,
     )
 }
 
@@ -353,6 +359,9 @@ internal fun heldOrderDiscountMutation(
     review: HeldOrderReview,
     manualDiscountMinor: Long,
 ): HeldOrderDiscountMutation {
+    require(review.gamingVoidProvenance?.financialEvidenceLocked != true) {
+        "Gaming Void amounts are immutable audit evidence. Use the Owner mistake correction when applicable."
+    }
     require(manualDiscountMinor in 0L..review.maxManualDiscountMinor) {
         "Discount must be within the reviewed bill total."
     }
@@ -695,6 +704,7 @@ class PosViewModel : ViewModel() {
      * retry registered in that gap must still be unable to overlay success.
      */
     private val preparedDirectCheckoutLocalId = MutableStateFlow<String?>(null)
+    private val directCheckoutWindow = MutableStateFlow<CheckoutClaimWindow?>(null)
     private val checkoutBusy = MutableStateFlow(false)
     private val preparingHeldOrderId = MutableStateFlow<String?>(null)
     private val heldOrderReview = MutableStateFlow<HeldOrderReview?>(null)
@@ -833,7 +843,11 @@ class PosViewModel : ViewModel() {
             )
         },
         combine(
-            combine(selectedCategory, notice, directReviewOrderId, ::Triple),
+            combine(
+                combine(selectedCategory, notice, directReviewOrderId, ::Triple),
+                directCheckoutWindow,
+                ::Pair,
+            ),
             combine(
                 combine(
                     checkoutBusy,
@@ -885,7 +899,7 @@ class PosViewModel : ViewModel() {
         val programRules = programCache?.let {
             runCatching { ApiClient.json.decodeFromString<LoyaltyProgramRulesDto>(it.rulesJson) }.getOrNull()
         }
-        val uiValues = ui.first
+        val (uiValues, freshDirectClaim) = ui.first
         val checkout = ui.second.first
         val retries = ui.second.second
         val resolved = net.third.first
@@ -956,6 +970,12 @@ class PosViewModel : ViewModel() {
                 val claimExpiresAt = draft.checkoutClaimExpiresAtMillis ?: return@let null
                 val claimVersion = draft.checkoutVersion ?: return@let null
                 val claimToken = draft.checkoutClaimToken ?: return@let null
+                val totalMinor = draft.serverTotalMinor ?: return@let null
+                val dueMinor = draft.serverDueMinor ?: return@let null
+                if (!DirectOrderPublishPolicy.canPresentPreparedCheckout(
+                        totalMinor, dueMinor, claimToken, freshDirectClaim, SystemClock.elapsedRealtime(),
+                    )
+                ) return@let null
                 PreparedDirectCheckout(
                     localId = draft.localId,
                     revision = draft.revision,
@@ -967,8 +987,8 @@ class PosViewModel : ViewModel() {
                     pointsRedeemed = draft.serverPointsRedeemed ?: 0,
                     taxMinor = draft.serverTaxMinor ?: 0L,
                     roundOffMinor = draft.serverRoundOffMinor ?: 0L,
-                    totalMinor = draft.serverTotalMinor ?: return@let null,
-                    dueMinor = draft.serverDueMinor ?: return@let null,
+                    totalMinor = totalMinor,
+                    dueMinor = dueMinor,
                     claimToken = claimToken,
                     claimExpiresAtMillis = claimExpiresAt,
                     claimOrderVersion = claimVersion,
@@ -1358,11 +1378,11 @@ class PosViewModel : ViewModel() {
     }
 
     private fun requireVoid(): Boolean = authorizeAction(access.canVoid) {
-        notice.value = "Voiding a released bill requires POS void permission. Ask a manager."
+        notice.value = "Voiding a released bill requires POS void permission. Ask an Owner to review this bill."
     }
 
     private fun requireDiscount(): Boolean = authorizeAction(access.canApplyDiscount) {
-        notice.value = "Changing or clearing a manual discount requires manager discount permission."
+        notice.value = "Changing or clearing a manual discount requires POS discount permission."
     }
 
     private fun scopeLeaseOrNotice(message: String): CacheScopeLease? {
@@ -1681,9 +1701,10 @@ class PosViewModel : ViewModel() {
                     if (
                         initialLocal.syncState == SyncState.AWAITING_PAYMENT &&
                         !initialLocal.checkoutClaimToken.isNullOrBlank() &&
-                        initialLocal.checkoutClaimExpiresAtMillis?.let {
-                            HeldOrderClaimPolicy.hasConfirmationWindow(it, System.currentTimeMillis())
-                        } == true
+                        directCheckoutWindow.value?.hasConfirmationWindow(
+                            initialLocal.checkoutClaimToken,
+                            SystemClock.elapsedRealtime(),
+                        ) == true
                     ) {
                         return@withLock
                     }
@@ -2163,6 +2184,7 @@ class PosViewModel : ViewModel() {
         val clientInstance = CheckoutClientInstancePolicy.requireStable(
             app.updateTelemetry.installation.installationId(),
         )
+        val requestStarted = SystemClock.elapsedRealtime()
         val claim = ApiClient.api.publishDirectCheckoutClaim(
             id = pricedOrder.id,
             body = PublishDirectCheckoutClaimRequest(expectedVersion),
@@ -2177,8 +2199,12 @@ class PosViewModel : ViewModel() {
             ),
         ) { "The published checkout claim does not match the reviewed bill." }
         val expiresAtMillis = HeldOrderClaimPolicy.claimExpiryMillis(claim)
-            ?: throw IllegalStateException("The checkout claim had an invalid expiry time.")
-        if (!HeldOrderClaimPolicy.hasConfirmationWindow(expiresAtMillis, System.currentTimeMillis())) {
+        val confirmationWindow = CheckoutClaimWindow.from(claim, requestStarted)
+        if (expiresAtMillis == null || confirmationWindow == null) {
+            releaseClaimBestEffort(pricedOrder.id, claim.claimToken)
+            throw IllegalStateException(CheckoutClaimWindow.UNVERIFIED_TIME_MESSAGE)
+        }
+        if (!confirmationWindow.hasConfirmationWindow(claim.claimToken, SystemClock.elapsedRealtime())) {
             releaseClaimBestEffort(pricedOrder.id, claim.claimToken)
             throw IllegalStateException("The checkout reservation expired too soon. Review the bill again.")
         }
@@ -2211,6 +2237,7 @@ class PosViewModel : ViewModel() {
         }
         directReviewOrderId.value = null
         preparedDirectCheckoutLocalId.value = local.localId
+        directCheckoutWindow.value = confirmationWindow
         // The prepared checkout is already the inline, authoritative review.
         // Do not cover its payment fields with a second acknowledgement modal.
         successfulOutcomeNoticeOwner.beginCheckout(notice)
@@ -2739,10 +2766,12 @@ class PosViewModel : ViewModel() {
         }
     }
 
-    fun voidOrder(orderId: String, reason: String) {
+    fun voidOrder(orderId: String, reason: String, allItemsMistakenNotSupplied: Boolean = false) {
         val direct = state.value.preparedDirectCheckout?.takeIf { it.orderId == orderId }
         val held = preparedHeldCheckout.value?.takeIf { it.orderId == orderId }
-        if (held?.allowsGenericVoid == false || (held == null && direct == null)) return
+        val correction = held?.retainedMistakeReview
+        if (correction != null && (!access.canCorrectRetainedMistakes || !allItemsMistakenNotSupplied)) return
+        if ((held?.allowsGenericVoid == false && correction == null) || (held == null && direct == null)) return
         if (!requireVoid()) return
         val cleanReason = reason.trim()
         if (cleanReason.isEmpty()) {
@@ -2800,12 +2829,32 @@ class PosViewModel : ViewModel() {
                     }
                     checkoutClosedSafely = true
                 }
-                ApiClient.api.voidOrder(
-                    orderId,
-                    cloud.dcompany.erp.core.net.VoidOrderRequest(cleanReason),
-                    direct?.claimToken ?: held?.claimToken,
-                )
-                notice.value = "Bill voided with reason: $cleanReason. The audit and linked cancellation are retained."
+                if (correction != null && held != null) {
+                    val body = cloud.dcompany.erp.core.net.RetainedMistakeCorrectionRequest(
+                        originalReceiptId = correction.originalReceiptId,
+                        expectedCheckoutVersion = correction.expectedCheckoutVersion,
+                        reviewHash = correction.reviewHash,
+                        allItemsMistakenNotSupplied = true,
+                        reason = cleanReason,
+                    )
+                    val result = ApiClient.api.correctRetainedMistake(
+                        orderId, body, held.claimToken,
+                        retainedMistakeActionKey(orderId, correction.reviewHash, cleanReason),
+                    )
+                    check(result.orderId == orderId && result.orderStatus == "void" &&
+                        result.originalReceiptId == correction.originalReceiptId &&
+                        result.gamingSessionId == correction.gamingSessionId && result.correctionId.isNotBlank()) {
+                        "The server correction receipt could not be verified. Refresh POS before continuing."
+                    }
+                    notice.value = "Mistaken items cancelled once. No money collected or refunded; original history retained."
+                } else {
+                    ApiClient.api.voidOrder(
+                        orderId,
+                        cloud.dcompany.erp.core.net.VoidOrderRequest(cleanReason),
+                        direct?.claimToken ?: held?.claimToken,
+                    )
+                    notice.value = "Bill voided with reason: $cleanReason. The audit and linked cancellation are retained."
+                }
                 app.sync.refresh("orders")
                 reconciled()
             } catch (cancelled: CancellationException) {
@@ -2889,10 +2938,10 @@ class PosViewModel : ViewModel() {
             dismissDirectCheckout()
             return false
         }
-        if (!HeldOrderClaimPolicy.hasConfirmationWindow(
-                prepared.claimExpiresAtMillis,
-                System.currentTimeMillis(),
-            )
+        if (directCheckoutWindow.value?.hasConfirmationWindow(
+                prepared.claimToken,
+                SystemClock.elapsedRealtime(),
+            ) != true
         ) {
             notice.value = "The verified total expired. Refreshing it now; review before collecting."
             prepareDirectCheckout()
@@ -3172,7 +3221,9 @@ class PosViewModel : ViewModel() {
         )
 
     private fun clearPreparedDirectCheckout(localId: String) {
-        preparedDirectCheckoutLocalId.compareAndSet(localId, null)
+        if (preparedDirectCheckoutLocalId.compareAndSet(localId, null)) {
+            directCheckoutWindow.value = null
+        }
     }
 
     private fun watchRetriedSaleOutcome(
@@ -3261,6 +3312,10 @@ class PosViewModel : ViewModel() {
         if (!requireWrite() || !requireDiscount()) return
         val review = heldOrderReview.value?.takeIf { it.orderId == orderId } ?: run {
             notice.value = "Reload the held bill before changing its discount."
+            return
+        }
+        if (review.gamingVoidProvenance?.financialEvidenceLocked == true) {
+            notice.value = "Gaming Void amounts are immutable. An Owner can cancel entirely mistaken, unsupplied retained items."
             return
         }
         if (checkoutBusy.value) return
@@ -3375,6 +3430,7 @@ class PosViewModel : ViewModel() {
                 val checkoutClientInstance = CheckoutClientInstancePolicy.requireStable(
                     app.updateTelemetry.installation.installationId(),
                 )
+                val requestStarted = SystemClock.elapsedRealtime()
                 val claim = ApiClient.api.acquireCheckoutClaim(
                     orderId,
                     checkoutClientInstance = checkoutClientInstance,
@@ -3403,16 +3459,19 @@ class PosViewModel : ViewModel() {
                     return@launch
                 }
                 val expiresAtMillis = HeldOrderClaimPolicy.claimExpiryMillis(claim)
-                val hasTime = expiresAtMillis != null && HeldOrderClaimPolicy.hasConfirmationWindow(
-                    expiresAtMillis,
-                    System.currentTimeMillis(),
-                )
+                val confirmationWindow = CheckoutClaimWindow.from(claim, requestStarted)
+                val hasTime = expiresAtMillis != null && confirmationWindow?.hasConfirmationWindow(
+                    claim.claimToken,
+                    SystemClock.elapsedRealtime(),
+                ) == true
                 if (!hasTime || !heldClaimMatchesReview(review, claim)) {
                     releaseClaimBestEffort(orderId, claim.claimToken)
                     acquiredToken = null
                     val refreshed = refreshHeldReviewBestEffort(review)
                     if (!refreshed) heldOrderReview.compareAndSet(review, null)
-                    notice.value = if (!hasTime) {
+                    notice.value = if (expiresAtMillis == null || confirmationWindow == null) {
+                        CheckoutClaimWindow.UNVERIFIED_TIME_MESSAGE
+                    } else if (!hasTime) {
                         if (refreshed) {
                             "The checkout reservation was already too close to expiry. Review the refreshed bill and try again."
                         } else {
@@ -3430,6 +3489,18 @@ class PosViewModel : ViewModel() {
                 val original = requireNotNull(kotlinx.coroutines.currentCoroutineContext()[cloud.dcompany.erp.core.handover.OperationDispatchContext]?.binding)
                 check(claim.claimantUserId == original.authority.scope.actorId && claim.terminalId == original.authority.scope.terminalId)
                 app.idleCheckoutClaims.remember(original, claim.orderId, claim.claimToken)
+                val correctionReview = if (access.canCorrectRetainedMistakes &&
+                    review.gamingVoidProvenance?.mistakeCorrectionAvailable == true) {
+                    ApiClient.api.reviewRetainedMistake(orderId, claim.claimToken).also { correction ->
+                        check(correction.orderId == orderId && correction.expectedCheckoutVersion == review.checkoutVersion &&
+                            correction.totalMinor == review.totalMinor && correction.itemCount == review.lines.size &&
+                            correction.originalReceiptId == review.gamingVoidProvenance.originalReceiptId &&
+                            correction.gamingSessionId == review.gamingVoidProvenance.gamingSessionId &&
+                            correction.reviewHash.matches(Regex("[0-9a-f]{64}"))) {
+                            "The retained bill changed. Reload and review its exact items before continuing."
+                        }
+                    }
+                } else null
                 val prepared = PreparedHeldCheckout(
                     orderId = claim.orderId,
                     shiftIdAtClaim = shiftIdAtClaim,
@@ -3449,6 +3520,8 @@ class PosViewModel : ViewModel() {
                     claimToken = claim.claimToken,
                     claimExpiresAtMillis = requireNotNull(expiresAtMillis),
                     claimOrderVersion = claim.orderVersion,
+                    retainedMistakeReview = correctionReview,
+                    confirmationWindow = requireNotNull(confirmationWindow),
                 )
                 if (!heldOrderReview.compareAndSet(review, null)) {
                     releaseClaimBestEffort(orderId, claim.claimToken)
@@ -3611,10 +3684,10 @@ class PosViewModel : ViewModel() {
             notice.value = "Connection was lost before confirmation. Do not collect yet; reconnect first."
             return false
         }
-        if (!HeldOrderClaimPolicy.hasConfirmationWindow(
-                prepared.claimExpiresAtMillis,
-                System.currentTimeMillis(),
-            )
+        if (prepared.confirmationWindow?.hasConfirmationWindow(
+                prepared.claimToken,
+                SystemClock.elapsedRealtime(),
+            ) != true
         ) {
             clearPreparedHeldCheckout(preparedHeldCheckout.value)
             notice.value = "The checkout hold expired before confirmation. It is being refreshed; " +
@@ -3760,10 +3833,10 @@ class PosViewModel : ViewModel() {
                 "it must be confirmed by the server."
             return
         }
-        if (!HeldOrderClaimPolicy.hasConfirmationWindow(
-                prepared.claimExpiresAtMillis,
-                System.currentTimeMillis(),
-            )
+        if (prepared.confirmationWindow?.hasConfirmationWindow(
+                prepared.claimToken,
+                SystemClock.elapsedRealtime(),
+            ) != true
         ) {
             clearPreparedHeldCheckout(preparedHeldCheckout.value)
             notice.value = "The checkout hold expired before completion. The bill is being " +
@@ -4241,4 +4314,11 @@ internal const val POS_NO_OPEN_SHIFT_MESSAGE = "No shift is open. Open Shift bef
 
 internal fun clearResolvedNoShiftNotice(notice: MutableStateFlow<String?>, billingReady: Boolean) {
     if (billingReady) notice.compareAndSet(POS_NO_OPEN_SHIFT_MESSAGE, null)
+}
+
+internal fun retainedMistakeActionKey(orderId: String, reviewHash: String, reason: String): String {
+    val digest = java.security.MessageDigest.getInstance("SHA-256")
+        .digest("$orderId:$reviewHash:${reason.trim()}".toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it) }
+    return "retained-mistake:$digest"
 }

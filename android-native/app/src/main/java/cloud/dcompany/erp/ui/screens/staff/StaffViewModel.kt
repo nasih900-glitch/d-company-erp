@@ -82,7 +82,16 @@ data class StaffEditor(
     val originalRoleCode: String,
     val isSelf: Boolean,
     val accessChangesLocked: Boolean,
+    val canManageOwnerAccess: Boolean = false,
+    val managedRoles: List<String>? = null,
+    val publicRoles: List<String> = emptyList(),
+    val replaceMultipleRoles: Boolean = false,
 ) {
+    val hasMultiplePrimaryRoles: Boolean
+        get() = (managedRoles ?: publicRoles).count { it != "pos_discount" } > 1
+    val roleChangesLocked: Boolean
+        get() = accessChangesLocked ||
+            (originalRoleCode in setOf("owner", "co_owner", "super_owner") && managedRoles == null)
     val validationError: String?
         get() = when {
             name.trim().isEmpty() -> "Enter the staff member's name."
@@ -242,6 +251,7 @@ class StaffViewModel(
     private val rolesState = MutableStateFlow(StaffRolesState())
     private val myProfile = MutableStateFlow<MeResponse?>(profile)
     private val editing = MutableStateFlow(EditingState())
+    private var editGeneration = 0L
     private val profileAndAttendanceBranch = combine(
         myProfile,
         appCtx.terminalStore.activeValidatedTerminal,
@@ -449,7 +459,9 @@ class StaffViewModel(
 
     fun startEdit(row: StaffRow) {
         if (!access.canManageDirectory) return
-        val currentRole = row.roles.firstOrNull().orEmpty()
+        val currentRole = primaryStaffRole(row.roles)
+        val requestGeneration = ++editGeneration
+        val canManageOwnerAccess = myProfile.value?.auditAccess == true
         editing.update {
             it.copy(
                 editor = StaffEditor(
@@ -461,10 +473,40 @@ class StaffViewModel(
                     originalStatus = row.status,
                     originalRoleCode = currentRole,
                     isSelf = row.isSelf,
-                    accessChangesLocked = row.accessChangesLocked,
+                    accessChangesLocked = row.accessChangesLocked || row.roles.any {
+                        it == "owner" || it == "co_owner" || it == "super_owner"
+                    },
+                    canManageOwnerAccess = canManageOwnerAccess,
+                    publicRoles = row.roles,
                 ),
                 editError = null,
             )
+        }
+        if (!canManageOwnerAccess) return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        val binding = StaffEditorLookupBinding(scopeLease, requestGeneration, row.id)
+        fun lookupIsCurrent() = binding.isCurrent(
+            appCtx.cacheIsolation.currentLease(), editGeneration, editing.value.editor, myProfile.value,
+        )
+        viewModelScope.launch {
+            try {
+                if (!lookupIsCurrent()) return@launch
+                val fresh = api.list().firstOrNull { it.id == row.id } ?: return@launch
+                appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    if (lookupIsCurrent()) {
+                        editing.update { current ->
+                            val editor = current.editor
+                            if (editor?.id == row.id && !current.savingEdit) {
+                                current.copy(editor = resolveStaffEditorAccess(editor, fresh))
+                            } else current
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Public cached roles remain usable for profile edits; owner access stays locked.
+            }
         }
     }
 
@@ -473,6 +515,7 @@ class StaffViewModel(
     }
 
     fun cancelEdit() {
+        editGeneration++
         editing.update { it.copy(editor = null, editError = null) }
     }
 
@@ -521,11 +564,7 @@ class StaffViewModel(
                     // resubmit of the current value can never trip the
                     // backend's own self-edit guard (router.py's is_self check).
                             status = if (ed.accessChangesLocked || ed.status == ed.originalStatus) null else ed.status,
-                            roleCode = if (ed.accessChangesLocked || ed.roleCode == ed.originalRoleCode) {
-                                null
-                            } else {
-                                ed.roleCode.ifBlank { null }
-                            },
+                            roleCode = staffRoleUpdate(ed),
                     // Always false, not `existingPending?.pendingDelete`: the
                     // only way to reach this save with an existing local row
                     // already attached is either no pending write, or a

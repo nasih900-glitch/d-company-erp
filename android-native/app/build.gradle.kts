@@ -85,8 +85,8 @@ android {
         // Build 52 is immutable withheld predecessor history. This release keeps
         // Room 58 under a direct version code so CI and upgrade checks cannot
         // produce different identities from a local Gradle property.
-        versionCode = 71
-        versionName = "3.1.64"
+        versionCode = 72
+        versionName = "3.1.65"
         buildConfigField("boolean", "DIRECT_UPDATES_ENABLED", "false")
         buildConfigField("String", "DISTRIBUTION_CHANNEL", buildConfigString("play"))
 
@@ -197,6 +197,9 @@ android {
     dependenciesInfo {
         includeInBundle = false
     }
+
+    sourceSets.getByName("test").java.srcDir("src/testShared/java")
+    sourceSets.getByName("androidTest").java.srcDir("src/testShared/java")
 
     // MigrationTestHelper reads the same Room-generated history that ships in
     // source control. Point instrumentation directly at that canonical folder

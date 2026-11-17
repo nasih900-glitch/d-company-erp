@@ -4,17 +4,23 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -26,9 +32,16 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import cloud.dcompany.erp.core.handover.HandoverAction
 import cloud.dcompany.erp.core.handover.HandoverIntent
 import cloud.dcompany.erp.core.handover.HandoverStage
+import cloud.dcompany.erp.core.handover.OriginalOperationBinding
 import cloud.dcompany.erp.core.handover.TillOperatorCandidate
+import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.ui.remote.RemoteSensitiveContent
 
 internal data class TillTakeoverUi(
@@ -39,22 +52,52 @@ internal data class TillTakeoverUi(
     val intent: HandoverIntent? = null,
     val busy: Boolean = false,
     val error: String? = null,
+    val preparationBlocker: cloud.dcompany.erp.core.handover.TillPreparationBlocker? = null,
 )
+
+internal fun mayPresentOrdinaryTillTakeover(
+    expected: TillTakeoverUi,
+    current: TillTakeoverUi?,
+    expectedProfile: MeResponse,
+    currentProfile: MeResponse?,
+    original: OriginalOperationBinding?,
+): Boolean = expected.intent == null && current === expected && currentProfile === expectedProfile &&
+    original?.isCurrent() == true
+
+internal fun matchesFreshTillHandoverAcceptance(
+    action: HandoverAction,
+    completed: HandoverIntent,
+    retained: HandoverIntent?,
+): Boolean = completed.action == action && completed.stage == HandoverStage.ACCEPTED &&
+    completed == retained && runCatching { completed.validate() }.isSuccess
 
 @Composable
 internal fun TillTakeoverDialog(state: TillTakeoverUi, onDismiss: () -> Unit, onMore: () -> Unit,
-    onConfirm: (TillTakeoverUi, String, String) -> Unit) {
+    onConfirm: (TillTakeoverUi, String, String, String) -> Unit) {
     var selected by remember(state.shiftId, state.revision) { mutableStateOf<TillOperatorCandidate?>(null) }
+    var email by remember(state.shiftId, selected?.id) { mutableStateOf("") }
     var password by remember(state.shiftId, selected?.id) { mutableStateOf("") }
+    fun clearCredentials() { email = ""; password = "" }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle, state.shiftId, selected?.id) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) clearCredentials()
+        }
+        lifecycle.addObserver(observer)
+        onDispose { clearCredentials(); lifecycle.removeObserver(observer) }
+    }
     AlertDialog(
-        onDismissRequest = { if (!state.busy) { password = ""; onDismiss() } },
+        onDismissRequest = { if (!state.busy) { clearCredentials(); onDismiss() } },
+        modifier = Modifier.widthIn(max = 520.dp).fillMaxWidth(.94f)
+            .statusBarsPadding().navigationBarsPadding().imePadding(),
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
         title = { Text("Hand over this till") },
         text = {
             RemoteSensitiveContent {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("The cash shift and running games stay open. This does not count cash or clock anyone in or out.")
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("The cash shift and running games stay open. Choose the next cashier and have them sign in here.")
                     if (state.busy) Text("Verifying this till…")
-                    state.error?.let { Text(it) }
+                    (state.preparationBlocker?.guidance ?: state.error)?.let { Text(it) }
                     if (!state.busy && state.revision != null && state.people.isEmpty() && state.nextCursor == null) {
                         Text("No other eligible staff were found for this till.")
                     }
@@ -68,6 +111,10 @@ internal fun TillTakeoverDialog(state: TillTakeoverUi, onDismiss: () -> Unit, on
                     }
                     if (state.nextCursor != null) TextButton(onClick = onMore, enabled = !state.busy) { Text("More staff") }
                     selected?.let {
+                        OutlinedTextField(email, { email = it.take(254) }, label = { Text("${it.name}’s email") },
+                            enabled = !state.busy, singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                            modifier = Modifier.fillMaxWidth().testTag("till-takeover-email"))
                         TillPasswordField(password, { password = it }, "${it.name}’s password", !state.busy)
                     }
                 }
@@ -76,16 +123,17 @@ internal fun TillTakeoverDialog(state: TillTakeoverUi, onDismiss: () -> Unit, on
         confirmButton = {
             Button(onClick = {
                 val person = selected ?: return@Button
-                val entered = password
-                password = ""
-                onConfirm(state, person.id, entered)
-            }, enabled = !state.busy && selected != null && password.isNotEmpty(),
+                val enteredEmail = email
+                val enteredPassword = password
+                clearCredentials()
+                onConfirm(state, person.id, enteredEmail, enteredPassword)
+            }, enabled = !state.busy && selected != null && email.isNotBlank() && password.isNotEmpty(),
                 modifier = Modifier.heightIn(min = 48.dp).testTag("till-takeover-confirm")) {
-                Text("Approve handover")
+                Text("Hand over and sign in")
             }
         },
         dismissButton = {
-            TextButton(onClick = { password = ""; onDismiss() }, enabled = !state.busy,
+            TextButton(onClick = { clearCredentials(); onDismiss() }, enabled = !state.busy,
                 modifier = Modifier.heightIn(min = 48.dp)) { Text("Cancel") }
         },
     )
@@ -103,6 +151,11 @@ internal fun TillTakeoverRecovery(state: TillTakeoverUi, onRecover: (TillTakeove
     val clipboard = LocalClipboardManager.current
     RemoteSensitiveContent {
         Column(Modifier.widthIn(max = 460.dp).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (intent.stage == HandoverStage.ACCEPTED && state.busy) {
+                Text("Finishing till handover")
+                Text("Verifying the cashier and loading the open shift…")
+                return@Column
+            }
             Text(when {
                 ownerReturned -> "Verify Owner recovery"
                 intent.stage == HandoverStage.ACCEPTED -> "Incoming operator sign-in"

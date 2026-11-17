@@ -269,10 +269,13 @@ class WorkspaceLeaseFeedbackContractTest {
         assertTrue("The held claim must preserve the authoritative review type", "type = review.type" in preparation)
 
         val void = source.between("    fun voidOrder(", "    fun captureSale(")
-        val gate = "if (held?.allowsGenericVoid == false || (held == null && direct == null)) return"
+        val consentGate = "if (correction != null && (!access.canCorrectRetainedMistakes || !allItemsMistakenNotSupplied)) return"
+        val gate = "if ((held?.allowsGenericVoid == false && correction == null) || (held == null && direct == null)) return"
         val gateIndex = void.indexOf(gate)
+        val consentIndex = void.indexOf(consentGate)
+        assertTrue("Retained corrections require Owner authority and explicit unsupplied-item consent", consentIndex > 0 && consentIndex < gateIndex)
         assertTrue("The refusal must precede permission notices, lease checks and checkout changes", gateIndex > 0)
-        for (effect in listOf("requireVoid()", "notice.value", "scopeLeaseOrNotice(", "checkoutBusy.value =", "operations.launch(", "clearPreparedHeldCheckout(", "ApiClient.api.voidOrder(")) {
+        for (effect in listOf("requireVoid()", "notice.value", "scopeLeaseOrNotice(", "checkoutBusy.value =", "operations.launch(", "clearPreparedHeldCheckout(", "ApiClient.api.correctRetainedMistake(", "ApiClient.api.voidOrder(")) {
             assertTrue("The refusal must precede $effect", void.indexOf(effect) > gateIndex)
         }
     }

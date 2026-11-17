@@ -160,6 +160,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
@@ -693,13 +694,6 @@ fun GamingScreen(
     LaunchedEffect(filters, selectedFilter, state.catalogueLoaded) {
         selectedFilter = resolveGamingFilterId(filters.map(StationFilter::id), selectedFilter, state.catalogueLoaded)
     }
-    LaunchedEffect(focusStationId, state.stations) {
-        // A notification/deep link takes precedence over the operator's saved
-        // filter so the highlighted station can never be silently hidden.
-        if (focusStationId != null && state.stations.any { it.id == focusStationId }) {
-            selectedFilter = "all"
-        }
-    }
     val visibleStations = remember(state.stations, selectedFilter) {
         state.stations.filter { selectedFilter == "all" || stationFilterId(it.type) == selectedFilter }
     }
@@ -710,8 +704,11 @@ fun GamingScreen(
             catalogueLoaded = state.catalogueLoaded,
         )
     }
-    LaunchedEffect(focusStationId, state.stations) {
-        if (focusStationId != null && state.stations.any { it.id == focusStationId }) {
+    val focusedStationAvailable = focusStationId != null && state.stations.any { it.id == focusStationId }
+    LaunchedEffect(focusStationId, focusSessionId, focusedStationAvailable) {
+        if (focusedStationAvailable) {
+            // Repeated catalogue refreshes must not reopen a station the cashier collapsed.
+            selectedFilter = "all"
             selectedCommandStationId = focusStationId
             commandDetailOpen = true
         }
@@ -783,10 +780,7 @@ fun GamingScreen(
                     startTerminalBlockMessage = startTerminalBlockMessage,
                     wallClock = wallClock,
                     attentionCount = commandAttentionCount,
-                    onSelectFilter = {
-                        selectedFilter = it
-                        commandDetailOpen = false
-                    },
+                    onSelectFilter = { selectedFilter = it },
                     onSelectStation = {
                         selectedCommandStationId = it
                         commandDetailOpen = true
@@ -2048,13 +2042,12 @@ internal fun GamingCommandWorkspace(
         InlineShiftOpeningWorkspace(shift, onReturn = onReturn)
     },
 ) {
-    // Selection changes the control pane; it never removes the station board.
-    // `showDetail`/`onBackToBoard` remain as compatibility inputs for deep-link
-    // callers while they move to the same-screen selection model.
+    // Selection and expansion share the station board's scroll owner.
     val compactListState = rememberLazyListState()
     val compactScrollScope = rememberCoroutineScope()
     val selectedStation = visibleStations.firstOrNull { it.id == selectedStationId }
         ?: visibleStations.firstOrNull()
+    val expandedStationId = selectedStation?.id?.takeIf { showDetail }
     val selectedStationIndex = visibleStations.indexOfFirst { it.id == selectedStation?.id }
     val selectedSession = selectedStation?.let { state.activeFor(it.id) }
     val stationStartSelections = rememberGamingStationStartSelections(state.stations, state.packages)
@@ -2064,8 +2057,8 @@ internal fun GamingCommandWorkspace(
     var customerCacheRequested by remember { mutableStateOf(false) }
     var inlineShiftOpen by rememberSaveable(selectedStationId) { mutableStateOf(false) }
     var inlinePanel by rememberSaveable(selectedStationId) { mutableStateOf<String?>(null) }
-    LaunchedEffect(selectedStation != null && selectedSession == null, access.canManageSessions) {
-        if (selectedStation != null && selectedSession == null &&
+    LaunchedEffect(expandedStationId != null && selectedSession == null, access.canManageSessions) {
+        if (expandedStationId != null && selectedSession == null &&
             access.canManageSessions && !customerCacheRequested
         ) {
             customerCacheRequested = true
@@ -2445,8 +2438,8 @@ internal fun GamingCommandWorkspace(
                     inlinePanel == "drinks" -> "drinks"
                     else -> "session"
                 }
-                val pinStartPrimaryAction = selectedWorkspaceGeometry.fourZone &&
-                    detailContentKey == "start"
+                val pinStartPrimaryAction = fixedTabletWorkspace &&
+                    detailContentKey == "start" && selectedStation.isActive
                 val pinStopPrimaryAction = selectedWorkspaceGeometry.fourZone &&
                     detailContentKey == "session" && selectedSession != null &&
                     state.packageExtensionFor(selectedSession.id) == null &&
@@ -2846,6 +2839,11 @@ internal fun GamingCommandWorkspace(
                     allowGrowth = !imeVisible,
                 )
                 val tableHeaderHeight = if (rowHeight > 72.dp) 40.dp else 30.dp
+                // The sticky header still covers the top of the viewport when
+                // a row becomes the scroll target. Keep the selected row below it.
+                val selectedRowScrollOffset = -with(density) {
+                    tableHeaderHeight.roundToPx() + 1.dp.roundToPx()
+                }
                 val inlineExpansionHeight = if (imeVisible) {
                     minOf(stableInlineExpansionHeight, (maxHeight - tableHeaderHeight - Spacing.lg - 1.dp).coerceAtLeast(0.dp))
                 } else stableInlineExpansionHeight
@@ -2861,10 +2859,17 @@ internal fun GamingCommandWorkspace(
                     var itemIndex = if (scrollBoardChromeForIme) 2 else 1
                     visibleStations.forEach { station ->
                         put(station.id, itemIndex++)
-                        if (station.id == selectedStation?.id) itemIndex++
+                        if (station.id == expandedStationId) itemIndex++
                     }
                 })
                 val boardViewportSize = IntSize(constraints.maxWidth, constraints.maxHeight)
+                // Padding rounds each side independently before the table content is measured.
+                val showHeaderOptions = with(density) {
+                    (boardViewportSize.width - 2 * Spacing.sm.roundToPx()).toDp() >= 900.dp
+                }
+                val showRowPricing = with(density) {
+                    (boardViewportSize.width - 2 * Spacing.xs.roundToPx()).toDp() >= 900.dp
+                }
                 LazyColumn(
                     modifier = Modifier.fillMaxSize().testTag("gaming-station-board"),
                     state = compactListState,
@@ -2880,6 +2885,7 @@ internal fun GamingCommandWorkspace(
                         GamingStationTableHeader(
                             rowHeight = rowHeight,
                             compactStatusColumnWidth = compactStatusColumnWidth,
+                            showOptional = showHeaderOptions,
                         )
                     }
                     visibleStations.forEach { station ->
@@ -2890,7 +2896,9 @@ internal fun GamingCommandWorkspace(
                                 compactScrollScope.launch {
                                     withFrameNanos { }
                                     stationRowIndices[station.id]?.let { index ->
-                                        compactListState.animateScrollToItem(index)
+                                        compactListState.animateScrollToItem(
+                                            index, scrollOffset = selectedRowScrollOffset,
+                                        )
                                     }
                                 }
                             }
@@ -2917,6 +2925,7 @@ internal fun GamingCommandWorkspace(
                                 packages = state.packages,
                                 wallClock = wallClock,
                                 selected = station.id == selectedStation?.id,
+                                expanded = station.id == expandedStationId,
                                 focused = station.id == focusStationId,
                                 combinedBillSnapshotMinor = session?.let(state::pendingBillSnapshotMinor),
                                 playerCount = session?.let {
@@ -2929,14 +2938,16 @@ internal fun GamingCommandWorkspace(
                                     else ActionIntent.Secondary,
                                 rowHeight = rowHeight,
                                 compactStatusColumnWidth = compactStatusColumnWidth,
+                                showPricing = showRowPricing,
                                 onSelect = selectRow,
+                                onToggleDetails = if (station.id == expandedStationId) onBackToBoard else selectRow,
                                 onPrimaryAction = {
                                     if (directEnd && session != null) onStop(station, session)
                                     else selectRow()
                                 },
                             )
                         }
-                        if (station.id == selectedStation?.id) {
+                        if (station.id == expandedStationId) {
                             item(key = "station-controls-${station.id}") {
                                 Box(
                                     Modifier.fillMaxWidth().height(inlineExpansionHeight)
@@ -3210,68 +3221,64 @@ internal fun gamingSelectedSessionIdentityLabel(
 private fun GamingStationTableHeader(
     rowHeight: Dp,
     compactStatusColumnWidth: Dp,
+    showOptional: Boolean,
 ) {
-    BoxWithConstraints(
+    val glass = gamingGlassStyle(WorkspaceGlassRole.PANEL)
+    val headerStyle = MaterialTheme.typography.labelSmall
+    Row(
         Modifier.fillMaxWidth().height(if (rowHeight > 72.dp) 40.dp else 30.dp)
             .clip(GamingTableShape)
             .gamingGlass(WorkspaceGlassRole.PANEL, GamingTableShape)
             .testTag("gaming-station-table-header")
             .padding(horizontal = Spacing.sm),
+        horizontalArrangement = Arrangement.spacedBy(if (showOptional) Spacing.sm else Spacing.xs),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        val showOptional = maxWidth >= 900.dp
-        val glass = gamingGlassStyle(WorkspaceGlassRole.PANEL)
-        val headerStyle = MaterialTheme.typography.labelSmall
-        Row(
-            Modifier.fillMaxSize(),
-            horizontalArrangement = Arrangement.spacedBy(if (showOptional) Spacing.sm else Spacing.xs),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Spacer(Modifier.width(48.dp))
+        Spacer(Modifier.width(48.dp))
+        Text(
+            "Station / type",
+            Modifier.weight(if (showOptional) 0.28f else 0.58f),
+            color = glass.secondaryContent,
+            style = headerStyle,
+            fontWeight = FontWeight.Normal,
+        )
+        Text(
+            "Status",
+            if (showOptional) Modifier.weight(0.20f) else Modifier.width(compactStatusColumnWidth),
+            color = glass.secondaryContent,
+            style = headerStyle,
+            fontWeight = FontWeight.Normal,
+        )
+        Text(
+            "Duration",
+            Modifier.weight(if (showOptional) 0.27f else 0.42f),
+            color = glass.secondaryContent,
+            style = headerStyle,
+            fontWeight = FontWeight.Normal,
+        )
+        if (showOptional) {
             Text(
-                "Station / type",
-                Modifier.weight(if (showOptional) 0.28f else 0.58f),
+                "Rate / package",
+                Modifier.weight(0.25f),
                 color = glass.secondaryContent,
                 style = headerStyle,
                 fontWeight = FontWeight.Normal,
             )
             Text(
-                "Status",
-                if (showOptional) Modifier.weight(0.20f) else Modifier.width(compactStatusColumnWidth),
-                color = glass.secondaryContent,
-                style = headerStyle,
-                fontWeight = FontWeight.Normal,
-            )
-            Text(
-                "Duration",
-                Modifier.weight(if (showOptional) 0.27f else 0.42f),
-                color = glass.secondaryContent,
-                style = headerStyle,
-                fontWeight = FontWeight.Normal,
-            )
-            if (showOptional) {
-                Text(
-                    "Rate / package",
-                    Modifier.weight(0.25f),
-                    color = glass.secondaryContent,
-                    style = headerStyle,
-                    fontWeight = FontWeight.Normal,
-                )
-                Text(
-                    "Players",
-                    Modifier.width(54.dp),
-                    color = glass.secondaryContent,
-                    style = headerStyle,
-                    fontWeight = FontWeight.Normal,
-                )
-            }
-            Text(
-                "Action",
-                Modifier.width(84.dp),
+                "Players",
+                Modifier.width(54.dp),
                 color = glass.secondaryContent,
                 style = headerStyle,
                 fontWeight = FontWeight.Normal,
             )
         }
+        Text(
+            "Action",
+            Modifier.width(84.dp),
+            color = glass.secondaryContent,
+            style = headerStyle,
+            fontWeight = FontWeight.Normal,
+        )
     }
 }
 
@@ -3283,6 +3290,7 @@ private fun GamingStationTableRow(
     packages: List<GamingPackage>,
     wallClock: State<Long>,
     selected: Boolean,
+    expanded: Boolean,
     focused: Boolean,
     combinedBillSnapshotMinor: Long?,
     playerCount: Int?,
@@ -3291,7 +3299,9 @@ private fun GamingStationTableRow(
     primaryIntent: ActionIntent,
     rowHeight: Dp,
     compactStatusColumnWidth: Dp,
+    showPricing: Boolean,
     onSelect: () -> Unit,
+    onToggleDetails: () -> Unit,
     onPrimaryAction: () -> Unit,
 ) {
     val shouldTick = session?.status == "active" ||
@@ -3316,7 +3326,7 @@ private fun GamingStationTableRow(
         intent = primaryIntent,
         day = MaterialTheme.colorScheme.background.luminance() > 0.5f,
     )
-    BoxWithConstraints(
+    Row(
         Modifier.fillMaxWidth().height(rowHeight)
             .clip(GamingTableShape)
             .gamingGlass(glassRole, GamingTableShape)
@@ -3334,102 +3344,100 @@ private fun GamingStationTableRow(
                 horizontal = Spacing.xs,
                 vertical = if (rowHeight <= 52.dp) 0.dp else Spacing.xs,
             ),
+        horizontalArrangement = Arrangement.spacedBy(if (showPricing) Spacing.sm else Spacing.xs),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        val showPricing = maxWidth >= 900.dp
-        Row(
-            Modifier.fillMaxSize(),
-            horizontalArrangement = Arrangement.spacedBy(if (showPricing) Spacing.sm else Spacing.xs),
-            verticalAlignment = Alignment.CenterVertically,
+        Box(
+            Modifier.size(48.dp).clip(Radius.shapeSm)
+                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                .padding(4.dp).alpha(0.68f),
+            contentAlignment = Alignment.Center,
         ) {
-            Box(
-                Modifier.size(48.dp).clip(Radius.shapeSm)
-                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                    .padding(4.dp).alpha(0.68f),
-                contentAlignment = Alignment.Center,
-            ) {
-                GamingStationArtwork(station.type, Modifier.fillMaxSize())
-            }
-            Column(Modifier.weight(if (showPricing) 0.28f else 0.58f)) {
+            GamingStationArtwork(station.type, Modifier.fillMaxSize())
+        }
+        Column(Modifier.weight(if (showPricing) 0.28f else 0.58f)) {
+            Text(
+                station.name,
+                color = glass.primaryContent,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                stationTypeLabel(station.type),
+                color = glass.secondaryContent,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Box(
+            (if (showPricing) Modifier.weight(0.20f) else Modifier.width(compactStatusColumnWidth))
+                .testTag("gaming-station-status-${station.id}"),
+        ) {
+            OperationalStatusBadge(
+                label = presentation.statusLabel,
+                tone = presentation.tone,
+                icon = presentation.statusIcon,
+            )
+        }
+        Box(
+            Modifier.weight(if (showPricing) 0.27f else 0.42f)
+                .testTag("gaming-station-timer-${station.id}"),
+        ) {
+            RemoteSensitiveContent {
                 Text(
-                    station.name,
-                    color = glass.primaryContent,
-                    style = MaterialTheme.typography.labelLarge,
+                    timerValue,
+                    color = accent,
+                    style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    stationTypeLabel(station.type),
-                    color = glass.secondaryContent,
-                    style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Box(
-                (if (showPricing) Modifier.weight(0.20f) else Modifier.width(compactStatusColumnWidth))
-                    .testTag("gaming-station-status-${station.id}"),
-            ) {
-                OperationalStatusBadge(
-                    label = presentation.statusLabel,
-                    tone = presentation.tone,
-                    icon = presentation.statusIcon,
-                )
-            }
-            Box(
-                Modifier.weight(if (showPricing) 0.27f else 0.42f)
-                    .testTag("gaming-station-timer-${station.id}"),
-            ) {
-                RemoteSensitiveContent {
-                    Text(
-                        timerValue,
-                        color = accent,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-            if (showPricing) {
-                Text(
-                    pricingValue,
-                    modifier = Modifier.weight(0.25f),
-                    color = if (pricingValue.contains("unavailable") || pricingValue.contains("not synced")) {
-                        MaterialTheme.colorScheme.operationalWarning
-                    } else {
-                        glass.secondaryContent
-                    },
-                    style = MaterialTheme.typography.labelSmall,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    playerCount?.toString() ?: "—",
-                    modifier = Modifier.width(54.dp),
-                    color = glass.primaryContent,
-                    style = MaterialTheme.typography.labelMedium,
-                    maxLines = 1,
-                )
             }
-            ErpButton(
-                text = primaryLabel,
-                onClick = onPrimaryAction,
-                intent = primaryIntent,
-                enabled = primaryEnabled,
-                contentPadding = PaddingValues(horizontal = Spacing.sm),
-                containerColor = actionFinish?.container,
-                contentColor = actionFinish?.content,
-                modifier = Modifier.width(84.dp).heightIn(min = 48.dp)
-                    .testTag("gaming-station-action-${station.id}"),
+        }
+        if (showPricing) {
+            Text(
+                pricingValue,
+                modifier = Modifier.weight(0.25f),
+                color = if (pricingValue.contains("unavailable") || pricingValue.contains("not synced")) {
+                    MaterialTheme.colorScheme.operationalWarning
+                } else {
+                    glass.secondaryContent
+                },
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
-            Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                Icon(
-                    if (selected) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                    contentDescription = null,
-                    tint = if (selected) glass.iconContent else glass.secondaryContent,
-                )
-            }
+            Text(
+                playerCount?.toString() ?: "—",
+                modifier = Modifier.width(54.dp),
+                color = glass.primaryContent,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+            )
+        }
+        ErpButton(
+            text = primaryLabel,
+            onClick = onPrimaryAction,
+            intent = primaryIntent,
+            enabled = primaryEnabled,
+            contentPadding = PaddingValues(horizontal = Spacing.sm),
+            containerColor = actionFinish?.container,
+            contentColor = actionFinish?.content,
+            modifier = Modifier.width(84.dp).heightIn(min = 48.dp)
+                .testTag("gaming-station-action-${station.id}"),
+        )
+        IconButton(
+            onClick = onToggleDetails,
+            modifier = Modifier.size(48.dp).testTag("gaming-station-details-${station.id}"),
+        ) {
+            Icon(
+                if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "Collapse ${station.name} details" else "Expand ${station.name} details",
+                tint = if (expanded) glass.iconContent else glass.secondaryContent,
+            )
         }
     }
 }
@@ -7008,6 +7016,8 @@ internal fun CancelUnbilledSessionDialog(
 ) {
     var selectedReasonId by rememberSaveable(stationName) { mutableStateOf<String?>(null) }
     var customReason by rememberSaveable(stationName) { mutableStateOf("") }
+    var customOwnerSize by remember(stationName) { mutableStateOf(IntSize.Zero) }
+    var formViewportSize by remember(stationName) { mutableStateOf(IntSize.Zero) }
     val screenHeightDp = LocalConfiguration.current.screenHeightDp
     var selectedShiftId by rememberSaveable(stationName, activeAddons) { mutableStateOf<String?>(null) }
     val compactCustomLayout = useCompactVoidCustomLayout(selectedReasonId) && activeAddons.isEmpty()
@@ -7026,7 +7036,10 @@ internal fun CancelUnbilledSessionDialog(
         title = "$actionLabel · $stationName",
         maxWidth = 600.dp,
         showFooter = !compactCustomLayout,
-        text = {
+        adaptiveChrome = activeAddons.isNotEmpty(),
+        minimumBodyHeightPx = customOwnerSize.height.takeIf { selectedReasonId == VOID_REASON_OTHER_ID } ?: 0,
+        bodyHeightCap = contentMaxHeight,
+        text = { bodyLayout ->
             if (compactCustomLayout) {
                 VoidReasonInput(
                     selectedId = selectedReasonId,
@@ -7058,8 +7071,13 @@ internal fun CancelUnbilledSessionDialog(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = contentMaxHeight)
-                        .verticalScroll(rememberScrollState()),
+                        .then(
+                            if (bodyLayout.scrollsChrome) Modifier else Modifier
+                                .heightIn(max = contentMaxHeight)
+                                .onSizeChanged { formViewportSize = it }
+                                .testTag("gaming-void-form-viewport")
+                                .verticalScroll(rememberScrollState()),
+                        ),
                     verticalArrangement = Arrangement.spacedBy(Spacing.md),
                 ) {
                     Text(
@@ -7101,6 +7119,9 @@ internal fun CancelUnbilledSessionDialog(
                         onPresetSelected = { selectedReasonId = it },
                         onCustomReasonChange = { customReason = it },
                         parentOwnsScrolling = true,
+                        parentViewportSize = if (bodyLayout.scrollsChrome) bodyLayout.viewportSize else formViewportSize,
+                        parentScrollOwnerIsFrame = bodyLayout.scrollsChrome,
+                        onCustomOwnerSizeChanged = { customOwnerSize = it },
                         required = reasonRequired,
                     )
                     if (activeAddons.isNotEmpty()) {
@@ -7467,7 +7488,10 @@ private fun GamingVisibleWindowDialogFrame(
     title: String,
     maxWidth: Dp = 640.dp,
     showFooter: Boolean = true,
-    text: @Composable () -> Unit,
+    adaptiveChrome: Boolean = false,
+    minimumBodyHeightPx: Int = 0,
+    bodyHeightCap: Dp = Dp.Unspecified,
+    text: @Composable (GamingDialogBodyLayout) -> Unit,
     confirmButton: @Composable () -> Unit,
     dismissButton: @Composable () -> Unit,
 ) {
@@ -7538,27 +7562,88 @@ private fun GamingVisibleWindowDialogFrame(
                         contentColor = MaterialTheme.colorScheme.onSurface,
                         shape = Radius.shapeLg,
                     ) {
-                        Column(
-                            Modifier.padding(Spacing.xl),
-                            verticalArrangement = Arrangement.spacedBy(Spacing.lg),
-                        ) {
-                            Text(
-                                title,
-                                style = MaterialTheme.typography.headlineSmall,
-                            )
-                            Box(Modifier.weight(1f, fill = false)) { text() }
-                            if (showFooter) {
-                                FlowRow(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm, Alignment.End),
-                                    verticalArrangement = Arrangement.spacedBy(Spacing.sm),
-                                ) {
-                                    dismissButton()
-                                    confirmButton()
-                                }
-                            }
-                        }
+                        GamingDialogFrameContent(
+                            title = title, showFooter = showFooter, adaptiveChrome = adaptiveChrome,
+                            minimumBodyHeightPx = minimumBodyHeightPx, bodyHeightCap = bodyHeightCap,
+                            text = text, confirmButton = confirmButton, dismissButton = dismissButton,
+                        )
                     }
+                }
+            }
+        }
+    }
+}
+
+internal data class GamingDialogBodyLayout(val viewportSize: IntSize, val scrollsChrome: Boolean)
+
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
+internal fun GamingDialogFrameContent(
+    title: String,
+    showFooter: Boolean = true,
+    adaptiveChrome: Boolean = false,
+    minimumBodyHeightPx: Int = 0,
+    bodyHeightCap: Dp = Dp.Unspecified,
+    text: @Composable (GamingDialogBodyLayout) -> Unit,
+    confirmButton: @Composable () -> Unit,
+    dismissButton: @Composable () -> Unit,
+) {
+    var bodyViewport by remember { mutableStateOf(IntSize.Zero) }
+    var outerViewport by remember { mutableStateOf(IntSize.Zero) }
+    val scroll = rememberScrollState()
+    BoxWithConstraints {
+        val density = LocalDensity.current
+        var titleHeight by remember(constraints.maxWidth, density.density, density.fontScale, title) {
+            mutableStateOf<Int?>(null)
+        }
+        var footerHeight by remember(constraints.maxWidth, density.density, density.fontScale, showFooter) {
+            mutableStateOf<Int?>(null)
+        }
+        val padding = with(density) { Spacing.xl.roundToPx() * 2 }
+        val gaps = with(density) { Spacing.lg.roundToPx() * if (showFooter) 2 else 1 }
+        val cap = if (bodyHeightCap == Dp.Unspecified) Int.MAX_VALUE else with(density) { bodyHeightCap.roundToPx() }
+        val capacity = if (constraints.hasBoundedHeight) gamingPinnedBodyCapacityPx(
+            constraints.maxHeight, titleHeight, if (showFooter) footerHeight else 0, padding, gaps, cap,
+        ) else null
+        // Capacity always describes the pinned layout, including while chrome scrolls.
+        val scrollChrome = adaptiveChrome &&
+            gamingDialogBodyFit(capacity, minimumBodyHeightPx) == GamingDialogBodyFit.ScrollChrome
+        Column(
+            Modifier.padding(Spacing.xl).then(
+                if (scrollChrome) Modifier
+                    .heightIn(max = with(density) { (constraints.maxHeight - padding).coerceAtLeast(0).toDp() })
+                    .onSizeChanged { outerViewport = it }
+                    .testTag("gaming-dialog-scroll-viewport")
+                    .verticalScroll(scroll)
+                else Modifier,
+            ),
+            verticalArrangement = Arrangement.spacedBy(Spacing.lg),
+        ) {
+            Text(title, style = MaterialTheme.typography.headlineSmall,
+                modifier = Modifier.layout { measurable, limits ->
+                    val measured = measurable.measure(limits)
+                    titleHeight = measured.height
+                    layout(measured.width, measured.height) { measured.placeRelative(0, 0) }
+                }.testTag("gaming-dialog-title"))
+            Box(
+                if (scrollChrome) Modifier else Modifier.weight(1f, fill = false)
+                    .onSizeChanged { bodyViewport = it },
+            ) {
+                text(GamingDialogBodyLayout(if (scrollChrome) outerViewport else bodyViewport, scrollChrome))
+            }
+            if (showFooter) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth().layout { measurable, limits ->
+                        val measured = measurable.measure(limits)
+                        footerHeight = measured.height
+                        layout(measured.width, measured.height) { measured.placeRelative(0, 0) }
+                    }
+                        .testTag("gaming-dialog-footer"),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm, Alignment.End),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                ) {
+                    dismissButton()
+                    confirmButton()
                 }
             }
         }

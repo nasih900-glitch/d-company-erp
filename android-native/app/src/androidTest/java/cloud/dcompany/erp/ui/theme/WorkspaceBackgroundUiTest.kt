@@ -97,10 +97,13 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Rule
+import org.junit.rules.RuleChain
 import org.junit.Test
 
 class WorkspaceBackgroundUiTest {
-    @get:Rule val compose = createBackgroundComposeRule()
+    val compose = createBackgroundComposeRule()
+    private val lifecycleTrace = BackgroundLifecycleTraceRule()
+    @get:Rule val rules: RuleChain = RuleChain.outerRule(lifecycleTrace).around(compose)
 
     private val base: Context = ApplicationProvider.getApplicationContext()
     private val root = File(base.cacheDir, "workspace-background-test-${UUID.randomUUID()}").apply { mkdirs() }
@@ -150,6 +153,11 @@ class WorkspaceBackgroundUiTest {
         assertEquals(WorkspaceBackgroundSource.BUNDLED, preset.image.source)
         assertTrue(customBytes.contentEquals(File(requireNotNull(imported.privatePath)).readBytes()))
         assertTrue(store.load().savedCustomAvailable)
+
+        val violet = store.selectPreset("violet_glass")
+        assertEquals("violet_glass", violet.selection.presetId)
+        assertEquals(1_672 to 941, violet.image.width to violet.image.height)
+        assertEquals(violet.image.contentId, WorkspaceBackgroundStore(context).load().workspace.contentId)
 
         val restored = store.useSavedCustom()
         assertEquals(WorkspaceBackgroundSelectionKind.CUSTOM_WORKSPACE, restored.selection.kind)
@@ -825,7 +833,9 @@ class WorkspaceBackgroundUiTest {
                 message = "Background updated on this tablet.",
             ),
         )
-        val density = compose.activity.resources.displayMetrics.density
+        val activity = compose.activity
+        val density = activity.resources.displayMetrics.density
+        lifecycleTrace.bindOwner(activity)
         val registry = RecordingActivityResultRegistry(listOf(null, null, null, null))
         val owner = object : ActivityResultRegistryOwner {
             override val activityResultRegistry: ActivityResultRegistry = registry
@@ -852,6 +862,7 @@ class WorkspaceBackgroundUiTest {
                 }
             }
         }
+        lifecycleTrace.mark(BackgroundPhase.CONTENT_READY)
         listOf(AppearancePreference.Day, AppearancePreference.Night).forEach { preference ->
             compose.runOnIdle { appearance.value = preference }
             compose.onNodeWithTag("workspace-background-settings").assertIsDisplayed()
@@ -865,6 +876,7 @@ class WorkspaceBackgroundUiTest {
                         ),
                     )
             }
+            lifecycleTrace.mark(if (preference == AppearancePreference.Day) BackgroundPhase.DAY_GALLERY_DONE else BackgroundPhase.NIGHT_GALLERY_DONE)
             compose.onNodeWithTag("workspace-background-change-workspace")
                 .performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
             assertFullyInsideCompactRoot("workspace-background-change-workspace")
@@ -886,6 +898,7 @@ class WorkspaceBackgroundUiTest {
             }
             assertAllTextDoesNotOverflow("Use default")
             captureRoot("background-settings-${preference.name.lowercase()}-font1_3")
+            lifecycleTrace.mark(if (preference == AppearancePreference.Day) BackgroundPhase.DAY_NORMAL_DONE else BackgroundPhase.NIGHT_NORMAL_DONE)
 
             compose.runOnIdle {
                 state.value = state.value.copy(
@@ -918,6 +931,7 @@ class WorkspaceBackgroundUiTest {
             assertAllTextDoesNotOverflow("Cancel")
             assertAllTextDoesNotOverflow("Use saved custom")
             assertAllTextDoesNotOverflow("Use default")
+            lifecycleTrace.mark(if (preference == AppearancePreference.Day) BackgroundPhase.DAY_BUSY_DONE else BackgroundPhase.NIGHT_BUSY_DONE)
 
             compose.runOnIdle {
                 state.value = state.value.copy(
@@ -931,6 +945,7 @@ class WorkspaceBackgroundUiTest {
             assertFullyInsideCompactRoot("workspace-background-change-workspace")
             assertAllTextDoesNotOverflow("Cancelling")
             assertTextDoesNotOverflow("Cancelling image change…")
+            lifecycleTrace.mark(if (preference == AppearancePreference.Day) BackgroundPhase.DAY_CANCELLING_DONE else BackgroundPhase.NIGHT_CANCELLING_DONE)
 
             compose.runOnIdle {
                 state.value = state.value.copy(
@@ -945,6 +960,7 @@ class WorkspaceBackgroundUiTest {
             assertTextDoesNotOverflow(
                 "Could not import the selected image. Choose a different JPEG or PNG and try again.",
             )
+            lifecycleTrace.mark(if (preference == AppearancePreference.Day) BackgroundPhase.DAY_ERROR_DONE else BackgroundPhase.NIGHT_ERROR_DONE)
             compose.runOnIdle {
                 state.value = state.value.copy(
                     message = "Background updated on this tablet.",
@@ -964,7 +980,10 @@ class WorkspaceBackgroundUiTest {
                 cancelling = false,
             )
         }
+        lifecycleTrace.mark(BackgroundPhase.LEGACY_CUSTOM_SUBMITTED)
         compose.onNodeWithTag("workspace-background-use-saved-custom").assertDoesNotExist()
+        lifecycleTrace.mark(BackgroundPhase.FINAL_ASSERT_PASSED)
+        lifecycleTrace.mark(BackgroundPhase.BODY_RETURNED)
     }
 
     @Test

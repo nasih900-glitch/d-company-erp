@@ -118,9 +118,61 @@ GRYPE_IMAGE='anchore/grype:v0.118.0@sha256:8a93fc48da96bd6ec5981279d099b69de1154
 # Root tar otherwise preserves archive mode bits instead of applying this mask;
 # every Git-archive extraction below therefore uses --no-same-permissions.
 umask 077
-# Bash redirections cannot request O_NOFOLLOW. A small reviewed bootstrap opens
-# /run and the lock dir relative to verified descriptors, opens the file with
-# O_NOFOLLOW and no truncation, locks it, then re-execs this installer with fd 9.
+# Validate an inherited descriptor without acquiring or creating a lock. The
+# unpublished successor must stop before even the lock helper creates state.
+if [ "${DCOMPANY_PRODUCTION_INSTALL_LOCK_FD:-}" = 9 ]; then
+  if ! [[ "${DCOMPANY_PRODUCTION_INSTALL_LOCK_ID:-}" =~ ^[0-9]+:[0-9]+$ ]]; then
+    echo "Production lock descriptor identity is missing." >&2
+    exit 1
+  fi
+  # 8180 is a regular file with mode 0600; inspect the descriptor, not its path.
+  lock_fd_metadata=$(stat -Lc '%u:%g:%a:%h:%f:%d:%i' "/proc/$$/fd/9")
+  expected_lock_fd_metadata="0:0:600:1:8180:${DCOMPANY_PRODUCTION_INSTALL_LOCK_ID}"
+  if [ "$lock_fd_metadata" != "$expected_lock_fd_metadata" ]; then
+    echo "Production lock descriptor failed ownership/type validation." >&2
+    exit 1
+  fi
+fi
+
+# BEGIN UNREVIEWED SUCCESSOR PREFLIGHT
+source_app_version() {
+  awk -F= '$1 == "APP_VERSION" { count++; version=$2 }
+    END { if (count != 1 || version !~ /^3[.]1[.][0-9]+$/) exit 1; print version }'
+}
+refuse_unreviewed_successor() {
+  local script_template="$SCRIPT_SOURCE_ROOT/.env.production.example"
+  local script_version repo_version
+  if [ ! -f "$script_template" ] || [ -L "$script_template" ] || \
+     [ "$(realpath "$script_template")" != "$script_template" ] || \
+     ! script_version=$(source_app_version < "$script_template"); then
+    echo "Production candidate source version is missing, malformed or linked." >&2
+    return 1
+  fi
+  # Read the executing source first: changing REPO_DIR, .env or CLI flags cannot
+  # disguise this closed candidate as a historical or fresh-install release.
+  if [ "$script_version" = 3.1.65 ]; then
+    echo "Build72 production admission is closed: reviewed deployed-image/source provenance, current fleet evidence and Redis ACTIVE_REDIS_REPAIR.json / CONFIG_RECREATION_HOLD.json recreation admission are unavailable. Neither upgrades nor fresh-install fallback are admitted." >&2
+    return 1
+  fi
+  if ! repo_version=$(git show HEAD:.env.production.example 2>/dev/null | source_app_version); then
+    echo "Production repository source version could not be verified." >&2
+    return 1
+  fi
+  if [ "$repo_version" = 3.1.65 ]; then
+    echo "Build72 production admission is closed: the repository selects the unreviewed successor even though another installer source was invoked." >&2
+    return 1
+  fi
+  if [ "$script_version" != "$repo_version" ] || \
+     ! git show HEAD:infra/scripts/install-on-vm.sh 2>/dev/null | cmp -s - "$SCRIPT_SOURCE_ROOT/infra/scripts/install-on-vm.sh"; then
+    echo "Production installer and repository source identities differ." >&2
+    return 1
+  fi
+}
+refuse_unreviewed_successor || exit 1
+# END UNREVIEWED SUCCESSOR PREFLIGHT
+
+# Bash redirections cannot request O_NOFOLLOW. The reviewed helper creates and
+# locks the descriptor only after the candidate admission preflight passed.
 if [ "${DCOMPANY_PRODUCTION_INSTALL_LOCK_FD:-}" != 9 ]; then
   if ! command -v python3 >/dev/null 2>&1; then
     echo "python3 is required for secure production installer locking." >&2
@@ -128,18 +180,6 @@ if [ "${DCOMPANY_PRODUCTION_INSTALL_LOCK_FD:-}" != 9 ]; then
   fi
   exec python3 "$SCRIPT_SOURCE_ROOT/infra/scripts/production_install_lock.py" \
     "$SCRIPT_SOURCE_ROOT/infra/scripts/install-on-vm.sh" "${INSTALLER_ARGS[@]}"
-fi
-if ! [[ "${DCOMPANY_PRODUCTION_INSTALL_LOCK_ID:-}" =~ ^[0-9]+:[0-9]+$ ]]; then
-  echo "Production lock descriptor identity is missing." >&2
-  exit 1
-fi
-# GNU stat's raw mode is independent of file contents and localized type names;
-# 8180 is the exact Linux mode for a regular file with permissions 0600.
-lock_fd_metadata=$(stat -Lc '%u:%g:%a:%h:%f:%d:%i' "/proc/$$/fd/9")
-expected_lock_fd_metadata="0:0:600:1:8180:${DCOMPANY_PRODUCTION_INSTALL_LOCK_ID}"
-if [ "$lock_fd_metadata" != "$expected_lock_fd_metadata" ]; then
-  echo "Production lock descriptor failed ownership/type validation." >&2
-  exit 1
 fi
 if ! flock -n 9; then
   echo "Another D Company production install or upgrade is already running." >&2

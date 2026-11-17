@@ -407,11 +407,8 @@ def test_composite_gates_every_scanner_on_verified_connection_and_hardened_scan(
             f"vex: ${{{{ runner.temp }}}}/container-security/"
             f"{input_name}-zlib.openvex.json"
         )
-        if input_name in {"backend", "caddy"}:
-            assert vex_input not in scan
-            assert "vex:" not in scan
-        else:
-            assert vex_input in scan
+        assert vex_input not in scan
+        assert "vex:" not in scan
 
     hardened_scan = action.split(
         "    - name: Exercise hardened archive scanner on all candidate images", 1
@@ -424,15 +421,15 @@ def test_composite_gates_every_scanner_on_verified_connection_and_hardened_scan(
     )[1].split("    - name: Retain container security evidence", 1)[0]
     assert zlib_validation.count(hardened_guard) == 1
     assert "services=(backend frontend caddy postgres redis)" in zlib_validation
-    assert action.count("vex: ${{ runner.temp }}/container-security/") == 3
-    assert "caddy-zlib.openvex.json" not in action
-    assert '"$evidence_dir/$service-zlib.openvex.json"' in zlib_validation
+    assert action.count("vex: ${{ runner.temp }}/container-security/") == 0
+    assert "-zlib.openvex.json" not in action
     assert '"$service=$evidence_dir/$service-grype.json"' in zlib_validation
     assert (
         'python3 "$verifier" \\\n'
-        '              --caddy-fixed-sbom "$evidence_dir/caddy.syft.json" \\\n'
-        '              "$image" "${config_ids[0]}" \\\n'
-        '              "caddy=$evidence_dir/caddy-grype.json" >> "$validation"'
+        '            "--$service-fixed-sbom" "$evidence_dir/$service.syft.json" \\\n'
+        '            "$image" "${config_ids[0]}" \\\n'
+        '            "$service=$evidence_dir/$service-grype.json" \\\n'
+        '            "--runtime-proof=$evidence_dir/$service-zlib-runtime.json" >> "$validation"'
         in zlib_validation
     )
     assert "sudo -E" not in action

@@ -17,15 +17,15 @@ class StaffTimeNavigationTest {
         val routes = allowedDestinations(me(), WorkspaceFeatureProfiles.GamingCentre)
         assertTrue(Destination.Staff in routes)
         assertFalse(Destination.Finance in routes); assertFalse(Destination.Reports in routes)
-        assertFalse(Destination.Dashboard in routes); assertFalse(Destination.Settings in routes)
+        assertFalse(Destination.Dashboard in routes); assertTrue(Destination.Settings in routes)
     }
     @Test fun attendanceDoesNotEnableAnExcludedProductFeature() {
         val profile = WorkspaceFeatureProfiles.GamingCentre.copy(enabled = WorkspaceFeatureProfiles.GamingCentre.enabled - WorkspaceFeature.Staff)
         assertFalse(Destination.Staff in allowedDestinations(me(), profile))
     }
-    @Test fun ordinaryDirectoryOrPayrollPermissionDoesNotOpenIdentityAdministration() {
+    @Test fun exactDirectoryPermissionsOpenIdentityWithoutPayrollAuthority() {
         val p = me(listOf("manager"), permissions = listOf("staff.read", "staff.write", "staff.attendance.write"))
-        assertEquals(StaffAccess(false, false, false), staffIdentityAccess(p, StaffAccess(true, true, true)))
+        assertEquals(StaffAccess(true, true, false), staffIdentityAccess(p, StaffAccess(true, true, true)))
         assertFalse(Destination.Staff in allowedDestinations(me(listOf("partner"), permissions = listOf(STAFF_PAYROLL_WRITE)), WorkspaceFeatureProfiles.GamingCentre))
     }
     @Test fun ownerPayrollCanReachTimeWithoutGainingProtectedIdentityUi() {

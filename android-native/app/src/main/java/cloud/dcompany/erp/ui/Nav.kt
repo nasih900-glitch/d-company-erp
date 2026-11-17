@@ -6,12 +6,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.view.View
 import android.view.accessibility.AccessibilityManager
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import cloud.dcompany.erp.ui.theme.operationalDanger
 import cloud.dcompany.erp.ui.theme.operationalDangerContainer
 import cloud.dcompany.erp.ui.theme.operationalGood
@@ -107,6 +101,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.setValue
@@ -117,9 +112,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
@@ -274,6 +271,24 @@ private fun rememberTouchExplorationEnabled(): Boolean {
     return enabled
 }
 
+@Composable
+internal fun TillOperatorBanner(display: TillOperatorDisplay?) {
+    if (display == null) return
+    val stale = display.status in setOf(TillOperatorStatus.STALE, TillOperatorStatus.UNAVAILABLE)
+    Surface(
+        modifier = Modifier.fillMaxWidth().testTag("till-current-operator"),
+        color = if (stale) MaterialTheme.colorScheme.operationalWarningContainer
+            else MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+            Text(display.operatorLabel, style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurface)
+            Text(display.detail, style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
 /**
  * Responsive workspace shell. Landscape tablet workspaces use the shared
  * Executive Dark rail; compact and portrait windows retain the bottom dock.
@@ -287,6 +302,7 @@ internal fun WorkspaceScaffold(
     connectivityProblem: SyncAvailabilityProblem,
     outboxWorkStatus: OutboxWorkStatus,
     syncing: Boolean,
+    tillOperator: TillOperatorDisplay? = null,
     pendingSupportCount: Int = 0,
     remoteSupportRequestWaiting: Boolean = false,
     remoteSupportActive: Boolean = false,
@@ -394,6 +410,7 @@ internal fun WorkspaceScaffold(
                     onSignOut = onSignOut,
                     homeFinish = current == Destination.Dashboard,
                 )
+                TillOperatorBanner(tillOperator)
                 RemoteAssistanceRequestWaitingBanner(
                     visible = remoteSupportRequestWaiting && current != Destination.Help,
                     onReview = onReviewRemoteSupportRequest,
@@ -421,13 +438,25 @@ internal fun WorkspaceScaffold(
             val density = LocalDensity.current
             val framePadding = 8.dp
             val framedWidth = maxWidth - framePadding * 2
-            val railWidth by animateDpAsState(
-                targetValue = if (navigationRailVisible) ExecutiveSidebarWidth else 0.dp,
-                label = "workspace-navigation-rail-width",
-            )
+            // Only the rail animates. Measuring the header and active route
+            // at every intermediate width can stall the rail's own transition.
+            val railWidth = if (navigationRailVisible) ExecutiveSidebarWidth else 0.dp
+            val railAnimationScope = rememberCoroutineScope()
+            val railMotion = remember { ExecutiveRailMotion(navigationRailVisible, railAnimationScope) }
+            fun settleRail(open: Boolean) {
+                navigationRailVisible = open
+                railMotion.settle(open)
+            }
+            val railWidthPx = with(density) { ExecutiveSidebarWidth.toPx() }
             val railVisibilityCommitDistancePx = with(density) { 56.dp.toPx() }
             val railRevealEdgeWidthPx = with(density) { 28.dp.toPx() }
+            val railHideStartWidthPx = with(density) { (framePadding + ExecutiveSidebarWidth).toPx() }
             val railRevealExclusionHeightPx = with(density) { 160.dp.toPx() }
+            val railVisibilityDirection = if (navigationRailVisible) {
+                ExecutiveRailVisibilityGestureDirection.HideToLeft
+            } else {
+                ExecutiveRailVisibilityGestureDirection.ShowToRight
+            }
             // Gesture ownership starts at the window edge, outside the decorative8dp frame.
             Box(
                 Modifier.fillMaxSize()
@@ -451,11 +480,18 @@ internal fun WorkspaceScaffold(
                         },
                     )
                     .executiveRailVisibilitySwipe(
-                        enabled = !navigationRailVisible && !touchExplorationEnabled,
-                        direction = ExecutiveRailVisibilityGestureDirection.ShowToRight,
+                        enabled = !touchExplorationEnabled,
+                        direction = railVisibilityDirection,
                         commitDistancePx = railVisibilityCommitDistancePx,
-                        edgeStartWidthPx = railRevealEdgeWidthPx,
-                        onCommit = { navigationRailVisible = true },
+                        edgeStartWidthPx = if (navigationRailVisible) railHideStartWidthPx else railRevealEdgeWidthPx,
+                        onStart = railMotion::startDrag,
+                        onDrag = { deltaX -> railMotion.dragBy(deltaX / railWidthPx) },
+                        onEnd = { committed ->
+                            val open = if (committed) {
+                                railVisibilityDirection == ExecutiveRailVisibilityGestureDirection.ShowToRight
+                            } else navigationRailVisible
+                            settleRail(open)
+                        },
                     )
                     .testTag("workspace-wide-gesture-host"),
             ) {
@@ -498,11 +534,12 @@ internal fun WorkspaceScaffold(
                                     onSignOut = onSignOut,
                                     homeFinish = true,
                                     leadingContent = if (!navigationRailVisible) {
-                                        { WorkspaceRailRevealButton { navigationRailVisible = true } }
+                                        { WorkspaceRailRevealButton { settleRail(true) } }
                                     } else {
                                         null
                                     },
                                 )
+                                TillOperatorBanner(tillOperator)
                                 RemoteAssistanceRequestWaitingBanner(
                                     visible = remoteSupportRequestWaiting && current != Destination.Help,
                                     onReview = onReviewRemoteSupportRequest,
@@ -549,29 +586,6 @@ internal fun WorkspaceScaffold(
                                     }
                                 }
                             }
-                            AnimatedVisibility(
-                                visible = navigationRailVisible,
-                                modifier = Modifier.align(Alignment.CenterStart),
-                                enter = slideInHorizontally { -it } + fadeIn(),
-                                exit = slideOutHorizontally { -it } + fadeOut(),
-                            ) {
-                                ExecutiveNavigationRail(
-                                    destinations = destinations,
-                                    current = current,
-                                    onSelect = navigateAuthorized,
-                                    onOpenMore = { openCommand("more-wide") },
-                                    modifier = Modifier.width(ExecutiveSidebarWidth).fillMaxHeight(),
-                                    homeFinish = true,
-                                    showMore = true,
-                                    railRouteAuthority = railRouteAuthority,
-                                    onRailDestinationBeforeCommit = onRailDestinationBeforeCommit,
-                                    onRailDestinationAccepted = onRailDestinationAccepted,
-                                    railScrubTrace = railScrubTrace,
-                                    visibilityGesturesEnabled = !touchExplorationEnabled,
-                                    touchExplorationEnabled = touchExplorationEnabled,
-                                    onHide = { navigationRailVisible = false },
-                                )
-                            }
                         }
                       }
                       if (!navigationRailVisible && !touchExplorationEnabled) {
@@ -590,6 +604,33 @@ internal fun WorkspaceScaffold(
                               Box(
                                   Modifier.align(Alignment.Center).width(3.dp).height(18.dp)
                                       .background(finish.gold.copy(alpha = 0.8f), CircleShape),
+                              )
+                          }
+                      }
+                      // Draw the translating rail over the header, content and edge hint.
+                      if (railMotion.mounted) {
+                          val settled = railMotion.settledOpen
+                          // Use the existing legible solid finish while the rail moves.
+                          val railScene = if (settled) LocalWorkspaceGlassScene.current else null
+                          CompositionLocalProvider(LocalWorkspaceGlassScene provides railScene) {
+                              ExecutiveNavigationRail(
+                                  destinations = destinations,
+                                  current = current,
+                                  onSelect = navigateAuthorized,
+                                  onOpenMore = { openCommand("more-wide") },
+                                  modifier = Modifier.align(Alignment.CenterStart)
+                                      .width(ExecutiveSidebarWidth).fillMaxHeight()
+                                      .graphicsLayer { translationX = (railMotion.position - 1f) * size.width },
+                                  homeFinish = true,
+                                  showMore = true,
+                                  railRouteAuthority = railRouteAuthority,
+                                  onRailDestinationBeforeCommit = onRailDestinationBeforeCommit,
+                                  onRailDestinationAccepted = onRailDestinationAccepted,
+                                  railScrubTrace = railScrubTrace,
+                                  // The stationary shell owns visibility. Scrub needs settled target bounds.
+                                  controlsEnabled = settled,
+                                  touchExplorationEnabled = touchExplorationEnabled,
+                                  onHide = { settleRail(false) },
                               )
                           }
                       }
@@ -658,7 +699,7 @@ private fun ExecutiveNavigationRail(
     onRailDestinationBeforeCommit: (Destination) -> Unit = {},
     onRailDestinationAccepted: (Destination) -> Unit = {},
     railScrubTrace: ExecutiveRailScrubTraceSink? = null,
-    visibilityGesturesEnabled: Boolean = true,
+    controlsEnabled: Boolean = true,
     touchExplorationEnabled: Boolean = false,
     onHide: () -> Unit = {},
 ) {
@@ -670,8 +711,8 @@ private fun ExecutiveNavigationRail(
     val directTargets = remember(primary, settingsAvailable) {
         primary + if (settingsAvailable) listOf(Destination.Settings) else emptyList()
     }
-    val targetBounds = remember { mutableMapOf<Destination, Rect>() }
-    val viewportBounds = remember { arrayOfNulls<Rect>(1) }
+    val targets = remember { mutableMapOf<Destination, LayoutCoordinates>() }
+    val viewport = remember { arrayOfNulls<LayoutCoordinates>(1) }
     val railScrollState = rememberScrollState()
     val density = LocalDensity.current
     val scrubPolicy = remember(density) {
@@ -683,14 +724,9 @@ private fun ExecutiveNavigationRail(
     }
     val onRailDestinationBeforeCommitState = rememberUpdatedState(onRailDestinationBeforeCommit)
     val onRailDestinationAcceptedState = rememberUpdatedState(onRailDestinationAccepted)
-    var scrubDescription by remember { mutableStateOf<String?>(null) }
+    var scrubCandidate by remember { mutableStateOf<Destination?>(null) }
     Box(
-        modifier.executiveRailVisibilitySwipe(
-            enabled = visibilityGesturesEnabled,
-            direction = ExecutiveRailVisibilityGestureDirection.HideToLeft,
-            commitDistancePx = with(density) { 56.dp.toPx() },
-            onCommit = onHide,
-        ).testTag("workspace-navigation-rail"),
+        modifier.testTag("workspace-navigation-rail"),
     ) {
         val scene = LocalWorkspaceGlassScene.current
         val day = MaterialTheme.colorScheme.background.luminance() > 0.5f
@@ -756,21 +792,21 @@ private fun ExecutiveNavigationRail(
             )
             Column(
                 Modifier.weight(1f).fillMaxWidth()
-                    .onGloballyPositioned { viewportBounds[0] = it.boundsInRoot() }
+                    .onGloballyPositioned { viewport[0] = it }
                     .testTag("workspace-navigation-rail-scrub-viewport")
                     .then(
                         if (railRouteAuthority == null) {
                             Modifier
                         } else {
                             Modifier.executiveRailLiveScrub(
-                                enabled = executiveRailScrubEnabled(touchExplorationEnabled),
+                                enabled = controlsEnabled && executiveRailScrubEnabled(touchExplorationEnabled),
                                 modelKey = directTargets,
                                 policy = scrubPolicy,
                                 scrollState = railScrollState,
-                                viewportBoundsInRoot = { viewportBounds[0] },
+                                viewportBoundsInRoot = { viewport[0]?.takeIf { it.isAttached }?.boundsInRoot() },
                                 targetBoundsInRoot = {
                                     directTargets.mapNotNull { destination ->
-                                        targetBounds[destination]?.let { bounds ->
+                                        targets[destination]?.takeIf { it.isAttached }?.boundsInRoot()?.let { bounds ->
                                             ExecutiveRailTargetBounds(
                                                 destination = destination,
                                                 left = bounds.left,
@@ -788,13 +824,14 @@ private fun ExecutiveNavigationRail(
                                 onRouteAfterCommit = {
                                     onRailDestinationAcceptedState.value(it)
                                 },
-                                onCandidateDescription = { scrubDescription = it },
+                                onCandidate = { scrubCandidate = it },
                                 trace = railScrubTrace,
                             )
                         },
                     )
                     .semantics {
-                        stateDescription = scrubDescription ?: "Navigation rail"
+                        stateDescription = scrubCandidate?.let { "${executiveRailVisibleLabel(it)} under finger" }
+                            ?: "Navigation rail"
                     }
                     .verticalScroll(railScrollState)
                     .padding(
@@ -813,10 +850,12 @@ private fun ExecutiveNavigationRail(
                         label = executiveRailVisibleLabel(destination),
                         description = destination.description,
                         selected = destination == current,
+                        enabled = controlsEnabled,
                         testTag = "workspace-rail-${destination.name}",
                         onClick = { onSelect(destination) },
                         homeFinish = homeFinish,
-                        onBoundsChanged = { targetBounds[destination] = it },
+                        onPositioned = { targets[destination] = it },
+                        previewed = destination == scrubCandidate,
                     )
                 }
                 if (settingsAvailable) {
@@ -825,10 +864,12 @@ private fun ExecutiveNavigationRail(
                         label = Destination.Settings.label,
                         description = Destination.Settings.description,
                         selected = current == Destination.Settings,
+                        enabled = controlsEnabled,
                         testTag = "workspace-rail-Settings",
                         onClick = { onSelect(Destination.Settings) },
                         homeFinish = homeFinish,
-                        onBoundsChanged = { targetBounds[Destination.Settings] = it },
+                        onPositioned = { targets[Destination.Settings] = it },
+                        previewed = scrubCandidate == Destination.Settings,
                     )
                 }
                 if (showMore && additional.isNotEmpty()) {
@@ -837,6 +878,7 @@ private fun ExecutiveNavigationRail(
                         label = "More",
                         description = if (moreSelected) "${current.label} selected" else "Open more modules",
                         selected = moreSelected,
+                        enabled = controlsEnabled,
                         testTag = "workspace-more-modules",
                         onClick = onOpenMore,
                         homeFinish = homeFinish,
@@ -847,6 +889,7 @@ private fun ExecutiveNavigationRail(
             Box(Modifier.fillMaxWidth().height(48.dp)) {
                 IconButton(
                     onClick = onHide,
+                    enabled = controlsEnabled,
                     modifier = Modifier.align(Alignment.CenterEnd).size(48.dp)
                         .testTag("workspace-rail-hide"),
                 ) {
@@ -869,19 +912,19 @@ private fun ExecutiveRailItem(
     selected: Boolean,
     testTag: String,
     onClick: () -> Unit,
+    enabled: Boolean = true,
     homeFinish: Boolean = false,
-    onBoundsChanged: ((Rect) -> Unit)? = null,
+    onPositioned: ((LayoutCoordinates) -> Unit)? = null,
+    previewed: Boolean = false,
 ) {
     val finish = executiveHomePalette()
     val day = MaterialTheme.colorScheme.background.luminance() > 0.5f
     val selectedGlass = workspaceGlassRoleStyle(WorkspaceGlassRole.SELECTED_OUTLINE, day)
     Box(
         Modifier.fillMaxWidth().height(if (homeFinish) 48.dp else 52.dp)
-            .selectable(selected = selected, role = Role.Tab, onClick = onClick)
+            .selectable(selected = selected, enabled = enabled, role = Role.Tab, onClick = onClick)
             .testTag(testTag)
-            .onGloballyPositioned { coordinates ->
-                onBoundsChanged?.invoke(coordinates.boundsInRoot())
-            }
+            .onGloballyPositioned { coordinates -> onPositioned?.invoke(coordinates) }
             .semantics {
                 contentDescription = "$label. $description"
                 this.selected = selected
@@ -907,6 +950,12 @@ private fun ExecutiveRailItem(
                 )
                 .testTag("$testTag-decoration"),
         ) {
+            if (previewed && !selected) {
+                Box(Modifier.fillMaxSize()
+                    .background(finish.gold.copy(alpha = .14f))
+                    .border(1.dp, finish.gold.copy(alpha = .55f), Radius.shapeSm)
+                    .testTag("$testTag-scrub-preview"))
+            }
             if (selected && homeFinish) {
                 Box(
                     Modifier.align(Alignment.CenterStart).width(48.dp).fillMaxHeight()

@@ -352,6 +352,19 @@ def _is_paid_recovery(request: Request) -> bool:
     }
 
 
+def _is_grn_recovery(request: Request) -> bool:
+    return request.url.path in {
+        "/api/v1/inventory/grn-commands/recovery/unlock",
+        "/api/v1/inventory/grn-commands/recovery/actions/outcome",
+        "/api/v1/inventory/grn-commands/recovery/actions/cancel",
+        "/api/v1/inventory/grn-commands/recovery/lock",
+    }
+
+
+def _is_grn_sensitive(request: Request) -> bool:
+    return _is_grn_recovery(request) or request.url.path == "/api/v1/inventory/grn"
+
+
 class RequestContextMiddleware(BaseHTTPMiddleware):
     """Binds request_id and (later) tenant context to structlog."""
 
@@ -383,7 +396,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
                     client_reported_at = candidate.astimezone(UTC)
             except ValueError:
                 pass
-        if _is_paid_recovery(request):
+        if _is_paid_recovery(request) or _is_grn_sensitive(request):
             # Caller identifiers can contain the original private command/key.
             request_id, action_id = str(uuid.uuid4()), None
             client_reported_at, client_was_offline = None, False
@@ -407,7 +420,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
             response.headers["X-Request-Id"] = request_id
-            if _is_paid_recovery(request):
+            if _is_paid_recovery(request) or _is_grn_sensitive(request):
                 response.headers["Cache-Control"] = "no-store"
             return response
         finally:
@@ -500,7 +513,7 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        if _is_paid_recovery(request):
+        if _is_paid_recovery(request) or _is_grn_recovery(request):
             return await call_next(request)
         if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
             key = request.headers.get("Idempotency-Key") or request.headers.get("X-Idempotency-Key")

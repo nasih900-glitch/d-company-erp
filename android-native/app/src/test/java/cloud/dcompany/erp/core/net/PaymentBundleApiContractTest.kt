@@ -44,9 +44,9 @@ class PaymentBundleApiContractTest {
         assertEquals(1, function.countOccurrences("ApiClient.api.recordPayment("))
         assertTrue(function.contains("val singlePaid = if (splitPlan == null)"))
         assertTrue(
-            "A post-bundle invoice read failure must remain an ambiguous durable retry",
-            function.contains("The split payment may already be committed") &&
-                function.contains("throw IllegalStateException("),
+            "Both accepted payment types must use the pending-safe invoice read",
+            function.indexOf("HeldOrderClaimPolicy.readOrderAfterAcceptedPayment") >
+                function.indexOf("ApiClient.api.recordPayment("),
         )
         assertFalse(
             "A split row must never loop over legs and call the single-payment endpoint",

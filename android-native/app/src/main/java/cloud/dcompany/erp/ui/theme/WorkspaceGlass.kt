@@ -9,15 +9,18 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
+import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.LayoutCoordinates
@@ -30,6 +33,7 @@ import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -70,6 +74,8 @@ internal class WorkspaceGlassSafetyGrid(
         require(columns > 0 && rows > 0 && this.maxima.size == columns * rows)
     }
 
+    val isOpaque: Boolean = this.maxima.all { it ushr 24 == 0xFF }
+
     internal fun colorAt(column: Int, row: Int): Color =
         Color(maxima[row * columns + column])
 }
@@ -87,6 +93,7 @@ internal data class WorkspaceGlassScene(
     val rootBoundsInRoot: Rect,
     val layoutEpoch: Long,
     val applyWorkspaceSceneGrade: Boolean = true,
+    val violetGlass: Boolean = false,
 ) {
     val softenedBitmap: Bitmap? get() = derivative?.bitmap
     val softenedKey: WorkspaceGlassDerivativeKey? get() = derivative?.key
@@ -132,6 +139,7 @@ internal val WorkspaceGlassAdaptiveAlphaCandidates: List<Float> = listOf(
 )
 
 internal const val WorkspaceGlassNeutralNightTintFloor = .58f
+private const val WorkspaceGlassLeastDarkGradeY = .45f
 internal val WorkspaceGlassNeutralNightContourWidth = .5.dp
 
 internal fun workspaceGlassContourWidth(role: WorkspaceGlassRole, day: Boolean) = when {
@@ -274,6 +282,18 @@ internal fun workspaceGlassRoleStyle(role: WorkspaceGlassRole, day: Boolean): Wo
     }
 }
 
+internal fun workspaceVioletGlassFill(
+    role: WorkspaceGlassRole,
+    style: WorkspaceGlassRoleStyle,
+    inWorkspace: Boolean,
+): Color = when {
+    !inWorkspace -> style.fallback
+    // Bound contrast even over a bright nested surface. The actual graded wallpaper is darker.
+    role in WorkspaceGlassNeutralNightRoles -> style.tint.copy(alpha = .62f)
+    role == WorkspaceGlassRole.SELECTED_OUTLINE || role == WorkspaceGlassRole.SELECTED -> style.tint
+    else -> style.fallback
+}
+
 internal fun Modifier.workspaceGlass(
     scene: WorkspaceGlassScene?,
     role: WorkspaceGlassRole,
@@ -296,7 +316,7 @@ internal fun Modifier.workspaceGlass(
         )
     }
     val contourWidth = workspaceGlassContourWidth(role, day)
-    return this.then(WorkspaceGlassElement(scene, role, day, allowWindowProjection))
+    return this.then(WorkspaceGlassElement(scene, role, day, shape, allowWindowProjection))
         .border(contourWidth, contour, shape)
 }
 
@@ -304,12 +324,13 @@ private data class WorkspaceGlassElement(
     val scene: WorkspaceGlassScene?,
     val role: WorkspaceGlassRole,
     val day: Boolean,
+    val shape: Shape,
     val allowWindowProjection: Boolean,
 ) : ModifierNodeElement<WorkspaceGlassNode>() {
-    override fun create(): WorkspaceGlassNode = WorkspaceGlassNode(scene, role, day, allowWindowProjection)
+    override fun create(): WorkspaceGlassNode = WorkspaceGlassNode(scene, role, day, shape, allowWindowProjection)
 
     override fun update(node: WorkspaceGlassNode) {
-        node.update(scene, role, day, allowWindowProjection)
+        node.update(scene, role, day, shape, allowWindowProjection)
     }
 
     override fun InspectorInfo.inspectableProperties() {
@@ -323,6 +344,7 @@ private class WorkspaceGlassNode(
     private var scene: WorkspaceGlassScene?,
     private var role: WorkspaceGlassRole,
     private var day: Boolean,
+    private var shape: Shape,
     private var allowWindowProjection: Boolean,
 ) : Modifier.Node(), GlobalPositionAwareModifierNode, DrawModifierNode {
     private var consumerCoordinates: LayoutCoordinates? = null
@@ -335,12 +357,25 @@ private class WorkspaceGlassNode(
     private var sceneScrimViewportHeight = 0
     private var admissionKey: WorkspaceGlassAdmissionKey? = null
     private var admittedTint: Color? = null
+    private var violetOutline: Outline? = null
+    private var violetSize = Size.Unspecified
+    private var violetDirection: LayoutDirection? = null
+    private var violetDensity = Float.NaN
+    private var violetFontScale = Float.NaN
 
-    fun update(scene: WorkspaceGlassScene?, role: WorkspaceGlassRole, day: Boolean, allowWindowProjection: Boolean) {
+    fun update(
+        scene: WorkspaceGlassScene?,
+        role: WorkspaceGlassRole,
+        day: Boolean,
+        shape: Shape,
+        allowWindowProjection: Boolean,
+    ) {
         val sceneChanged = this.scene != scene
         val roleStyleChanged = this.role != role || this.day != day
-        val changed = sceneChanged || roleStyleChanged ||
+        val shapeChanged = this.shape != shape
+        val changed = sceneChanged || roleStyleChanged || shapeChanged ||
             this.allowWindowProjection != allowWindowProjection
+        if (shapeChanged) violetOutline = null
         if (sceneChanged) {
             // The renderer owns and recycles the Bitmap. Drop only this node's lightweight
             // Compose wrapper so a replacement scene cannot retain the previous derivative.
@@ -357,15 +392,22 @@ private class WorkspaceGlassNode(
         this.scene = scene
         this.role = role
         this.day = day
+        this.shape = shape
         this.allowWindowProjection = allowWindowProjection
         if (changed) {
-            boundsInScene = mapBoundsToScene(consumerCoordinates, scene, allowWindowProjection)
+            boundsInScene = if (!day && scene?.violetGlass == true) null
+                else mapBoundsToScene(consumerCoordinates, scene, allowWindowProjection)
             invalidateDraw()
         }
     }
 
     override fun onGloballyPositioned(coordinates: LayoutCoordinates) {
+        val coordinatesChanged = consumerCoordinates !== coordinates
         consumerCoordinates = coordinates
+        if (!day && scene?.violetGlass == true) {
+            if (coordinatesChanged) invalidateDraw()
+            return
+        }
         val mapped = mapBoundsToScene(coordinates, scene, allowWindowProjection)
         if (mapped != boundsInScene) {
             boundsInScene = mapped
@@ -383,12 +425,37 @@ private class WorkspaceGlassNode(
         sceneScrimBrush = null
         sceneScrimTop = Float.NaN
         sceneScrimViewportHeight = 0
+        violetOutline = null
+    }
+
+    private fun ContentDrawScope.violetMaterial(color: Color) {
+        if (shape === RectangleShape) {
+            drawRect(color)
+            return
+        }
+        if (violetOutline == null || violetSize != size || violetDirection != layoutDirection ||
+            violetDensity != density || violetFontScale != fontScale
+        ) {
+            violetOutline = shape.createOutline(size, layoutDirection, this)
+            violetSize = size
+            violetDirection = layoutDirection
+            violetDensity = density
+            violetFontScale = fontScale
+        }
+        drawOutline(checkNotNull(violetOutline), color)
     }
 
     override fun ContentDrawScope.draw() {
         val style = roleStyle
-        val sceneGradeStrength = workspaceGlassSceneGradeStrength(role, day)
         val currentScene = scene
+        if (!day && currentScene?.violetGlass == true) {
+            val inWorkspace = role != WorkspaceGlassRole.MODAL &&
+                sharesWorkspaceRoot(consumerCoordinates, currentScene.rootCoordinates)
+            violetMaterial(workspaceVioletGlassFill(role, style, inWorkspace))
+            drawContent()
+            return
+        }
+        val sceneGradeStrength = workspaceGlassSceneGradeStrength(role, day)
         // Coordinate attachment can change between placement and draw. Revalidate the live roots
         // so a detached or reparented consumer cannot reuse its last mapped rectangle.
         val local = mapBoundsToScene(consumerCoordinates, currentScene, allowWindowProjection)
@@ -481,6 +548,15 @@ private class WorkspaceGlassNode(
             drawRect(style.tint)
         }
         drawContent()
+    }
+}
+
+private fun sharesWorkspaceRoot(consumer: LayoutCoordinates?, host: LayoutCoordinates): Boolean {
+    if (consumer == null || !consumer.isAttached || !host.isAttached) return false
+    return try {
+        consumer.findRootCoordinates() === host.findRootCoordinates()
+    } catch (_: IllegalStateException) {
+        false
     }
 }
 
@@ -590,14 +666,6 @@ internal fun workspaceGlassAdmittedTintAlpha(
         derivativeKey.width,
         derivativeKey.height,
     ) ?: return null
-    val firstColumn = floor(source.left.toFloat() / derivativeKey.width * grid.columns).toInt()
-        .coerceIn(0, grid.columns - 1)
-    val lastColumn = ceil(source.right.toFloat() / derivativeKey.width * grid.columns).toInt()
-        .minus(1).coerceIn(firstColumn, grid.columns - 1)
-    val firstRow = floor(source.top.toFloat() / derivativeKey.height * grid.rows).toInt()
-        .coerceIn(0, grid.rows - 1)
-    val lastRow = ceil(source.bottom.toFloat() / derivativeKey.height * grid.rows).toInt()
-        .minus(1).coerceIn(firstRow, grid.rows - 1)
     val floor = when (role) {
         in WorkspaceGlassNeutralNightRoles -> WorkspaceGlassNeutralNightTintFloor
         WorkspaceGlassRole.MODAL -> .60f
@@ -607,27 +675,44 @@ internal fun workspaceGlassAdmittedTintAlpha(
     val primaryLuminance = style.primaryContent.luminance()
     val secondaryLuminance = style.secondaryContent.luminance()
     val iconLuminance = style.iconContent.luminance()
+    fun passesContrast(materialLuminance: Float): Boolean =
+        workspaceGlassContrastRatio(primaryLuminance, materialLuminance) >= 4.8 &&
+            workspaceGlassContrastRatio(secondaryLuminance, materialLuminance) >= 4.8 &&
+            workspaceGlassContrastRatio(iconLuminance, materialLuminance) >= 3.2
+
+    fun materialLuminance(scene: Color, y: Float, alpha: Float): Float {
+        val graded = workspaceGlassCompleteSceneColor(scene, role, y, applySceneGrade)
+        return Color(0xFF05060B).copy(alpha = alpha).compositeOver(graded).luminance()
+    }
+
+    if (grid.isOpaque) {
+        val firstAlpha = WorkspaceGlassAdaptiveAlphaCandidates.firstOrNull { it >= floor } ?: return null
+        val brightestMaterial = materialLuminance(Color.White, WorkspaceGlassLeastDarkGradeY, firstAlpha)
+        // Opaque sRGB white under the weakest black scrim bounds every sampled channel.
+        // With lighter foregrounds, darker material can only increase contrast.
+        if (brightestMaterial <= minOf(primaryLuminance, secondaryLuminance, iconLuminance) &&
+            passesContrast(brightestMaterial)
+        ) return firstAlpha
+    }
+
+    val firstColumn = floor(source.left.toFloat() / derivativeKey.width * grid.columns).toInt()
+        .coerceIn(0, grid.columns - 1)
+    val lastColumn = ceil(source.right.toFloat() / derivativeKey.width * grid.columns).toInt()
+        .minus(1).coerceIn(firstColumn, grid.columns - 1)
+    val firstRow = floor(source.top.toFloat() / derivativeKey.height * grid.rows).toInt()
+        .coerceIn(0, grid.rows - 1)
+    val lastRow = ceil(source.bottom.toFloat() / derivativeKey.height * grid.rows).toInt()
+        .minus(1).coerceIn(firstRow, grid.rows - 1)
     return WorkspaceGlassAdaptiveAlphaCandidates.firstOrNull { alpha ->
         alpha >= floor && (firstRow..lastRow).all { row ->
             val rowTop = maxOf(boundsInScene.top / viewportHeight, row.toFloat() / grid.rows).coerceIn(0f, 1f)
             val rowBottom = minOf(boundsInScene.bottom / viewportHeight, (row + 1f) / grid.rows).coerceIn(0f, 1f)
             (firstColumn..lastColumn).all { column ->
                 val scene = grid.colorAt(column, row)
-                fun passesAt(y: Float): Boolean {
-                    val graded = workspaceGlassCompleteSceneColor(
-                        scene = scene,
-                        role = role,
-                        normalizedY = y,
-                        applySceneGrade = applySceneGrade,
-                    )
-                    val material = Color(0xFF05060B).copy(alpha = alpha).compositeOver(graded)
-                    val materialLuminance = material.luminance()
-                    return workspaceGlassContrastRatio(primaryLuminance, materialLuminance) >= 4.8 &&
-                        workspaceGlassContrastRatio(secondaryLuminance, materialLuminance) >= 4.8 &&
-                        workspaceGlassContrastRatio(iconLuminance, materialLuminance) >= 3.2
-                }
+                fun passesAt(y: Float): Boolean = passesContrast(materialLuminance(scene, y, alpha))
                 passesAt(rowTop) && passesAt(rowBottom) &&
-                    (!(rowTop <= .45f && rowBottom >= .45f) || passesAt(.45f))
+                    (!(rowTop <= WorkspaceGlassLeastDarkGradeY && rowBottom >= WorkspaceGlassLeastDarkGradeY) ||
+                        passesAt(WorkspaceGlassLeastDarkGradeY))
             }
         }
     }
@@ -641,10 +726,10 @@ internal fun workspaceGlassCompleteSceneColor(
 ): Color {
     if (!applySceneGrade) return scene
     val y = normalizedY.coerceIn(0f, 1f)
-    val scrimAlpha = if (y <= .45f) {
-        .44f + (.26f - .44f) * (y / .45f)
+    val scrimAlpha = if (y <= WorkspaceGlassLeastDarkGradeY) {
+        .44f + (.26f - .44f) * (y / WorkspaceGlassLeastDarkGradeY)
     } else {
-        .26f + (.60f - .26f) * ((y - .45f) / .55f)
+        .26f + (.60f - .26f) * ((y - WorkspaceGlassLeastDarkGradeY) / (1f - WorkspaceGlassLeastDarkGradeY))
     }
     val strength = workspaceGlassSceneGradeStrength(role, day = false)
     val scrimmed = Color.Black.copy(alpha = scrimAlpha * strength).compositeOver(scene)

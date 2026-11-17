@@ -262,6 +262,6 @@ async def test_role_backfill_adds_only_missing_rows_for_two_companies_and_is_ide
         assert first[key] == row
     added = [row for key, row in first.items() if key not in before[Role.__table__.name]]
     assert len(added) == 2 and {row["company_id"] for row in added} == set(company_ids)
-    assert all(row["code"] == "gaming_cashier" and row["name"] == "Gaming & POS staff" for row in added)
+    assert all(row["code"] == "gaming_cashier" and row["name"] == "Gaming & POS staff (legacy)" for row in added)
     assert await _rows(session, User.__table__, company_ids) == before[User.__table__.name]
     assert await _rows(session, UserRole.__table__, company_ids) == before[UserRole.__table__.name]

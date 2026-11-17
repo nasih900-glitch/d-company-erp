@@ -460,13 +460,46 @@ it('lets a payroll-authorized Owner record their own time under the backend self
   await click('Clock in');
   expect(mocks.submit.mock.calls[0][0].kind).toBe('self-in');
 });
-it('distinguishes a confirmed save from a failed subsequent refresh', async () => {
+it.each(['manual refresh', 'month change'])('clears earlier saved-success feedback when a later %s fails', async mode => {
+  mocks.me = { ...employee, roles: ['owner'], effective_permissions: ['staff.payroll.write'] };
+  mocks.summary.mockImplementation(async (month: string, id?: string) => estimatedSummary(month, id));
+  await render();
+  await click('Clock in');
+  expect(mocks.submit).toHaveBeenCalledTimes(1);
+  expect(host.textContent).toContain('Saved. Records refreshed.');
+  expect(host.textContent).toContain('Base-pay estimate400.00');
+
+  mocks.summary.mockRejectedValue(new Error('Records are unavailable'));
+  if (mode === 'manual refresh') await click('Refresh records');
+  else await fill('input[type="month"]', '2025-02');
+
+  expect([...host.querySelectorAll('[role="alert"]')].some(n => n.textContent?.includes('Records are unavailable'))).toBe(true);
+  expect(host.textContent).not.toContain('Saved. Records refreshed.');
+  expect(host.textContent).not.toContain('Base-pay estimate400.00');
+  expect(host.textContent).not.toContain('Keep this request together');
+  expect(mocks.submit).toHaveBeenCalledTimes(1);
+});
+
+it('distinguishes a confirmed save from a failed subsequent refresh without resubmitting it', async () => {
   await render();
   mocks.cards.mockRejectedValue(new Error('refresh failed'));
   await click('Clock in');
   expect(host.textContent).toContain('Saved. Refresh records to review the confirmed write.');
   expect(host.textContent).not.toContain('Records refreshed.');
   expect(host.textContent).not.toContain('Keep this request together');
+  expect(mocks.submit).toHaveBeenCalledTimes(1);
+  expect(findButton('Refresh records').disabled).toBe(false);
+
+  await click('Refresh records');
+  expect(host.textContent).toContain('refresh failed');
+  expect(host.textContent).not.toContain('Saved.');
+  expect(host.textContent).not.toContain('Keep this request together');
+  expect(mocks.submit).toHaveBeenCalledTimes(1);
+
+  mocks.cards.mockImplementation(async (period, start) => cards(period, start));
+  await click('Refresh records');
+  expect(host.textContent).not.toContain('refresh failed');
+  expect(mocks.submit).toHaveBeenCalledTimes(1);
 });
 it('refuses a nonzero actual break on an open correction before sending a request', async () => {
   mocks.me = {

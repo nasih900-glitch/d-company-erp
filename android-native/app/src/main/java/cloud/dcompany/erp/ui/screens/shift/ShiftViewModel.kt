@@ -178,6 +178,23 @@ class ShiftViewModel : ViewModel() {
 
     private val app = DCompanyApp.instance
     private val operations = app.handoverOperations.caller(app.shiftCache.profile.value, app.cacheIsolation.currentLease())
+    internal val startWorkController = cloud.dcompany.erp.ui.screens.shift.work.StartWorkController(
+        cloud.dcompany.erp.ui.screens.shift.work.AndroidStartWorkRuntime(app.shiftCache.profile.value, app.cacheIsolation.currentLease()),
+        cloud.dcompany.erp.ui.screens.shift.work.AtomicStartWorkStore(java.io.File(app.noBackupFilesDir.canonicalFile,
+            cloud.dcompany.erp.ui.screens.shift.work.START_WORK_DIRECTORY)))
+    internal val startWorkState = startWorkController.state
+    internal fun reviewStartWork() { viewModelScope.launch { startWorkController.refresh() } }
+    internal fun retryStartWork(value: cloud.dcompany.erp.ui.screens.shift.work.PendingStartWork) {
+        viewModelScope.launch { startWorkController.retry(value) }
+    }
+    internal fun ownerStartWork(value: cloud.dcompany.erp.ui.screens.shift.work.PendingStartWork,
+        email: String, password: String, reason: String, cancel: Boolean) {
+        viewModelScope.launch { startWorkController.owner(value, email, password, reason, cancel) }
+    }
+    internal fun onlineStartWorkName(): String? = app.shiftCache.profile.value?.takeIf {
+        app.connectivity.online.value && app.terminalStore.activeValidatedTerminal.value?.onlineStartWorkSupported == true &&
+            cloud.dcompany.erp.core.auth.EffectivePermissions.from(it).has(cloud.dcompany.erp.core.auth.ErpPermission.StaffAttendanceWrite)
+    }?.name
     private val db = app.db
     private val access = MutableStateFlow(ShiftAccess())
     private val confirmedTerminalId = app.terminalStore.activeValidatedTerminal
@@ -380,6 +397,7 @@ class ShiftViewModel : ViewModel() {
                     }
                 }
         }
+        reviewStartWork()
         app.sync.requestSync()
     }
 
@@ -415,6 +433,15 @@ class ShiftViewModel : ViewModel() {
         if (state.value.rejectedShift != null) {
             operationError.value =
                 "Recover the saved rejected shift attempt before creating another shift identity."
+            return
+        }
+        if (!startWorkState.value.ready || startWorkState.value.pending.isNotEmpty() || startWorkState.value.busy) {
+            operationError.value = "Review the saved Start work request before opening another shift."
+            return
+        }
+        if (onlineStartWorkName() != null) {
+            if (!state.value.currentShiftLoaded) return
+            viewModelScope.launch { startWorkController.start(floatMinor) }
             return
         }
         val profile = app.shiftCache.profile.value

@@ -37,6 +37,7 @@ import LoyaltyProgramTab from './tabs/LoyaltyProgramTab';
 import AccessControlTab from './tabs/AccessControlTab';
 import { GAMING_CENTRE_FEATURES } from '@/lib/product-profile';
 import { hasSupportAccess } from '@/lib/admin-access';
+import { hasExactPermission } from '@/lib/effective-permissions';
 
 const DevicesUpdatesTab = lazy(() => import('./tabs/DevicesUpdatesTab'));
 const SystemHealthTab = lazy(() => import('./tabs/SystemHealthTab'));
@@ -69,11 +70,11 @@ export default function SettingsScreen() {
   const canManageDeviceUpdates = me?.release_control_access === true;
   const effectivePermissions = new Set(me?.effective_permissions ?? []);
   const canManageSettings = Boolean(
-    demo || me?.protected_access || effectivePermissions.has('settings.manage'),
+    demo || hasExactPermission(me, 'settings.manage'),
   );
   const canManageMemberships = Boolean(
     GAMING_CENTRE_FEATURES.memberships
-    && (demo || me?.protected_access || effectivePermissions.has('memberships.manage')),
+    && (demo || effectivePermissions.has('memberships.manage')),
   );
   const [tab, setTab] = useState<Tab>('account');
   const tabStripRef = useRef<HTMLDivElement>(null);
@@ -232,7 +233,7 @@ function TabBtn({
   active, onClick, children,
 }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
-    <button type="button" onClick={onClick}
+    <button type="button" onClick={onClick} aria-pressed={active}
       className={`shrink-0 px-4 py-2 text-sm font-medium border-b-2 -mb-px whitespace-nowrap flex items-center gap-1.5
         ${active ? 'border-accent text-accent' : 'border-transparent text-fg-muted hover:text-fg'}`}>
       {children}

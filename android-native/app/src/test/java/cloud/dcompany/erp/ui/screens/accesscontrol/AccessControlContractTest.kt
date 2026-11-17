@@ -46,6 +46,21 @@ class AccessControlContractTest {
         assertEquals("partial", cell.accessLevel)
         assertEquals("partial", cell.defaultAccessLevel)
         assertTrue(accessChangeNotice(cell).contains("exact permission evidence"))
+        assertTrue(cell.configurable)
+    }
+
+    @Test
+    fun `operational owner cells cannot offer ineffective restriction actions`() {
+        val cell = Json.decodeFromString<AccessCell>(
+            """{"role_code":"co_owner","module":"finance","default_allowed":true,"override":false,"allowed":true,"access_level":"full","default_access_level":"full","effective_permissions":["finance.read","finance.write"],"unavailable_permissions":[],"ceiling_limited_permissions":[],"configurable":false}""",
+        )
+        assertEquals("full", cell.accessLevel)
+        assertEquals(false, cell.configurable)
+        assertEquals("Owner (operational override)", roleDisplayName(cell.roleCode))
+        val legacy = Json.decodeFromString<AccessCell>(
+            """{"role_code":"co_owner","module":"finance","default_allowed":true,"allowed":true}""",
+        )
+        assertEquals(false, legacy.configurable)
     }
 
     @Test

@@ -38,7 +38,10 @@ internal class HandoverOperations(
     private val currentProfile: () -> MeResponse?,
     private val currentTerminal: () -> ValidatedTerminalDisplay?,
 ) {
-    val coordinator = HandoverCoordinator(store)
+    val coordinator = HandoverCoordinator(store) {
+        check(startupResult() == PersistedStartupStateResult.Ready)
+        startupFence.requireOperationalReadiness()
+    }
     val dispatchGate: OperationDispatchGate = CoordinatorOperationDispatchGate(coordinator, ::status)
     private val bindMutex = Mutex()
     private val captures = Any()
@@ -58,6 +61,7 @@ internal class HandoverOperations(
         }
         val state = coordinator.state.value
         if (state.storageFault) return HandoverStartupStatus.Unavailable
+        if (state.startWorkOwnerRecoveryActive) return HandoverStartupStatus.Preparing
         if (state.preparationAction != null || state.workspaceExitKey != null) return HandoverStartupStatus.Preparing
         if (state.initialized) return state.intent?.let { HandoverStartupStatus.RecoveryRequired(it) } ?: HandoverStartupStatus.Open
         return startupFence.state.value
@@ -82,6 +86,13 @@ internal class HandoverOperations(
     }
 
     /** Call at caller construction with its actual profile/lease, never with freshly-read B in an old callback. */
+    /** Fresh Owner credentials are purpose-bound to one already retained start action. */
+    suspend fun beginStartWorkReview(reference: cloud.dcompany.erp.ui.screens.shift.work.StartWorkReference,
+        mode: String) = coordinator.beginStartWorkReview(reference, mode)
+
+    suspend fun beginStartWorkOwnerRecovery(reference: cloud.dcompany.erp.ui.screens.shift.work.StartWorkReference,
+        mode: String) = coordinator.beginStartWorkOwnerRecovery(reference, mode)
+
     fun captureOriginal(profile: MeResponse?, lease: CacheScopeLease?): OriginalOperationBinding? = captureCurrent(profile, lease, null)
 
     /** Wait for an in-flight bind, then prove and bind only the original startup scope. */

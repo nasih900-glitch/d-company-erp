@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -18,7 +17,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from tests.integration import test_android_update_policy as policy_fixtures
 from tests.integration.test_cafe_workflow_migration import _disposable_database, _run_alembic
-from tests.integration.test_tender_corrections import case, unlock
+from tests.integration.historical_tender_producer import BUILD54, seed_historical_tender_history
 
 owned_policy_database = policy_fixtures.owned_policy_database
 
@@ -50,37 +49,6 @@ def _snapshot(dsn):
     )
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
-
-
-def _current_finance_seed_shift_columns(dsn, *, enable):
-    """Allow current ORM only during seeding of the owned historical fixture."""
-    with psycopg.connect(dsn) as connection:
-        database, revision = connection.execute(
-            "SELECT current_database(), (SELECT version_num FROM public.alembic_version)"
-        ).fetchone()
-        assert connection.info.host in {"localhost", "127.0.0.1", "::1"}
-        assert re.fullmatch(r"erp_build(?:51_nonempty_tender|55_stable_schema)_[0-9a-f]{16}", database)
-        assert revision == "0091"
-        connection.execute("SET LOCAL lock_timeout = '5s'")
-        if enable:
-            connection.execute(
-                "ALTER TABLE public.shifts ADD COLUMN operator_user_id uuid, "
-                "ADD COLUMN operator_revision integer"
-            )
-        else:
-            assert connection.execute(
-                "SELECT NOT EXISTS (SELECT 1 FROM public.shifts "
-                "WHERE operator_user_id IS NOT NULL OR operator_revision IS NOT NULL)"
-            ).fetchone() == (True,)
-            connection.execute(
-                "ALTER TABLE public.shifts DROP COLUMN operator_user_id, "
-                "DROP COLUMN operator_revision"
-            )
-            assert connection.execute(
-                "SELECT count(*) FROM information_schema.columns "
-                "WHERE table_schema = 'public' AND table_name = 'shifts' "
-                "AND column_name IN ('operator_user_id', 'operator_revision')"
-            ).fetchone() == (0,)
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -158,58 +126,17 @@ async def session(owned_policy_database, stable_owned_schema):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("gaming_session_count", [1, 3])
 async def test_build55_retains_nonempty_finance_audit_and_exact_stopped_restore(
-    client, session, seed_owner, owned_policy_database, tmp_path, gaming_session_count
+    session, owned_policy_database, tmp_path, gaming_session_count
 ):
     engine = owned_policy_database.kw["bind"]
     url = engine.url.set(drivername="postgresql+psycopg").render_as_string(hide_password=False)
     dsn = url.replace("postgresql+psycopg://", "postgresql://", 1)
-    _current_finance_seed_shift_columns(dsn, enable=True)
-    headers, day, order, payment, shift = await case(session, seed_owner)
-    gaming_ids = {
-        "station": uuid4(), "session": uuid4(), "company": order.company_id,
-        "branch": order.branch_id, "shift": shift.id, "owner": shift.opened_by,
-        "start_at": shift.opened_at,
-    }
-    protected = await unlock(client, seed_owner, headers, "payment")
-    preview = await client.post(
-        "/api/v1/finance/tender-corrections/payment/prepare",
-        headers=protected,
-        json={"payment_id": str(payment.id)},
-    )
-    assert preview.status_code == 200, preview.text
-    corrected = await client.post(
-        "/api/v1/finance/tender-corrections/payment/commit",
-        headers={**protected, "Idempotency-Key": "build55-payment:" + str(uuid4())},
-        json={
-            "payment_id": str(payment.id),
-            "source_fingerprint": preview.json()["source_fingerprint"],
-            "reason": "Synthetic owner confirms Cash to UPI; original payment remains",
-        },
-    )
-    assert corrected.status_code == 201, corrected.text
-    protected = await unlock(client, seed_owner, headers, "daily")
-    preview = await client.post(
-        "/api/v1/finance/tender-corrections/daily/prepare",
-        headers=protected,
-        json={"branch_id": str(order.branch_id), "business_date": str(day)},
-    )
-    assert preview.status_code == 200, preview.text
-    actuals = await client.post(
-        "/api/v1/finance/tender-corrections/daily/commit",
-        headers={**protected, "Idempotency-Key": "build55-daily:" + str(uuid4())},
-        json={
-            "branch_id": str(order.branch_id),
-            "business_date": str(day),
-            "source_fingerprint": preview.json()["source_fingerprint"],
-            "actual_cash_minor": 1,
-            "actual_upi_minor": 27000,
-            "reason": "Synthetic unresolved actuals are evidence, not financial posting",
-        },
-    )
-    assert actuals.status_code == 201, actuals.text
-    assert actuals.json()["financial_effect"] is False
-    await session.rollback()
-    _current_finance_seed_shift_columns(dsn, enable=False)
+    # The preservation profile's exact predecessor is Build54/v3.1.46/0091.
+    # Its original API creates real immutable finance rows without fake95/97 DDL.
+    history = seed_historical_tender_history(url, tmp_path / "build54", revision=BUILD54)
+    gaming_ids = {"station": uuid4(), "session": uuid4(), **{
+        key: history[key] for key in ("company", "branch", "shift", "owner", "start_at")
+    }}
     migration = _run_alembic(url, "downgrade", "0091")
     assert migration.returncode == 0, migration.stderr
     # Exercise the new NULL-field projection with real predecessor rows, not

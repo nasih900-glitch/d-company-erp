@@ -55,7 +55,7 @@ class NavigationAccessTest {
         )
         val routes = allowedDestinations(gaming)
         assertEquals(WorkspaceHomeMode.STAFF, workspaceHomeMode(gaming))
-        assertEquals(listOf(Destination.Gaming, Destination.Dashboard, Destination.Staff, Destination.Help), routes)
+        assertEquals(listOf(Destination.Gaming, Destination.Dashboard, Destination.Staff, Destination.Settings, Destination.Help), routes)
         assertEquals(Destination.Gaming, resolveWorkspaceDestination(null, routes))
         assertEquals(Destination.Gaming, resolveWorkspaceDestination(Destination.Reports, routes))
         assertEquals(Destination.Dashboard, resolveWorkspaceDestination(Destination.Dashboard, routes))
@@ -82,7 +82,7 @@ class NavigationAccessTest {
         val executive = staff.copy(
             roles = staff.roles + "owner",
             protectedAccess = true,
-            effectivePermissions = listOf(ErpPermission.AnalyticsRead, ErpPermission.GamingRead),
+            effectivePermissions = listOf(ErpPermission.AnalyticsRead, ErpPermission.FinanceRead, ErpPermission.GamingRead),
         )
         assertEquals(WorkspaceHomeMode.EXECUTIVE, workspaceHomeMode(executive))
         assertEquals(Destination.Dashboard, resolveWorkspaceDestination(null, allowedDestinations(executive)))

@@ -382,6 +382,7 @@ class CheckoutClaimRead(BaseModel):
     order_id: UUID
     claim_token: str
     expires_at: datetime
+    server_time: datetime
     order_total_minor: int
     paid_minor: int
     due_minor: int
@@ -398,6 +399,7 @@ def _checkout_claim_read(grant: CheckoutClaimGrant) -> CheckoutClaimRead:
         order_id=claim.order_id,
         claim_token=grant.token,
         expires_at=claim.expires_at,
+        server_time=datetime.now(UTC),
         order_total_minor=int(claim.order_total_minor),
         paid_minor=grant.paid_minor,
         due_minor=int(claim.due_minor),
@@ -3712,16 +3714,11 @@ async def list_receipt_history(
     )
 
 
-@router.get(
-    "/receipts/{order_id}",
-    response_model=ReceiptHistoryRead,
-    summary="Get one immutable POS receipt with payment and Gaming provenance",
-)
-async def get_receipt_history(
+async def load_finalized_receipt_order(
     order_id: UUID,
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("pos.read")),  # noqa: B008
-) -> ReceiptHistoryRead:
+    tenant: TenantContext,
+) -> Order:
     if tenant.branch_id is None:
         raise BusinessRuleError(
             "This account has no branch assigned. Assign one before viewing receipts."
@@ -3742,6 +3739,20 @@ async def get_receipt_history(
     ).scalar_one_or_none()
     if order is None:
         raise NotFoundError("Receipt not found for this company and branch.")
+    return order
+
+
+@router.get(
+    "/receipts/{order_id}",
+    response_model=ReceiptHistoryRead,
+    summary="Get one immutable POS receipt with payment and Gaming provenance",
+)
+async def get_receipt_history(
+    order_id: UUID,
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("pos.read")),  # noqa: B008
+) -> ReceiptHistoryRead:
+    order = await load_finalized_receipt_order(order_id, session, tenant)
     reads = await _receipt_history_reads(
         session,
         orders=[order],

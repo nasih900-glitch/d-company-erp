@@ -44,6 +44,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -72,6 +73,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.Destination
+import cloud.dcompany.erp.ui.TillOperatorDisplay
+import cloud.dcompany.erp.ui.TillOperatorStatus
 import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.screens.analytics.CachedDataPresentation
 import cloud.dcompany.erp.ui.screens.analytics.cachedDataPresentation
@@ -404,12 +407,58 @@ private val StaffHomeShortcutOrder = listOf(
     ExecutiveHomeShortcut(Destination.Staff, "Attendance"),
 )
 
+internal data class StaffHomeTillPresentation(
+    val operatorLabel: String,
+    val detail: String,
+    val canStartHandover: Boolean,
+    val handoverGuidance: String?,
+)
+
+internal fun staffHomeTillPresentation(
+    display: TillOperatorDisplay?,
+    online: Boolean,
+    canHandover: Boolean,
+): StaffHomeTillPresentation {
+    val read = display?.verified
+    val recordedName = read?.operatorName?.takeIf { it.isNotBlank() }
+    val operator = when {
+        read?.tracking == "untracked" -> "not recorded"
+        recordedName != null -> recordedName
+        else -> "name unavailable"
+    }
+    val label = when (display?.status) {
+        TillOperatorStatus.NO_SHIFT -> "No open shop shift"
+        TillOperatorStatus.VERIFIED -> "Running till: $operator"
+        TillOperatorStatus.STALE -> "Last verified till: $operator"
+        TillOperatorStatus.CHECKING -> if (read == null) "Checking running till…" else "Last verified till: $operator"
+        else -> "Running till status unavailable"
+    }
+    val guidance = when {
+        !canHandover -> "This account cannot hand over the till."
+        !online -> "Connect to the internet before handing over."
+        display?.status == TillOperatorStatus.NO_SHIFT -> "Start work before handing over."
+        display?.status != TillOperatorStatus.VERIFIED || read?.shiftStatus != "open" || read.shiftId.isBlank() ->
+            "Refresh the running till status before handing over."
+        else -> null
+    }
+    return StaffHomeTillPresentation(label, display?.detail ?: "The running operator has not been verified.",
+        canStartHandover = guidance == null, handoverGuidance = guidance)
+}
+
 @Composable
 internal fun StaffHomeScreen(
     employeeName: String,
     locationLabel: String,
     destinations: List<Destination>,
     navigateTo: (Destination) -> Unit,
+    tillOperator: TillOperatorDisplay? = null,
+    online: Boolean = false,
+    onAttendance: (() -> Unit)? = null,
+    onHandover: (() -> Unit)? = null,
+    onRefreshTill: (() -> Unit)? = null,
+    completionMessage: String? = null,
+    onDismissCompletion: (() -> Unit)? = null,
+    dailyWork: (@Composable () -> Unit)? = null,
 ) {
     val shell = LocalExecutiveHomeShellLayout.current
     val topInset = if (shell.enabled) shell.utilityHeight + shell.noticeHeight else 0.dp
@@ -426,7 +475,60 @@ internal fun StaffHomeScreen(
                 locationLabel = locationLabel,
                 compact = !wide,
             )
+            completionMessage?.let { message ->
+                Column(Modifier.fillMaxWidth().homeGlass(WorkspaceGlassRole.PANEL, WorkspacePanelShape)
+                    .testTag("staff-home-handover-complete").padding(12.dp)) {
+                    Text(message, style = MaterialTheme.typography.bodyMedium)
+                    onDismissCompletion?.let { dismiss -> TextButton(dismiss) { Text("Dismiss") } }
+                }
+            }
+            StaffHomeTillCard(
+                presentation = staffHomeTillPresentation(tillOperator, online, onHandover != null),
+                onAttendance = onAttendance,
+                onHandover = onHandover,
+                onRefreshTill = onRefreshTill,
+            )
+            dailyWork?.invoke()
             if (shortcuts.isNotEmpty()) HomeShortcuts(shortcuts, wide, navigateTo)
+        }
+    }
+}
+
+@Composable
+private fun StaffHomeTillCard(
+    presentation: StaffHomeTillPresentation,
+    onAttendance: (() -> Unit)?,
+    onHandover: (() -> Unit)?,
+    onRefreshTill: (() -> Unit)?,
+) {
+    Column(
+        Modifier.fillMaxWidth().homeGlass(WorkspaceGlassRole.PANEL, WorkspacePanelShape)
+            .testTag("staff-home-running-till").padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(presentation.operatorLabel, style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold, modifier = Modifier.testTag("staff-home-till-name"))
+                Text(presentation.detail, style = MaterialTheme.typography.bodySmall)
+            }
+            if (onRefreshTill != null) TextButton(onClick = onRefreshTill,
+                modifier = Modifier.heightIn(min = 48.dp).testTag("staff-home-till-refresh")) {
+                Icon(Icons.Default.Refresh, contentDescription = "Refresh running till")
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (onAttendance != null) Button(onClick = onAttendance,
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("staff-home-clock")) {
+                Text("Attendance history")
+            }
+            if (onHandover != null) Button(onClick = onHandover, enabled = presentation.canStartHandover,
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("staff-home-handover")) {
+                Text("Hand over till")
+            }
+        }
+        if (onHandover != null) presentation.handoverGuidance?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("staff-home-handover-guidance"))
         }
     }
 }

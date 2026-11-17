@@ -2,6 +2,10 @@ package cloud.dcompany.erp.core.db
 
 import cloud.dcompany.erp.core.net.ApiClient
 import cloud.dcompany.erp.core.net.CanonicalReceipt
+import cloud.dcompany.erp.core.net.ReceiptCorrectionMetadata
+import cloud.dcompany.erp.core.net.hasVerifiedNoPayoutCorrection
+import cloud.dcompany.erp.core.net.hasReceiptCorrection
+import cloud.dcompany.erp.ui.screens.receiptStatusLabel
 import cloud.dcompany.erp.ui.screens.matchesCachedReceiptQuery
 import cloud.dcompany.erp.ui.screens.ReceiptHistoryFilters
 import cloud.dcompany.erp.ui.screens.ReceiptSearchSource
@@ -10,6 +14,7 @@ import cloud.dcompany.erp.ui.screens.withRefreshedDetail
 import cloud.dcompany.erp.ui.screens.refunds.toExactRefundOrder
 import kotlinx.serialization.decodeFromString
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertFalse
@@ -94,6 +99,39 @@ class CanonicalReceiptMappingTest {
         assertEquals(refreshed, result.detail)
         assertFalse(result.detailLoading)
         assertEquals(null, result.detailError)
+    }
+
+    @Test fun `old receipt json defaults correction metadata without changing classic status`() {
+        val old = ApiClient.json.decodeFromString<CanonicalReceipt>(receiptJson())
+        assertEquals(0L, old.correctedMinor); assertNull(old.receiptCorrection)
+        assertFalse(old.hasReceiptCorrection); assertEquals("REFUNDED", receiptStatusLabel(old))
+        assertEquals("PAID", receiptStatusLabel(old.copy(status = "paid")))
+        assertEquals("VOIDED", receiptStatusLabel(old.copy(status = "voided")))
+    }
+
+    @Test fun `correction survives canonical json cache without erasing gross payment or permitting refund`() {
+        val old = ApiClient.json.decodeFromString<CanonicalReceipt>(receiptJson())
+        val corrected = old.copy(status = "paid", refundedMinor = 0, pendingRefundMinor = 0, refundableMinor = 0,
+            netCollectedMinor = 0, refunds = emptyList(), correctedMinor = old.paidMinor,
+            receiptCorrection = ReceiptCorrectionMetadata("correction-1", "payment_not_received_full_mistake", old.paidMinor,
+                "2026-11-08T01:00:00Z", 0, "Corrected — payment not received; no payout"))
+        val restored = corrected.toCacheEntity().decodedReceipt()!!
+        assertEquals(corrected, restored); assertTrue(restored.hasVerifiedNoPayoutCorrection)
+        assertEquals(old.paidMinor, restored.paidMinor); assertEquals(old.payments, restored.payments)
+        assertEquals(0L, restored.toExactRefundOrder().refundableMinor)
+        assertEquals("CORRECTED · NO PAYOUT", receiptStatusLabel(restored))
+        for (invalid in listOf(
+            corrected.copy(receiptCorrection = corrected.receiptCorrection!!.copy(kind = "future_adjustment")),
+            corrected.copy(receiptCorrection = corrected.receiptCorrection!!.copy(payoutMinor = null)),
+            corrected.copy(receiptCorrection = corrected.receiptCorrection!!.copy(payoutMinor = 100)),
+            corrected.copy(receiptCorrection = corrected.receiptCorrection!!.copy(amountMinor = 1)),
+            corrected.copy(receiptCorrection = corrected.receiptCorrection!!.copy(accountingAt = "invalid")),
+            corrected.copy(correctedMinor = 1), corrected.copy(refundableMinor = 1),
+        )) {
+            assertFalse(invalid.hasVerifiedNoPayoutCorrection)
+            assertEquals("CORRECTION · REVIEW DETAILS", receiptStatusLabel(invalid))
+            assertEquals(invalid, invalid.toCacheEntity().decodedReceipt())
+        }
     }
 
     private fun receiptJson() =

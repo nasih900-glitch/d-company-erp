@@ -173,27 +173,29 @@ configure_tablet_viewport() {
 reassert_tablet_viewport() {
   local effective_size=''
   local effective_density=''
+  local effective_rotation=''
 
-  adb -s "${device_serial}" shell wm size 2560x1600 >/dev/null
-  adb -s "${device_serial}" shell wm density 320 >/dev/null
-  adb -s "${device_serial}" shell settings put system accelerometer_rotation 0 >/dev/null
-  adb -s "${device_serial}" shell settings put system user_rotation 0 >/dev/null
-  effective_size="$(adb -s "${device_serial}" shell wm size | tr -d '\r' | awk -F': ' '/Physical size:/{value=$2} /Override size:/{value=$2} END{print value}')"
-  effective_density="$(adb -s "${device_serial}" shell wm density | tr -d '\r' | awk -F': ' '/Physical density:/{value=$2} /Override density:/{value=$2} END{print value}')"
-  [[ "${effective_size}" == '2560x1600' ]]
-  [[ "${effective_density}" == '320' ]]
-  [[ "$(adb -s "${device_serial}" shell settings get system user_rotation | tr -d '\r')" == '0' ]]
+  adb -s "${device_serial}" shell wm size 2560x1600 >/dev/null || return 1
+  adb -s "${device_serial}" shell wm density 320 >/dev/null || return 1
+  adb -s "${device_serial}" shell settings put system accelerometer_rotation 0 >/dev/null || return 1
+  adb -s "${device_serial}" shell settings put system user_rotation 0 >/dev/null || return 1
+  effective_size="$(adb -s "${device_serial}" shell wm size | tr -d '\r' | awk -F': ' '/Physical size:/{value=$2} /Override size:/{value=$2} END{print value}')" || return 1
+  [[ "${effective_size}" == '2560x1600' ]] || return 1
+  effective_density="$(adb -s "${device_serial}" shell wm density | tr -d '\r' | awk -F': ' '/Physical density:/{value=$2} /Override density:/{value=$2} END{print value}')" || return 1
+  [[ "${effective_density}" == '320' ]] || return 1
+  effective_rotation="$(adb -s "${device_serial}" shell settings get system user_rotation | tr -d '\r')" || return 1
+  [[ "${effective_rotation}" == '0' ]] || return 1
 }
 
 wait_for_launcher_focus() {
   local attempt
   local focused_window=''
   for attempt in {1..40}; do
-    focused_window="$(adb -s "${device_serial}" shell dumpsys window | tr -d '\r' | sed -n 's/.*mCurrentFocus=//p' | head -n 1)"
+    focused_window="$(adb -s "${device_serial}" shell dumpsys window | tr -d '\r' | sed -n 's/.*mCurrentFocus=//p' | head -n 1)" || return 1
     if [[ "${focused_window}" == *launcher* ]]; then
       return 0
     fi
-    sleep 0.25
+    sleep 0.25 || return 1
   done
   echo "Launcher did not regain focus before the next instrumentation lane: ${focused_window:-unknown}." >&2
   return 1
@@ -203,14 +205,14 @@ reset_emulator_for_instrumentation_lane() {
   # Every lane starts outside the prior app/test process and with the exact
   # tablet geometry. This prevents hundreds of Compose dialogs, IME windows,
   # and frame-stress surfaces from accumulating in one instrumentation run.
-  adb -s "${device_serial}" shell am force-stop "${test_package}" >/dev/null
-  adb -s "${device_serial}" shell am force-stop "${app_package}" >/dev/null
-  adb -s "${device_serial}" shell input keyevent KEYCODE_WAKEUP >/dev/null
-  adb -s "${device_serial}" shell input keyevent KEYCODE_HOME >/dev/null
+  adb -s "${device_serial}" shell am force-stop "${test_package}" >/dev/null || return 1
+  adb -s "${device_serial}" shell am force-stop "${app_package}" >/dev/null || return 1
+  adb -s "${device_serial}" shell input keyevent KEYCODE_WAKEUP >/dev/null || return 1
+  adb -s "${device_serial}" shell input keyevent KEYCODE_HOME >/dev/null || return 1
   adb -s "${device_serial}" shell cmd statusbar collapse >/dev/null 2>&1 || true
-  wait_for_launcher_focus
-  adb -s "${device_serial}" shell am wait-for-broadcast-idle >/dev/null
-  reassert_tablet_viewport
+  wait_for_launcher_focus || return 1
+  adb -s "${device_serial}" shell am wait-for-broadcast-idle >/dev/null || return 1
+  reassert_tablet_viewport || return 1
 }
 
 read_deep_idle_enabled() {
@@ -365,23 +367,30 @@ discover_instrumentation_tests() {
 }
 
 clear_connected_outputs() {
-  [[ "${connected_results_dir}" == "${android_root}/app/build/"* ]]
-  [[ "${connected_report_dir}" == "${android_root}/app/build/"* ]]
-  rm -rf -- "${connected_results_dir}" "${connected_report_dir}"
+  [[ "${connected_results_dir}" == "${android_root}/app/build/outputs/androidTest-results/connected/debug" ]] || return 1
+  [[ "${connected_report_dir}" == "${android_root}/app/build/reports/androidTests/connected/debug" ]] || return 1
+  rm -rf -- "${connected_results_dir}" "${connected_report_dir}" || return 1
 }
 
 preserve_instrumentation_lane() {
   local lane_dir=$1
   local preserved=0
-  mkdir -p "${lane_dir}/results" "${lane_dir}/report"
+  local results_ready=0
+  local report_ready=0
+  if mkdir -p "${lane_dir}/results"; then results_ready=1; else preserved=1; fi
+  if mkdir -p "${lane_dir}/report"; then report_ready=1; else preserved=1; fi
   if [[ -d "${connected_results_dir}" ]]; then
-    cp -R "${connected_results_dir}/." "${lane_dir}/results/"
+    if (( results_ready )); then
+      cp -R "${connected_results_dir}/." "${lane_dir}/results/" || preserved=1
+    fi
   else
     echo "Instrumentation lane produced no connected test results: ${lane_dir##*/}." >&2
     preserved=1
   fi
   if [[ -d "${connected_report_dir}" ]]; then
-    cp -R "${connected_report_dir}/." "${lane_dir}/report/"
+    if (( report_ready )); then
+      cp -R "${connected_report_dir}/." "${lane_dir}/report/" || preserved=1
+    fi
   else
     echo "Instrumentation lane produced no connected HTML report: ${lane_dir##*/}." >&2
     preserved=1
@@ -412,39 +421,80 @@ sample_host_health() {
   } >> "${lane_dir}/host-health.txt" 2>&1 || true
 }
 
+# Read only the preserved XML and existing health sample, after artifact retention.
+# A broken/missing diagnostic helper cannot alter the original lane verdict.
+summarize_failed_instrumentation_lane() {
+  local lane_dir=$1
+  if ! python3 - "${shard_verifier}" "${lane_dir}" <<'PY_FAILURE_DIAGNOSTICS'
+import subprocess
+import sys
+
+try:
+    result = subprocess.run(
+        [sys.executable, sys.argv[1], "failure-diagnostics", "--lane", sys.argv[2]],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10, check=False,
+    )
+    if result.returncode:
+        raise ValueError("diagnostic child failed")
+    sys.stdout.write(result.stdout[:32_000].decode("ascii"))
+except (OSError, ValueError, subprocess.TimeoutExpired):
+    print("Instrumentation failure diagnostics unavailable; original lane failure retained.")
+PY_FAILURE_DIAGNOSTICS
+  then
+    echo 'Instrumentation failure diagnostics unavailable; original lane failure retained.' >&2
+  fi
+  return 0
+}
+
 run_connected_instrumentation_lane() {
   local lane_name=$1
   shift
   local lane_dir="${shard_evidence_root}/${lane_name}"
   local lane_status=0
+  local outputs_cleared=0
+  local gradle_attempted=0
 
-  mkdir -p "${lane_dir}"
-  sample_host_health "${lane_dir}" before
-  clear_connected_outputs
-  if ! verify_instrumentation_provenance; then
+  mkdir -p "${lane_dir}" || return 1
+  sample_host_health "${lane_dir}" before || true
+  if ! clear_connected_outputs; then
     lane_status=1
-  elif ! reset_emulator_for_instrumentation_lane 2>&1 | tee "${lane_dir}/reset.log"; then
-    lane_status=1
-  elif ! run_gradle_ci "${gradle_runner_args[@]}" "$@" :app:connectedDebugAndroidTest \
-    2>&1 | tee "${lane_dir}/gradle.log"; then
-    lane_status=1
+  else
+    outputs_cleared=1
+    if ! verify_instrumentation_provenance; then
+      lane_status=1
+    elif ! reset_emulator_for_instrumentation_lane 2>&1 | tee "${lane_dir}/reset.log"; then
+      lane_status=1
+    else
+      gradle_attempted=1
+      if ! run_gradle_ci "${gradle_runner_args[@]}" "$@" :app:connectedDebugAndroidTest \
+        2>&1 | tee "${lane_dir}/gradle.log"; then
+        lane_status=1
+      fi
+    fi
   fi
   if ! verify_instrumentation_provenance; then
     lane_status=1
   fi
-  sample_host_health "${lane_dir}" after
-  if ! preserve_instrumentation_lane "${lane_dir}"; then
-    lane_status=1
+  sample_host_health "${lane_dir}" after || true
+  # Never relabel prior XML after a failed clear or a lane that never ran.
+  if (( outputs_cleared && gradle_attempted )); then
+    if ! preserve_instrumentation_lane "${lane_dir}"; then
+      lane_status=1
+    fi
+  fi
+  if (( lane_status != 0 )); then
+    summarize_failed_instrumentation_lane "${lane_dir}" || true
   fi
   return "${lane_status}"
 }
+
 
 run_persistence_stage() {
   local stage=$1
   local lane_name=$2
   local lane_dir="${shard_evidence_root}/${lane_name}"
   local stage_status=0
-  mkdir -p "${lane_dir}"
+  mkdir -p "${lane_dir}" || return 1
   sample_host_health "${lane_dir}" before
   verify_instrumentation_provenance || return 1
   reset_emulator_for_instrumentation_lane 2>&1 | tee "${lane_dir}/reset.log" || return 1
@@ -490,6 +540,7 @@ run_persistence_chain() {
 install_alarm_test_apks() {
   local app_apk
   local test_apk
+  local verified_deep_idle
   [[ -f "${app_metadata}" ]] || {
     echo "Missing debug APK metadata after connected tests: ${app_metadata}" >&2
     return 1
@@ -523,7 +574,8 @@ install_alarm_test_apks() {
   if [[ "${deep_idle_initial_state}" == '0' ]]; then
     adb -s "${device_serial}" shell dumpsys deviceidle enable deep || return 1
   fi
-  [[ "$(read_deep_idle_enabled)" == '1' ]] || {
+  verified_deep_idle="$(read_deep_idle_enabled)" || return 1
+  [[ "${verified_deep_idle}" == '1' ]] || {
     echo "Deep idle is not enabled after CI alarm setup." >&2
     return 1
   }
@@ -636,8 +688,8 @@ if [[ "${status}" -eq 0 ]]; then
     echo "Unexpected deep-idle state: ${deep_idle_initial_state:-empty}." | tee "${alarm_setup_report}" >&2
     alarm_setup_status=1
   elif ! {
-    reset_emulator_for_instrumentation_lane
-    install_alarm_test_apks
+    reset_emulator_for_instrumentation_lane &&
+      install_alarm_test_apks
   } 2>&1 | tee "${alarm_setup_report}"; then
     alarm_setup_status=1
   fi

@@ -87,6 +87,7 @@ import androidx.compose.ui.test.swipe
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.DpRect
 import androidx.compose.ui.unit.dp
+import androidx.test.espresso.Espresso
 import androidx.test.platform.app.InstrumentationRegistry
 import cloud.dcompany.erp.core.auth.GamingAccess
 import cloud.dcompany.erp.core.auth.ShiftAccess
@@ -445,7 +446,7 @@ class GamingBoardUiTest {
                         state = state.value, access = GamingAccess(canManageSessions = true),
                         filters = listOf(StationFilter("all", "All")), selectedFilter = "all",
                         visibleStations = listOf(station), selectedStationId = station.id,
-                        showDetail = false, focusStationId = null, focusRequested = false,
+                        showDetail = true, focusStationId = null, focusRequested = false,
                         startTerminalBlockMessage = null,
                         wallClock = remember { mutableLongStateOf(1_790_503_500_000L) }, attentionCount = 0,
                         onSelectFilter = {}, onSelectStation = {}, onBackToBoard = {},
@@ -807,6 +808,90 @@ class GamingBoardUiTest {
         } finally {
             instrumentation.runOnMainSync { android.view.Choreographer.getInstance().removeFrameCallback(callback) }
         }
+    }
+
+    private data class DialGeometryRead(
+        val geometry: GamingDialSnapshot?, val state: String, val ready: Boolean,
+    )
+
+    private fun awaitDialGeometry(
+        phase: String,
+        statusPhase: Boolean = false,
+        selection: () -> Pair<String, String?>,
+    ): GamingDialSnapshot {
+        val rootTag = "gaming-full-workspace"
+        val tags = linkedMapOf("root" to rootTag, "ring" to "gaming-control-ring",
+            "pane" to "gaming-control-pane", "header" to "gaming-photo-header",
+            "board" to "gaming-station-board", "expansion" to "gaming-inline-expansion-ps5-1")
+        var previous: DialGeometryRead? = null
+        var last: DialGeometryRead? = null
+        var stableFrames = 0
+        try {
+            compose.waitUntil(5_000L) {
+                awaitGeometryAndroidFrame()
+                // Re-resolve the live root on every sample; never substitute a cached owner.
+                val owner = compose.onNodeWithTag(rootTag).fetchSemanticsNode().root as ViewRootForTest
+                val current = compose.runOnIdle {
+                    val nodes = owner.semanticsOwner.getAllSemanticsNodes(mergingEnabled = true)
+                    val selected = tags.mapValues { (_, tag) -> nodes.filter {
+                        it.config.getOrNull(SemanticsProperties.TestTag) == tag
+                    } }
+                    val view = owner.view
+                    val frame = android.graphics.Rect().also(view::getWindowVisibleDisplayFrame)
+                    val origin = IntArray(2).also(view::getLocationOnScreen)
+                    val insets = ViewCompat.getRootWindowInsets(view)
+                    val imeVisible = insets?.isVisible(WindowInsetsCompat.Type.ime())
+                    val imeBottom = insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom
+                    val context = "frame=${frame.toShortString()} origin=${origin.toList()} " +
+                        "size=${view.width}x${view.height} attached=${view.isAttachedToWindow} " +
+                        "focus=${view.hasWindowFocus()} layout=${view.isLayoutRequested} " +
+                        "composeLayout=${owner.hasPendingMeasureOrLayout} ime=$imeVisible/$imeBottom"
+                    val liveTags = selected.filterValues { rows -> rows.size == 1 && rows.single().let {
+                        it.layoutInfo.isAttached && it.layoutInfo.isPlaced && it.root === owner
+                    } }
+                    // IME chrome is a lazy item: footer scrolling may uncompose the editor's header.
+                    // A status baseline requires the complete ordinary header after real dismissal.
+                    val live = tags.keys.filter { statusPhase || it != "header" }.all { it in liveTags }
+                    val scroll = liveTags["board"]?.singleOrNull()?.config
+                        ?.getOrNull(SemanticsProperties.VerticalScrollAxisRange)?.let {
+                            Triple(it.value(), it.maxValue(), it.reverseScrolling)
+                        }
+                    val finiteScroll = scroll != null && scroll.first.isFinite() && scroll.second.isFinite()
+                    fun bounds(key: String): DialRect {
+                        val node = liveTags.getValue(key).single()
+                        val position = node.positionInRoot
+                        return DialRect(position.x, position.y,
+                            position.x + node.size.width, position.y + node.size.height)
+                    }
+                    val geometry = if (!live || !finiteScroll) null else GamingDialSnapshot(
+                        ring = bounds("ring"), pane = bounds("pane"),
+                        header = if ("header" in liveTags) bounds("header") else null,
+                        root = bounds("root"), viewport = bounds("board"),
+                        ids = liveTags.mapValues { it.value.single().id },
+                        nativeOwner = owner, nativeView = view, nativeContext = context,
+                        boardScroll = checkNotNull(scroll), selection = selection(),
+                    )
+                    DialGeometryRead(geometry, "$context counts=${selected.mapValues { it.value.size }}",
+                        geometry != null && view.isAttachedToWindow && view.hasWindowFocus() &&
+                            insets != null && !frame.isEmpty && view.width > 0 && view.height > 0 &&
+                            !view.isLayoutRequested && !owner.hasPendingMeasureOrLayout &&
+                            (!statusPhase || imeVisible == false && imeBottom == 0))
+                }
+                last = current
+                stableFrames = if (current.ready && current == previous) stableFrames + 1 else 0
+                previous = current
+                stableFrames >= 2
+            }
+        } catch (failure: Throwable) {
+            runCatching { captureDiagnostic("gaming-status-$phase-readiness-timeout", rootTag,
+                mapOf("native_state" to last?.state.toString(), "ring" to last?.geometry?.ring.toString(),
+                    "pane" to last?.geometry?.pane.toString(), "owners" to last?.geometry?.ids.toString())) }
+                .onFailure(failure::addSuppressed)
+            throw failure
+        }
+        compose.onNodeWithTag("gaming-control-ring").assertIsDisplayed()
+        if (statusPhase) compose.onNodeWithTag("gaming-photo-header").assertIsDisplayed()
+        return checkNotNull(last?.geometry)
     }
 
     @OptIn(ExperimentalTestApi::class)
@@ -1455,6 +1540,8 @@ class GamingBoardUiTest {
         ))
         val visibleStations = mutableStateOf(stations)
         val selectedId = mutableStateOf("ps5-1")
+        val expanded = mutableStateOf(true)
+        val stopRequests = mutableListOf<String>()
         var confirmed: Pair<String, String?>? = null
         var confirmedExtraControllers = -1
         var customerPrepareCalls = 0
@@ -1472,7 +1559,7 @@ class GamingBoardUiTest {
                                 StationFilter("shisha", "Shisha"),
                             ),
                             selectedFilter = "all", visibleStations = visibleStations.value,
-                            selectedStationId = selectedId.value, showDetail = false,
+                            selectedStationId = selectedId.value, showDetail = expanded.value,
                             focusStationId = null, focusRequested = false,
                             startTerminalBlockMessage = null,
                             wallClock = remember {
@@ -1481,15 +1568,15 @@ class GamingBoardUiTest {
                                 )
                             },
                             attentionCount = 0,
-                            onSelectFilter = {}, onSelectStation = { selectedId.value = it },
-                            onBackToBoard = {}, onOpenAttention = {}, onRefresh = {},
+                            onSelectFilter = {}, onSelectStation = { selectedId.value = it; expanded.value = true },
+                            onBackToBoard = { expanded.value = false }, onOpenAttention = {}, onRefresh = {},
                             onStart = {},
                             onConfirmStart = { station, _, _, _, _, packageId, extraControllers, _ ->
                                 confirmed = station.id to packageId
                                 confirmedExtraControllers = extraControllers
                             },
                             onPrepareStart = { customerPrepareCalls++ },
-                            onStop = { _, _ -> }, onSend = {}, onCancelUnbilled = {},
+                            onStop = { _, session -> stopRequests += session.id }, onSend = {}, onCancelUnbilled = {},
                             onExtendTimer = {}, onExtendPackage = { _, _ -> },
                             onTransfer = {}, onPauseResume = {}, onReconcile = {},
                             onRepairBilling = {}, onResolveLegacyStart = {},
@@ -1639,6 +1726,19 @@ class GamingBoardUiTest {
         )
         activeStop.assertIsDisplayed()
         compose.onNodeWithTag("gaming-control-pane").assertIsDisplayed()
+        scrollGamingBoardToKey("station-row-ps5-1")
+        compose.onNodeWithContentDescription("Collapse PS5 Station 1 details")
+            .assertIsDisplayed().performTouchInput { click() }
+        compose.onNodeWithTag("gaming-inline-expansion-ps5-1").assertDoesNotExist()
+        compose.onNodeWithTag("gaming-station-action-ps5-1").assertIsDisplayed().assertTextEquals("End")
+        compose.onNodeWithContentDescription("Expand PS5 Station 1 details")
+            .assertIsDisplayed().performTouchInput { click() }
+        scrollGamingBoardToKey("station-controls-ps5-1")
+        compose.onNodeWithTag("gaming-control-pane").assertIsDisplayed()
+        compose.runOnIdle {
+            assertTrue(stopRequests.isEmpty())
+            assertEquals("session-1", state.value.activeFor("ps5-1")?.id)
+        }
         compose.runOnIdle {
             state.value = state.value.copy(sessions = listOf(GameSession(
                 id = "session-1", stationId = "ps5-1", shiftId = "fixture-shift",
@@ -1762,7 +1862,7 @@ class GamingBoardUiTest {
                     selectedFilter = "all",
                     visibleStations = listOf(station),
                     selectedStationId = station.id,
-                    showDetail = false,
+                    showDetail = true,
                     focusStationId = null,
                     focusRequested = false,
                     startTerminalBlockMessage = null,
@@ -1980,7 +2080,7 @@ class GamingBoardUiTest {
                             selectedFilter = "all",
                             visibleStations = listOf(station),
                             selectedStationId = station.id,
-                            showDetail = false,
+                            showDetail = true,
                             focusStationId = null,
                             focusRequested = false,
                             startTerminalBlockMessage = null,
@@ -2067,7 +2167,7 @@ class GamingBoardUiTest {
                             selectedFilter = "all",
                             visibleStations = visibleStations.value,
                             selectedStationId = selectedStationId.value,
-                            showDetail = false,
+                            showDetail = true,
                             focusStationId = null,
                             focusRequested = false,
                             startTerminalBlockMessage = null,
@@ -2158,7 +2258,7 @@ class GamingBoardUiTest {
                             selectedFilter = "all",
                             visibleStations = listOf(station),
                             selectedStationId = station.id,
-                            showDetail = false,
+                            showDetail = true,
                             focusStationId = null,
                             focusRequested = false,
                             startTerminalBlockMessage = null,
@@ -2239,7 +2339,7 @@ class GamingBoardUiTest {
                             state = state.value, access = GamingAccess(canManageSessions = true),
                             filters = listOf(StationFilter("all", "All")), selectedFilter = "all",
                             visibleStations = listOf(station), selectedStationId = station.id,
-                            showDetail = false, focusStationId = null, focusRequested = false,
+                            showDetail = true, focusStationId = null, focusRequested = false,
                             startTerminalBlockMessage = null,
                             wallClock = remember { mutableLongStateOf(start.plusSeconds(600).toEpochMilli()) },
                             attentionCount = 0, onSelectFilter = {}, onSelectStation = {},
@@ -2462,6 +2562,7 @@ class GamingBoardUiTest {
         val attentionCount = mutableStateOf(0)
         var submittedPackageId: String? = null
         val quickAdds = mutableListOf<Pair<String, Int>>()
+        val dialSelection = { "ps5-1" to state.value.sessions.firstOrNull { it.stationId == "ps5-1" }?.id }
         compose.setContent {
             DCompanyTheme {
                 val productionViewport = if (
@@ -2494,7 +2595,7 @@ class GamingBoardUiTest {
                                 StationFilter("shisha", "Shisha"),
                             ), selectedFilter = "all",
                             visibleStations = visibleStations.value, selectedStationId = "ps5-1",
-                            showDetail = false, focusStationId = null, focusRequested = false,
+                            showDetail = true, focusStationId = null, focusRequested = false,
                             startTerminalBlockMessage = null,
                             wallClock = remember { mutableLongStateOf(1_779_989_200_000L) },
                             attentionCount = attentionCount.value,
@@ -2526,6 +2627,7 @@ class GamingBoardUiTest {
         compose.onNodeWithTag("gaming-attention-bar").assertDoesNotExist()
         val readyHeaderBounds = compose.onNodeWithTag("gaming-photo-header")
             .assertIsDisplayed().getUnclippedBoundsInRoot()
+        val readyHeaderSize = compose.onNodeWithTag("gaming-photo-header").fetchSemanticsNode().size
         compose.onNodeWithTag("gaming-headline-title", useUnmergedTree = true).assertIsDisplayed()
         compose.runOnIdle { state.value = state.value.copy(refreshing = true) }
         compose.onNode(
@@ -2699,6 +2801,7 @@ class GamingBoardUiTest {
             }
             val wideActiveRingBounds = compose.onNodeWithTag("gaming-control-ring")
                 .assertIsDisplayed().getUnclippedBoundsInRoot()
+            val editorAnchor = awaitDialGeometry("active-editor-anchor", selection = dialSelection)
             val activePrimary = compose.onNodeWithTag("gaming-primary-action-host")
                 .performScrollTo()
             captureDetailTargetBeforeAssert(
@@ -2767,6 +2870,8 @@ class GamingBoardUiTest {
                 "gaming-full-workspace", "player_inline", playerInline,
             )
             playerInline.assertIsDisplayed()
+            assertEditorDialUnchanged(editorAnchor,
+                awaitDialGeometry("players-entry", selection = dialSelection))
             val pinnedConfirmNode = compose.onNodeWithTag("gaming-player-inline-confirm")
                 .performScrollTo()
             captureDetailTargetBeforeAssert(
@@ -2788,6 +2893,8 @@ class GamingBoardUiTest {
                 "gaming-full-workspace", "player_close", playerClose,
             )
             playerClose.assertIsDisplayed().performClick()
+            assertEditorDialUnchanged(editorAnchor,
+                awaitDialGeometry("players-close", selection = dialSelection))
             capture(
                 "gaming-full-workspace-1280x800-post-player-close.png",
                 "gaming-full-workspace",
@@ -2805,6 +2912,8 @@ class GamingBoardUiTest {
                 "gaming-full-workspace", "drinks_inline", drinksInline,
             )
             drinksInline.assertIsDisplayed()
+            assertEditorDialUnchanged(editorAnchor,
+                awaitDialGeometry("drinks-entry", selection = dialSelection))
             val drinksSearch = compose.onNodeWithTag("gaming-drinks-search").performScrollTo()
             captureDetailTargetBeforeAssert(
                 "gaming-r7-4-full-tablet-drinks-search-before-assert",
@@ -2819,8 +2928,18 @@ class GamingBoardUiTest {
                 rootTag = "gaming-full-workspace",
                 filenameStem = "gaming-r7-5-full-tablet-drinks-footer-before-assert",
             )
+            assertEditorDialUnchanged(editorAnchor,
+                awaitDialGeometry("drinks-footer-ready", selection = dialSelection))
             compose.onNodeWithTag("gaming-drinks-inline-confirm").performClick()
             compose.runOnIdle { assertEquals(listOf("mango" to 1), quickAdds) }
+            assertEditorDialUnchanged(editorAnchor,
+                awaitDialGeometry("drinks-confirmed", selection = dialSelection))
+            compose.onNodeWithTag("gaming-drinks-inline-close")
+                .performScrollTo().assertIsDisplayed().performClick()
+            Espresso.closeSoftKeyboard()
+            compose.onNodeWithTag("gaming-drinks-inline").assertDoesNotExist()
+            val prePause = awaitDialGeometry("pre-pause", statusPhase = true, selection = dialSelection)
+            assertEditorDialUnchanged(editorAnchor, prePause)
             compose.runOnIdle {
                 state.value = state.value.copy(sessions = state.value.sessions.map {
                     it.copy(status = "paused", pausedAt = "2026-09-27T10:10:00Z", pauseVersion = 1)
@@ -2834,8 +2953,9 @@ class GamingBoardUiTest {
                     hasAnyAncestor(hasTestTag("gaming-control-ring")),
                 useUnmergedTree = true,
             ).assertIsDisplayed()
-            assertEquals("Pausing must preserve the permanent dial bounds", wideActiveRingBounds,
-                compose.onNodeWithTag("gaming-control-ring").assertIsDisplayed().getUnclippedBoundsInRoot())
+            val pausedGeometry = awaitDialGeometry("paused", statusPhase = true, selection = dialSelection)
+            assertStatusDialUnchanged(prePause, pausedGeometry)
+            assertEquals("Pausing must preserve the permanent dial bounds", prePause.ring, pausedGeometry.ring)
             val pausedPrimary = compose.onNodeWithTag("gaming-primary-action-host")
                 .performScrollTo()
             captureDetailTargetBeforeAssert(
@@ -2848,13 +2968,17 @@ class GamingBoardUiTest {
                     it.bottom - it.top >= 48.dp
                 },
             )
+            val preResume = awaitDialGeometry("pre-resume", statusPhase = true, selection = dialSelection)
             compose.runOnIdle {
                 state.value = state.value.copy(sessions = state.value.sessions.map {
                     it.copy(status = "active", pausedAt = null, pauseVersion = 2)
                 })
             }
+            val resumedGeometry = awaitDialGeometry("resumed", statusPhase = true, selection = dialSelection)
+            assertStatusDialUnchanged(preResume, resumedGeometry)
             capture("gaming-full-workspace-1280x800-active.png", "gaming-full-workspace")
 
+            val preAttention = awaitDialGeometry("pre-attention", statusPhase = true, selection = dialSelection)
             compose.runOnIdle {
                 attentionCount.value = 1
                 state.value = state.value.copy(sessions = listOf(GameSession(
@@ -2865,16 +2989,20 @@ class GamingBoardUiTest {
                 )))
             }
             compose.onNodeWithTag("gaming-attention-bar").assertIsDisplayed()
+            val attentionGeometry = awaitDialGeometry("attention", statusPhase = true, selection = dialSelection)
+            assertStatusDialUnchanged(preAttention, attentionGeometry)
             assertEquals(
-                "Payment attention must share the existing header height",
-                readyHeaderBounds,
-                compose.onNodeWithTag("gaming-photo-header").getUnclippedBoundsInRoot(),
+                "Payment attention must preserve the immediately preceding full header rectangle",
+                preAttention.header, attentionGeometry.header,
+            )
+            assertEquals(
+                "Payment attention must share the original ready header size",
+                readyHeaderSize.width.toFloat() to readyHeaderSize.height.toFloat(),
+                checkNotNull(attentionGeometry.header).size,
             )
             assertEquals(
                 "Payment attention must update the status rail without moving the dial",
-                wideActiveRingBounds,
-                compose.onNodeWithTag("gaming-control-ring")
-                    .assertIsDisplayed().getUnclippedBoundsInRoot(),
+                preAttention.ring, attentionGeometry.ring,
             )
             stationBoard.performScrollToNode(hasTestTag("gaming-station-streaming-1"))
             compose.onNodeWithTag("gaming-station-streaming-1").assertIsDisplayed()
@@ -3170,7 +3298,7 @@ class GamingBoardUiTest {
                         access = GamingAccess(canManageSessions = true),
                         filters = listOf(StationFilter("all", "All")), selectedFilter = "all",
                         visibleStations = listOf(station), selectedStationId = station.id,
-                        showDetail = false, focusStationId = null, focusRequested = false,
+                        showDetail = true, focusStationId = null, focusRequested = false,
                         startTerminalBlockMessage = null,
                         wallClock = remember { mutableLongStateOf(1_779_989_200_000L) },
                         attentionCount = 0, onSelectFilter = {}, onSelectStation = {},
@@ -3255,7 +3383,7 @@ class GamingBoardUiTest {
                             access = GamingAccess(canManageSessions = true),
                             filters = listOf(StationFilter("all", "All")),
                             selectedFilter = "all", visibleStations = listOf(station),
-                            selectedStationId = station.id, showDetail = false,
+                            selectedStationId = station.id, showDetail = true,
                             focusStationId = null, focusRequested = false,
                             startTerminalBlockMessage = null,
                             wallClock = remember { mutableLongStateOf(1_779_989_200_000L) },

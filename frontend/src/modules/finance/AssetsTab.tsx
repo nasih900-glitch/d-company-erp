@@ -1,3 +1,5 @@
+import { useAuth } from '@/modules/auth/AuthContext';
+import { hasExactPermission } from '@/lib/effective-permissions';
 import { useCallback, useEffect, useState } from 'react';
 import { AlertCircle, Loader2, Package, Plus, RefreshCw } from 'lucide-react';
 
@@ -30,6 +32,7 @@ function categoryLabel(type: string): string {
 }
 
 export default function AssetsTab() {
+  const canWrite = hasExactPermission(useAuth().me, 'finance.assets.write');
   const requests = useLatestRequest();
   const notifications = useNotifications();
   const [rows, setRows] = useState<AssetDTO[]>([]);
@@ -96,9 +99,9 @@ export default function AssetsTab() {
         </p>
         <div className="flex gap-2">
           <button className="btn btn-ghost" onClick={() => void load()} aria-label="Refresh assets"><RefreshCw size={14}/></button>
-          <button className="btn btn-primary" onClick={() => setAddOpen(true)} disabled={!branches.length}>
+          {canWrite && <button className="btn btn-primary" onClick={() => { if (canWrite) setAddOpen(true); }} disabled={!branches.length}>
             <Plus size={14}/> Add asset
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -172,7 +175,7 @@ export default function AssetsTab() {
         </div>
       )}
 
-      {addOpen && (
+      {canWrite && addOpen && (
         <AssetForm
           branches={branches}
           onClose={() => setAddOpen(false)}
@@ -204,6 +207,7 @@ function AssetForm({
   onClose: () => void;
   onSuccess: () => void;
 }) {
+  const canWrite = hasExactPermission(useAuth().me, 'finance.assets.write');
   const [form, setForm] = useState({
     branch_id: branches[0]?.id ?? '',
     name: '',
@@ -220,6 +224,7 @@ function AssetForm({
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (!canWrite) return;
     const purchaseMinor = rupeesToMinor(form.purchase_rupees);
     if (purchaseMinor === null) {
       setErr('Enter a purchase cost greater than 0 with no more than two decimal places.');

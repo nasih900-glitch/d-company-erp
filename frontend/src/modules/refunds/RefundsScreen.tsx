@@ -1,3 +1,5 @@
+import { capturePaidBillLease, currentPaidEndpoint } from '@/lib/paid-bill-api';
+import { matchesExactRefundTask, parseExactRefundTask } from './exact-refund-task';
 import {
   useCallback,
   useEffect,
@@ -228,8 +230,16 @@ export function taskActionDisabledReason({
 
 export default function RefundsScreen() {
   const [searchParams] = useSearchParams();
-  const exactOrderId = searchParams.get('order_id')?.trim() || null;
-  const { me, demo, terminalId, terminalReady, terminalIssue } = useAuth();
+  const exactTaskRequested = searchParams.has('refund_request_id');
+  const taskReference = searchParams.toString();
+  const exactOrderId = exactTaskRequested ? null : searchParams.get('order_id')?.trim() || null;
+  const auth = useAuth();
+  const { me, demo, terminalId, terminalReady, terminalIssue, terminalOptions } = auth;
+  const branchId = me?.branch_id ?? terminalOptions?.find(t => t.id === terminalId && t.is_active === true)?.branch_id ?? null;
+  const authRef = useRef(auth); authRef.current = auth;
+  const [exactTask, setExactTask] = useState<PosRefundRequestDTO | null>(null);
+  const [exactError, setExactError] = useState<string | null>(null);
+  const exactRequests = useLatestRequest();
   const notifications = useNotifications();
   const online = useOnlineStatus();
   const canAccess = Boolean(demo || canAccessRefunds(me));
@@ -260,7 +270,7 @@ export default function RefundsScreen() {
     verifiedExactTargetRef.current = null;
     exactTargetOpenedRef.current = null;
     setSelectedOrder(null);
-  }, [exactOrderId, me?.company_id, me?.branch_id, terminalId]);
+  }, [exactOrderId, taskReference, me?.company_id, branchId, terminalId]);
 
   const load = useCallback(async ({
     initial = false,
@@ -277,7 +287,7 @@ export default function RefundsScreen() {
       setRefreshing(false);
       return false;
     }
-    if (!terminalReady || !terminalId || !me?.branch_id) {
+    if (!me || !terminalReady || !terminalId || !branchId) {
       setLoadError(terminalIssue || 'Select this device’s shop terminal before opening Refunds.');
       setLoading(false);
       setRefreshing(false);
@@ -307,12 +317,12 @@ export default function RefundsScreen() {
 
       const scope = {
         companyId: me.company_id,
-        branchId: me.branch_id,
+        branchId: branchId,
         terminalId,
       };
       const resolved = resolveOpenShift({
         storedShiftId: readStoredShiftId(scope),
-        branchId: me.branch_id,
+        branchId: branchId,
         terminalId,
         openShifts,
       });
@@ -335,7 +345,7 @@ export default function RefundsScreen() {
         verifiedExactTargetRef.current = {
           orderId: exactOrder.id,
           companyId: me.company_id,
-          branchId: me.branch_id,
+          branchId: branchId,
           terminalId,
           checkoutVersion: exactOrder.checkout_version,
           refundableMinor: Number(exactOrder.refundable_minor ?? 0),
@@ -363,7 +373,7 @@ export default function RefundsScreen() {
       }
       const recoveryScope: RefundRecoveryScope = {
         companyId: me.company_id,
-        branchId: me.branch_id,
+        branchId: branchId,
         terminalId,
       };
       // Merge disk evidence with this page's in-memory copy. If browser
@@ -407,7 +417,26 @@ export default function RefundsScreen() {
         setRefreshing(false);
       }
     }
-  }, [canAccess, exactOrderId, me, online, requests, terminalId, terminalIssue, terminalReady]);
+  }, [canAccess, exactOrderId, me, branchId, online, requests, terminalId, terminalIssue, terminalReady]);
+
+  const loadExactTask = useCallback(async () => {
+    const current = exactRequests.begin();
+    setExactTask(null); setExactError(null);
+    if (!exactTaskRequested) return;
+    if (!me || !canAccess || !terminalReady || !terminalId || !branchId || !online) { setExactError('Restore this task’s original authorized online workspace. No new refund was prepared.'); return; }
+    try {
+      const target = parseExactRefundTask(new URLSearchParams(taskReference));
+      const l = capturePaidBillLease({ endpoint: currentPaidEndpoint(), companyId: me.company_id, userId: me.user_id, branchId, terminalId }, () => {
+        const a = authRef.current;
+        return a.me?.user_id === me.user_id && a.me.company_id === me.company_id && a.terminalId === terminalId && a.terminalReady && canAccessRefunds(a.me);
+      });
+      const value = await refunds.getRequest(target.id);
+      if (!current() || !l.current()) return;
+      if (!matchesExactRefundTask(value, target, branchId, terminalId)) throw new Error('The returned task does not match this exact receipt, amount or workspace. No replacement refund was prepared.');
+      setExactTask(value);
+    } catch (error) { if (current()) setExactError((error as Error).message); }
+  }, [branchId, canAccess, exactRequests, exactTaskRequested, me, online, taskReference, terminalId, terminalReady]);
+  useEffect(() => { void loadExactTask(); }, [loadExactTask]);
 
   useEffect(() => { void load({ initial: true }); }, [load]);
 
@@ -423,8 +452,8 @@ export default function RefundsScreen() {
   }, [canAccess, load, terminalId, terminalReady]);
 
   const currentShift = shiftResolution?.kind === 'ready' ? shiftResolution.shift : null;
-  const recoveryScope = me?.company_id && me.branch_id && terminalId
-    ? { companyId: me.company_id, branchId: me.branch_id, terminalId }
+  const recoveryScope = me?.company_id && branchId && terminalId
+    ? { companyId: me.company_id, branchId: branchId, terminalId }
     : null;
   const canManageCurrentShift = Boolean(
     currentShift
@@ -498,12 +527,12 @@ export default function RefundsScreen() {
     mode: 'cash' | 'original';
     note: string;
   }) {
-    if (!online || !currentShift || !canManageCurrentShift || busyKey || mutationBusyRef.current) return;
+    if (exactTaskRequested || !online || !currentShift || !canManageCurrentShift || busyKey || mutationBusyRef.current) return;
     if (loadError || refreshing) return;
     if (exactOrderId) {
       const scope = {
         companyId: me?.company_id || '',
-        branchId: me?.branch_id || '',
+        branchId: branchId || '',
         terminalId: terminalId || '',
       };
       if (!matchesVerifiedExactRefundTarget(order, verifiedExactTargetRef.current, scope)) {
@@ -532,6 +561,7 @@ export default function RefundsScreen() {
         ...(note.trim() ? { note: note.trim() } : {}),
       }, actionId);
       applyServerTask(result);
+      if (exactTaskRequested && exactTask?.id === result.id) setExactTask(result);
       setSelectedOrder(null);
       notifications.success(
         `Refund ${inr(result.amount_minor)} reserved. No money has moved yet.`,
@@ -670,6 +700,7 @@ export default function RefundsScreen() {
           }
           clearRecoveryCheckpoint(task.id);
           applyServerTask(result);
+      if (exactTaskRequested && exactTask?.id === result.id) setExactTask(result);
           if (result.status === 'cash_handed_over_pending_accounting') {
             result = await refunds.finalizeCash(
               task.id, task.shift_id, task.amount_minor, makeRefundActionId('finalize_cash'),
@@ -725,6 +756,7 @@ export default function RefundsScreen() {
           }
           clearRecoveryCheckpoint(task.id);
           applyServerTask(result);
+      if (exactTaskRequested && exactTask?.id === result.id) setExactTask(result);
           if (result.status === 'provider_completed_pending_accounting') {
             result = await refunds.finalizeProvider(
               task.id, task.shift_id, task.amount_minor, makeRefundActionId('finalize_provider'),
@@ -761,6 +793,7 @@ export default function RefundsScreen() {
       }
       if (!result) throw new Error('The server did not return a refund state.');
       applyServerTask(result);
+      if (exactTaskRequested && exactTask?.id === result.id) setExactTask(result);
       setDialog(null);
       const presentation = refundStatusPresentation(result.status);
       notifications.success(presentation.detail, { title: presentation.title });
@@ -827,13 +860,14 @@ export default function RefundsScreen() {
           type="button"
           className="btn btn-ghost"
           disabled={refreshing || !online || !terminalReady}
-          onClick={() => { void load(); }}
+          onClick={() => { void load(); void loadExactTask(); }}
         >
           <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
           {uncertainTaskIds.size ? 'Recheck server state' : 'Refresh'}
         </button>
       </header>
 
+      {exactTaskRequested && <section className="card" aria-label="Exact existing refund task"><h3 className="font-semibold">Existing bill-change refund task</h3><p className="text-sm">This link opens one existing task. It never prepares another refund, including when lookup fails.</p>{exactError && <p role="alert" className="text-accent-bad">{exactError}</p>}{exactTask && <p className="text-sm">{exactTask.id} · {inr(exactTask.amount_minor)} · {refundStatusPresentation(exactTask.status).label}</p>}</section>}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard label="Refundable orders" value={String(eligibleOrders.length)} icon={<ReceiptText size={18}/>} />
         <StatCard label="Open refund tasks" value={String(data.tasks.length)} icon={<AlertTriangle size={18}/>} tone="warning" />
@@ -884,14 +918,14 @@ export default function RefundsScreen() {
           </div>
           <span className="chip border-accent-gold/40 text-accent-gold">{data.tasks.length} open</span>
         </div>
-        {data.tasks.length === 0 ? (
+        {(exactTaskRequested ? !exactTask || COMPLETED_STATUSES.has(exactTask.status) : data.tasks.length === 0) ? (
           <EmptyState
             title="No refund tasks waiting"
-            detail="Choose a paid order below to create a recoverable refund request."
+            detail={exactTaskRequested ? "The exact task is complete, unavailable or still being verified. No new refund is prepared here." : "Choose a paid order below to create a recoverable refund request."}
           />
         ) : (
           <div className="grid gap-3 p-4 xl:grid-cols-2">
-            {data.tasks.map((task) => {
+            {(exactTaskRequested ? exactTask && !COMPLETED_STATUSES.has(exactTask.status) ? [exactTask] : [] : data.tasks).map((task) => {
               const presentation = refundStatusPresentation(task.status);
               const order = orderById.get(task.order_id);
               const uncertain = uncertainTaskIds.has(task.id);
@@ -966,7 +1000,7 @@ export default function RefundsScreen() {
         )}
       </section>
 
-      <section className="card !p-0 overflow-hidden">
+      {!exactTaskRequested && <section className="card !p-0 overflow-hidden">
         <div className="border-b border-bg-border p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -1028,7 +1062,7 @@ export default function RefundsScreen() {
             })}
           </div>
         )}
-      </section>
+      </section>}
 
       <section className="card !p-0 overflow-hidden">
         <div className="flex items-center gap-2 border-b border-bg-border p-4">
@@ -1038,11 +1072,11 @@ export default function RefundsScreen() {
             <p className="text-xs text-fg-muted">Settled and verified no-payout outcomes from this terminal.</p>
           </div>
         </div>
-        {!data.recent.length ? (
+        {(exactTaskRequested ? !exactTask || !COMPLETED_STATUSES.has(exactTask.status) : !data.recent.length) ? (
           <EmptyState title="No completed refunds yet" detail="Settled or withdrawn tasks will remain visible here for review." />
         ) : (
           <div className="divide-y divide-bg-border/70">
-            {data.recent.map((task) => (
+            {(exactTaskRequested ? exactTask && COMPLETED_STATUSES.has(exactTask.status) ? [exactTask] : [] : data.recent).map((task) => (
               <div key={task.id} className="grid gap-2 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
                 <div>
                   <div className="flex flex-wrap items-center gap-2">

@@ -341,7 +341,12 @@ def test_exact_candidate_images_are_scanned_before_maintenance() -> None:
     ) >= 2
     assert "--network none --read-only --cap-drop ALL" in source
     assert source.count("--security-opt no-new-privileges") >= 2
-    assert "--vex /scan/zlib.openvex.json" in source
+    assert "--vex" not in scanner_source
+    assert '"--$service-fixed-sbom" "$syft_report"' in scanner_source
+    assert '"--runtime-proof=$runtime_proof"' in scanner_source
+    assert '--bind-runtime-proof "$service"' in scanner_source
+    assert '^(backend|frontend|caddy|postgres|redis)$' in scanner_source
+    assert scanner_source.index('--bind-runtime-proof') < scanner_source.index('  grype_arguments=(')
     assert 'python3 "$ZLIB_VEX_VERIFIER"' in source
 
 
@@ -543,6 +548,9 @@ def test_state_helper_rejects_links_and_unsafe_modes_then_creates_private_tree(
 
     state.unlink()
     state.mkdir(mode=0o755)
+    # mkdir honors the caller's umask; this fixture must actually be unsafe.
+    state.chmod(0o755)
+    assert stat.S_IMODE(state.stat().st_mode) == 0o755
     with pytest.raises(helper.ProductionInstallLockError):
         helper.ensure_private_state_directories(**arguments)
 

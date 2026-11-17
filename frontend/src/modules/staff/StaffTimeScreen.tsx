@@ -1,4 +1,5 @@
 import './staff-time.css';
+import SharedAttendancePanel from './SharedAttendancePanel';
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Clock, CalendarDays, RefreshCw, History, ShieldCheck, ArrowRight, Pencil } from 'lucide-react';
 import { useAuth, type Me } from '@/modules/auth/AuthContext';
@@ -55,7 +56,7 @@ export default function StaffTimeScreen() {
   const generation = readSessionGeneration();
   const scope = `${ownerScope(me)}:${terminalId ?? 'none'}:${generation}:${canManage}:${canList}`;
   const branchId = terminalOptions.find(t => t.id === terminalId)?.branch_id ?? me.branch_id;
-  return <StaffTimeWorkspace key={scope} me={me} scope={scope} generation={generation} terminalId={terminalId} branchId={branchId} canManage={canManage} canList={canList} />;
+  return <><SharedAttendancePanel/><StaffTimeWorkspace key={scope} me={me} scope={scope} generation={generation} terminalId={terminalId} branchId={branchId} canManage={canManage} canList={canList} /></>;
 }
 function StaffTimeWorkspace({
   me,
@@ -198,6 +199,7 @@ function StaffTimeWorkspace({
     setLoading(true);
     setCardsBusy(false);
     setError(null);
+    setNotice(null);
     try {
       const [page, view, live, history] = await Promise.all([
         staffTime.cards(period, periodStart, undefined, controller.signal),

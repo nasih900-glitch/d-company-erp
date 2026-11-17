@@ -1691,6 +1691,37 @@ class SyncEngine private constructor(
         }
     }
 
+    /** Exact online-start observation and publication share the normal shift refresh lock. */
+    internal suspend fun hydrateStartedWorkShift(
+        lease: CacheScopeLease, shiftId: String, actorId: String, companyId: String,
+        branchId: String, terminalId: String, installationId: String, platform: String,
+        openingFloatMinor: Long, openedAt: Instant, shifts: ShiftApi, stillCurrent: () -> Boolean,
+    ) = resourceRefreshSerialiser.run("shifts") {
+        check(stillCurrent())
+        check(lease.scope.companyId == companyId && lease.scope.terminalId == terminalId &&
+            (lease.scope.branchId == null || lease.scope.branchId == branchId))
+        val shift = shifts.shifts(onlyOpen = false, limit = 1, installationId = installationId,
+            shiftId = shiftId).single()
+        check(stillCurrent())
+        check(shift.id == shiftId && shift.openedByUserId == actorId &&
+            shift.branchId == branchId && shift.terminalId == terminalId &&
+            shift.openingProtocolRevision == 1 && shift.openingClientPlatform == platform &&
+            shift.openingClientInstallationId == installationId &&
+            shift.openingFloatMinor == openingFloatMinor && Instant.parse(shift.openedAt) == openedAt &&
+            shift.status in setOf("open", "closed"))
+        val observedAt = System.currentTimeMillis()
+        check(commitToCurrentScope(lease) {
+            check(stillCurrent())
+            db.withTransaction {
+                if (shift.status == "open") db.shiftDao().reconcileServerOpen(terminalId,
+                    shift.toServerOpenShiftCache(terminalId, openedAt.toEpochMilli(), observedAt), observedAt)
+                else db.shiftDao().deleteExactServerOpen(terminalId, shift.id)
+            }
+        })
+        check(stillCurrent())
+        shift
+    }
+
     /** Narrow settings refreshes used after direct online writes. */
     suspend fun refreshSettingsCompany() = withResourceSerialisation("settings") {
         pullCompany()
@@ -5312,8 +5343,16 @@ class SyncEngine private constructor(
             }
         }
         while (true) {
+            var terminalReplay = false
             if (paymentNeedsClaim && token == null) {
-                token = acquireMatchingClaimForConfirmedPayment(row)
+                val canonical = ApiClient.api.order(row.targetOrderId)
+                check(canonical.id == row.targetOrderId) {
+                    "The live payment recovery bill belongs to a different order."
+                }
+                terminalReplay = HeldOrderClaimPolicy.canReplayWithoutClaim(row.targetOrderId, canonical)
+                if (!terminalReplay) {
+                    token = acquireMatchingClaimForConfirmedPayment(row)
+                }
             }
             try {
                 val idempotencyKey = HeldOrderClaimPolicy.paymentIdempotencyKey(row.localId)
@@ -5357,25 +5396,8 @@ class SyncEngine private constructor(
                 // Fetch the authoritative post-payment order before resolving
                 // the outbox. If this GET is interrupted, the same idempotent
                 // payment replay remains pending and the receipt is never lost.
-                val finalOrder = try {
+                val finalOrder = HeldOrderClaimPolicy.readOrderAfterAcceptedPayment {
                     ApiClient.api.order(row.targetOrderId)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (failure: Exception) {
-                    if (splitPaid != null) {
-                        // The bundle POST returned an authoritative receipt,
-                        // so even a definitive-looking failure from this
-                        // follow-up read cannot prove that no money committed.
-                        // Convert it to an app reconciliation failure: the
-                        // outer outbox loop keeps the one durable row pending
-                        // and replays the same body and idempotency key.
-                        throw IllegalStateException(
-                            "The split payment may already be committed, but its final invoice " +
-                                "could not be verified yet. Do not collect again.",
-                            failure,
-                        )
-                    }
-                    throw failure
                 }
                 if (splitPaid != null) {
                     requireAuthoritativeSplitSettlement(
@@ -5418,7 +5440,7 @@ class SyncEngine private constructor(
                 return
             } catch (e: ApiException) {
                 if (
-                    !paymentNeedsClaim ||
+                    !paymentNeedsClaim || terminalReplay ||
                     !HeldOrderClaimPolicy.shouldReacquireAfterPaymentError(e.code) ||
                     reacquisitions >= 2
                 ) {
