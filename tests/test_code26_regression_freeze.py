@@ -1319,7 +1319,7 @@ def test_build56_release_identity_normalisation_is_narrow() -> None:
         "android-native/app/src/test/java/cloud/dcompany/erp/core/net/ClientPolicyMonotonicTest.kt",
     ):
         assert _normalise_release_identity(path, current) == current
-    future = 'assertEquals(73, BuildConfig.VERSION_CODE)\n"3.1.66"\nversion_code = 73\n'
+    future = 'assertEquals(74, BuildConfig.VERSION_CODE)\n"3.1.67"\nversion_code = 74\n'
     assert _normalise_release_identity(identity, future) == future
 
 
@@ -1370,7 +1370,7 @@ def test_build55_release_identity_normalisation_is_narrow() -> None:
         "android-native/app/src/test/java/cloud/dcompany/erp/core/net/ClientPolicyMonotonicTest.kt",
     ):
         assert _normalise_release_identity(path, current) == current
-    future = 'assertEquals(73, BuildConfig.VERSION_CODE)\n"3.1.66"\nversion_code = 73\n'
+    future = 'assertEquals(74, BuildConfig.VERSION_CODE)\n"3.1.67"\nversion_code = 74\n'
     assert _normalise_release_identity(identity, future) == future
 
 
@@ -1514,7 +1514,7 @@ def test_build57_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(identity, current) == baseline
     assert _normalise_release_identity("backend/tests/unit/test_money.py", current) == current
-    future = 'assertEquals(73, BuildConfig.VERSION_CODE)\n"3.1.66"\nversion_code = 73\n'
+    future = 'assertEquals(74, BuildConfig.VERSION_CODE)\n"3.1.67"\nversion_code = 74\n'
     assert _normalise_release_identity(identity, future) == future
 
 
@@ -1597,7 +1597,7 @@ def test_build58_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(identity, current) == baseline
     assert _normalise_release_identity("backend/tests/unit/test_money.py", current) == current
-    future = 'assertEquals(73, BuildConfig.VERSION_CODE)\n"3.1.66"\nversion_code = 73\n'
+    future = 'assertEquals(74, BuildConfig.VERSION_CODE)\n"3.1.67"\nversion_code = 74\n'
     assert _normalise_release_identity(identity, future) == future
 
 
@@ -1683,7 +1683,7 @@ def test_build59_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(identity, current) == baseline
     assert _normalise_release_identity("backend/tests/unit/test_money.py", current) == current
-    future = 'assertEquals(73, BuildConfig.VERSION_CODE)\n"3.1.66"\nversion_code = 73\n'
+    future = 'assertEquals(74, BuildConfig.VERSION_CODE)\n"3.1.67"\nversion_code = 74\n'
     assert _normalise_release_identity(identity, future) == future
 
 
@@ -1766,7 +1766,7 @@ def test_build60_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(identity, current) == baseline
     assert _normalise_release_identity("backend/tests/unit/test_money.py", current) == current
-    future = 'assertEquals(73, BuildConfig.VERSION_CODE)\n"3.1.66"\nversion_code = 73\n'
+    future = 'assertEquals(74, BuildConfig.VERSION_CODE)\n"3.1.67"\nversion_code = 74\n'
     assert _normalise_release_identity(identity, future) == future
 
 
@@ -1920,7 +1920,7 @@ def test_build61_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(path, source) == baseline
     assert _normalise_release_identity("unrelated/test.kt", source) == source
-    future = 'assertEquals(73, BuildConfig.VERSION_CODE)\n"3.1.66"\nversion_code = 73\n'
+    future = 'assertEquals(74, BuildConfig.VERSION_CODE)\n"3.1.67"\nversion_code = 74\n'
     assert _normalise_release_identity(path, future) == future
 
 
@@ -1945,7 +1945,7 @@ def test_build62_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(path, source) == baseline
     assert _normalise_release_identity("unrelated/test.kt", source) == source
-    future = 'assertEquals(73, BuildConfig.VERSION_CODE)\n"3.1.66"\nversion_code = 73\n'
+    future = 'assertEquals(74, BuildConfig.VERSION_CODE)\n"3.1.67"\nversion_code = 74\n'
     assert _normalise_release_identity(path, future) == future
 
 
@@ -1991,7 +1991,7 @@ def test_build63_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(path, source) == baseline
     assert _normalise_release_identity("unrelated/test.kt", source) == source
-    future = 'assertEquals(73, BuildConfig.VERSION_CODE)\n"3.1.66"\nversion_code = 73\n'
+    future = 'assertEquals(74, BuildConfig.VERSION_CODE)\n"3.1.67"\nversion_code = 74\n'
     assert _normalise_release_identity(path, future) == future
 
 
@@ -2036,7 +2036,7 @@ def test_build64_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(path, source) == baseline
     assert _normalise_release_identity("unrelated/test.kt", source) == source
-    future = 'assertEquals(73, BuildConfig.VERSION_CODE)\n"3.1.66"\nversion_code = 73\n'
+    future = 'assertEquals(74, BuildConfig.VERSION_CODE)\n"3.1.67"\nversion_code = 74\n'
     assert _normalise_release_identity(path, future) == future
 
 
@@ -2081,7 +2081,7 @@ def test_build65_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(path, source) == baseline
     assert _normalise_release_identity("unrelated/test.kt", source) == source
-    future = 'assertEquals(73, BuildConfig.VERSION_CODE)\n"3.1.66"\nversion_code = 73\n'
+    future = 'assertEquals(74, BuildConfig.VERSION_CODE)\n"3.1.67"\nversion_code = 74\n'
     assert _normalise_release_identity(path, future) == future
 
 
@@ -2107,7 +2107,7 @@ def test_build66_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(path, source) == baseline
     assert _normalise_release_identity("unrelated/test.kt", source) == source
-    future = 'assertEquals(73, BuildConfig.VERSION_CODE)\n"3.1.66"\nversion_code = 73\n'
+    future = 'assertEquals(74, BuildConfig.VERSION_CODE)\n"3.1.67"\nversion_code = 74\n'
     assert _normalise_release_identity(path, future) == future
 
 def test_build67_historical_delta_inventory_is_exact() -> None:
@@ -2132,7 +2132,7 @@ def test_build67_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(path, source) == baseline
     assert _normalise_release_identity("unrelated/test.kt", source) == source
-    future = 'assertEquals(73, BuildConfig.VERSION_CODE)\n"3.1.66"\nversion_code = 73\n'
+    future = 'assertEquals(74, BuildConfig.VERSION_CODE)\n"3.1.67"\nversion_code = 74\n'
     assert _normalise_release_identity(path, future) == future
 
 def test_build68_historical_delta_inventory_is_exact() -> None:
@@ -2157,7 +2157,7 @@ def test_build68_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(path, source) == baseline
     assert _normalise_release_identity("unrelated/test.kt", source) == source
-    future = 'assertEquals(73, BuildConfig.VERSION_CODE)\n"3.1.66"\nversion_code = 73\n'
+    future = 'assertEquals(74, BuildConfig.VERSION_CODE)\n"3.1.67"\nversion_code = 74\n'
     assert _normalise_release_identity(path, future) == future
 
 def test_build69_historical_delta_inventory_is_exact() -> None:
@@ -2182,7 +2182,7 @@ def test_build69_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(path, source) == baseline
     assert _normalise_release_identity("unrelated/test.kt", source) == source
-    future = 'assertEquals(73, BuildConfig.VERSION_CODE)\n"3.1.66"\nversion_code = 73\n'
+    future = 'assertEquals(74, BuildConfig.VERSION_CODE)\n"3.1.67"\nversion_code = 74\n'
     assert _normalise_release_identity(path, future) == future
 
 def test_build70_historical_delta_inventory_is_exact() -> None:
@@ -2207,7 +2207,7 @@ def test_build70_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(path, source) == baseline
     assert _normalise_release_identity("unrelated/test.kt", source) == source
-    future = 'assertEquals(73, BuildConfig.VERSION_CODE)\n"3.1.66"\nversion_code = 73\n'
+    future = 'assertEquals(74, BuildConfig.VERSION_CODE)\n"3.1.67"\nversion_code = 74\n'
     assert _normalise_release_identity(path, future) == future
 
 def test_build71_historical_delta_inventory_is_exact() -> None:
@@ -2232,7 +2232,7 @@ def test_build71_release_identity_normalisation_is_narrow() -> None:
     baseline = 'assertEquals(25, BuildConfig.VERSION_CODE)\n"3.1.14"\nversion_code=25\n'
     assert _normalise_release_identity(path, source) == baseline
     assert _normalise_release_identity("unrelated/test.kt", source) == source
-    future = 'assertEquals(73, BuildConfig.VERSION_CODE)\n"3.1.66"\nversion_code = 73\n'
+    future = 'assertEquals(74, BuildConfig.VERSION_CODE)\n"3.1.67"\nversion_code = 74\n'
     assert _normalise_release_identity(path, future) == future
 
 
