@@ -33,7 +33,7 @@ import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.ui.COMPOSE_PIXEL_COPY_EXCEPTION
 import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceScaffold
-import cloud.dcompany.erp.ui.captureWorkspaceAfterPixelCopyTimeout
+import cloud.dcompany.erp.ui.captureActivityWindowAfterPixelCopyTimeout
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
 import cloud.dcompany.erp.ui.isPixelCopyTimeout
 import cloud.dcompany.erp.ui.screens.customers.CustomerLeaderboardPanel
@@ -133,7 +133,8 @@ class ControlDeckFullShellScreenshotsUiTest {
                     .captureToImage().asAndroidBitmap()
             }
         } catch (error: RuntimeException) {
-            compose.captureWorkspaceAfterPixelCopyTimeout("control-deck-full-shell", error)
+            compose.onNodeWithTag("control-deck-full-shell")
+                .captureActivityWindowAfterPixelCopyTimeout(error).asAndroidBitmap()
         }
         try {
             output.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }

@@ -1,6 +1,7 @@
 package cloud.dcompany.erp.ui.screens
 
 import cloud.dcompany.erp.ui.RailWaitClock
+import cloud.dcompany.erp.ui.captureToImage
 import cloud.dcompany.erp.ui.waitForFiniteEntryAcknowledgement
 import android.app.ActivityOptions
 import android.graphics.Bitmap
@@ -34,7 +35,6 @@ import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.assertWidthIsAtLeast
-import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyDescendant

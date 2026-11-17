@@ -59,7 +59,6 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertTextEquals
-import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
@@ -98,7 +97,7 @@ import cloud.dcompany.erp.core.db.MenuVariantEntity
 import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceScaffold
-import cloud.dcompany.erp.ui.captureWorkspaceAfterPixelCopyTimeout
+import cloud.dcompany.erp.ui.captureToImage
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
 import cloud.dcompany.erp.ui.theme.AppearancePreference
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
@@ -3650,11 +3649,7 @@ class GamingBoardUiTest {
         json.writeText(org.json.JSONObject(bounds.mapValues { it.value.toString() })
             .put("screenshotTiming", "after atomic sample; not same-frame pixel evidence").toString(2))
         publishDiagnostic(json, bounds)
-        val bitmap = try {
-            compose.onNodeWithTag(rootTag).captureToImage().asAndroidBitmap()
-        } catch (error: RuntimeException) {
-            compose.captureWorkspaceAfterPixelCopyTimeout(rootTag, error)
-        }
+        val bitmap = compose.onNodeWithTag(rootTag).captureToImage().asAndroidBitmap()
         try {
             output.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
         } finally {
