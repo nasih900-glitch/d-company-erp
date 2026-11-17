@@ -8,6 +8,7 @@ from __future__ import annotations
 import io
 import json
 import os
+from collections import Counter
 from pathlib import Path
 import shutil
 import subprocess
@@ -572,6 +573,9 @@ def test_current_0102_preserves_populated_0101_decisions_without_reapproval(tmp_
 NEW_LEDGERS["0103"] = NEW_LEDGERS["0102"] | {
     "grn_action_decisions", "grn_completion_proofs", "grn_recovery_sessions",
 }
+REPORT_TABLE = "pos_receipt_mistake_reports"
+NEW_LEDGERS["0104"] = NEW_LEDGERS["0103"]
+NEW_LEDGERS["0105"] = NEW_LEDGERS["0104"] | {REPORT_TABLE}
 
 
 def _assert_0103_catalogue_is_additive(before: dict, after: dict) -> None:
@@ -645,9 +649,57 @@ def _assert_0103_catalogue_is_additive(before: dict, after: dict) -> None:
         assert row[3:6] == expected
 
 
+def _assert_0104_stock_guard_delta(before: dict, after: dict) -> None:
+    old_rows = set(before["schema_catalog_rows"])
+    new_rows = set(after["schema_catalog_rows"])
+    changes = {
+        "dcompany_guard_receipt_stock_restoration",
+        "dcompany_check_receipt_stock_complete",
+    }
+    assert len(old_rows - new_rows) == len(new_rows - old_rows) == len(changes)
+    for previous in old_rows - new_rows:
+        kind, name, *_ = previous.split("|", 3)
+        assert kind == "function"
+        changes.remove(name)
+        marker = "AS $function$"
+        assert previous.count(marker) == 1
+        assert previous.replace(marker, " SET \"TimeZone\" TO 'UTC'\n" + marker) in new_rows
+    assert set(after["tables"]) == set(before["tables"])
+    assert after["trigger_catalog_rows"] == before["trigger_catalog_rows"]
+
+
+def _assert_0105_report_delta(before: dict, after: dict) -> None:
+    assert set(after["tables"]) == set(before["tables"]) | {REPORT_TABLE}
+    old_rows = set(before["schema_catalog_rows"])
+    new_rows = set(after["schema_catalog_rows"])
+    assert old_rows <= new_rows
+    added = [row.split("|", 4) for row in new_rows - old_rows]
+    assert Counter((row[0], row[1]) for row in added) == {
+        ("column", REPORT_TABLE): 13,
+        ("constraint", REPORT_TABLE): 10,
+        ("index", REPORT_TABLE): 4,
+        ("trigger", REPORT_TABLE): 2,
+        ("function", "dcompany_keep_pos_receipt_mistake_reports"): 1,
+    }
+    assert {row[3] for row in added if row[0] == "column"} == {
+        "id", "company_id", "branch_id", "order_id", "original_shift_id", "original_terminal_id",
+        "reporter_user_id", "idempotency_key", "request_hash", "invoice_no", "reason", "note", "created_at",
+    }
+    old_bindings = set(before["trigger_catalog_rows"])
+    new_bindings = set(after["trigger_catalog_rows"])
+    assert old_bindings <= new_bindings
+    triggers = [row.split("|") for row in new_bindings - old_bindings]
+    assert len(triggers) == 2
+    assert {row[2] for row in triggers} == {
+        "pos_receipt_mistake_report_immutable", "pos_receipt_mistake_report_no_truncate",
+    }
+    assert all(row[:2] == ["trigger_binding", REPORT_TABLE] and row[3:6] == ["O", "false", "false"]
+               for row in triggers)
+
+
 @pytest.mark.integration
-def test_current_0103_preserves_populated_build71_restore_and_empty_roundtrip(tmp_path):
-    old_backend = _export_build71_backend(tmp_path / "build71-current103")
+def test_build72_preserves_populated_build71_restore_and_empty_roundtrip(tmp_path):
+    old_backend = _export_build71_backend(tmp_path / "build71-current")
     with (
         _disposable_database("erp_grn_recovery_20261113_b71_source") as source,
         _disposable_database("erp_grn_recovery_20261113_b103_restore") as restored,
@@ -682,6 +734,17 @@ def test_current_0103_preserves_populated_build71_restore_and_empty_roundtrip(tm
         at103 = _inventory(restored)
         _assert_retained(baseline, at103, columns, projection, work, restored, "0103")
         _assert_0103_catalogue_is_additive(at102, at103)
+        assert _run_alembic(restored, "upgrade", "0104").returncode == 0
+        at104 = _inventory(restored)
+        _assert_retained(baseline, at104, columns, projection, work, restored, "0104")
+        _assert_0104_stock_guard_delta(at103, at104)
+        assert _run_alembic(restored, "upgrade", "0105").returncode == 0
+        at105 = _inventory(restored)
+        _assert_retained(baseline, at105, columns, projection, work, restored, "0105")
+        _assert_0105_report_delta(at104, at105)
+        for previous, following in ((at103, at104), (at104, at105)):
+            assert all(following["tables"][table] == entry for table, entry in previous["tables"].items()
+                       if table != "alembic_version")
         assert _run_alembic(restored, "downgrade", "0095").returncode == 0
         at95 = _inventory(restored)
         assert at95["database_revision"] == "0095"
@@ -689,13 +752,13 @@ def test_current_0103_preserves_populated_build71_restore_and_empty_roundtrip(tm
             assert at95[key] == baseline[key], key
         assert _restore_catalogue(at95["schema_catalog_rows"]) == _restore_catalogue(
             baseline["schema_catalog_rows"])
-        assert _run_alembic(restored, "upgrade", "0103").returncode == 0
-        assert _inventory(restored) == at103
+        assert _run_alembic(restored, "upgrade", "0105").returncode == 0
+        assert _inventory(restored) == at105
         assert _legacy_projection(restored, columns) == projection
         assert _work_evidence(restored) == work
-        (tmp_path / "current103-rehearsal-result.json").write_text(json.dumps({
+        (tmp_path / "build72-rehearsal-result.json").write_text(json.dumps({
             "source_baseline": BUILD71,
-            "schema_steps": ["0095", "0102", "0103", "0095", "0103"],
+            "schema_steps": ["0095", "0102", "0103", "0104", "0105", "0095", "0105"],
             "baseline_public_tables": len(columns),
             "baseline_columns": sum(map(len, columns.values())),
             "preserved_sequences": len(before["sequences"]),
@@ -703,5 +766,6 @@ def test_current_0103_preserves_populated_build71_restore_and_empty_roundtrip(tm
             "preserved_fleet_rows_pending_total_nonzero": list(work["fleet"][:3]),
             "exact_old_catalogue_and_bindings_retained": True,
             "new_grn_tables": 3, "new_grn_functions": 14, "new_grn_trigger_bindings": 32,
+            "configured_stock_guards": 2, "new_report_table": REPORT_TABLE,
             "production_admission": False,
         }, indent=2) + "\n")
