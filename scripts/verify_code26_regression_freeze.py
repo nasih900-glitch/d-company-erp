@@ -2938,7 +2938,7 @@ REVIEWED_CODE30_4_BUILD72_SHA256 = {'.env.production.example': '3d2da9400f5b233d
  'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingBoardUiTest.kt': 'c00986b1b6823b83ca2e1655bb56fd1f3136e93f493183c8853b48b533d35f7b',
  'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDraftRecreationUiTest.kt': '6791f824974fd82471b469c6b67f9553a1980da24e57a231b2173c9694dc1757',
  'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingGlassUiTest.kt': '9506d645ea8b10294edd3fe5f19159affccbb389941f23b31e2a22a2500ca5e5',
- 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingInlineShiftWorkspaceUiTest.kt': '2803ed11052ebe35ae12f4e08c803927df78e3f327096ebef80f2fd07c207a98',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingInlineShiftWorkspaceUiTest.kt': '07c8210c2523a3f73c41ad465af370a04980ed87860b6a784e6956ef2e355f90',
  'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingVoidImeUiTest.kt': '9df7770b4071ff88336c54e12b6fcd839515128b6f9bff57f0bdbaa9ce88d338',
  'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/home/StaffHomeTillUiTest.kt': 'a8bcd8a1d6d327e3a86a7f5333fd020c6e6a7fba62e3f00b44e51e30ab55d7c4',
  'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/shift/DailyWorkHubUiTest.kt': '8b44173a8fc9fc656cd64a6d7f29055a178649830f502e812cb7467bbd4d2682',

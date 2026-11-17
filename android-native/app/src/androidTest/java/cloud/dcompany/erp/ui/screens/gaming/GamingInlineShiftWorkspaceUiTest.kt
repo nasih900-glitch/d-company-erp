@@ -33,6 +33,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.SoftwareKeyboardController
+import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertHeightIsAtLeast
@@ -66,8 +67,12 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.unit.DpRect
 import androidx.compose.ui.unit.dp
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.platform.app.InstrumentationRegistry
 import cloud.dcompany.erp.core.auth.GamingAccess
 import cloud.dcompany.erp.core.auth.ShiftAccess
@@ -430,18 +435,18 @@ class GamingInlineShiftWorkspaceUiTest {
         revealShiftDetailTarget(retainedCustomer, "Retained Customer result")
         retainedCustomer.assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
         compose.runOnIdle { focus.clearFocus(force = true); keyboard?.hide() }
+        compose.waitUntil(5_000L) {
+            compose.runOnIdle {
+                val insets = ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+                val ime = WindowInsetsCompat.Type.ime()
+                insets != null && !insets.isVisible(ime) && insets.getInsets(ime).bottom == 0
+            }
+        }
         val start = compose.onNodeWithTag("gaming-start-action")
         revealShiftDetailTarget(start, "Blocked Start")
         start.assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
             .assertIsNotEnabled().assertTextEquals("Start 60 min · 210.00")
-        val initialActionHost = compose.onNodeWithTag("gaming-primary-action-host")
-            .getUnclippedBoundsInRoot()
-        assertTrue("Start must be contained in its visible action host: start=${start.getUnclippedBoundsInRoot()} host=$initialActionHost",
-            start.getUnclippedBoundsInRoot().let { target ->
-                target.left >= initialActionHost.left - 1.dp && target.top >= initialActionHost.top - 1.dp &&
-                    target.right <= initialActionHost.right + 1.dp &&
-                    target.bottom <= initialActionHost.bottom + 1.dp
-            })
+        assertStartInActionHost("Start must be contained in its visible action host")
         val openShiftHere = compose.onNodeWithTag("open-shift-here")
         revealShiftDetailTarget(openShiftHere, "Open shift here")
         openShiftHere.assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
@@ -506,20 +511,34 @@ class GamingInlineShiftWorkspaceUiTest {
         revealShiftDetailTarget(retainedStart, "Retained blocked Start")
         retainedStart.assertIsDisplayed().assertHasClickAction().assertHeightIsAtLeast(48.dp)
             .assertIsNotEnabled().assertTextEquals("Start 60 min · 210.00")
-        val returnedActionHost = compose.onNodeWithTag("gaming-primary-action-host")
-            .getUnclippedBoundsInRoot()
-        assertTrue(
-            "Returned Start must be contained in its current natural-flow action host: " +
-                "start=${retainedStart.getUnclippedBoundsInRoot()} host=$returnedActionHost",
-            retainedStart.getUnclippedBoundsInRoot().let { target ->
-                target.left >= returnedActionHost.left - 1.dp &&
-                    target.top >= returnedActionHost.top - 1.dp &&
-                    target.right <= returnedActionHost.right + 1.dp &&
-                    target.bottom <= returnedActionHost.bottom + 1.dp
-            },
-        )
+        assertStartInActionHost("Returned Start must be contained in its current natural-flow action host")
         assertPermanentRingGeometry(requireFullContainment = false)
         compose.runOnIdle { assertEquals(0, starts) }
+    }
+
+    private fun assertStartInActionHost(message: String) {
+        val owner = compose.onRoot().fetchSemanticsNode().root as ViewRootForTest
+        val (start, host) = compose.runOnIdle {
+            // Read both unclipped bounds from the same layout while insets and scroll can settle.
+            val nodes = owner.semanticsOwner.getAllSemanticsNodes(mergingEnabled = true)
+            fun bounds(tag: String): DpRect {
+                val node = nodes.single { it.config.getOrNull(SemanticsProperties.TestTag) == tag }
+                check(node.layoutInfo.isPlaced) { "$tag must be placed" }
+                val position = node.positionInRoot
+                return with(node.layoutInfo.density) {
+                    DpRect(
+                        position.x.toDp(), position.y.toDp(),
+                        (position.x + node.size.width).toDp(), (position.y + node.size.height).toDp(),
+                    )
+                }
+            }
+            bounds("gaming-start-action") to bounds("gaming-primary-action-host")
+        }
+        assertTrue(
+            "$message: start=$start host=$host",
+            start.left >= host.left - 1.dp && start.top >= host.top - 1.dp &&
+                start.right <= host.right + 1.dp && start.bottom <= host.bottom + 1.dp,
+        )
     }
 
     @Test
