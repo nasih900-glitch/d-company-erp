@@ -205,7 +205,7 @@ cold_boot_hosted_emulator() {
 
   owned_emulator_log="$(mktemp "${RUNNER_TEMP}/dcompany-emulator-cold-boot.XXXXXX")" ||
     { cold_boot_failed native_log "$?"; return 1; }
-  "${emulator}" -port 5554 -avd test -no-window -gpu swiftshader -feature -Vulkan \
+  "${emulator}" -port 5554 -avd test -no-window -gpu swangle -feature -Vulkan \
     -no-snapshot -noaudio -no-boot-anim > "${owned_emulator_log}" 2>&1 &
   owned_emulator_pid=$!
   local boot_deadline=$((SECONDS + 180))
@@ -227,7 +227,8 @@ cold_boot_hosted_emulator() {
     { cold_boot_failed replacement_boot_id "$?"; return 1; }
   cold_boot_check emulator_version grep -Fq 'Android emulator version 37.2.13.0 (build_id 16740729)' "${owned_emulator_log}" || return 1
   cold_boot_check vulkan_disabled grep -Eq "Feature 'Vulkan' \([0-9]+\) is overridden to 'disabled'" "${owned_emulator_log}" || return 1
-  cold_boot_check renderer grep -Fq 'Graphics Adapter Android Emulator OpenGL ES Translator (Google SwiftShader)' "${owned_emulator_log}" || return 1
+  cold_boot_check renderer_selection grep -Eq 'emuglConfig_init: vulkan_mode_selected:swiftshader gles_mode_selected:swangle[[:space:]]*$' "${owned_emulator_log}" || return 1
+  cold_boot_check renderer_adapter grep -Eq 'Graphics Adapter Android Emulator OpenGL ES Translator \(ANGLE \([^[:cntrl:]]*SwiftShader Device[^[:cntrl:]]*\)\)[[:space:]]*$' "${owned_emulator_log}" || return 1
 
   cold_boot_check guest_api select_api_35_emulator >/dev/null || return 1
   cpu_online="$(timeout 5s adb -s "${device_serial}" shell cat /sys/devices/system/cpu/online | tr -d '\r')" ||

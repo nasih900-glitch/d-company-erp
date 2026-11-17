@@ -253,9 +253,9 @@ jobs:
           disable-animations: true
           # Pin the official 37.2.13 stable build after the 37.1.11 native crash.
           emulator-build: 16740729
-          # Request swiftshader directly with Vulkan disabled. These flags do
-          # not prove the selected mode; retained runtime diagnostics must.
-          emulator-options: -no-window -gpu swiftshader -feature -Vulkan -no-snapshot -noaudio -no-boot-anim
+          # Use ANGLE over SwiftShader while keeping guest Vulkan disabled.
+          # The test process verifies the renderer from its startup log.
+          emulator-options: -no-window -gpu swangle -feature -Vulkan -no-snapshot -noaudio -no-boot-anim
           # Full-resolution captures and system gestures require physical
           # 2560x1600 at 320dpi, preserving the 1280x800dp tablet layout.
           # Configure before boot; this renders four times as many pixels as

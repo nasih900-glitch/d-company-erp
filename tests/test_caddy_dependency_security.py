@@ -1223,6 +1223,20 @@ def test_caddy_binary_hash_is_coordinated_across_ci_and_release() -> None:
                 "          # Pin the official 37.2.13 stable build after the 37.1.11 native crash.\n",
             )
         expected = _replace_once(expected, "          emulator-build: 15917651\n", "          emulator-build: 16740729\n")
+        renderer_comment = (
+            "          # Request swiftshader directly with Vulkan disabled. These flags do\n"
+            "          # not prove the selected mode; retained runtime diagnostics must.\n"
+            if workflow == CI_WORKFLOW
+            else "          # Match CI's direct swiftshader request with Vulkan disabled. The\n"
+            "          # retained runtime diagnostics must prove the actually selected mode.\n"
+        )
+        expected = _replace_once(
+            expected,
+            renderer_comment + "          emulator-options: -no-window -gpu swiftshader -feature -Vulkan -no-snapshot -noaudio -no-boot-anim\n",
+            "          # Use ANGLE over SwiftShader while keeping guest Vulkan disabled.\n"
+            "          # The test process verifies the renderer from its startup log.\n"
+            "          emulator-options: -no-window -gpu swangle -feature -Vulkan -no-snapshot -noaudio -no-boot-anim\n",
+        )
         assert workflow.read_text(encoding="utf-8") == expected
 
     assert "go 1.26.9" in GO_MOD.read_text(encoding="utf-8")

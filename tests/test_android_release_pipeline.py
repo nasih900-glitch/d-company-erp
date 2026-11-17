@@ -939,7 +939,7 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         cold_boot = instrumentation.split("cold_boot_hosted_emulator() {", 1)[1].split("\n}\n", 1)[0]
         launch = re.sub(r"\s*\\\n\s*", " ", cold_boot)
         self.assertIn(
-            "-port 5554 -avd test -no-window -gpu swiftshader -feature -Vulkan "
+            "-port 5554 -avd test -no-window -gpu swangle -feature -Vulkan "
             "-no-snapshot -noaudio -no-boot-anim",
             launch,
         )
@@ -956,7 +956,11 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         )
         self.assertIn("cold_boot_check tablet_viewport configure_tablet_viewport || return 1", cold_boot)
         self.assertIn("Android emulator version 37.2.13.0 (build_id 16740729)", cold_boot)
-        self.assertIn("Graphics Adapter Android Emulator OpenGL ES Translator (Google SwiftShader)", cold_boot)
+        self.assertIn("cold_boot_check renderer_selection grep -Eq", cold_boot)
+        self.assertIn("vulkan_mode_selected:swiftshader gles_mode_selected:swangle[[:space:]]*$", cold_boot)
+        self.assertIn("cold_boot_check renderer_adapter grep -Eq", cold_boot)
+        self.assertIn(r"Graphics Adapter Android Emulator OpenGL ES Translator \(ANGLE \(", cold_boot)
+        self.assertIn("SwiftShader Device", cold_boot)
         self.assertIn("if ! stop_owned_emulator; then", main)
 
     def test_cold_boot_reports_failed_stage_without_masking_the_exit_status(self) -> None:
@@ -980,7 +984,7 @@ class AndroidReleasePipelineTest(unittest.TestCase):
 
     def test_ci_and_release_request_same_bounded_linux_emulator_quadrant(self) -> None:
         expected = (
-            "-no-window -gpu swiftshader -feature -Vulkan "
+            "-no-window -gpu swangle -feature -Vulkan "
             "-no-snapshot -noaudio -no-boot-anim"
         )
         for workflow_path in (CI_WORKFLOW, WORKFLOW):

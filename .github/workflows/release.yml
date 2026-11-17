@@ -380,9 +380,9 @@ jobs:
           disable-animations: true
           # Keep the same emulator build and host platform as CI.
           emulator-build: 16740729
-          # Match CI's direct swiftshader request with Vulkan disabled. The
-          # retained runtime diagnostics must prove the actually selected mode.
-          emulator-options: -no-window -gpu swiftshader -feature -Vulkan -no-snapshot -noaudio -no-boot-anim
+          # Use ANGLE over SwiftShader while keeping guest Vulkan disabled.
+          # The test process verifies the renderer from its startup log.
+          emulator-options: -no-window -gpu swangle -feature -Vulkan -no-snapshot -noaudio -no-boot-anim
           pre-emulator-launch-script: python3 scripts/configure_ci_android_avd.py test
           # The pinned action runs each nonempty line in a fresh shell. Keep
           # capture, normalization, logging, and assertion in one command.

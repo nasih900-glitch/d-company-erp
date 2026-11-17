@@ -27,6 +27,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
@@ -688,19 +689,29 @@ class PosEmptyCatalogueUiTest {
             .assertIsDisplayed()
             .assertIsEnabled()
         compose.onNode(hasSetTextAction()).performClick().performTextReplacement("30")
-        fun keyboardVisible(): Boolean = compose.runOnIdle {
+        fun keyboardBottom(): Int = compose.runOnIdle {
             val insets = ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
-            (insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0) > 0
+            insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0
         }
         val unappliedMessage = hasText("Apply this edited amount or restore", substring = true)
         val continueAction = hasTestTag("pos-held-review-continue")
-        val unappliedMessages = compose.onAllNodes(unappliedMessage)
-        val continueActions = compose.onAllNodes(continueAction)
+        // An interaction collection keeps the IDs from its first fetch, even when empty.
+        fun currentNodeCount(matcher: SemanticsMatcher): Int = compose.onAllNodes(matcher)
+            .fetchSemanticsNodes(atLeastOneRootRequired = false).size
+        fun waitForImePhase(phase: String, ready: () -> Boolean) {
+            try {
+                compose.waitUntil(5_000, ready)
+            } catch (timeout: ComposeTimeoutException) {
+                throw ComposeTimeoutException(
+                    "Held bill IME $phase did not settle within 5000ms. keyboardBottom=${keyboardBottom()} " +
+                        "warningNodes=${currentNodeCount(unappliedMessage)} " +
+                        "continueNodes=${currentNodeCount(continueAction)}",
+                ).apply { initCause(timeout) }
+            }
+        }
         // The decor view receives IME insets separately from the Compose layout that uses them.
-        compose.waitUntil(5_000) {
-            keyboardVisible() &&
-                unappliedMessages.fetchSemanticsNodes(atLeastOneRootRequired = false).isEmpty() &&
-                continueActions.fetchSemanticsNodes(atLeastOneRootRequired = false).isEmpty()
+        waitForImePhase("show") {
+            keyboardBottom() > 0 && currentNodeCount(unappliedMessage) == 0 && currentNodeCount(continueAction) == 0
         }
         val discountAction = compose.onNodeWithTag("pos-held-review-apply-discount")
             .assertIsDisplayed().assertIsEnabled().assertHeightIsAtLeast(48.dp).fetchSemanticsNode()
@@ -718,10 +729,8 @@ class PosEmptyCatalogueUiTest {
         }
         compose.onNode(continueAction).assertDoesNotExist()
         compose.onNode(hasSetTextAction()).performImeAction()
-        compose.waitUntil(5_000) {
-            !keyboardVisible() &&
-                unappliedMessages.fetchSemanticsNodes(atLeastOneRootRequired = false).size == 1 &&
-                continueActions.fetchSemanticsNodes(atLeastOneRootRequired = false).size == 1
+        waitForImePhase("hide") {
+            keyboardBottom() == 0 && currentNodeCount(unappliedMessage) == 1 && currentNodeCount(continueAction) == 1
         }
         compose.onNode(hasSetTextAction()).assertIsNotFocused()
         compose.onNode(unappliedMessage).assertIsDisplayed()
