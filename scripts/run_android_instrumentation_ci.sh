@@ -165,35 +165,53 @@ stop_owned_emulator() {
   [[ "${expected_shutdown}" -eq 1 && "${exit_status}" -eq 0 ]]
 }
 
+cold_boot_failed() {
+  local stage=$1 status=$2
+  printf 'cold_boot_failed_stage=%s\ncold_boot_failed_status=%s\n' "${stage}" "${status}" |
+    tee -a "${diagnostics_dir}/emulator-cold-boot.txt" >&2
+  return "${status}"
+}
+
+cold_boot_check() {
+  local stage=$1
+  shift
+  "$@" || cold_boot_failed "${stage}" "$?"
+}
+
 cold_boot_hosted_emulator() {
   local emulator="${ANDROID_HOME:-}/emulator/emulator"
-  local original_name original_pid boot_id original_boot_id boot_completed overlays cpu_online attempt
-  [[ "${device_serial}" == 'emulator-5554' && -x "${emulator}" && -n "${RUNNER_TEMP:-}" ]] || return 1
-  original_name="$(timeout 5s adb -s "${device_serial}" emu avd name | tr -d '\r')" || return 1
-  [[ "${original_name}" == $'test\nOK' ]] || return 1
-  original_boot_id="$(timeout 5s adb -s "${device_serial}" shell cat /proc/sys/kernel/random/boot_id | tr -d '\r')" || return 1
-  [[ "${original_boot_id}" =~ ^[[:xdigit:]-]{36}$ ]] || return 1
-  original_pid="$(ps -eo pid=,comm=,args= | awk '$2 ~ /^qemu-system/ && $0 ~ / -port 5554( |$)/ && $0 ~ / -avd test( |$)/ {print $1}')" || return 1
-  [[ "${original_pid}" =~ ^[1-9][0-9]*$ ]] || return 1
-  cleanup_alarm_environment || return 1
-  timeout 10s adb -s "${device_serial}" emu kill >/dev/null || return 1
+  local original_name original_pid boot_id original_boot_id boot_completed user_state overlays cpu_online attempt
+  [[ "${device_serial}" == 'emulator-5554' && -x "${emulator}" && -n "${RUNNER_TEMP:-}" ]] ||
+    { cold_boot_failed hosted_configuration "$?"; return 1; }
+  original_name="$(timeout 5s adb -s "${device_serial}" emu avd name | tr -d '\r')" ||
+    { cold_boot_failed discovery_avd "$?"; return 1; }
+  [[ "${original_name}" == $'test\nOK' ]] || { cold_boot_failed discovery_avd "$?"; return 1; }
+  original_boot_id="$(timeout 5s adb -s "${device_serial}" shell cat /proc/sys/kernel/random/boot_id | tr -d '\r')" ||
+    { cold_boot_failed discovery_boot_id "$?"; return 1; }
+  [[ "${original_boot_id}" =~ ^[[:xdigit:]-]{36}$ ]] || { cold_boot_failed discovery_boot_id "$?"; return 1; }
+  original_pid="$(ps -eo pid=,comm=,args= | awk '$2 ~ /^qemu-system/ && $0 ~ / -port 5554( |$)/ && $0 ~ / -avd test( |$)/ {print $1}')" ||
+    { cold_boot_failed discovery_process "$?"; return 1; }
+  [[ "${original_pid}" =~ ^[1-9][0-9]*$ ]] || { cold_boot_failed discovery_process "$?"; return 1; }
+  cold_boot_check discovery_guest_cleanup cleanup_alarm_environment || return 1
+  cold_boot_check discovery_stop timeout 10s adb -s "${device_serial}" emu kill >/dev/null || return 1
   for ((attempt = 0; attempt < 40; attempt++)); do
     kill -0 "${original_pid}" 2>/dev/null || break
     sleep 1
   done
   if kill -0 "${original_pid}" 2>/dev/null; then
-    echo "Discovery emulator did not shut down before the planned cold boot." >&2
+    cold_boot_failed discovery_shutdown 124
     return 1
   fi
 
-  owned_emulator_log="$(mktemp "${RUNNER_TEMP}/dcompany-emulator-cold-boot.XXXXXX")" || return 1
+  owned_emulator_log="$(mktemp "${RUNNER_TEMP}/dcompany-emulator-cold-boot.XXXXXX")" ||
+    { cold_boot_failed native_log "$?"; return 1; }
   "${emulator}" -port 5554 -avd test -no-window -gpu swiftshader -feature -Vulkan \
     -no-snapshot -noaudio -no-boot-anim > "${owned_emulator_log}" 2>&1 &
   owned_emulator_pid=$!
   local boot_deadline=$((SECONDS + 180))
   while (( SECONDS < boot_deadline )); do
     if ! kill -0 "${owned_emulator_pid}" 2>/dev/null; then
-      echo "Cold-boot emulator exited during startup." >&2
+      cold_boot_failed replacement_process 1
       return 1
     fi
     boot_completed="$(timeout 3s adb -s "${device_serial}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" || boot_completed=''
@@ -202,27 +220,45 @@ cold_boot_hosted_emulator() {
     fi
     sleep 2
   done
-  [[ "${boot_completed}" == '1' ]] || return 1
-  boot_id="$(timeout 5s adb -s "${device_serial}" shell cat /proc/sys/kernel/random/boot_id | tr -d '\r')" || return 1
-  [[ "${boot_id}" =~ ^[[:xdigit:]-]{36}$ && "${boot_id}" != "${original_boot_id}" ]] || return 1
-  grep -Fq 'Android emulator version 37.2.13.0 (build_id 16740729)' "${owned_emulator_log}" || return 1
-  grep -Eq "Feature 'Vulkan' \([0-9]+\) is overridden to 'disabled'" "${owned_emulator_log}" || return 1
-  grep -Fq 'Graphics Adapter Android Emulator OpenGL ES Translator (Google SwiftShader)' "${owned_emulator_log}" || return 1
+  [[ "${boot_completed}" == '1' ]] || { cold_boot_failed boot_completed 124; return 1; }
+  boot_id="$(timeout 5s adb -s "${device_serial}" shell cat /proc/sys/kernel/random/boot_id | tr -d '\r')" ||
+    { cold_boot_failed replacement_boot_id "$?"; return 1; }
+  [[ "${boot_id}" =~ ^[[:xdigit:]-]{36}$ && "${boot_id}" != "${original_boot_id}" ]] ||
+    { cold_boot_failed replacement_boot_id "$?"; return 1; }
+  cold_boot_check emulator_version grep -Fq 'Android emulator version 37.2.13.0 (build_id 16740729)' "${owned_emulator_log}" || return 1
+  cold_boot_check vulkan_disabled grep -Eq "Feature 'Vulkan' \([0-9]+\) is overridden to 'disabled'" "${owned_emulator_log}" || return 1
+  cold_boot_check renderer grep -Fq 'Graphics Adapter Android Emulator OpenGL ES Translator (Google SwiftShader)' "${owned_emulator_log}" || return 1
 
-  select_api_35_emulator >/dev/null || return 1
-  cpu_online="$(timeout 5s adb -s "${device_serial}" shell cat /sys/devices/system/cpu/online | tr -d '\r')" || return 1
-  [[ "${cpu_online}" == '0-1' ]] || return 1
-  timeout 5s adb -s "${device_serial}" shell input keyevent 82 || return 1
+  cold_boot_check guest_api select_api_35_emulator >/dev/null || return 1
+  cpu_online="$(timeout 5s adb -s "${device_serial}" shell cat /sys/devices/system/cpu/online | tr -d '\r')" ||
+    { cold_boot_failed guest_cpu "$?"; return 1; }
+  [[ "${cpu_online}" == '0-1' ]] || { cold_boot_failed guest_cpu "$?"; return 1; }
+
+  # Android reports boot complete before user 0, SystemUI and Home finish starting.
+  local user_deadline=$((SECONDS + 30))
+  while (( SECONDS < user_deadline )); do
+    user_state="$(timeout 5s adb -s "${device_serial}" shell cmd activity get-started-user-state 0 2>/dev/null | tr -d '\r')" || user_state=''
+    [[ "${user_state}" == 'RUNNING_UNLOCKED' ]] && break
+    sleep 1
+  done
+  [[ "${user_state:-}" == 'RUNNING_UNLOCKED' ]] || { cold_boot_failed user_unlock 124; return 1; }
+  cold_boot_check keyguard_input timeout 20s adb -s "${device_serial}" shell input keyevent 82 || return 1
   local setting
   for setting in window_animation_scale transition_animation_scale animator_duration_scale; do
-    timeout 5s adb -s "${device_serial}" shell settings put global "${setting}" 0.0 || return 1
+    cold_boot_check "${setting}" timeout 5s adb -s "${device_serial}" shell settings put global "${setting}" 0.0 || return 1
   done
-  timeout 5s adb -s "${device_serial}" shell cmd overlay enable-exclusive --category \
+  cold_boot_check gesture_apply timeout 10s adb -s "${device_serial}" shell cmd overlay enable-exclusive --category \
     com.android.internal.systemui.navbar.gestural || return 1
-  overlays="$(timeout 5s adb -s "${device_serial}" shell cmd overlay list --user 0 | tr -d '\r' | \
-    sed -n 's/^[[:space:]]*\(\[x\] com\.android\.internal\.systemui\.navbar\..*\)$/\1/p')" || return 1
-  [[ "${overlays}" == '[x] com.android.internal.systemui.navbar.gestural' ]] || return 1
-  configure_tablet_viewport || return 1
+  local overlay_deadline=$((SECONDS + 15))
+  while (( SECONDS < overlay_deadline )); do
+    overlays="$(timeout 5s adb -s "${device_serial}" shell cmd overlay list --user 0 2>/dev/null | tr -d '\r' | \
+      sed -n 's/^[[:space:]]*\(\[x\] com\.android\.internal\.systemui\.navbar\..*\)$/\1/p')" || overlays=''
+    [[ "${overlays}" == '[x] com.android.internal.systemui.navbar.gestural' ]] && break
+    sleep 1
+  done
+  [[ "${overlays:-}" == '[x] com.android.internal.systemui.navbar.gestural' ]] ||
+    { cold_boot_failed gesture_readiness 124; return 1; }
+  cold_boot_check tablet_viewport configure_tablet_viewport || return 1
   printf 'cold_boot_verified=true\nguest_cpu_online=%s\nguest_navigation=gestural\n' "${cpu_online}" \
     > "${diagnostics_dir}/emulator-cold-boot.txt"
 }

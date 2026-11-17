@@ -945,10 +945,38 @@ class AndroidReleasePipelineTest(unittest.TestCase):
         )
         self.assertIn('"${boot_id}" != "${original_boot_id}"', cold_boot)
         self.assertIn(""""${cpu_online}" == '0-1'""", cold_boot)
-        self.assertIn("configure_tablet_viewport || return 1", cold_boot)
+        self.assertLess(
+            cold_boot.index("get-started-user-state 0"),
+            cold_boot.index('keyguard_input timeout 20s'),
+        )
+        self.assertIn('"${user_state:-}" == \'RUNNING_UNLOCKED\'', cold_boot)
+        self.assertLess(
+            cold_boot.index("gesture_apply timeout 10s"),
+            cold_boot.index("cmd overlay list --user 0"),
+        )
+        self.assertIn("cold_boot_check tablet_viewport configure_tablet_viewport || return 1", cold_boot)
         self.assertIn("Android emulator version 37.2.13.0 (build_id 16740729)", cold_boot)
         self.assertIn("Graphics Adapter Android Emulator OpenGL ES Translator (Google SwiftShader)", cold_boot)
         self.assertIn("if ! stop_owned_emulator; then", main)
+
+    def test_cold_boot_reports_failed_stage_without_masking_the_exit_status(self) -> None:
+        source = INSTRUMENTATION_SCRIPT.read_text(encoding="utf-8")
+        guards = source[source.index("cold_boot_failed() {"):source.index("cold_boot_hosted_emulator() {")]
+        with tempfile.TemporaryDirectory() as temporary:
+            result = subprocess.run(
+                ["bash", "-c", guards + "cold_boot_check keyguard_input sh -c 'exit 124'"],
+                env={**os.environ, "diagnostics_dir": temporary},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 124)
+            expected = "cold_boot_failed_stage=keyguard_input\ncold_boot_failed_status=124\n"
+            self.assertEqual(result.stderr, expected)
+            self.assertEqual(
+                (Path(temporary) / "emulator-cold-boot.txt").read_text(encoding="utf-8"),
+                expected,
+            )
 
     def test_ci_and_release_request_same_bounded_linux_emulator_quadrant(self) -> None:
         expected = (
