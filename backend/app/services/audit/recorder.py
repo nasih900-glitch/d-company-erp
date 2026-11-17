@@ -92,10 +92,11 @@ from app.models import (
     Order,
     OrderCheckoutClaim,
     OrderLine,
+    PaidBillActionDecision,
+    PaidBillAmendmentIntent,
     Partner,
     Payment,
     PayrollEntry,
-    PaidBillAmendmentIntent,
     PosReceiptCorrection,
     PosReceiptStockRestoration,
     PosRefundCashHandoff,
@@ -114,8 +115,8 @@ from app.models import (
     RolePermissionOverride,
     Shift,
     ShiftOperatorHandover,
-    ShiftStartWorkReceipt,
     ShiftStartWorkCancellation,
+    ShiftStartWorkReceipt,
     StaffWorkPolicy,
     Station,
     StockMovement,
@@ -207,6 +208,7 @@ from app.models import DailyTenderReconciliation, PaymentTenderCorrection
 
 TRACKED: set[type] = {
     PaidBillAmendmentIntent,
+    PaidBillActionDecision,
     PosReceiptCorrection,
     PosReceiptStockRestoration,
     PaymentTenderCorrection,
@@ -452,6 +454,9 @@ _REASON_FIELDS = (
 
 
 def _reason_of(obj: Any) -> str | None:
+    if isinstance(obj, PaidBillActionDecision):
+        # Recovery reasons stay only in the protected decision, never the general audit reason.
+        return "Exact paid-bill command retired"
     if isinstance(obj, AuditLog):
         for snapshot in (obj.after, obj.before):
             if not isinstance(snapshot, dict):

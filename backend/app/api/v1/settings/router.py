@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
-from app.schemas.paid_bill_amendment import PAID_BILL_AMENDMENT_PROTOCOL
 from app.core.db import SessionDep
 from app.core.errors import BusinessRuleError, ConflictError, NotFoundError
 from app.core.idempotency import check_or_reserve, store_response
@@ -38,6 +37,8 @@ from app.models import (
     Shift,
     Terminal,
 )
+from app.schemas.paid_bill_action_decision import PAID_BILL_ACTION_OUTCOME_PROTOCOL
+from app.schemas.paid_bill_amendment import PAID_BILL_AMENDMENT_PROTOCOL
 from app.services.accounting.accounts import ACCOUNT_BY_CODE
 from app.services.pos.loyalty_program import (
     LoyaltyProgramRules,
@@ -323,6 +324,7 @@ class TerminalRead(BaseModel):
     offline_shift_capture_supported: bool = True
     online_start_work_supported: bool = True
     paid_bill_amendment_protocol: int = PAID_BILL_AMENDMENT_PROTOCOL
+    paid_bill_action_outcome_protocol: int = PAID_BILL_ACTION_OUTCOME_PROTOCOL
 
 
 class TerminalCreate(BaseModel):

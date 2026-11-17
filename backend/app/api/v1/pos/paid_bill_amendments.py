@@ -12,16 +12,17 @@ from pydantic import BaseModel, ConfigDict, SecretStr
 from sqlalchemy import select
 
 from app.api.v1.finance.tender_corrections import (
-    TenderRoute,
     require_confirmation,
     require_protected_owner,
 )
+from app.api.v1.pos.paid_bill_decision_route import PaidBillDecisionRoute
 from app.core.db import SessionDep
 from app.core.errors import AuthError, NotFoundError
 from app.core.permissions import require_permission, requires
 from app.core.security import issue_tender_token, verify_password
 from app.core.tenant import TenantContext, get_tenant_context
 from app.models import Branch, PaidBillAmendmentIntent, User
+from app.schemas.paid_bill_action_decision import PaidBillCancelRequest, PaidBillOutcome
 from app.schemas.paid_bill_amendment import (
     AmendmentAcceptance,
     AmendmentActionRead,
@@ -31,9 +32,10 @@ from app.schemas.paid_bill_amendment import (
     PaidBillState,
 )
 from app.services.auth.rate_limit import enforce_login_rate_limit
+from app.services.pos import paid_bill_action_decisions as decisions
 from app.services.pos import paid_bill_amendments as service
 
-router = APIRouter(route_class=TenderRoute)
+router = APIRouter(route_class=PaidBillDecisionRoute)
 Owner = Annotated[TenantContext, Depends(requires("finance.receipt.correct"))]
 
 
@@ -177,3 +179,18 @@ async def receipt(order_id: UUID, request: Request, session: SessionDep, tenant:
     result = await service.current_state(session, tenant, order_id)
     await fresh()
     return result
+
+
+@router.post("/actions/cancel", response_model=PaidBillOutcome)
+async def cancel_action(payload: PaidBillCancelRequest, request: Request, session: SessionDep,
+    tenant: Owner, idempotency_key: str | None = Header(default=None),
+    x_owner_confirmation: str | None = Header(default=None)):
+    return await decisions.cancel(session, tenant, payload, key=idempotency_key,
+        confirmation=x_owner_confirmation, fresh=_fresh_authority(request,session,tenant))
+
+
+@router.get("/actions/outcome", response_model=PaidBillOutcome)
+async def action_outcome(request: Request, session: SessionDep, tenant: Owner,
+    idempotency_key: str = Header(), x_owner_confirmation: str | None = Header(default=None)):
+    return await decisions.outcome(session,tenant,key=idempotency_key,
+        confirmation=x_owner_confirmation,fresh=_fresh_authority(request,session,tenant))
