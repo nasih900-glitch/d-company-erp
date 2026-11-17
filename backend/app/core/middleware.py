@@ -343,6 +343,15 @@ class RequestBodyLimitMiddleware:
         await response(scope, receive, send)
 
 
+def _is_paid_recovery(request: Request) -> bool:
+    return request.url.path in {
+        "/api/v1/pos/paid-bill-amendments/recovery/unlock",
+        "/api/v1/pos/paid-bill-amendments/recovery/actions/outcome",
+        "/api/v1/pos/paid-bill-amendments/recovery/actions/cancel",
+        "/api/v1/pos/paid-bill-amendments/recovery/lock",
+    }
+
+
 class RequestContextMiddleware(BaseHTTPMiddleware):
     """Binds request_id and (later) tenant context to structlog."""
 
@@ -374,6 +383,11 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
                     client_reported_at = candidate.astimezone(UTC)
             except ValueError:
                 pass
+        if _is_paid_recovery(request):
+            # Caller identifiers can contain the original private command/key.
+            request_id, action_id = str(uuid.uuid4()), None
+            client_reported_at, client_was_offline = None, False
+            platform, client_version_code = "web", None
         set_request_context(
             request_id=request_id,
             client_platform=platform,
@@ -381,6 +395,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             client_action_id=action_id,
             client_reported_at=client_reported_at,
             client_was_offline=client_was_offline,
+            paid_recovery=_is_paid_recovery(request),
         )
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(
@@ -392,6 +407,8 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
             response.headers["X-Request-Id"] = request_id
+            if _is_paid_recovery(request):
+                response.headers["Cache-Control"] = "no-store"
             return response
         finally:
             clear_actor()
@@ -483,6 +500,8 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
+        if _is_paid_recovery(request):
+            return await call_next(request)
         if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
             key = request.headers.get("Idempotency-Key") or request.headers.get("X-Idempotency-Key")
             if key:

@@ -289,3 +289,4 @@ __all__ = [
 
 from app.models.paid_bill_action_decision import PaidBillActionDecision
 from app.models.paid_bill_amendment import PaidBillAmendmentIntent
+from app.models.paid_bill_recovery_session import PaidBillRecoverySession

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.api.v1.pos.paid_bill_amendments import router as paid_bill_amendments_router
+from app.api.v1.pos.paid_bill_recovery import router as paid_bill_recovery_router
 
 from fastapi import APIRouter
 
@@ -42,6 +43,7 @@ from app.api.v1.tables.router import router as tables_router
 from app.api.v1.ws.router import router as ws_router
 
 api_router = APIRouter()
+api_router.include_router(paid_bill_recovery_router, prefix="/pos/paid-bill-amendments/recovery", tags=["pos"])
 api_router.include_router(paid_bill_amendments_router, prefix="/pos/paid-bill-amendments", tags=["pos"])
 api_router.include_router(auth_router, prefix="/auth", tags=["auth"])
 api_router.include_router(

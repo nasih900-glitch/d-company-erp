@@ -37,7 +37,7 @@ async def authorize(session, tenant, confirmation, fresh):
     )
 
 
-async def original_order(session, tenant, order_id, confirmation, fresh):
+async def original_order(session, tenant, order_id, authorized):
     # Plain MVCC read only. 0048 protects issued identity; avoid financial/source locks.
     order = await session.scalar(
         select(Order)
@@ -49,7 +49,7 @@ async def original_order(session, tenant, order_id, confirmation, fresh):
         )
         .execution_options(populate_existing=True)
     )
-    await authorize(session, tenant, confirmation, fresh)
+    await authorized()
     if (
         order is None
         or order.source_integrity_revision != 48
@@ -92,13 +92,13 @@ def reference(row):
     }
 
 
-async def present(session, tenant, row, confirmation, fresh):
-    await original_order(session, tenant, row.order_id, confirmation, fresh)
+async def present(session, tenant, row, authorized):
+    await original_order(session, tenant, row.order_id, authorized)
     if row.outcome == "accepted":
         if row.response_body["refund_request_id"] is not None:
             await require_permission(session, tenant, "pos.refund")
         current = await amendments.current_state(session, tenant, row.order_id)
-        await authorize(session, tenant, confirmation, fresh)
+        await authorized()
         return {
             "protocol": 1,
             "outcome": "accepted",
@@ -106,7 +106,7 @@ async def present(session, tenant, row, confirmation, fresh):
             "accepted": row.response_body,
             "current": current,
         }
-    await authorize(session, tenant, confirmation, fresh)
+    await authorized()
     return {
         "protocol": 1,
         "outcome": "cancelled",
@@ -115,15 +115,14 @@ async def present(session, tenant, row, confirmation, fresh):
     }
 
 
-async def outcome(session, tenant, *, key, confirmation, fresh):
+async def outcome_authorized(session, tenant, *, key, authorized):
     validate_key(key)
     await require_read_committed(session)
-    await amendments.lock_actor(session, tenant)
-    await authorize(session, tenant, confirmation, fresh)
+    await authorized()
     row = await decision(session, tenant, key)
-    await authorize(session, tenant, confirmation, fresh)
+    await authorized()
     if row is not None:
-        return await present(session, tenant, row, confirmation, fresh)
+        return await present(session, tenant, row, authorized)
     return {
         "protocol": 1,
         "outcome": "unconfirmed",
@@ -135,17 +134,16 @@ async def outcome(session, tenant, *, key, confirmation, fresh):
     }
 
 
-async def cancel(session, tenant, payload, *, key, confirmation, fresh):
+async def cancel_authorized(session, tenant, payload, *, key, authorized):
     validate_key(key)
     await require_read_committed(session)
-    await amendments.lock_actor(session, tenant)
-    await authorize(session, tenant, confirmation, fresh)
+    await authorized()
     command = payload.original_command
     body = command.model_dump(mode="json")
     digest = await amendments._digest(session, body)
-    await original_order(session, tenant, command.order_id, confirmation, fresh)
+    await original_order(session, tenant, command.order_id, authorized)
     row = await decision(session, tenant, key)
-    await authorize(session, tenant, confirmation, fresh)
+    await authorized()
     if row is not None:
         if (
             row.order_id != command.order_id
@@ -159,7 +157,7 @@ async def cancel(session, tenant, payload, *, key, confirmation, fresh):
                 "This key already has a different exact command or cancellation reason. "
                 "Keep its original evidence."
             )
-        return await present(session, tenant, row, confirmation, fresh)
+        return await present(session, tenant, row, authorized)
     ident = uuid4()
     at = await session.scalar(text("SELECT statement_timestamp()"))
     receipt = await session.scalar(
@@ -186,5 +184,27 @@ async def cancel(session, tenant, payload, *, key, confirmation, fresh):
     session.add(row)
     # UNIQUE waits here. Resolve a loser in a whole new transaction, never a savepoint.
     await session.flush()
-    await authorize(session, tenant, confirmation, fresh)
-    return await present(session, tenant, row, confirmation, fresh)
+    await authorized()
+    return await present(session, tenant, row, authorized)
+
+
+async def outcome(session, tenant, *, key, confirmation, fresh):
+    validate_key(key)
+    await require_read_committed(session)
+    await amendments.lock_actor(session, tenant)
+
+    async def authorized():
+        await authorize(session, tenant, confirmation, fresh)
+
+    return await outcome_authorized(session, tenant, key=key, authorized=authorized)
+
+
+async def cancel(session, tenant, payload, *, key, confirmation, fresh):
+    validate_key(key)
+    await require_read_committed(session)
+    await amendments.lock_actor(session, tenant)
+
+    async def authorized():
+        await authorize(session, tenant, confirmation, fresh)
+
+    return await cancel_authorized(session, tenant, payload, key=key, authorized=authorized)

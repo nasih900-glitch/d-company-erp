@@ -149,3 +149,12 @@ def issue_tender_token(*, user_id: UUID, company_id: UUID, branch_id: UUID,
         "branch_id": str(branch_id), "auth_version": auth_version,
         "type": "tender_confirmation", "scope": scope, "iat": now,
         "exp": now + timedelta(minutes=5)}, _signing_key(), algorithm=settings.jwt_algorithm)
+
+
+def issue_paid_bill_recovery_token(claims: dict[str, Any]) -> str:
+    """Dedicated, nonrefreshable credential; no ordinary access type or cookie."""
+    s = get_settings()
+    return jwt.encode(
+        {**claims, "type": "paid_bill_recovery", "purpose": "paid_bill_action_recovery"},
+        _signing_key(), algorithm=s.jwt_algorithm,
+    )

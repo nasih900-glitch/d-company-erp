@@ -177,6 +177,7 @@ def set_request_context(
     client_action_id: str | None,
     client_reported_at: datetime | None,
     client_was_offline: bool,
+    paid_recovery: bool = False,
 ) -> None:
     """Capture request provenance independently of authentication.
 
@@ -190,6 +191,7 @@ def set_request_context(
             "client_platform": client_platform,
             "client_version_code": client_version_code,
             "client_action_id": client_action_id,
+            "paid_recovery": paid_recovery,
             "client_reported_at": client_reported_at,
             "client_was_offline": client_was_offline,
             "synced_at": datetime.now(UTC) if client_was_offline else None,
@@ -374,6 +376,11 @@ def _serialize(obj: Any) -> dict | None:
         mapper = inspect(obj.__class__)
     except Exception:
         return None
+    if isinstance(obj, PaidBillActionDecision) and (request_ctx.get() or {}).get("paid_recovery"):
+        return {key: json_safe(getattr(obj, key)) for key in (
+            "id", "company_id", "recorded_by", "order_id", "branch_id", "terminal_id",
+            "outcome", "accepted_intent_id", "decided_at",
+        )}
     if isinstance(obj, PosReceiptCorrection):
         # Full exact-source evidence stays on its protected receipt, not in
         # duplicated audit JSON (which has its own browsing/export lifecycle).
