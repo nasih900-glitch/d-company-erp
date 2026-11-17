@@ -98,6 +98,7 @@ import cloud.dcompany.erp.core.db.MenuVariantEntity
 import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceScaffold
+import cloud.dcompany.erp.ui.captureWorkspaceAfterPixelCopyTimeout
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
 import cloud.dcompany.erp.ui.theme.AppearancePreference
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
@@ -3649,7 +3650,11 @@ class GamingBoardUiTest {
         json.writeText(org.json.JSONObject(bounds.mapValues { it.value.toString() })
             .put("screenshotTiming", "after atomic sample; not same-frame pixel evidence").toString(2))
         publishDiagnostic(json, bounds)
-        val bitmap = compose.onNodeWithTag(rootTag).captureToImage().asAndroidBitmap()
+        val bitmap = try {
+            compose.onNodeWithTag(rootTag).captureToImage().asAndroidBitmap()
+        } catch (error: RuntimeException) {
+            compose.captureWorkspaceAfterPixelCopyTimeout(rootTag, error)
+        }
         try {
             output.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
         } finally {
