@@ -90,7 +90,7 @@ def test_every_git_archive_extraction_honours_the_private_installer_umask() -> N
         assert private_umask < source.index(extraction)
 
 
-def test_candidate_archive_restores_only_the_reviewed_vex_template_mode(
+def test_candidate_archive_restores_only_reviewed_scanner_and_runtime_modes(
     tmp_path: Path,
 ) -> None:
     source = INSTALLER.read_text(encoding="utf-8")
@@ -106,11 +106,15 @@ def test_candidate_archive_restores_only_the_reviewed_vex_template_mode(
     assert 'realpath "$candidate_vex_template"' in extraction_and_mode_check
 
     template_name = "infra/security/vex/zlib-cve-2026-85091.openvex.json"
+    zlib_name = "infra/docker/caddy-zlib/verify-official-zlib.sh"
+    profile_name = "infra/docker/verify-backend-runtime-profile.py"
+    reviewed_modes = {template_name: 0o644, zlib_name: 0o755, profile_name: 0o644}
     peer = tmp_path / "peer.txt"
     peer.write_text("another reviewed input\n", encoding="utf-8")
     archive = tmp_path / "source.tar"
     with tarfile.open(archive, "w") as package:
-        package.add(ROOT / template_name, arcname=template_name)
+        for name in reviewed_modes:
+            package.add(ROOT / name, arcname=name)
         package.add(peer, arcname="infra/security/vex/peer.txt")
 
     snapshot = tmp_path / "snapshot"
@@ -127,9 +131,11 @@ def test_candidate_archive_restores_only_the_reviewed_vex_template_mode(
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
-    template = snapshot / template_name
-    assert stat.S_IMODE(template.stat().st_mode) == 0o644
-    assert template.read_bytes() == (ROOT / template_name).read_bytes()
+    for name, mode in reviewed_modes.items():
+        copied = snapshot / name
+        assert stat.S_IMODE(copied.stat().st_mode) == mode
+        assert copied.read_bytes() == (ROOT / name).read_bytes()
+    assert stat.S_IMODE(snapshot.stat().st_mode) == 0o700
     assert stat.S_IMODE((snapshot / "infra/security/vex/peer.txt").stat().st_mode) == 0o600
 
     linked = tmp_path / "linked-source.tar"
@@ -183,6 +189,29 @@ def test_candidate_archive_restores_only_the_reviewed_vex_template_mode(
     assert rejected_parent.returncode != 0
     assert "Frozen zlib VEX template is missing or linked." in rejected_parent.stderr
     assert stat.S_IMODE(external_template.stat().st_mode) == 0o600
+
+    for name in (zlib_name, profile_name):
+        linked_runtime = tmp_path / f"linked-{Path(name).name}.tar"
+        with tarfile.open(linked_runtime, "w") as package:
+            for other in reviewed_modes.keys() - {name}:
+                package.add(ROOT / other, arcname=other)
+            link = tarfile.TarInfo(name)
+            link.type = tarfile.SYMTYPE
+            link.linkname = str(external_template)
+            package.addfile(link)
+        runtime_snapshot = tmp_path / f"snapshot-{Path(name).name}"
+        runtime_snapshot.mkdir(mode=0o700)
+        rejected_runtime = subprocess.run(
+            ["bash", "-c", "set -euo pipefail\numask 077\n" + extraction_and_mode_check],
+            env={**os.environ, "CANDIDATE_SOURCE_ARCHIVE": str(linked_runtime),
+                 "CANDIDATE_BUILD_ROOT": str(runtime_snapshot)},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert rejected_runtime.returncode != 0
+        assert "Frozen runtime verifier is missing or linked." in rejected_runtime.stderr
+        assert stat.S_IMODE(external_template.stat().st_mode) == 0o600
 
 
 def test_business_quiescence_verifier_requires_exact_zero_evidence() -> None:

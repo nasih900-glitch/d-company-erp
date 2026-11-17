@@ -239,6 +239,18 @@ if [ -z "$CANDIDATE_BUILD_ROOT" ]; then
     exit 1
   fi
   chmod 0644 "$candidate_vex_template"
+  # Docker COPY preserves these modes. The final scanner and backend profile
+  # checks run as the image's unprivileged user, outside the private snapshot.
+  candidate_zlib_verifier="$CANDIDATE_BUILD_ROOT/infra/docker/caddy-zlib/verify-official-zlib.sh"
+  candidate_backend_profile="$CANDIDATE_BUILD_ROOT/infra/docker/verify-backend-runtime-profile.py"
+  for candidate_runtime_input in "$candidate_zlib_verifier" "$candidate_backend_profile"; do
+    if [ ! -f "$candidate_runtime_input" ] || [ -L "$candidate_runtime_input" ] || \
+       [ "$(realpath "$candidate_runtime_input")" != "$candidate_runtime_input" ]; then
+      echo "Frozen runtime verifier is missing or linked." >&2; exit 1
+    fi
+  done
+  chmod 0755 "$candidate_zlib_verifier"
+  chmod 0644 "$candidate_backend_profile"
   rm -f "$CANDIDATE_SOURCE_ARCHIVE"
   test ! -e "$CANDIDATE_BUILD_ROOT/.git"
   test -f "$CANDIDATE_BUILD_ROOT/infra/scripts/install-on-vm.sh"
