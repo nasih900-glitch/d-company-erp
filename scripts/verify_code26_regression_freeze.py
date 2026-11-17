@@ -3356,7 +3356,7 @@ REVIEWED_CODE30_4_BUILD73_SHA256 = {'.env.production.example': '784386e8f33c4a8d
  'PROJECT_STATE.md': '5c4a54ae804f70cfd6c07762cbc23a3115c96c89a32c18f4fa5c64f39903ceb0',
  'README.md': 'c6f7b9e6c05429d8c20fad110cc9bcf7569ab3648213fef34506406e1a863ab7',
  'android-native/app/build.gradle.kts': '39ff4a128aadf16566a603aec62356ea260b3ea95690ab0182756002c7e348d2',
- 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/PhysicalSmoothnessUiTest.kt': '4ad1abd7bbec959fc6e1c9f6d364ab63b740968609ba82489f6e9e9d3c763828',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/PhysicalSmoothnessUiTest.kt': '4f4fb6a335f5e67fb84bdf4df2360b06be0b5d8241784a0833032621e9c5f3cb',
  'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': '595e9d7104c51c390877c4fbbac381a6cf8421d39e6167f792ea60423fd954e9',
  'backend/app/__init__.py': 'fec581423f9ae83e3f84f3cc9bffd6697b22a8e386a4e2469632e2ccf20ef92a',
  'backend/docs/POS_START_WORK.md': 'e5b11c2748b4c1139cc625b1d6d140ff1843cea93037da460cce6b47147560d6',
