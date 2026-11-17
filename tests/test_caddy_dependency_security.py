@@ -858,7 +858,16 @@ def test_postgres_runtime_changes_only_reviewed_security_corrections() -> None:
     )
     historical = expected + "\n" + MUSL_UTILS_INSTALL + "3.24\n"
     assert _file_at("b9b19bd2462e0f417922849a455e12116e8207e2", POSTGRES_DOCKERFILE) == historical
-    assert POSTGRES_DOCKERFILE.read_text(encoding="utf-8") == _official_zlib_expected(historical, "postgres")
+    expected = _official_zlib_expected(historical, "postgres")
+    for name, version in (("libxslt", "1.1.43-r4"), ("krb5-libs", "1.22.3-r0")):
+        pin = "      'libuuid=2.42.3-r1'; \\\n"
+        check = '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'libuuid-2.42.3-r1\'; \\\n'
+        expected = _replace_once(expected, pin, f"      '{name}={version}' \\\n" + pin)
+        expected = _replace_once(
+            expected, check,
+            f'    printf \'%s\\n\' "$installed_packages" | grep -Fx \'{name}-{version}\'; \\\n' + check,
+        )
+    assert POSTGRES_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
 def test_postgres_compatibility_gate_binds_the_current_gosu_binary() -> None:

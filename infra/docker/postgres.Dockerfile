@@ -74,10 +74,14 @@ RUN set -eux; \
       'zlib=1.4-r0' \
       'libcrypto3=3.5.9-r0' \
       'libssl3=3.5.9-r0' \
+      'libxslt=1.1.43-r4' \
+      'krb5-libs=1.22.3-r0' \
       'libuuid=2.42.3-r1'; \
     installed_packages="$(apk info -v)"; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'libxslt-1.1.43-r4'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'krb5-libs-1.22.3-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libuuid-2.42.3-r1'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'zlib-1.4-r0'; \
     test "$(postgres --version)" = 'postgres (PostgreSQL) 16.15'
