@@ -2,9 +2,13 @@ package cloud.dcompany.erp.ui
 
 import android.content.res.Configuration
 import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.SystemClock
 import android.util.Log
 import android.util.SparseIntArray
+import android.view.FrameMetrics
+import android.view.Window
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -49,6 +53,8 @@ import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import cloud.dcompany.erp.ui.theme.Spacing
 import java.io.File
 import java.time.Instant
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import kotlin.math.ceil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -118,18 +124,28 @@ class PhysicalComponentFrameStressUiTest {
             compose.waitForIdle()
         }
 
-        val frameMetrics = FrameMetricsAggregator(FrameMetricsAggregator.TOTAL_DURATION)
-        var collectedMetrics: SparseIntArray? = null
-        frameMetrics.add(compose.activity)
+        val window = compose.activity.window
+        val callbackThread = HandlerThread("erp-frame-stress").apply { start() }
+        val completedFrames = LinkedBlockingQueue<CompletedFrame>()
+        val listener = Window.OnFrameMetricsAvailableListener { _, frame, _ ->
+            completedFrames.add(
+                CompletedFrame(
+                    frame.getMetric(FrameMetrics.VSYNC_TIMESTAMP),
+                    frame.getMetric(FrameMetrics.TOTAL_DURATION),
+                ),
+            )
+        }
+        val histogram = SparseIntArray()
+        window.addOnFrameMetricsAvailableListener(listener, Handler(callbackThread.looper))
 
-        // Forty full availability cycles reproduce the old online/offline
-        // oscillation under a simultaneously ticking multi-station board.
-        // Busy-station churn is excluded here: a write lock changes twice per
-        // real action, not 200 times in a burst, and previously dominated the
-        // trace by intentionally recomposing every disabled station action.
+        // Keep all 200 transitions and their geometry checks at the maximum
+        // rate the display can complete them. Compose idleness alone permits
+        // the test to enqueue later inputs behind an unfinished frame.
         try {
             repeat(200) { index ->
+                var inputNanos = 0L
                 compose.runOnIdle {
+                    inputNanos = System.nanoTime()
                     connection.value = when (index % 5) {
                         0 -> SyncAvailabilityProblem.VERIFYING
                         1 -> SyncAvailabilityProblem.NO_NETWORK
@@ -148,6 +164,7 @@ class PhysicalComponentFrameStressUiTest {
                     wallClock.longValue += 1_000L
                 }
                 compose.waitForIdle()
+                recordFramesThroughInput(completedFrames, histogram, inputNanos, index)
                 assertEquals(
                     stableWorkflowBounds,
                     compose.onNodeWithTag("physical-gaming-board").fetchSemanticsNode().boundsInRoot,
@@ -155,17 +172,14 @@ class PhysicalComponentFrameStressUiTest {
                 assertEquals(stableStationBounds, captureStationBounds(stations.take(4)))
             }
         } finally {
-            // FrameMetricsAggregator posts histogram updates on its own
-            // HandlerThread. Compose idleness alone does not guarantee those
-            // callbacks have drained before remove() snapshots the metrics.
-            compose.waitForIdle()
-            SystemClock.sleep(250)
-            collectedMetrics = frameMetrics.remove(compose.activity)
-                ?.getOrNull(FrameMetricsAggregator.TOTAL_INDEX)
+            window.removeOnFrameMetricsAvailableListener(listener)
+            callbackThread.quitSafely()
+            callbackThread.join(3_000)
+            assertTrue("The frame callback thread did not stop", !callbackThread.isAlive)
         }
-
+        for (frame in completedFrames) recordStressFrame(histogram, frame)
         val metrics = summarizeFrameMetrics(
-            collectedMetrics,
+            histogram,
             compose.activity.display?.refreshRate ?: 60f,
         )
         writeScreenshot("03-gaming-after-connectivity-stress.png")
@@ -174,7 +188,7 @@ class PhysicalComponentFrameStressUiTest {
 
         assertTrue(
             "The physical run captured too few frames for a useful audit: ${metrics.totalFrames}",
-            metrics.totalFrames >= 100,
+            metrics.totalFrames >= 200,
         )
         assertEquals("A frozen frame was detected during Gaming/connectivity stress", 0, metrics.frozenFrames)
         // Jank and percentile values are calibration evidence on the first
@@ -182,6 +196,30 @@ class PhysicalComponentFrameStressUiTest {
         // rate materially affect them, so we inspect and compare the pulled
         // files before establishing a device-specific release threshold.
     }
+
+    private fun recordFramesThroughInput(
+        completedFrames: LinkedBlockingQueue<CompletedFrame>,
+        histogram: SparseIntArray,
+        inputNanos: Long,
+        sample: Int,
+    ) {
+        val deadline = inputNanos + TimeUnit.SECONDS.toNanos(5)
+        while (true) {
+            val remaining = deadline - System.nanoTime()
+            val frame = completedFrames.poll(remaining.coerceAtLeast(0), TimeUnit.NANOSECONDS)
+                ?: throw AssertionError("The changed frame never completed at stress sample $sample")
+            recordStressFrame(histogram, frame)
+            if (frame.vsyncNanos >= inputNanos && frame.durationNanos > 0) return
+        }
+    }
+
+    private fun recordStressFrame(histogram: SparseIntArray, frame: CompletedFrame) {
+        if (frame.durationNanos <= 0) return
+        val durationMillis = ((frame.durationNanos + 500_000L) / 1_000_000L).toInt()
+        histogram.put(durationMillis, histogram.get(durationMillis) + 1)
+    }
+
+    private data class CompletedFrame(val vsyncNanos: Long, val durationNanos: Long)
 
     @Test
     fun gamingTimersAtProductionCadenceHaveStableGeometry() {
