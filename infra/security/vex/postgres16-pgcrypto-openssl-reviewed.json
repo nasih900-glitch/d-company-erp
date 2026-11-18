@@ -58,7 +58,7 @@
     }
   },
   "deployment_sources": {
-    "docker-compose.prod.yml": "70c363f8ff5f6870704dbc03227e7d7905142e8fd8e6620661fcdd7f3001276d",
+    "docker-compose.prod.yml": "5eb9eb2701b91912fd29523d4218e94eced2bbd13bf13d03e065add16f703344",
     "infra/docker/postgres.Dockerfile": "7c2917c3909ee6c6c092ba7b1283782341a92cfc98da462ada5094438ef0feff"
   },
   "elf_files_sha256": "4949c2fb6f6f22b3e114478151b4ab8e4f36f7908a458315e93653fbfe200174",

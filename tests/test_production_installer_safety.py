@@ -370,7 +370,10 @@ def test_exact_candidate_images_are_scanned_before_maintenance() -> None:
     ) >= 2
     assert "--network none --read-only --cap-drop ALL" in source
     assert source.count("--security-opt no-new-privileges") >= 2
-    assert scanner_source.count(" --vex ") == 1
+    vex_paths = ("/scan/openssl-reviewed.openvex.json", "/scan/hashlib-fixed.openvex.json",
+                 "/scan/service-openssl-reviewed.openvex.json")
+    assert scanner_source.count(" --vex ") == len(vex_paths) == 3
+    assert all(scanner_source.count(f" --vex {path}") == 1 for path in vex_paths)
     assert '--vex /scan/hashlib-fixed.openvex.json' in scanner_source
     scan_order = (
         '--validate-hashlib-runtime "$hashlib_runtime" "$image_ref" "$config_image_id"',
@@ -378,9 +381,9 @@ def test_exact_candidate_images_are_scanned_before_maintenance() -> None:
         'run_owned_container 1200s "$grype_report" online "${grype_arguments[@]}"',
         'if [ "$service" = backend ] && [ "$scanner_status" -eq 2 ]; then',
         'mv "$grype_report" "$raw_grype"',
-        '--prove-fixed-hashlib "$raw_grype" "$image_ref"',
+        '--prove-fixed-hashlib "$hashlib_raw" "$image_ref"',
         '"$config_image_id" "$hashlib_runtime" "$hashlib_vex"',
-        'src=$hashlib_vex,dst=/scan/hashlib-fixed.openvex.json,readonly',
+        'src=$final_vex,dst=/scan/hashlib-fixed.openvex.json,readonly',
         '"${grype_arguments[@]}" --vex /scan/hashlib-fixed.openvex.json',
         'if [ "$scanner_status" -ne 0 ]; then',
         '"--$service-fixed-sbom" "$syft_report"',
@@ -389,6 +392,28 @@ def test_exact_candidate_images_are_scanned_before_maintenance() -> None:
     previous_step = 0
     for step in scan_order:
         previous_step = scanner_source.index(step, previous_step) + len(step)
+    backend = scanner_source.split('if [ "$service" = backend ] && [ "$scanner_status" -eq 2 ]; then', 1)[1].split('  case "$service" in', 1)[0]
+    backend_order = (
+        'mv "$grype_report" "$raw_grype"', '--has-findings "$raw_grype"',
+        '--collect /scan/backend-openssl-reviewed.json', '--prove "$EVIDENCE_ROOT" "$syft_report"',
+        '--vex /scan/openssl-reviewed.openvex.json', 'if [ "$scanner_status" -ne 2 ]; then',
+        '--prove-fixed-hashlib "$hashlib_raw"', '--combine "$EVIDENCE_ROOT" "$syft_report"',
+        'src=$final_vex,dst=/scan/hashlib-fixed.openvex.json,readonly', '--vex /scan/hashlib-fixed.openvex.json',
+    )
+    offset = 0
+    for step in backend_order:
+        offset = backend.index(step, offset) + len(step)
+    services = scanner_source.split('caddy|frontend|postgres)', 1)[1].split('  esac', 1)[0]
+    service_order = (
+        'mv "$grype_report" "$raw_grype"', '--has-findings "$service"', '--prepare-runtime "$service"',
+        '--entrypoint /bin/sh "$runtime_image_id"', '--bind-runtime "$service"', '--prove "$service"',
+        'docker image inspect --format', 'src=$service_vex,dst=/scan/service-openssl-reviewed.openvex.json,readonly',
+        '--vex /scan/service-openssl-reviewed.openvex.json',
+    )
+    offset = 0
+    for step in service_order:
+        offset = services.index(step, offset) + len(step)
+    assert '${openssl_vex_argument:+"$openssl_vex_argument"}' in scanner_source
     assert '[ "$run_status" -eq 2 ] && [ "$state" != false:2 ]' in scanner_source
     assert '"--$service-fixed-sbom" "$syft_report"' in scanner_source
     assert '"--runtime-proof=$runtime_proof"' in scanner_source

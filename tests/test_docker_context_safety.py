@@ -224,9 +224,16 @@ class DockerContextSafetyTest(unittest.TestCase):
             '            "$image" "${config_ids[0]}" \\\n'
             '            "$service=$evidence_dir/$service-grype.json" \\\n'
             '            "--runtime-proof=$evidence_dir/$service-zlib-runtime.json" \\\n'
-            '            "--archive-platform=${archive_platforms[0]}@${config_ids[0]}" "${hashlib_vex[@]}" >> "$validation"',
+            '            "--archive-platform=${archive_platforms[0]}@${config_ids[0]}" "${hashlib_vex[@]}" "${openssl_vex[@]}" >> "$validation"',
             action,
         )
+        for service in ("frontend", "caddy", "postgres"):
+            self.assertIn(f"vex: ${{{{ steps.service-openssl-vex.outputs.{service}_path }}}}", action)
+            self.assertIn(f"{service}-openssl-reviewed.openvex.json", action)
+            self.assertIn(f"{service}-grype-unfiltered.json", action)
+        self.assertIn("vex: ${{ steps.backend-hashlib-vex.outputs.scan_path }}", action)
+        self.assertIn('openssl_vex=("--openssl-assessment=$service_vex")', action)
+        self.assertIn('openssl_vex=("--openssl-assessment=$VERIFIED_OPENSSL_VEX")', action)
         self.assertNotIn("sbom: ${{ runner.temp }}/container-security", action)
         self.assertNotIn("continue-on-error", action)
 

@@ -383,7 +383,16 @@ def test_composite_gates_every_scanner_on_verified_connection_and_hardened_scan(
         "if: ${{ !cancelled() && steps.hardened-scan.outcome == 'success' }}"
     )
     assert action.count(connection_guard) == 7
-    assert action.count(hardened_guard) == 7
+    guarded_steps = {
+        "Select the independently verified backend fix statement",
+        "Select separately verified service execution-path statements",
+        "Scan backend image", "Scan frontend image", "Scan Caddy image",
+        "Scan PostgreSQL image", "Scan Redis image", "Validate exact zlib evidence",
+    }
+    steps = {block.splitlines()[0]: block for block in action.split("    - name: ")[1:]}
+    assert action.count(hardened_guard) == len(guarded_steps) == 8
+    assert {name for name, block in steps.items() if hardened_guard in block} == guarded_steps
+    assert all(steps[name].count(hardened_guard) == 1 for name in guarded_steps)
 
     services = {
         "backend": "backend",
@@ -409,9 +418,13 @@ def test_composite_gates_every_scanner_on_verified_connection_and_hardened_scan(
         )
         assert vex_input not in scan
         vex_lines = [line.strip() for line in scan.splitlines() if line.lstrip().startswith("vex:")]
-        assert vex_lines == (
-            ["vex: ${{ steps.backend-hashlib-vex.outputs.path }}"] if input_name == "backend" else []
-        )
+        expected_vex = {
+            "backend": "vex: ${{ steps.backend-hashlib-vex.outputs.scan_path }}",
+            "frontend": "vex: ${{ steps.service-openssl-vex.outputs.frontend_path }}",
+            "caddy": "vex: ${{ steps.service-openssl-vex.outputs.caddy_path }}",
+            "postgres": "vex: ${{ steps.service-openssl-vex.outputs.postgres_path }}",
+        }
+        assert vex_lines == ([expected_vex[input_name]] if input_name in expected_vex else [])
 
     hardened_scan = action.split(
         "    - name: Exercise hardened archive scanner on all candidate images", 1
@@ -419,9 +432,7 @@ def test_composite_gates_every_scanner_on_verified_connection_and_hardened_scan(
     assert hardened_scan.count(connection_guard) == 1
     assert "id: hardened-scan" in hardened_scan
 
-    verified_fix = action.split(
-        "    - name: Select the independently verified backend fix statement", 1
-    )[1].split("    - name: Scan backend image", 1)[0]
+    verified_fix = steps["Select the independently verified backend fix statement"]
     assert verified_fix.count(hardened_guard) == 1
     assert "id: backend-hashlib-vex" in verified_fix
     evidence_checks = (
@@ -433,6 +444,14 @@ def test_composite_gates_every_scanner_on_verified_connection_and_hardened_scan(
     )
     checks = [verified_fix.index(check) for check in evidence_checks]
     assert checks == sorted(checks)
+
+    verified_services = steps["Select separately verified service execution-path statements"]
+    assert "id: service-openssl-vex" in verified_services
+    assert "for service in caddy frontend postgres; do" in verified_services
+    assert "runtime_proof:openssl-runtime.json raw_grype:grype-unfiltered.json vex:openssl-reviewed.openvex.json" in verified_services
+    assert verified_services.index("sha256sum -c -") < verified_services.index('>> "$GITHUB_OUTPUT"')
+    assert 'validate_evidence_hash assessed_grype "$evidence_dir/backend-grype-openssl-filtered.json"' in verified_fix
+    assert 'combined_vex:backend-reviewed.openvex.json' in verified_fix
 
     zlib_validation = action.split(
         "    - name: Validate exact zlib evidence", 1
@@ -451,9 +470,13 @@ def test_composite_gates_every_scanner_on_verified_connection_and_hardened_scan(
         '            "$image" "${config_ids[0]}" \\\n'
         '            "$service=$evidence_dir/$service-grype.json" \\\n'
         '            "--runtime-proof=$evidence_dir/$service-zlib-runtime.json" \\\n'
-        '            "--archive-platform=${archive_platforms[0]}@${config_ids[0]}" "${hashlib_vex[@]}" >> "$validation"'
+        '            "--archive-platform=${archive_platforms[0]}@${config_ids[0]}" "${hashlib_vex[@]}" "${openssl_vex[@]}" >> "$validation"'
         in zlib_validation
     )
+    for service in ("caddy", "frontend", "postgres"):
+        assert f"{service}) service_vex=$VERIFIED_{service.upper()}_VEX ;;" in zlib_validation
+    assert 'openssl_vex=("--openssl-assessment=$service_vex")' in zlib_validation
+    assert 'openssl_vex=("--openssl-assessment=$VERIFIED_OPENSSL_VEX")' in zlib_validation
     assert "sudo -E" not in action
     assert '"DOCKER_HOST=$EXPECTED_DOCKER_HOST"' in action
     assert "/var/run/docker.sock" not in action

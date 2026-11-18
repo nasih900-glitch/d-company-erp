@@ -1,12 +1,12 @@
 # D Company ERP — current project state
 
-## Build 75 candidate
+## Build 76 candidate
 
-Version 3.1.68 targets Android build 75, Room 58 and Alembic 0105. See the
-[current candidate](docs/V3_1_68_RELEASE_CANDIDATE.md) for the tablet motion and
+Version 3.1.69 targets Android build 76, Room 58 and Alembic 0105. See the
+[current candidate](docs/V3_1_69_RELEASE_CANDIDATE.md) for the tablet motion and
 focus corrections, retained product scope and remaining release checks.
 Physical probes used an isolated release-like package with the prior QA
-identity. They do not establish newly signed Build 75 or live Redmi acceptance.
+identity. They do not establish newly signed Build 76 or live Redmi acceptance.
 
 The signed Build 74 / v3.1.67 source and assets remain immutable history.
 Production deployment and update offer are separate, still guarded steps.
@@ -15,7 +15,12 @@ The security follow-up adds four separately bounded image execution-path
 assessments and a readonly PostgreSQL configuration/catalogue admission check.
 Scanner thresholds and original reports remain intact; final exact-source CI,
 signing and production admission remain distinct requirements. The
-[candidate document](docs/V3_1_68_RELEASE_CANDIDATE.md) links the scoped contracts.
+[candidate document](docs/V3_1_69_RELEASE_CANDIDATE.md) links the scoped contracts.
+
+The immutable v3.1.68 tag remains historical evidence. Build 76 corrects three
+scanner test contracts exposed by the complete root preflight; it retains the
+same tablet implementation and scanner policies. Full branch CI precedes a new
+tag, signing and any production offer.
 
 ## Earlier checkpoints
 
