@@ -1,10 +1,15 @@
 # D Company ERP — current project state
 
-## Build 74 candidate
+## Build 75 candidate
 
-Version 3.1.67 targets Android build 74, Room 58 and Alembic 0105. See the
-[current candidate](docs/V3_1_67_RELEASE_CANDIDATE.md) for product scope and
-release checks.
+Version 3.1.68 targets Android build 75, Room 58 and Alembic 0105. See the
+[current candidate](docs/V3_1_68_RELEASE_CANDIDATE.md) for the tablet motion and
+focus corrections, retained product scope and remaining release checks.
+Physical probes used an isolated release-like package with the prior QA
+identity. They do not establish newly signed Build 75 or live Redmi acceptance.
+
+The signed Build 74 / v3.1.67 source and assets remain immutable history.
+Production deployment and update offer are separate, still guarded steps.
 
 ## Earlier checkpoints
 

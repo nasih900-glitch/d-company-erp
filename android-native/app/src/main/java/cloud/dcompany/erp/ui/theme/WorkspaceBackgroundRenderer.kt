@@ -525,8 +525,7 @@ internal fun WorkspaceBackgroundRenderer(
                 },
                 typography = inheritedTypography,
                 shapes = inheritedShapes,
-                content = content,
-            )
+            ) { WorkspaceInteractionFeedback(content) }
         }
     }
 }

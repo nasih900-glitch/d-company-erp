@@ -24,8 +24,8 @@ PG_MOUNT = "/var/lib/postgresql/data"
 CADDY_CONFIG = "/etc/caddy/Caddyfile"
 CADDY_APKS = "/srv/releases/android"
 INSTALL_RECEIPTS = Path("/var/lib/dcompany-erp/build72-deployments")
-RELEASE_VERSION = "3.1.67"
-RELEASE_BUILD = 74
+RELEASE_VERSION = "3.1.68"
+RELEASE_BUILD = 75
 RELEASE_SCHEMA = "0105"
 CANDIDATE_SERVICES = ("postgres", "backend", "frontend", "caddy")
 

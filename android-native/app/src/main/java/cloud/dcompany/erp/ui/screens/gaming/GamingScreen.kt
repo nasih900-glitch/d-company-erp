@@ -244,6 +244,7 @@ import cloud.dcompany.erp.ui.theme.WorkspacePanelShape
 import cloud.dcompany.erp.ui.theme.WorkspaceGlassRoleStyle
 import cloud.dcompany.erp.ui.theme.workspaceGlass
 import cloud.dcompany.erp.ui.theme.workspaceGlassRoleStyle
+import cloud.dcompany.erp.ui.theme.WorkspaceInteractionFeedback
 import cloud.dcompany.erp.ui.remote.RemoteSensitiveContent
 import java.time.Instant
 import java.util.Locale
@@ -313,8 +314,7 @@ private fun GamingGlassContent(
         ),
         typography = typography,
         shapes = shapes,
-        content = content,
-    )
+    ) { WorkspaceInteractionFeedback(content) }
 }
 
 @Composable

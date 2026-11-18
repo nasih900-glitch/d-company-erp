@@ -293,7 +293,7 @@ private val DCompanyTypography = Typography(
 enum class AppearancePreference { System, Day, Night }
 
 @OptIn(ExperimentalMaterial3Api::class)
-private val TouchFeedbackRippleConfiguration = RippleConfiguration(
+private val KeyboardFocusRippleConfiguration = RippleConfiguration(
     rippleAlpha = RippleAlpha(
         draggedAlpha = 0f,
         focusedAlpha = RippleDefaults.RippleAlpha.focusedAlpha,
@@ -330,8 +330,8 @@ fun DCompanyTheme(
             typography = DCompanyTypography,
             shapes = DCompanyShapes,
         ) {
-            CompositionLocalProvider(LocalRippleConfiguration provides TouchFeedbackRippleConfiguration) {
-                content()
+            CompositionLocalProvider(LocalRippleConfiguration provides KeyboardFocusRippleConfiguration) {
+                WorkspaceInteractionFeedback(content)
             }
         }
     }
