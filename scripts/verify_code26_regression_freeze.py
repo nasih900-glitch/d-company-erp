@@ -3522,6 +3522,7 @@ REVIEWED_CODE30_4_BUILD76_SHA256 = {'.env.production.example': '0147b90e91a99e94
  'README.md': 'fa9622307629a14c095031d14de8cebe81d9a7930194050efeecf14a80e40005',
  'android-native/app/build.gradle.kts': 'ef31f252c0f0b20949839a565e6e02d7a10726750bf2378cd117c09bd2daa9d1',
  'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': 'de8279ead521c8348317c07e47e78022449b4132d0645d8b9f7b40a373e7b358',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/update/VerifiedApkDownloaderTest.kt': '47c611558d25df6d724e4aa59080607b8b3b3e37de0e83d7fe9e1a3097dc9c5b',
  'backend/app/__init__.py': '4c4af0814d8ac2df73cce7ba6541ccebd9579985f6ae78f44531e2728d525887',
  'backend/docs/POS_START_WORK.md': '0712a7309862ea5d9136a423218b3f89a18bf64937b0562bb102fbb0dd3db5c9',
  'backend/pyproject.toml': '5de4f58f1775e49fa2fb880ca579af1a4a7f16ee07e31ea550497b37b19dd7a6',
