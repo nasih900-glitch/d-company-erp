@@ -5,6 +5,11 @@ import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Easing
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LocalRippleConfiguration
+import androidx.compose.material3.RippleConfiguration
+import androidx.compose.material3.RippleDefaults
+import androidx.compose.material.ripple.RippleAlpha
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
@@ -287,6 +292,17 @@ private val DCompanyTypography = Typography(
 
 enum class AppearancePreference { System, Day, Night }
 
+@OptIn(ExperimentalMaterial3Api::class)
+private val TouchFeedbackRippleConfiguration = RippleConfiguration(
+    rippleAlpha = RippleAlpha(
+        draggedAlpha = 0f,
+        focusedAlpha = RippleDefaults.RippleAlpha.focusedAlpha,
+        hoveredAlpha = 0f,
+        pressedAlpha = 0f,
+    ),
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DCompanyTheme(
     preference: AppearancePreference = AppearancePreference.System,
@@ -313,7 +329,10 @@ fun DCompanyTheme(
             colorScheme = companyColorScheme(palette, dark),
             typography = DCompanyTypography,
             shapes = DCompanyShapes,
-            content = content,
-        )
+        ) {
+            CompositionLocalProvider(LocalRippleConfiguration provides TouchFeedbackRippleConfiguration) {
+                content()
+            }
+        }
     }
 }

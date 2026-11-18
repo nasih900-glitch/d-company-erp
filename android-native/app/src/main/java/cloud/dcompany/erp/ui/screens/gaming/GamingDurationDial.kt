@@ -10,8 +10,6 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
-import androidx.compose.foundation.interaction.collectIsHoveredAsState
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -116,6 +114,7 @@ internal fun GamingDurationDial(
         mutableStateOf(selected.packageId)
     }
     var liveDragAngle by remember(options, gestureContextKey) { mutableStateOf<Float?>(null) }
+    var gestureActive by remember(options, gestureContextKey) { mutableStateOf(false) }
     var gestureRevision by remember(options, gestureContextKey) { mutableStateOf(0) }
     SideEffect {
         if (observedSelection != selected.packageId) {
@@ -131,13 +130,12 @@ internal fun GamingDurationDial(
     val compactMarkers = dialSize < 270.dp
     val compactCentre = dialSize < 200.dp
     val targetAngle = DURATION_DIAL_START + stops[selectedIndex]
-    val animatedAngle by animateFloatAsState(
-        targetValue = liveDragAngle ?: targetAngle,
-        animationSpec = if (liveDragAngle != null) snap()
+    val animatedAngle = animateFloatAsState(
+        targetValue = targetAngle,
+        animationSpec = if (gestureActive) snap()
             else tween(durationMillis = Motion.medium, easing = Motion.emphasized),
         label = "Gaming duration selection",
     )
-    val displayedAngle = liveDragAngle ?: animatedAngle
     val currentRequestedSelection by rememberUpdatedState(selectedPackageId)
     val currentDisplayedSelection by rememberUpdatedState(selected.packageId)
     val currentOnSelect by rememberUpdatedState(onSelect)
@@ -230,6 +228,7 @@ internal fun GamingDurationDial(
                     // Grabbing the ring must not move its handle or change the bill.
                     var progress = stops[currentIndex]
                     var previousAngle: Float = downAngle
+                    gestureActive = true
                     liveDragAngle = DURATION_DIAL_START + progress
                     try {
                         while (true) {
@@ -268,6 +267,7 @@ internal fun GamingDurationDial(
                         }
                     } finally {
                         liveDragAngle = null
+                        gestureActive = false
                     }
                 }
             }
@@ -292,6 +292,9 @@ internal fun GamingDurationDial(
                         contentDescription = "Gaming duration ring. The booking marker stays fixed while the inner trace shows remaining time."
                     },
             ) {
+                // Raw finger positions and animation frames invalidate drawing only.
+                val dragAngle = liveDragAngle
+                val displayedAngle = dragAngle ?: animatedAngle.value
                 val vividGold = dialAccent
                 val paleGold = dialAccentSoft
                 val radius = size.minDimension * 0.40f
@@ -334,7 +337,7 @@ internal fun GamingDurationDial(
                 )
                 // Minute positions follow the clock and remain frozen after Start.
                 // A drag previews the arc without inventing an unpublished tariff.
-                val selectedSweep = (liveDragAngle?.let { it - DURATION_DIAL_START }
+                val selectedSweep = (dragAngle?.let { it - DURATION_DIAL_START }
                     ?: stops[selectedIndex]).coerceIn(1f, 360f)
                 drawArc(
                     color = vividGold,
@@ -384,9 +387,7 @@ internal fun GamingDurationDial(
                 if (option.minutes != 60 || showHourMark) {
                     val angle = Math.toRadians((DURATION_DIAL_START + stops[index]).toDouble())
                     val interaction = remember(option.packageId) { MutableInteractionSource() }
-                    val hovered by interaction.collectIsHoveredAsState()
                     val focused by interaction.collectIsFocusedAsState()
-                    val pressed by interaction.collectIsPressedAsState()
                     Text(
                         "${option.minutes}",
                         modifier = Modifier
@@ -397,9 +398,6 @@ internal fun GamingDurationDial(
                             .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                             .testTag("gaming-duration-${option.minutes}")
                             .drawBehind {
-                                if (readout == null && (hovered || focused || pressed)) {
-                                    drawCircle(dialAccent.copy(alpha = 0.10f))
-                                }
                                 if (focused) drawRoundRect(focusRing, style = Stroke(1.dp.toPx()))
                             }
                             .then(if (readout == null) {

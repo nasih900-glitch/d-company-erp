@@ -100,6 +100,12 @@ internal fun workspaceSceneScrimBrush(
 
 internal val WorkspaceSceneScrimOverlay = Color.Black.copy(alpha = 0.10f)
 
+private fun workspaceCombinedSceneScrimBrush(): Brush = Brush.verticalGradient(
+    0f to Color.Black.copy(alpha = .496f),
+    .45f to Color.Black.copy(alpha = .334f),
+    1f to Color.Black.copy(alpha = .64f),
+)
+
 internal fun workspaceBackgroundCropPlan(
     sourceWidth: Int,
     sourceHeight: Int,
@@ -393,7 +399,7 @@ internal fun WorkspaceBackgroundRenderer(
             return@LaunchedEffect
         }
         softenedDerivative = null
-        val workerOwned = AtomicReference<Bitmap?>(null)
+        val workerOwned = AtomicReference<WorkspaceGlassDerivative?>(null)
         val result = try {
             withContext(Dispatchers.Default) {
                 softenWorkspaceBackground(
@@ -402,17 +408,17 @@ internal fun WorkspaceBackgroundRenderer(
                     height = derivativeSize.height,
                     key = derivativeKey,
                 ).also {
-                    workerOwned.set(it.bitmap)
+                    workerOwned.set(it)
                 }
-            }.also { check(workerOwned.compareAndSet(it.bitmap, null)) }
+            }.also { check(workerOwned.compareAndSet(it, null)) }
         } catch (cancelled: CancellationException) {
-            workerOwned.getAndSet(null)?.recycle()
+            workerOwned.getAndSet(null)?.recycleUnpublished()
             throw cancelled
         } catch (_: OutOfMemoryError) {
-            workerOwned.getAndSet(null)?.recycle()
+            workerOwned.getAndSet(null)?.recycleUnpublished()
             return@LaunchedEffect
         } catch (_: RuntimeException) {
-            workerOwned.getAndSet(null)?.recycle()
+            workerOwned.getAndSet(null)?.recycleUnpublished()
             return@LaunchedEffect
         }
         val stillCurrent = workspaceGlassCanPublish(
@@ -425,7 +431,7 @@ internal fun WorkspaceBackgroundRenderer(
             WorkspaceGlassBitmapCache.put(derivativeKey, result)
             softenedDerivative = result
         } else {
-            result.bitmap.recycle()
+            result.recycleUnpublished()
         }
     }
 
@@ -479,10 +485,9 @@ internal fun WorkspaceBackgroundRenderer(
         if (applyWorkspaceSceneGrade) {
             Box(
                 Modifier.fillMaxSize().background(
-                    workspaceSceneScrimBrush(),
+                    workspaceCombinedSceneScrimBrush(),
                 ),
             )
-            Box(Modifier.fillMaxSize().background(WorkspaceSceneScrimOverlay))
         }
         val scene = displayedFrame?.let { frame ->
             val coordinates = rootCoordinates ?: return@let null
@@ -535,7 +540,7 @@ private object WorkspaceGlassBitmapCache {
     }
 }
 
-private suspend fun softenWorkspaceBackground(
+internal suspend fun softenWorkspaceBackground(
     source: Bitmap,
     width: Int,
     height: Int,
@@ -543,6 +548,8 @@ private suspend fun softenWorkspaceBackground(
 ): WorkspaceGlassDerivative {
     check(workspaceGlassTransientBytes(androidx.compose.ui.unit.IntSize(width, height)) <= 4L * 1_024 * 1_024)
     val scaled = Bitmap.createScaledBitmap(source, width, height, true)
+    var raw: Bitmap? = null
+    var graded: Bitmap? = null
     try {
         val sourcePixels = IntArray(width * height)
         val horizontal = IntArray(width * height)
@@ -552,13 +559,55 @@ private suspend fun softenWorkspaceBackground(
         blurColumns(horizontal, output, width, height, WorkspaceGlassBlurRadius)
         coroutineContext.ensureActive()
         val safetyGrid = workspaceGlassSafetyGrid(output, width, height)
-        val bitmap = Bitmap.createBitmap(output, width, height, Bitmap.Config.ARGB_8888).also {
+        raw = Bitmap.createBitmap(output, width, height, Bitmap.Config.ARGB_8888).also {
             it.setHasAlpha(false)
         }
-        return WorkspaceGlassDerivative(key = key, bitmap = bitmap, safetyGrid = safetyGrid)
+        // Safety-grid maxima deliberately force alpha to FF. Only the actual blurred pixels
+        // prove that omitting the fallback and separate grade draws is safe.
+        if (workspaceGlassPixelsAreOpaque(output)) {
+            graded = try {
+                pregradeWorkspaceGlassBitmap(checkNotNull(raw))
+            } catch (_: OutOfMemoryError) {
+                null
+            } catch (_: RuntimeException) {
+                null
+            }
+        }
+        coroutineContext.ensureActive()
+        return WorkspaceGlassDerivative(key, checkNotNull(raw), safetyGrid, graded).also {
+            raw = null
+            graded = null
+        }
     } finally {
+        graded?.recycle()
+        raw?.recycle()
         // createScaledBitmap may return the leased clear frame when dimensions match.
         if (scaled !== source) scaled.recycle()
+    }
+}
+
+private fun pregradeWorkspaceGlassBitmap(source: Bitmap): Bitmap {
+    val graded = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+    try {
+        val canvas = Canvas(graded)
+        canvas.drawBitmap(source, 0f, 0f, null)
+        val paint = Paint().apply {
+            shader = android.graphics.LinearGradient(
+                0f, 0f, 0f, source.height.toFloat(),
+                intArrayOf(0x70000000, 0x42000000, 0x99000000.toInt()),
+                floatArrayOf(0f, .45f, 1f),
+                android.graphics.Shader.TileMode.CLAMP,
+            )
+        }
+        canvas.drawRect(0f, 0f, source.width.toFloat(), source.height.toFloat(), paint)
+        paint.shader = null
+        paint.color = 0x1A000000
+        canvas.drawRect(0f, 0f, source.width.toFloat(), source.height.toFloat(), paint)
+        graded.setHasAlpha(false)
+        return graded
+    } catch (failure: Throwable) {
+        graded.recycle()
+        throw failure
     }
 }
 

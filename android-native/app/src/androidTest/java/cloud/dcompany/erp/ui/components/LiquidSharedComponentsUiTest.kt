@@ -5,6 +5,8 @@ import android.graphics.Canvas
 import android.graphics.Color as AndroidColor
 import android.view.View
 import androidx.compose.foundation.background
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -43,6 +46,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsDisplayed
@@ -88,6 +92,71 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class LiquidSharedComponentsUiTest {
     @get:Rule val compose = createGlassComposeRule()
+
+    @Test
+    fun heldTouchesDoNotWashFoundationSelectionsOrNestedMaterialButtons() {
+        val selected = mutableStateOf(false)
+        val rowClicks = AtomicInteger()
+        val buttonClicks = AtomicInteger()
+        compose.setContent {
+            DCompanyTheme(AppearancePreference.Night) {
+                Column(Modifier.width(400.dp).height(260.dp).padding(16.dp)) {
+                    Box(
+                        Modifier.width(320.dp).height(72.dp)
+                            .testTag("touch-feedback-selectable")
+                            .selectable(selected = selected.value, role = Role.Tab) {
+                                selected.value = true
+                                rowClicks.incrementAndGet()
+                            }
+                            .padding(12.dp)
+                            .background(
+                                if (selected.value) MaterialTheme.colorScheme.primaryContainer
+                                else MaterialTheme.colorScheme.surfaceContainer,
+                                RoundedCornerShape(12.dp),
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) { Text("Store workspace") }
+                    Spacer(Modifier.height(24.dp))
+                    // Workspace scene hosts install a nested MaterialTheme too.
+                    MaterialTheme(colorScheme = MaterialTheme.colorScheme) {
+                        Button(
+                            onClick = { buttonClicks.incrementAndGet() },
+                            modifier = Modifier.width(280.dp).height(56.dp).testTag("touch-feedback-button"),
+                        ) { Text("Continue") }
+                    }
+                }
+            }
+        }
+        for (tag in listOf("touch-feedback-selectable", "touch-feedback-button")) {
+            val node = compose.onNodeWithTag(tag).assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+            val baseline = node.captureToImage().asAndroidBitmap()
+            var held: Bitmap? = null
+            try {
+                node.performTouchInput { down(center); advanceEventTime(120) }
+                compose.mainClock.advanceTimeBy(240)
+                held = node.captureToImage().asAndroidBitmap()
+                assertEquals(baseline.width, held.width)
+                assertEquals(baseline.height, held.height)
+                var maximumDistance = 0
+                for (y in 0 until baseline.height step 2) for (x in 0 until baseline.width step 2) {
+                    maximumDistance = max(maximumDistance, colorDistance(baseline.getPixel(x, y), held.getPixel(x, y)))
+                }
+                assertTrue("$tag must retain its pixels during a held touch, maxDistance=$maximumDistance", maximumDistance <= 6)
+                assertEquals(0, rowClicks.get())
+                assertEquals(0, buttonClicks.get())
+            } finally {
+                node.performTouchInput { cancel() }
+                baseline.recycle()
+                held?.recycle()
+            }
+        }
+        compose.onNodeWithTag("touch-feedback-selectable").assertIsNotSelected().performClick().assertIsSelected()
+        compose.onNodeWithTag("touch-feedback-button").performClick()
+        compose.runOnIdle {
+            assertEquals(1, rowClicks.get())
+            assertEquals(1, buttonClicks.get())
+        }
+    }
 
     @Test
     fun blankSectionCardsRespondToTheSameControlledScene() {

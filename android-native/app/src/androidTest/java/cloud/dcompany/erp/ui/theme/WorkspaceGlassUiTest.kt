@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -48,6 +49,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -1362,6 +1364,115 @@ class WorkspaceGlassUiTest {
         cleanupFailure?.let { throw it }
         assertEquals("The bounded motion workload must complete exactly", ExpectedMotionWorkload, workload)
         assertTrue("FrameMetrics evidence must be complete: $outcomeReason", complete)
+    }
+
+    @Test
+    fun realPregradedPanelMatchesLegacyProjectionAndIndependentColorOracle() {
+        val density = compose.activity.resources.displayMetrics.density
+        val rootWidthPx = (320 * density).roundToInt()
+        val rootHeightPx = (240 * density).roundToInt()
+        val pattern = createGlassCropPattern(rootWidthPx, rootHeightPx)
+        val key = WorkspaceBackgroundRenderKey(
+            WorkspaceBackgroundSlot.WORKSPACE, WorkspaceBackgroundSource.BUNDLED, 1,
+            "real-pregrade-projection", rootWidthPx, rootHeightPx, 0,
+        )
+        val size = workspaceGlassDerivativeSize(rootWidthPx, rootHeightPx)
+        val derivative = runBlocking(kotlinx.coroutines.Dispatchers.Default) {
+            softenWorkspaceBackground(
+                pattern, size.width, size.height,
+                WorkspaceGlassDerivativeKey(key, 1, WorkspaceGlassAlgorithmVersion, size.width, size.height, WorkspaceGlassBlurRadius),
+            )
+        }
+        val legacyDerivative = derivative.copy(gradedBitmap = null)
+        val optimized = mutableStateOf(true)
+        val partial = mutableStateOf(false)
+        val hostCoordinates = mutableStateOf<LayoutCoordinates?>(null)
+        val panelCoordinates = AtomicReference<LayoutCoordinates?>()
+        // Published fixture bitmaps remain leased until this Activity is torn down.
+        assertTrue("The real opaque blur must provide its graded derivative", derivative.gradedBitmap != null)
+        compose.setContent {
+            val scene = hostCoordinates.value?.let { coordinates ->
+                WorkspaceGlassScene(
+                    frame = DisplayedSceneFrame(key, key, DisplayedSceneState.REQUESTED_READY, pattern, 1),
+                    derivative = if (optimized.value) derivative else legacyDerivative,
+                    rootCoordinates = coordinates,
+                    rootBoundsInRoot = coordinates.boundsInRoot(),
+                    layoutEpoch = 1,
+                )
+            }
+            DCompanyTheme(AppearancePreference.Night) {
+                Box(
+                    Modifier.width(320.dp).height(240.dp).clipToBounds()
+                        .onGloballyPositioned { if (hostCoordinates.value == null) hostCoordinates.value = it }
+                        .testTag("real-pregrade-root"),
+                ) {
+                    Box(
+                        Modifier.offset(x = if (partial.value) (-40).dp else 70.dp, y = 72.dp)
+                            .width(180.dp).height(96.dp)
+                            .onGloballyPositioned(panelCoordinates::set)
+                            .testTag("real-pregrade-panel")
+                            .workspaceGlass(scene, WorkspaceGlassRole.PANEL, day = false),
+                    )
+                }
+            }
+        }
+        compose.waitUntil(3_000) { hostCoordinates.value != null && panelCoordinates.get() != null }
+        for (outside in listOf(false, true)) {
+            compose.runOnIdle { partial.value = outside; optimized.value = true }
+            val rootBounds = compose.onNodeWithTag("real-pregrade-root").fetchSemanticsNode().boundsInRoot
+            val panel = compose.onNodeWithTag("real-pregrade-panel")
+            val optimizedBounds = panel.fetchSemanticsNode().boundsInRoot
+            val mapped = compose.runOnIdle {
+                checkNotNull(hostCoordinates.value).localBoundingBoxOf(checkNotNull(panelCoordinates.get()), clipBounds = false)
+            }
+            assertEquals(
+                "Only the fully covered panel may use pregrading", !outside,
+                workspaceGlassPregradeCoversConsumer(
+                    mapped, androidx.compose.ui.geometry.Size(180 * density, 96 * density), rootWidthPx, rootHeightPx,
+                ),
+            )
+            val first = panel.captureToImage().asAndroidBitmap()
+            var second: Bitmap? = null
+            try {
+                compose.runOnIdle { optimized.value = false }
+                assertEquals("A/B must render the identical mapped panel", optimizedBounds, panel.fetchSemanticsNode().boundsInRoot)
+                second = panel.captureToImage().asAndroidBitmap()
+                assertEquals(first.width, second.width)
+                assertEquals(first.height, second.height)
+                var maximumDistance = 0
+                val inset = max(2, (4 * density).roundToInt())
+                for (y in inset until first.height - inset step 2) {
+                    for (x in inset until first.width - inset step 2) {
+                        maximumDistance = max(maximumDistance, colorDistance(first.getPixel(x, y), second.getPixel(x, y)))
+                    }
+                }
+                assertTrue(
+                    "Actual GPU projection must retain the legacy material pixels outside=$outside maxDistance=$maximumDistance",
+                    maximumDistance <= 12,
+                )
+                for (fraction in listOf(.25f, .5f, .75f)) {
+                    val x = first.width / 2
+                    val y = (first.height * fraction).roundToInt()
+                    val globalY = optimizedBounds.top - rootBounds.top + y + .5f
+                    val expected = expectedAdaptivePanelPixel(
+                        source = glassCropPatternColor(globalY, rootHeightPx),
+                        globalY = globalY,
+                        viewportHeight = rootHeightPx,
+                        boundsInScene = mapped,
+                        derivative = derivative,
+                        independentlyPinnedTintAlpha = .58f,
+                        independentlyPinnedGradeStrength = 1f,
+                    ).color
+                    assertTrue("Optimized pixels must match the unchanged independent oracle outside=$outside y=$y",
+                        colorDistance(first.getPixel(x, y), expected) <= 12)
+                    assertTrue("Legacy pixels must match the unchanged independent oracle outside=$outside y=$y",
+                        colorDistance(second.getPixel(x, y), expected) <= 12)
+                }
+            } finally {
+                first.recycle()
+                second?.recycle()
+            }
+        }
     }
 
     @Test

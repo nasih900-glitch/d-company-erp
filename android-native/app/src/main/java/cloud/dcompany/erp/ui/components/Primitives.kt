@@ -68,6 +68,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -78,6 +79,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -182,9 +184,9 @@ fun ShimmerBlock(modifier: Modifier = Modifier, shape: RoundedCornerShape = Radi
 }
 
 @Composable
-private fun rememberSkeletonAlpha(): Float {
+private fun rememberSkeletonAlpha(): State<Float> {
     val transition = rememberInfiniteTransition(label = "skeletonPulse")
-    val alpha by transition.animateFloat(
+    return transition.animateFloat(
         initialValue = 0.52f,
         targetValue = 0.86f,
         animationSpec = infiniteRepeatable(
@@ -193,16 +195,16 @@ private fun rememberSkeletonAlpha(): Float {
         ),
         label = "skeletonAlpha",
     )
-    return alpha
 }
 
 @Composable
 private fun SkeletonBlock(
     modifier: Modifier,
     shape: RoundedCornerShape,
-    alpha: Float,
+    alpha: State<Float>,
 ) {
-    Box(modifier.clip(shape).background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = alpha)))
+    val color = MaterialTheme.colorScheme.surfaceContainerHigh
+    Box(modifier.clip(shape).drawBehind { drawRect(color.copy(alpha = alpha.value)) })
 }
 
 @Composable

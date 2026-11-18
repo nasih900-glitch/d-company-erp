@@ -562,7 +562,6 @@ internal fun WorkspaceScaffold(
                         val noticeHeight = (topBarHeight - ExecutiveUtilityHeight).coerceAtLeast(0.dp)
                         val shellLayout = ExecutiveHomeShellLayout(
                             enabled = true,
-                            railWidth = railWidth,
                             utilityHeight = ExecutiveUtilityHeight,
                             noticeHeight = noticeHeight,
                         )

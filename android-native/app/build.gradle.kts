@@ -154,8 +154,8 @@ android {
         // Visual QA only. This package uses an inert Application and a
         // permission-free manifest, and cannot start the production activity.
         create("executiveReview") {
-            initWith(getByName("debug"))
-            matchingFallbacks += "debug"
+            initWith(getByName("release"))
+            matchingFallbacks += "release"
             signingConfig = signingConfigs.getByName("debug")
             applicationIdSuffix = ".executivereview"
             versionNameSuffix = "-executive-review"

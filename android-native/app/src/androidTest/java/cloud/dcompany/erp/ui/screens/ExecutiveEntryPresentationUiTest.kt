@@ -1460,8 +1460,12 @@ class ExecutiveEntryPresentationUiTest {
                 evidencePin(TestApkArgument)
             }
             assertTrue(host.windowBounds.width() > 0 && host.windowBounds.height() > 0)
-            assertTrue(host.windowBounds.width() <= host.modeWidthPx)
-            assertTrue(host.windowBounds.height() <= host.modeHeightPx)
+            assertTrue(
+                "Rotated window must fit the observed display mode: window=${host.windowBounds} " +
+                    "mode=${host.modeWidthPx}x${host.modeHeightPx}",
+                max(host.windowBounds.width(), host.windowBounds.height()) <= max(host.modeWidthPx, host.modeHeightPx) &&
+                    min(host.windowBounds.width(), host.windowBounds.height()) <= min(host.modeWidthPx, host.modeHeightPx),
+            )
             assertTrue(host.decorWidthPx > 0 && host.decorHeightPx > 0)
         }
     }

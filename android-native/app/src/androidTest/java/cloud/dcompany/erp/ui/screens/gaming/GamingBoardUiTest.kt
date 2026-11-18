@@ -32,16 +32,21 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.input.InputModeManager
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
@@ -55,6 +60,8 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
@@ -103,6 +110,7 @@ import cloud.dcompany.erp.ui.theme.AppearancePreference
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import java.io.File
 import java.time.Instant
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.roundToInt
@@ -894,11 +902,16 @@ class GamingBoardUiTest {
         return checkNotNull(last?.geometry)
     }
 
-    @OptIn(ExperimentalTestApi::class)
+    @OptIn(ExperimentalTestApi::class, ExperimentalComposeUiApi::class)
     @Test
     fun hoveringDurationPriceKeepsBookingUnchangedAndMarkerStillSelects() {
         val selected = mutableStateOf("single-60")
+        val selections = mutableListOf<String>()
+        var ticks = 0
+        val inputModeManager = AtomicReference<InputModeManager>()
         compose.setContent {
+            val inputMode = LocalInputModeManager.current
+            SideEffect { inputModeManager.set(inputMode) }
             DCompanyTheme(preference = AppearancePreference.Night) {
                 Surface(color = MaterialTheme.colorScheme.background) {
                     Box(Modifier.width(420.dp).height(420.dp).testTag("dial-hover-fixture")) {
@@ -908,7 +921,8 @@ class GamingBoardUiTest {
                                 GamingDurationChoice("single-60", 60, 12_000),
                             ),
                             selectedPackageId = selected.value,
-                            onSelect = { selected.value = it },
+                            onSelect = { selected.value = it; selections += it },
+                            segmentTick = { ticks++ },
                             dialSize = 344.dp,
                             showChoiceChips = false,
                         )
@@ -918,35 +932,71 @@ class GamingBoardUiTest {
         }
 
         val sixtyMinutePrice = compose.onNodeWithContentDescription("Choose 60 minutes, 120.00")
-        capture("gaming-duration-price-before-hover.png", "dial-hover-fixture")
-        sixtyMinutePrice.performMouseInput { enter() }
-        capture("gaming-duration-price-hover.png", "dial-hover-fixture")
-        compose.runOnIdle { assertEquals("single-60", selected.value) }
+        val fixtureNode = compose.onNodeWithTag("dial-hover-fixture")
         val marker = sixtyMinutePrice.fetchSemanticsNode().boundsInRoot
-        val fixture = compose.onNodeWithTag("dial-hover-fixture").fetchSemanticsNode().boundsInRoot
-        val hovered = compose.onNodeWithTag("dial-hover-fixture").captureToImage().asAndroidBitmap()
-        try {
-            val left = (marker.left - fixture.left).roundToInt().coerceIn(0, hovered.width)
-            val top = (marker.top - fixture.top).roundToInt().coerceIn(0, hovered.height)
-            val right = (marker.right - fixture.left).roundToInt().coerceIn(left, hovered.width)
-            val bottom = (marker.bottom - fixture.top).roundToInt().coerceIn(top, hovered.height)
-            var nearWhite = 0
-            var sampled = 0
-            for (y in top until bottom step 2) for (x in left until right step 2) {
-                val pixel = hovered.getPixel(x, y)
-                if (android.graphics.Color.red(pixel) > 225 &&
-                    android.graphics.Color.green(pixel) > 225 &&
-                    android.graphics.Color.blue(pixel) > 225
-                ) nearWhite++
-                sampled++
+        val fixture = fixtureNode.fetchSemanticsNode().boundsInRoot
+        val baseline = fixtureNode.captureToImage().asAndroidBitmap()
+        val left = (marker.left - fixture.left).roundToInt().coerceIn(0, baseline.width)
+        val top = (marker.top - fixture.top).roundToInt().coerceIn(0, baseline.height)
+        val right = (marker.right - fixture.left).roundToInt().coerceIn(left, baseline.width)
+        val bottom = (marker.bottom - fixture.top).roundToInt().coerceIn(top, baseline.height)
+        fun changedPixels(bitmap: Bitmap, inset: Int = 0): Int {
+            var changed = 0
+            for (y in top + inset until bottom - inset step 2) for (x in left + inset until right - inset step 2) {
+                val original = baseline.getPixel(x, y)
+                val actual = bitmap.getPixel(x, y)
+                val distance = kotlin.math.abs(android.graphics.Color.red(original) - android.graphics.Color.red(actual)) +
+                    kotlin.math.abs(android.graphics.Color.green(original) - android.graphics.Color.green(actual)) +
+                    kotlin.math.abs(android.graphics.Color.blue(original) - android.graphics.Color.blue(actual))
+                if (distance > 6) changed++
             }
-            assertTrue("Duration-price hover must not paint a white rectangular highlight",
-                sampled > 0 && nearWhite * 20 < sampled)
-        } finally {
-            hovered.recycle()
+            return changed
         }
+        try {
+            capture("gaming-duration-price-before-hover.png", "dial-hover-fixture")
+            sixtyMinutePrice.performMouseInput { enter() }
+            capture("gaming-duration-price-hover.png", "dial-hover-fixture")
+            val hovered = fixtureNode.captureToImage().asAndroidBitmap()
+            try {
+                assertEquals("Mouse hover must not tint or wash the duration marker", 0, changedPixels(hovered))
+            } finally { hovered.recycle() }
+            sixtyMinutePrice.performMouseInput { exit() }
+            sixtyMinutePrice.performTouchInput { down(center); advanceEventTime(120) }
+            try {
+                compose.mainClock.advanceTimeBy(240)
+                val pressed = fixtureNode.captureToImage().asAndroidBitmap()
+                try {
+                    assertEquals("Held touch must not tint or wash the duration marker", 0, changedPixels(pressed))
+                } finally { pressed.recycle() }
+                compose.runOnIdle {
+                    assertEquals("single-60", selected.value)
+                    assertTrue(selections.isEmpty())
+                    assertEquals(0, ticks)
+                }
+            } finally { sixtyMinutePrice.performTouchInput { cancel() } }
+
+            val originalInputMode = inputModeManager.get().inputMode
+            try {
+                compose.runOnIdle { assertTrue(inputModeManager.get().requestInputMode(InputMode.Keyboard)) }
+                sixtyMinutePrice.performSemanticsAction(SemanticsActions.RequestFocus) { assertTrue(it()) }
+                sixtyMinutePrice.assertIsFocused().assertIsSelected()
+                val focused = fixtureNode.captureToImage().asAndroidBitmap()
+                try {
+                    assertTrue("Keyboard focus must retain its visible outline", changedPixels(focused) > 8)
+                    val inset = (4 * compose.activity.resources.displayMetrics.density).roundToInt()
+                    assertEquals("Keyboard focus must not add an interior wash", 0, changedPixels(focused, inset))
+                } finally { focused.recycle() }
+            } finally {
+                compose.runOnIdle { inputModeManager.get().requestInputMode(originalInputMode) }
+            }
+        } finally { baseline.recycle() }
         sixtyMinutePrice.performClick()
-        compose.runOnIdle { assertEquals("single-60", selected.value) }
+        compose.onNodeWithContentDescription("Choose 30 minutes, 80.00").performClick()
+        compose.runOnIdle {
+            assertEquals("single-30", selected.value)
+            assertEquals(listOf("single-60", "single-30"), selections)
+            assertEquals(1, ticks)
+        }
     }
 
     @Test
@@ -1195,6 +1245,68 @@ class GamingBoardUiTest {
             up()
         }
         compose.runOnIdle { assertEquals("single-60", selected.value); assertEquals(1, ticks) }
+    }
+
+    @Test
+    fun cancelledPartialDragRestoresPublishedMarkerWithoutWaitingForAnAnimation() {
+        val selections = mutableListOf<String>()
+        compose.setContent {
+            DCompanyTheme {
+                GamingDurationDial(
+                    choices = listOf(
+                        GamingDurationChoice("single-30", 30, 8_000),
+                        GamingDurationChoice("single-60", 60, 12_000),
+                    ),
+                    selectedPackageId = "single-30",
+                    onSelect = selections::add,
+                    showChoiceChips = false,
+                    segmentTick = {},
+                )
+            }
+        }
+        val dial = compose.onNodeWithContentDescription("Session duration dial")
+        val geometry = compose.onNodeWithTag("gaming-control-ring-geometry")
+        val baseline = geometry.captureToImage().asAndroidBitmap()
+        var dragged: Bitmap? = null
+        var cancelled: Bitmap? = null
+        val automaticClock = compose.mainClock.autoAdvance
+        try {
+            compose.mainClock.autoAdvance = false
+            dial.performTouchInput {
+                down(ringPoint(width, height, 90f))
+                moveTo(ringPoint(width, height, 125f), delayMillis = 32)
+            }
+            compose.mainClock.advanceTimeByFrame()
+            dragged = geometry.captureToImage().asAndroidBitmap()
+            dial.performTouchInput { cancel() }
+            compose.mainClock.advanceTimeByFrame()
+            cancelled = geometry.captureToImage().asAndroidBitmap()
+
+            val knob = ringPoint(baseline.width, baseline.height, 90f)
+            val radius = (baseline.width * .016f).roundToInt().coerceAtLeast(2)
+            var samples = 0
+            var changedDuringDrag = 0
+            var changedAfterCancel = 0
+            for (y in knob.y.roundToInt() - radius..knob.y.roundToInt() + radius) {
+                for (x in knob.x.roundToInt() - radius..knob.x.roundToInt() + radius) {
+                    val original = baseline.getPixel(x, y)
+                    if (dragged.getPixel(x, y) != original) changedDuringDrag++
+                    if (cancelled.getPixel(x, y) != original) changedAfterCancel++
+                    samples++
+                }
+            }
+            assertTrue("Held movement must visibly move the marker", changedDuringDrag > samples / 5)
+            assertTrue(
+                "Cancellation must restore the published marker on the next frame, without stale animation",
+                changedAfterCancel < samples / 20,
+            )
+            compose.runOnIdle { assertTrue(selections.isEmpty()) }
+        } finally {
+            compose.mainClock.autoAdvance = automaticClock
+            baseline.recycle()
+            dragged?.recycle()
+            cancelled?.recycle()
+        }
     }
 
     @Test

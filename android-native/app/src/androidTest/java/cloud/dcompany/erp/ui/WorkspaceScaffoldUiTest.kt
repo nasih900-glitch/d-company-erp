@@ -2828,7 +2828,7 @@ class WorkspaceScaffoldUiTest {
                                         text = "Lower action $lowerCount",
                                         onClick = { lowerCount += 1 },
                                         modifier = Modifier.align(Alignment.BottomStart)
-                                            .width(shell.railWidth).height(48.dp)
+                                            .width(ExecutiveSidebarWidth).height(48.dp)
                                             .testTag("home-body-pointer-action"),
                                     )
                                 }

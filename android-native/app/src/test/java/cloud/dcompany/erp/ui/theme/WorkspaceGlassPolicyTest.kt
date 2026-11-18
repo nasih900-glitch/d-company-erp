@@ -1,6 +1,7 @@
 package cloud.dcompany.erp.ui.theme
 
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
@@ -172,14 +173,37 @@ class WorkspaceGlassPolicyTest {
             assertTrue(workspaceGlassTransientBytes(size) <= 4L * 1_024 * 1_024)
         }
         val largest = workspaceGlassDerivativeSize(2560, 1600)
-        val publishedDerivatives = largest.width.toLong() * largest.height * 4L *
-            WorkspaceGlassDerivativeCacheEntries
+        val publishedDerivatives = (
+            largest.width.toLong() * largest.height * 4L * 2L +
+                WorkspaceGlassSafetyGridColumns.toLong() * WorkspaceGlassSafetyGridRows * Int.SIZE_BYTES
+            ) * WorkspaceGlassDerivativeCacheEntries
         val oneNewHdClearFrame = 2560L * 1600 * 4L
         assertTrue(
             WorkspaceClearCacheBudgetKiB * 1024L + publishedDerivatives +
                 workspaceGlassTransientBytes(largest) + oneNewHdClearFrame <=
                 WorkspaceGlassCombinedStartingBudgetBytes,
         )
+    }
+
+    @Test
+    fun pregradeRequiresActualOpaquePixelsRatherThanOpaqueGridMaxima() {
+        assertTrue(workspaceGlassPixelsAreOpaque(intArrayOf(0xFF123456.toInt(), 0xFFFFFFFF.toInt())))
+        assertFalse(workspaceGlassPixelsAreOpaque(intArrayOf(0xFF123456.toInt(), 0xFEFFFFFF.toInt())))
+        assertFalse(workspaceGlassPixelsAreOpaque(intArrayOf(0x00123456)))
+        assertFalse(workspaceGlassPixelsAreOpaque(intArrayOf()))
+        val grid = workspaceGlassSafetyGrid(intArrayOf(0x80123456.toInt()), 1, 1, 1, 1)
+        assertTrue("Grid maxima alone cannot establish source opacity", grid.isOpaque)
+    }
+
+    @Test
+    fun pregradeCoverageUsesTheSameRoundedDestinationAsDrawImage() {
+        assertTrue(workspaceGlassPregradeCoversConsumer(Rect(0f, 0f, 100f, 100f), Size(100f, 100f), 100, 100))
+        assertTrue(workspaceGlassPregradeCoversConsumer(Rect(.4f, 0f, 100f, 100f), Size(99.6f, 100f), 100, 100))
+        assertFalse(workspaceGlassPregradeCoversConsumer(Rect(.6f, 0f, 100f, 100f), Size(99.4f, 100f), 100, 100))
+        assertFalse(workspaceGlassPregradeCoversConsumer(Rect(0f, .6f, 100f, 100f), Size(100f, 99.4f), 100, 100))
+        assertFalse(workspaceGlassPregradeCoversConsumer(Rect(-.1f, 0f, 99.9f, 100f), Size(100f, 100f), 100, 100))
+        assertFalse(workspaceGlassPregradeCoversConsumer(Rect(0f, 0f, 101f, 100f), Size(101f, 100f), 100, 100))
+        assertFalse(workspaceGlassPregradeCoversConsumer(Rect(0f, 0f, 100f, 100f), Size(Float.NaN, 100f), 100, 100))
     }
 
     @Test

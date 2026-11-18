@@ -320,12 +320,13 @@ internal fun FreshLoginSuccessScreen(
             BackHandler(enabled = true) {
                 settleOrContinue(0f, explicitContinuation = true)
             }
-            val progress = (-offsetPx / exitDistancePx).coerceIn(0f, 1f)
-
             Column(
                 modifier = Modifier
                     .offset { IntOffset(0, offsetPx.roundToInt()) }
-                    .graphicsLayer { alpha = 1f - (progress * 0.72f) }
+                    .graphicsLayer {
+                        val progress = (-offsetPx / exitDistancePx).coerceIn(0f, 1f)
+                        alpha = 1f - (progress * 0.72f)
+                    }
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 24.dp, vertical = 16.dp)

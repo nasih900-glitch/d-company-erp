@@ -5,13 +5,15 @@ import androidx.compose.foundation.border
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
-import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.RectangleShape
@@ -84,7 +86,13 @@ internal data class WorkspaceGlassDerivative(
     val key: WorkspaceGlassDerivativeKey,
     val bitmap: Bitmap,
     val safetyGrid: WorkspaceGlassSafetyGrid,
+    val gradedBitmap: Bitmap? = null,
 )
+
+internal fun WorkspaceGlassDerivative.recycleUnpublished() {
+    gradedBitmap?.takeUnless { it === bitmap }?.recycle()
+    bitmap.recycle()
+}
 
 internal data class WorkspaceGlassScene(
     val frame: DisplayedSceneFrame,
@@ -99,7 +107,8 @@ internal data class WorkspaceGlassScene(
     val softenedKey: WorkspaceGlassDerivativeKey? get() = derivative?.key
 }
 
-internal val LocalWorkspaceGlassScene = staticCompositionLocalOf<WorkspaceGlassScene?> { null }
+// Scene placement and frame changes must invalidate material readers, not every route descendant.
+internal val LocalWorkspaceGlassScene = compositionLocalOf<WorkspaceGlassScene?> { null }
 
 // Workspace accents never replace the app theme: the Gaming instrument keeps its own palette.
 internal val WorkspacePresentationGold = Color(0xFFFFD24A)
@@ -117,8 +126,8 @@ internal fun workspacePresentationAccent(): Color = workspacePresentationAccent(
 
 internal const val WorkspaceClearCacheBudgetKiB = 40 * 1_024
 internal const val WorkspaceGlassDerivativeCacheEntries = 2
-// Admission ceiling for app-managed clear-cache entries, two published derivatives, one
-// in-flight derivative (all five buffers), and one new 2560x1600 clear frame: about 59.9 MiB at
+// Admission ceiling for app-managed clear-cache entries, two published raw/graded pairs, one
+// in-flight derivative (all six buffers), and one new 2560x1600 clear frame: about 61.8 MiB at
 // the accepted maximum. This is not a process-PSS claim; platform decoder allocations, its input
 // and output scratch, and an already leased source bitmap are outside this managed envelope.
 internal const val WorkspaceGlassCombinedStartingBudgetBytes = 64L * 1_024 * 1_024
@@ -357,6 +366,8 @@ private class WorkspaceGlassNode(
     private var sceneScrimViewportHeight = 0
     private var admissionKey: WorkspaceGlassAdmissionKey? = null
     private var admittedTint: Color? = null
+    private var pregradeTint: Color? = null
+    private var pregradeTintFilter: ColorFilter? = null
     private var violetOutline: Outline? = null
     private var violetSize = Size.Unspecified
     private var violetDirection: LayoutDirection? = null
@@ -383,11 +394,15 @@ private class WorkspaceGlassNode(
             derivativeImage = null
             admissionKey = null
             admittedTint = null
+            pregradeTint = null
+            pregradeTintFilter = null
         }
         if (roleStyleChanged) {
             roleStyle = workspaceGlassRoleStyle(role, day)
             admissionKey = null
             admittedTint = null
+            pregradeTint = null
+            pregradeTintFilter = null
         }
         this.scene = scene
         this.role = role
@@ -422,6 +437,8 @@ private class WorkspaceGlassNode(
         derivativeImage = null
         admissionKey = null
         admittedTint = null
+        pregradeTint = null
+        pregradeTintFilter = null
         sceneScrimBrush = null
         sceneScrimTop = Float.NaN
         sceneScrimViewportHeight = 0
@@ -502,13 +519,25 @@ private class WorkspaceGlassNode(
         }
         val canProject = derivative != null && keyMatches && intersectsScene && (!adaptive || tint != null)
 
-        drawRect(style.fallback)
+        val usePregraded = canProject && currentScene?.applyWorkspaceSceneGrade == true &&
+            sceneGradeStrength == 1f && derivativeEntry?.gradedBitmap != null &&
+            local != null && workspaceGlassPregradeCoversConsumer(local, size, viewportWidth, viewportHeight)
+        val projectionFilter = if (usePregraded) {
+            val color = tint ?: style.tint
+            if (pregradeTint != color || pregradeTintFilter == null) {
+                pregradeTintFilter = ColorFilter.tint(color, BlendMode.SrcOver)
+                pregradeTint = color
+            }
+            pregradeTintFilter
+        } else null
+        if (!usePregraded) drawRect(style.fallback)
         if (canProject) {
-            val image = if (derivativeBitmap === derivative) {
-                derivativeImage ?: derivative.asImageBitmap().also { derivativeImage = it }
+            val projected = if (usePregraded) checkNotNull(derivativeEntry?.gradedBitmap) else checkNotNull(derivative)
+            val image = if (derivativeBitmap === projected) {
+                derivativeImage ?: projected.asImageBitmap().also { derivativeImage = it }
             } else {
-                derivative.asImageBitmap().also {
-                    derivativeBitmap = derivative
+                projected.asImageBitmap().also {
+                    derivativeBitmap = projected
                     derivativeImage = it
                 }
             }
@@ -520,11 +549,12 @@ private class WorkspaceGlassNode(
                 drawImage(
                     image = image,
                     srcOffset = IntOffset.Zero,
-                    srcSize = IntSize(derivative.width, derivative.height),
+                    srcSize = IntSize(projected.width, projected.height),
                     dstOffset = IntOffset(-local.left.roundToInt(), -local.top.roundToInt()),
                     dstSize = IntSize(viewportWidth, viewportHeight),
+                    colorFilter = projectionFilter,
                 )
-                if (currentScene?.applyWorkspaceSceneGrade == true) {
+                if (!usePregraded && currentScene?.applyWorkspaceSceneGrade == true) {
                     val scrim = if (sceneScrimBrush == null || sceneScrimTop != local.top ||
                         sceneScrimViewportHeight != viewportHeight
                     ) {
@@ -542,7 +572,7 @@ private class WorkspaceGlassNode(
             }
         }
         if (canProject) {
-            drawRect(tint ?: style.tint)
+            if (!usePregraded) drawRect(tint ?: style.tint)
         } else if (!adaptive) {
             // Day and semantic roles preserve their established solid fallback composition.
             drawRect(style.tint)
@@ -601,10 +631,31 @@ internal fun workspaceGlassDerivativeSize(width: Int, height: Int): IntSize {
     return IntSize(maxOf(1, (width * scale).roundToInt()), maxOf(1, (height * scale).roundToInt()))
 }
 
-// Scaled bitmap + three pixel buffers + unpublished output bitmap at peak.
+// Scaled bitmap + three pixel buffers + raw and optional graded output bitmaps at peak.
 internal fun workspaceGlassTransientBytes(size: IntSize): Long =
-    size.width.toLong() * size.height * 4L * 5L +
+    size.width.toLong() * size.height * 4L * 6L +
         WorkspaceGlassSafetyGridColumns.toLong() * WorkspaceGlassSafetyGridRows * Int.SIZE_BYTES
+
+internal fun workspaceGlassPixelsAreOpaque(pixels: IntArray): Boolean =
+    pixels.isNotEmpty() && pixels.all { it ushr 24 == 0xFF }
+
+internal fun workspaceGlassPregradeCoversConsumer(
+    bounds: Rect,
+    size: Size,
+    viewportWidth: Int,
+    viewportHeight: Int,
+): Boolean {
+    if (viewportWidth <= 0 || viewportHeight <= 0 || size.width <= 0f || size.height <= 0f ||
+        !size.width.isFinite() || !size.height.isFinite() ||
+        !bounds.left.isFinite() || !bounds.top.isFinite() ||
+        !bounds.right.isFinite() || !bounds.bottom.isFinite() || bounds.width <= 0f || bounds.height <= 0f ||
+        bounds.left < 0f || bounds.top < 0f || bounds.right > viewportWidth || bounds.bottom > viewportHeight
+    ) return false
+    // drawImage uses rounded integer destination offsets, not the fractional mapped bounds.
+    val left = -bounds.left.roundToInt()
+    val top = -bounds.top.roundToInt()
+    return left <= 0 && top <= 0 && left + viewportWidth >= size.width && top + viewportHeight >= size.height
+}
 
 internal fun workspaceGlassSourceRect(
     localBounds: Rect,

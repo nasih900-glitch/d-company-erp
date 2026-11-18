@@ -1,6 +1,6 @@
 package cloud.dcompany.erp.ui.screens.home
 
-import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
@@ -15,12 +15,11 @@ import androidx.compose.ui.unit.sp
 /** Read-only presentation insets supplied by the Dashboard-only wide shell. */
 internal data class ExecutiveHomeShellLayout(
     val enabled: Boolean = false,
-    val railWidth: Dp = 0.dp,
     val utilityHeight: Dp = 0.dp,
     val noticeHeight: Dp = 0.dp,
 )
 
-internal val LocalExecutiveHomeShellLayout = staticCompositionLocalOf { ExecutiveHomeShellLayout() }
+internal val LocalExecutiveHomeShellLayout = compositionLocalOf { ExecutiveHomeShellLayout() }
 
 /** Keeps muted status copy at >= 4.5:1 even when the underlying hero pixel is white. */
 internal const val ExecutiveHomeStatusGlassMinimumBlackAlpha = 0.74f

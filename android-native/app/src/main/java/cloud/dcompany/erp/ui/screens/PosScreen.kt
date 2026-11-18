@@ -5185,10 +5185,10 @@ private fun QtyButton(
     ) {
         Box(
             Modifier.size(32.dp).clip(Radius.shapeSm)
-                .background(if (pressed && enabled) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surfaceContainer)
+                .background(MaterialTheme.colorScheme.surfaceContainer)
                 .border(
                     1.dp,
-                    if (pressed && enabled) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
                     Radius.shapeSm,
                 ),
             contentAlignment = Alignment.Center,
