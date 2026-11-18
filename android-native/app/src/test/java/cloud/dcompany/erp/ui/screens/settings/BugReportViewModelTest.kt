@@ -3,6 +3,9 @@ package cloud.dcompany.erp.ui.screens.settings
 import cloud.dcompany.erp.core.db.BugReportOutboxState
 import cloud.dcompany.erp.core.db.LocalBugReportAttachmentEntity
 import cloud.dcompany.erp.core.db.LocalBugReportEntity
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -223,16 +226,113 @@ class BugReportViewModelTest {
         lastError = lastError,
     )
 
+    @Test
+    fun `refused original operation clears busy without saving or reading another workspace`() {
+        val outbox = FakeOutbox()
+        val refused = cloud.dcompany.erp.core.handover.CallerOperations(null) { _, _ ->
+            error("Refused caller must not execute")
+        }
+        val vm = viewModel(outbox, operations = refused)
+        vm.open(BugReportLaunchContext("Workspace setup"))
+        vm.descriptionChanged("The terminal could not be selected.")
+        vm.submit(validContext)
+        assertEquals(0, outbox.captureCalls)
+        assertFalse(vm.state.value.saving)
+        assertFalse(vm.state.value.refreshingHistory)
+        assertTrue(vm.state.value.draft.description.isNotBlank())
+    }
+
+    @Test
+    fun `pre terminal own history remains readable but send and retry explicitly require workspace`() {
+        val outbox = FakeOutbox()
+        var reads = 0
+        val vm = viewModel(outbox, workspaceReady = false, preTerminalHistory = {
+            reads++
+            BugReportMinePage(items = emptyList())
+        })
+        vm.open(BugReportLaunchContext("Workspace setup"))
+        assertEquals(1, reads)
+        assertTrue(vm.state.value.workspaceRequired)
+        assertFalse(vm.state.value.refreshingHistory)
+        vm.descriptionChanged("The workspace cannot be selected.")
+        vm.submit(validContext)
+        vm.retrySubmitted()
+        vm.retryHistoryItem("saved-request")
+        vm.discardHistoryItem("saved-request")
+        assertEquals(0, outbox.captureCalls)
+        assertEquals(0, outbox.retryCalls)
+        assertEquals(BUG_REPORT_WORKSPACE_REQUIRED, vm.state.value.error)
+        vm.dismiss()
+        assertTrue(vm.state.value.workspaceRequired)
+    }
+
     private fun viewModel(
         outbox: FakeOutbox,
         api: BugReportApi = FakeApi(),
+        operations: cloud.dcompany.erp.core.handover.CallerOperations = cloud.dcompany.erp.core.handover.standaloneOperationCaller(),
+        workspaceReady: Boolean = true,
+        preTerminalHistory: (suspend () -> BugReportMinePage)? = null,
     ) = BugReportViewModel(
         owner = owner,
         outbox = outbox,
         api = api,
+        operations = operations,
+        workspaceReady = workspaceReady,
+        preTerminalHistory = preTerminalHistory,
         keyFactory = { "test-key" },
         requestScope = CoroutineScope(Dispatchers.Unconfined),
     )
+
+    @Test
+    fun `awaited history completes only after actual original API read and clears cancelled busy`() = runBlocking<Unit> {
+        val gate = CompletableDeferred<Unit>()
+        val vm = viewModel(FakeOutbox(), FakeApi(historyGate = gate))
+        val refresh = async(Dispatchers.Unconfined) { vm.refreshHistoryAndAwait(silent = true) }
+        assertFalse(refresh.isCompleted); assertTrue(vm.state.value.refreshingHistory)
+        assertFalse(vm.refreshHistoryAndAwait(silent = true))
+        gate.complete(Unit); assertTrue(refresh.await()); assertFalse(vm.state.value.refreshingHistory)
+        val secondGate = CompletableDeferred<Unit>()
+        val second = viewModel(FakeOutbox(), FakeApi(historyGate = secondGate))
+        val cancelled = async(Dispatchers.Unconfined) { second.refreshHistoryAndAwait() }
+        assertTrue(second.state.value.refreshingHistory); cancelled.cancelAndJoin()
+        assertFalse(second.state.value.refreshingHistory)
+    }
+
+    @Test
+    fun `awaited history refuses original rows after authority changes during response`() = runBlocking<Unit> {
+        var current = true
+        val scope = cloud.dcompany.erp.core.handover.HandoverScope(
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222", null, null,
+        )
+        val authority = cloud.dcompany.erp.core.handover.HandoverAuthority(scope, 1)
+        val coordinator = cloud.dcompany.erp.core.handover.HandoverCoordinator(object : cloud.dcompany.erp.core.handover.HandoverIntentStore {
+            override suspend fun read(): cloud.dcompany.erp.core.handover.HandoverIntent? = null
+            override suspend fun begin(intent: cloud.dcompany.erp.core.handover.HandoverIntent): Unit = error("No handover")
+            override suspend fun compareAndSet(expected: cloud.dcompany.erp.core.handover.HandoverIntent, next: cloud.dcompany.erp.core.handover.HandoverIntent): Unit = error("No handover")
+            override suspend fun cancelNotSent(expected: cloud.dcompany.erp.core.handover.HandoverIntent): Unit = error("No handover")
+        })
+        coordinator.initialize(authority)
+        val binding = cloud.dcompany.erp.core.handover.OriginalOperationBinding(authority,
+            cloud.dcompany.erp.core.auth.CacheScopeLease(cloud.dcompany.erp.core.auth.CacheScope(scope.actorId, scope.companyId, null, null), 1),
+            cloud.dcompany.erp.core.auth.SessionRefreshLease(cloud.dcompany.erp.core.auth.StoredSession("synthetic", "synthetic"), 1)) { current }
+        val operations = cloud.dcompany.erp.core.handover.CallerOperations(binding) { original, block ->
+            coordinator.runOperation(original.authority, block)
+        }
+        val gate = CompletableDeferred<Unit>()
+        val page = BugReportMinePage(items = listOf(BugReportMineItem(
+            id = "private-a-row", title = "Original A", status = "open", publicReplies = emptyList(),
+            createdAt = "2026-08-28T10:00:00Z", updatedAt = "2026-08-28T10:00:00Z",
+        )))
+        val vm = viewModel(FakeOutbox(), FakeApi(page, gate), operations)
+        val refresh = async(Dispatchers.Unconfined) { vm.refreshHistoryAndAwait() }
+        assertTrue(vm.state.value.refreshingHistory)
+        current = false
+        gate.complete(Unit)
+        assertFalse(refresh.await())
+        assertTrue(vm.state.value.recentRequests.isEmpty())
+        assertFalse(vm.state.value.refreshingHistory)
+    }
 
     private data class Capture(
         val request: BugReportCreateRequest,
@@ -299,13 +399,14 @@ class BugReportViewModelTest {
 
     private class FakeApi(
         private val page: BugReportMinePage = BugReportMinePage(),
+        private val historyGate: CompletableDeferred<Unit>? = null,
     ) : BugReportApi {
         override suspend fun create(
             body: BugReportCreateRequest,
             idempotencyKey: String,
         ) = BugReportCreateResponse("report", "open", "2026-08-28T10:00:00Z")
 
-        override suspend fun mine(limit: Int, offset: Int): BugReportMinePage = page
+        override suspend fun mine(limit: Int, offset: Int): BugReportMinePage { historyGate?.await(); return page }
 
         override suspend fun uploadAttachment(
             reportId: String,

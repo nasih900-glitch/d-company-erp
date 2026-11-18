@@ -3,9 +3,13 @@ package cloud.dcompany.erp.core.update
 import cloud.dcompany.erp.BuildConfig
 import cloud.dcompany.erp.core.net.ApiClient
 import java.io.File
+import java.io.InterruptedIOException
+import java.net.SocketTimeoutException
 import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.Dispatchers
@@ -13,8 +17,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.decodeFromString
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.ResponseBody
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -23,8 +30,11 @@ import okhttp3.mockwebserver.SocketPolicy
 import okhttp3.tls.HandshakeCertificates
 import okhttp3.tls.HeldCertificate
 import okio.Buffer
+import okio.ForwardingSource
+import okio.buffer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -284,32 +294,126 @@ class VerifiedApkDownloaderTest {
     }
 
     @Test
-    fun readTimeoutAndSlowWholeCallBudgetKeepResumableState() = runBlocking {
+    fun freshValidatedResponseKeepsExactPrefixAndMetadataAfterBodyReadTimeout() = runBlocking {
         val bytes = payload(256 * 1024)
         val descriptor = descriptor(bytes)
+        val prefixSize = 4_096
+        val injected = AtomicBoolean(false)
+        val faultClient = client.newBuilder()
+            .addNetworkInterceptor { chain ->
+                val response = chain.proceed(chain.request())
+                val original = requireNotNull(response.body)
+                val source = object : ForwardingSource(original.source()) {
+                    private var delivered = 0L
+
+                    override fun read(sink: Buffer, byteCount: Long): Long {
+                        if (byteCount == 0L) return 0L
+                        if (delivered == prefixSize.toLong()) {
+                            injected.set(true)
+                            throw SocketTimeoutException("Fixture body read timed out after a verified prefix")
+                        }
+                        val count = super.read(sink, minOf(byteCount, prefixSize - delivered))
+                        if (count > 0) delivered += count
+                        return count
+                    }
+                }.buffer()
+                response.newBuilder().body(object : ResponseBody() {
+                    override fun contentType() = original.contentType()
+                    override fun contentLength() = original.contentLength()
+                    override fun source() = source
+                }).build()
+            }
+            .build()
+        server.enqueue(fullResponse(bytes))
+
+        val failure = runCatching {
+            VerifiedApkDownloader(directory, faultClient).download(descriptor) {}
+        }.exceptionOrNull() as UpdatePreparationException
+
+        assertEquals(UpdateErrorCode.NETWORK_ERROR, failure.errorCode)
+        assertTrue(injected.get())
+        assertTrue(failure.cause is SocketTimeoutException)
+        assertArrayEquals(bytes.copyOfRange(0, prefixSize), partialFile(descriptor).readBytes())
+        assertEquals(PartialUpdateRecord(descriptor, ETAG), savedMetadata(descriptor))
+        assertFalse(verifiedFile(descriptor).exists())
+        val initial = server.takeRequest(1, TimeUnit.SECONDS)
+        assertNotNull(initial)
+        assertEquals(null, initial?.getHeader("Range"))
+
+        server.enqueue(partialResponse(bytes, prefixSize))
+        val completed = downloader().download(descriptor) {}
+        assertTrue(verifyFileSizeAndSha256(completed, descriptor))
+        val resumed = server.takeRequest(1, TimeUnit.SECONDS)
+        assertEquals("bytes=$prefixSize-", resumed?.getHeader("Range"))
+        assertEquals(ETAG, resumed?.getHeader("If-Range"))
+    }
+
+    @Test
+    fun realReadTimeoutRetainsPreviouslyValidatedResumeStateAndRecovers() = runBlocking {
         val shortClient = client.newBuilder()
             .readTimeout(75, TimeUnit.MILLISECONDS)
             .callTimeout(5, TimeUnit.SECONDS)
             .build()
-        server.enqueue(fullResponse(bytes).setBodyDelay(250, TimeUnit.MILLISECONDS))
-        val timeout = runCatching {
-            VerifiedApkDownloader(directory, shortClient).download(descriptor) {}
-        }.exceptionOrNull()
-        assertEquals(UpdateErrorCode.NETWORK_ERROR, (timeout as UpdatePreparationException).errorCode)
-        assertTrue(metadataFile(descriptor).isFile)
+        assertTimedTransferRetainsResumeState(shortClient) {
+            it.setBodyDelay(250, TimeUnit.MILLISECONDS)
+        }
+    }
 
-        server.enqueue(
-            fullResponse(bytes).throttleBody(8 * 1024, 100, TimeUnit.MILLISECONDS),
-        )
+    @Test
+    fun realWholeCallBudgetRetainsPreviouslyValidatedResumeStateAndRecovers() = runBlocking {
         val budgetClient = client.newBuilder()
             .readTimeout(1, TimeUnit.SECONDS)
             .callTimeout(400, TimeUnit.MILLISECONDS)
             .build()
-        val budget = runCatching {
-            VerifiedApkDownloader(directory, budgetClient).download(descriptor) {}
-        }.exceptionOrNull()
-        assertEquals(UpdateErrorCode.NETWORK_ERROR, (budget as UpdatePreparationException).errorCode)
-        assertTrue(partialFile(descriptor).length() > 0)
+        assertTimedTransferRetainsResumeState(budgetClient) {
+            it.throttleBody(8 * 1024, 100, TimeUnit.MILLISECONDS)
+        }
+    }
+
+    private suspend fun assertTimedTransferRetainsResumeState(
+        timedClient: OkHttpClient,
+        delayedResponse: (MockResponse) -> MockResponse,
+    ) {
+        val bytes = payload(256 * 1024)
+        val descriptor = descriptor(bytes)
+        val prefixSize = 4_096
+        seedPartial(descriptor, bytes.copyOfRange(0, prefixSize))
+        val timedAttempt = AtomicBoolean(true)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val offset = request.getHeader("Range")?.removePrefix("bytes=")
+                    ?.removeSuffix("-")?.toIntOrNull()
+                    ?: return MockResponse().setResponseCode(400)
+                if (request.getHeader("If-Range") != ETAG || offset !in prefixSize until bytes.size) {
+                    return MockResponse().setResponseCode(400)
+                }
+                val response = partialResponse(bytes, offset)
+                return if (timedAttempt.get()) delayedResponse(response) else response
+            }
+        }
+
+        val failure = runCatching {
+            VerifiedApkDownloader(directory, timedClient).download(descriptor) {}
+        }.exceptionOrNull() as UpdatePreparationException
+
+        assertEquals(UpdateErrorCode.NETWORK_ERROR, failure.errorCode)
+        assertTrue(failure.cause is InterruptedIOException)
+        val savedBytes = partialFile(descriptor).readBytes()
+        assertTrue(savedBytes.size in prefixSize until bytes.size)
+        assertArrayEquals(bytes.copyOfRange(0, savedBytes.size), savedBytes)
+        assertEquals(PartialUpdateRecord(descriptor, ETAG), savedMetadata(descriptor))
+        assertFalse(verifiedFile(descriptor).exists())
+
+        timedAttempt.set(false)
+        val resumed = AtomicReference<Request>()
+        val recoveryClient = client.newBuilder().addNetworkInterceptor { chain ->
+            resumed.set(chain.request())
+            chain.proceed(chain.request())
+        }.build()
+        val completed = VerifiedApkDownloader(directory, recoveryClient).download(descriptor) {}
+        assertTrue(verifyFileSizeAndSha256(completed, descriptor))
+        assertEquals("bytes=${savedBytes.size}-", resumed.get()?.header("Range"))
+        assertEquals(ETAG, resumed.get()?.header("If-Range"))
     }
 
     @Test
@@ -453,6 +557,12 @@ class VerifiedApkDownloaderTest {
         directory,
         "d-company-${descriptor.versionCode}-${descriptor.sha256.take(12)}.resume.json",
     )
+
+    private fun savedMetadata(descriptor: DirectUpdateDescriptor) =
+        ApiClient.json.decodeFromString<PartialUpdateRecord>(metadataFile(descriptor).readText())
+
+    private fun verifiedFile(descriptor: DirectUpdateDescriptor) =
+        File(directory, partialFile(descriptor).name.removeSuffix(".part"))
 
     private fun payload(size: Int = 128 * 1024): ByteArray =
         ByteArray(size) { index -> (index * 31).toByte() }

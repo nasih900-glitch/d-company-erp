@@ -10,6 +10,7 @@ ROOT=/opt/d-company-erp
 STATE_ROOT=/var/lib/dcompany-erp
 BACKUP_RUNTIME="$STATE_ROOT/backup-runtime"
 BACKUP_REQUIREMENTS="$ROOT/ops/backup-requirements.lock"
+PIP_BOOTSTRAP="$ROOT/infra/scripts/bootstrap-verified-pip.py"
 BACKUP_DIR="$STATE_ROOT/backups/auto"
 LEGACY_BACKUP_DIR="$ROOT/backups/auto"
 
@@ -19,6 +20,10 @@ if [ ! -f "$ROOT/.env" ] || [ ! -f "$ROOT/docker-compose.prod.yml" ]; then
 fi
 if [ ! -f "$BACKUP_REQUIREMENTS" ]; then
   echo "Missing pinned backup dependencies: $BACKUP_REQUIREMENTS" >&2
+  exit 1
+fi
+if [ ! -f "$PIP_BOOTSTRAP" ] || [ -L "$PIP_BOOTSTRAP" ]; then
+  echo "Missing regular verified pip bootstrap helper." >&2
   exit 1
 fi
 if ! command -v python3 >/dev/null 2>&1; then
@@ -84,6 +89,7 @@ runtime_version="$BACKUP_RUNTIME/venv-$requirements_sha"
 runtime_is_valid() {
   candidate=$1
   [ -x "$candidate/bin/python" ] || return 1
+  "$candidate/bin/python" -I -B "$PIP_BOOTSTRAP" --verify-only >/dev/null 2>&1 || return 1
   "$candidate/bin/python" -m pip check >/dev/null 2>&1 || return 1
   "$candidate/bin/python" - "$BACKUP_REQUIREMENTS" >/dev/null 2>&1 <<'PY'
 from importlib.metadata import version
@@ -109,6 +115,7 @@ if ! runtime_is_valid "$runtime_version"; then
 
   runtime_temp="$BACKUP_RUNTIME/.venv-new-$$"
   python3 -m venv "$runtime_temp"
+  "$runtime_temp/bin/python" -I -B "$PIP_BOOTSTRAP"
   PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1 \
     "$runtime_temp/bin/python" -m pip install \
       --no-cache-dir \

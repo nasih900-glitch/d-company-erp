@@ -2,6 +2,8 @@ package cloud.dcompany.erp.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
 import androidx.compose.material3.Text
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
@@ -11,6 +13,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -20,6 +23,8 @@ import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import cloud.dcompany.erp.ui.theme.AppearancePreference
+import androidx.compose.ui.unit.dp
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.assertEquals
@@ -85,21 +90,24 @@ class GamingCentreNavigationUiTest {
         )
         compose.setContent {
             DCompanyTheme {
-                WorkspaceScaffold(
-                    destinations = allowed,
-                    currentDestination = current.value,
-                    employeeName = "Rafi",
-                    locationLabel = "Gaming Centre",
-                    connectivityProblem = SyncAvailabilityProblem.NONE,
-                    outboxWorkStatus = OutboxWorkStatus(),
-                    syncing = false,
-                    canChangeTill = false,
-                    onOpenSupport = {},
-                    onChangeTill = {},
-                    onSignOut = {},
-                    onDestinationChanged = { current.value = it },
-                ) { destination, _ ->
-                    Text("Current: ${destination.label}")
+                // Exercise the compact dock, rather than relying on CI's tablet width.
+                Box(Modifier.width(600.dp).height(800.dp)) {
+                    WorkspaceScaffold(
+                        destinations = allowed,
+                        currentDestination = current.value,
+                        employeeName = "Rafi",
+                        locationLabel = "Gaming Centre",
+                        connectivityProblem = SyncAvailabilityProblem.NONE,
+                        outboxWorkStatus = OutboxWorkStatus(),
+                        syncing = false,
+                        canChangeTill = false,
+                        onOpenSupport = {},
+                        onChangeTill = {},
+                        onSignOut = {},
+                        onDestinationChanged = { current.value = it },
+                    ) { destination, _ ->
+                        Text("Current: ${destination.label}")
+                    }
                 }
             }
         }
@@ -111,7 +119,7 @@ class GamingCentreNavigationUiTest {
             ).performClick()
             compose.onNodeWithText("Current: ${target.label}").assertIsDisplayed()
         }
-        compose.onNodeWithContentDescription("More modules").performClick()
+        compose.onNodeWithTag("workspace-more-modules").performClick()
         compose.onNodeWithTag("workspace-more-panel").assertIsDisplayed()
         compose.onNodeWithTag("workspace-module-search-input").assertDoesNotExist()
         compose.onNodeWithTag("workspace-destination-Inventory").performClick()
@@ -152,16 +160,11 @@ class GamingCentreNavigationUiTest {
             "Gaming. Manage stations and sessions",
             useUnmergedTree = true,
         ).assertExists()
-        compose.onNodeWithContentDescription("More modules").performClick()
-        compose.onNodeWithContentDescription(
-            "Help. Report a problem or ask what to do next",
-            useUnmergedTree = true,
-        ).assertDoesNotExist()
-        compose.onNodeWithText("Help").assertExists()
-        compose.onNodeWithContentDescription(
-            "Memberships. Manage plans and member credit",
-            useUnmergedTree = true,
-        ).assertDoesNotExist()
+        compose.onNodeWithTag("workspace-more-modules").performClick()
+        compose.onNodeWithTag("workspace-destination-Help").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-destination-Memberships").assertDoesNotExist()
+        compose.onNodeWithTag("workspace-rail-Memberships", useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithText("Current: Memberships").assertDoesNotExist()
     }
 
     @Test
@@ -203,7 +206,7 @@ class GamingCentreNavigationUiTest {
     }
 
     @Test
-    fun connectionAndSavedWorkChangesNeverMoveHeaderControlsOrActiveWorkflow() {
+    fun connectionAndSavedWorkKeepWorkflowAndEachHeaderVisibilityLayoutStable() {
         val problem = mutableStateOf(SyncAvailabilityProblem.NONE)
         val outboxStatus = mutableStateOf(OutboxWorkStatus())
         val syncing = mutableStateOf(false)
@@ -227,14 +230,28 @@ class GamingCentreNavigationUiTest {
             }
         }
 
-        val stableNodes = listOf(
-            compose.onNodeWithTag("active-workflow"),
-            compose.onNodeWithContentDescription("Connection status: Online. Open connection details"),
-            compose.onNodeWithTag("outbox-work-status-slot"),
+        val workflow = compose.onNodeWithTag("active-workflow").fetchSemanticsNode().boundsInRoot
+        val header = compose.onNodeWithTag("workspace-header").fetchSemanticsNode().boundsInRoot
+        val connection = compose.onNodeWithContentDescription(
+            "Connection status: Online. Open connection details",
+        ).fetchSemanticsNode().boundsInRoot
+        // The reviewed header removes the saved-work pill only once work clears.
+        // Keep each visibility layout stable, and retain cross-layout workflow,
+        // header and connection geometry checks across every transition.
+        val layouts = mutableMapOf<Boolean, List<androidx.compose.ui.geometry.Rect>>()
+        layouts[false] = listOf(
             compose.onNodeWithContentDescription("Help and support"),
             compose.onNodeWithContentDescription("Account actions"),
-        )
-        val originalBounds = stableNodes.map { it.fetchSemanticsNode().boundsInRoot }
+        ).map { it.fetchSemanticsNode().boundsInRoot }
+        compose.onNodeWithTag("outbox-work-status-slot").assertDoesNotExist()
+        var clearTransitions = 0
+        var workTransitions = 0
+        fun assertBounds(original: androidx.compose.ui.geometry.Rect, current: androidx.compose.ui.geometry.Rect) {
+            assertEquals(original.left, current.left, 0.1f)
+            assertEquals(original.top, current.top, 0.1f)
+            assertEquals(original.width, current.width, 0.1f)
+            assertEquals(original.height, current.height, 0.1f)
+        }
         repeat(40) { index ->
             val next = when (index % 5) {
                 0 -> SyncAvailabilityProblem.VERIFYING
@@ -255,25 +272,32 @@ class GamingCentreNavigationUiTest {
                 syncing.value = index % 3 == 0
             }
             compose.waitForIdle()
-            val currentNodes = listOf(
-                compose.onNodeWithTag("active-workflow"),
-                compose.onNodeWithContentDescription(
-                    "Connection status: ${connectionLabel(next)}. Open connection details",
-                ),
-                compose.onNodeWithTag("outbox-work-status-slot"),
+            val workVisible = !nextStatus.isClear || index % 3 == 0
+            assertBounds(workflow, compose.onNodeWithTag("active-workflow").fetchSemanticsNode().boundsInRoot)
+            assertBounds(header, compose.onNodeWithTag("workspace-header").fetchSemanticsNode().boundsInRoot)
+            assertBounds(connection, compose.onNodeWithContentDescription(
+                "Connection status: ${connectionLabel(next)}. Open connection details",
+            ).fetchSemanticsNode().boundsInRoot)
+            val controls = listOf(
                 compose.onNodeWithContentDescription("Help and support"),
                 compose.onNodeWithContentDescription("Account actions"),
             )
-            currentNodes.forEachIndexed { nodeIndex, node ->
-                val original = originalBounds[nodeIndex]
-                val current = node.fetchSemanticsNode().boundsInRoot
-                assertEquals(original.left, current.left, 0.1f)
-                assertEquals(original.top, current.top, 0.1f)
-                assertEquals(original.width, current.width, 0.1f)
-                assertEquals(original.height, current.height, 0.1f)
+            val nodes = if (workVisible) {
+                workTransitions++
+                listOf(compose.onNodeWithTag("outbox-work-status-slot")
+                    .assertIsDisplayed().assertHeightIsAtLeast(48.dp)) + controls
+            } else {
+                clearTransitions++
+                compose.onNodeWithTag("outbox-work-status-slot").assertDoesNotExist()
+                controls
             }
+            val bounds = nodes.map { it.fetchSemanticsNode().boundsInRoot }
+            val original = layouts.getOrPut(workVisible) { bounds }
+            bounds.forEachIndexed { nodeIndex, current -> assertBounds(original[nodeIndex], current) }
+
         }
 
+        assertTrue(clearTransitions > 1 && workTransitions > 1)
         compose.runOnIdle { problem.value = SyncAvailabilityProblem.SERVER_UNREACHABLE }
         compose.onNodeWithContentDescription(
             "Connection status: Server issue. Open connection details",

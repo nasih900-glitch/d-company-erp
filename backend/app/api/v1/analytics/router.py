@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import date as _date
+from datetime import date as _date, datetime
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,13 +22,149 @@ from app.core.permissions import requires
 from app.core.tenant import TenantContext
 from app.core.timezone import company_timezone, local_today
 from app.models import GamingSession, Ingredient, Station
+from app.services.analytics.home_read_model import HomeReadModelService
 from app.services.inventory.valuation import remaining_batch_totals
 from app.services.reports import ReportsAggregator
 
 router = APIRouter()
 
 
+class HomeMetricComparison(BaseModel):
+    current: int
+    previous: int
+    delta_pct: float | None
+    comparison_status: Literal["available", "no_baseline"]
+
+
+class HomeCustomers(BaseModel):
+    current: int
+    scope: Literal["company_live_directory"] = "company_live_directory"
+    comparison_status: Literal["unavailable_no_immutable_history"] = (
+        "unavailable_no_immutable_history"
+    )
+
+
+class HomeGaming(BaseModel):
+    active_station_capacity: int
+    open_sessions: int
+
+
+class HomeHourPoint(BaseModel):
+    hour: int
+    revenue_minor: int
+    orders_count: int
+
+
+class HomeLocalHourProfile(BaseModel):
+    timezone: str
+    business_date: _date
+    day_length_minutes: int
+    basis: Literal["pos_sales_tip_exclusive_local_hour_profile"]
+    reconciles_to_daily_gross: Literal[False]
+    total_revenue_minor: int
+    total_orders_count: int
+    points: list[HomeHourPoint]
+
+
+class HomeActivityRead(BaseModel):
+    kind: Literal["pos_order_paid", "pos_shift_opened", "gaming_session_started"]
+    occurred_at: datetime
+    display_reference: str
+    title: str
+    amount_minor: int | None
+    scope: Literal["terminal", "branch"]
+
+
+class HomeActivityCapabilities(BaseModel):
+    pos: Literal["available", "missing_permission", "missing_terminal"]
+    gaming: Literal["available", "missing_permission"]
+
+
+class HomeReadModelDTO(BaseModel):
+    schema_version: Literal[1] = 1
+    branch_id: UUID
+    terminal_id: UUID | None
+    business_date: _date
+    timezone: str
+    snapshot_at: datetime
+    revenue: HomeMetricComparison
+    orders: HomeMetricComparison
+    customers: HomeCustomers
+    gaming: HomeGaming
+    local_hour_profile: HomeLocalHourProfile
+    recent_activity: list[HomeActivityRead]
+    activity_capabilities: HomeActivityCapabilities
+
+
+@router.get("/home", response_model=HomeReadModelDTO)
+async def home(
+    session: SessionDep,
+    tenant: TenantContext = Depends(requires("analytics.read")),
+) -> HomeReadModelDTO:
+    if tenant.branch_id is None:
+        raise HTTPException(status_code=400, detail="a selected branch is required")
+    model = await HomeReadModelService(session).load(tenant=tenant)
+    return HomeReadModelDTO(
+        branch_id=model.branch_id,
+        terminal_id=model.terminal_id,
+        business_date=model.business_date,
+        timezone=model.timezone,
+        snapshot_at=model.snapshot_at,
+        revenue=HomeMetricComparison(
+            current=model.revenue.current,
+            previous=model.revenue.previous,
+            delta_pct=model.revenue.delta_pct,
+            comparison_status=model.revenue.comparison_status,
+        ),
+        orders=HomeMetricComparison(
+            current=model.orders.current,
+            previous=model.orders.previous,
+            delta_pct=model.orders.delta_pct,
+            comparison_status=model.orders.comparison_status,
+        ),
+        customers=HomeCustomers(current=model.customer_count),
+        gaming=HomeGaming(
+            active_station_capacity=model.active_station_capacity,
+            open_sessions=model.open_sessions,
+        ),
+        local_hour_profile=HomeLocalHourProfile(
+            timezone=model.local_hour_profile.timezone,
+            business_date=model.local_hour_profile.business_date,
+            day_length_minutes=model.local_hour_profile.day_length_minutes,
+            basis=model.local_hour_profile.basis,
+            reconciles_to_daily_gross=model.local_hour_profile.reconciles_to_daily_gross,
+            total_revenue_minor=model.local_hour_profile.total_revenue_minor,
+            total_orders_count=model.local_hour_profile.total_orders_count,
+            points=[
+                HomeHourPoint(
+                    hour=point.hour,
+                    revenue_minor=point.revenue_minor,
+                    orders_count=point.orders_count,
+                )
+                for point in model.local_hour_profile.points
+            ],
+        ),
+        recent_activity=[
+            HomeActivityRead(
+                kind=row.kind,
+                occurred_at=row.occurred_at,
+                display_reference=row.display_reference,
+                title=row.title,
+                amount_minor=row.amount_minor,
+                scope=row.scope,
+            )
+            for row in model.recent_activity
+        ],
+        activity_capabilities=HomeActivityCapabilities(
+            pos=model.pos_activity_capability,
+            gaming=model.gaming_activity_capability,
+        ),
+    )
+
+
 class DashboardKPIs(BaseModel):
+    receipt_corrections_minor: int = 0
+    effective_upi_received_minor: int = 0
     branch_id: UUID
     date: _date
     revenue_food_minor: int
@@ -58,7 +195,7 @@ class DashboardKPIs(BaseModel):
 async def dashboard(
     session: SessionDep,
     on_date: _date | None = None,
-    tenant: TenantContext = Depends(requires("analytics.read")),
+    tenant: TenantContext = Depends(requires("analytics.read", "finance.read")),
 ) -> DashboardKPIs:
     """Real-time KPIs for the given date.
 
@@ -116,6 +253,8 @@ async def dashboard(
     ).scalar_one()
 
     return DashboardKPIs(
+        receipt_corrections_minor=report.receipt_corrections_minor,
+        effective_upi_received_minor=report.effective_upi_received_minor,
         branch_id=tenant.branch_id,
         date=target_date,
         revenue_food_minor=report.revenue.food_minor,
@@ -125,7 +264,7 @@ async def dashboard(
         revenue_memberships_minor=report.revenue.memberships_minor,
         revenue_manual_collections_minor=report.manual_collections_minor,
         discounts_and_points_redeemed_minor=report.revenue.discounts_and_points_redeemed_minor,
-        revenue_total_minor=report.gross_revenue_minor,
+        revenue_total_minor=report.effective_gross_revenue_minor,
         orders_count=report.orders_count,
         tickets_count=report.tickets_count,
         avg_ticket_minor=report.avg_ticket_minor,
@@ -191,6 +330,14 @@ async def export_csv(
     writer.writerow(
         ["Refunds issued", report.refunds_issued_minor, f"{report.refunds_issued_minor / 100:.2f}"]
     )
+    writer.writerow([
+        "No-value receipt corrections (no payout)", report.receipt_corrections_minor,
+        f"{report.receipt_corrections_minor / 100:.2f}",
+    ])
+    writer.writerow([
+        "Effective UPI before refund payouts", report.effective_upi_received_minor,
+        f"{report.effective_upi_received_minor / 100:.2f}",
+    ])
     writer.writerow(
         ["Refunded tips", report.refunded_tips_minor, f"{report.refunded_tips_minor / 100:.2f}"]
     )

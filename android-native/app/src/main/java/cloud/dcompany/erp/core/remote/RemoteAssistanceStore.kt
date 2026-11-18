@@ -1,8 +1,10 @@
 package cloud.dcompany.erp.core.remote
 
 import android.content.Context
+import android.content.SharedPreferences
 import java.time.Instant
 import java.util.UUID
+import java.util.WeakHashMap
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -70,6 +72,7 @@ internal data class PersistedRemoteAssistanceState(
     val commandSessionId: String? = null,
     val lastAcknowledgedSequence: Long = 0L,
     val receipts: List<RemoteCommandReceipt> = emptyList(),
+    val lastMutationResolution: RemotePendingResolution? = null,
 ) {
     val consentChoice: RemoteConsentChoice
         get() = RemoteConsentChoice.fromStored(consent)
@@ -78,7 +81,7 @@ internal data class PersistedRemoteAssistanceState(
 internal fun validRemoteAssistanceState(
     value: PersistedRemoteAssistanceState,
 ): PersistedRemoteAssistanceState? {
-    if (value.format != REMOTE_STORE_FORMAT) return null
+    if (value.format != REMOTE_STORE_FORMAT || value.lastMutationResolution?.valid() == false) return null
     val choice = RemoteConsentChoice.fromStored(value.consent)
     if (choice.storedValue != value.consent) return null
     val grantKind = RemoteGrantKind.fromStored(value.grantKind)
@@ -115,8 +118,8 @@ internal fun validRemoteAssistanceState(
             !isCanonicalUuidV4(it.decisionId) ||
             it.decision !in RemoteGrantDecisionWire.entries ||
             it.grantId != value.grantId ||
-            (it.decision == RemoteGrantDecisionWire.ACCEPTED && choice != RemoteConsentChoice.ALLOWED) ||
-            (it.decision == RemoteGrantDecisionWire.DECLINED && choice != RemoteConsentChoice.DENIED)
+            (it.decision == RemoteGrantDecisionWire.ACCEPTED && choice !in setOf(RemoteConsentChoice.ALLOWED, RemoteConsentChoice.REVOKED)) ||
+            (it.decision == RemoteGrantDecisionWire.DECLINED && choice !in setOf(RemoteConsentChoice.DENIED, RemoteConsentChoice.REVOKED))
         ) return null
     }
     value.pendingRevocation?.let {
@@ -247,17 +250,29 @@ private fun validRemoteCommandReceipt(receipt: RemoteCommandReceipt): Boolean =
             else -> false
         }
 
+internal const val REMOTE_JOURNAL_RECOVERY_MESSAGE = "Saved remote support work needs recovery. Its private evidence has been retained."
+internal data class RemoteJournalReadiness(val verified: Boolean, val pending: Boolean = false) {
+    val isClear: Boolean get() = verified && !pending
+}
+
+/** Acknowledged command audit history stays retained but is not a pending action. */
+internal fun hasPendingRemoteHandoverWork(state: PersistedRemoteAssistanceState): Boolean =
+    state.consentChoice == RemoteConsentChoice.ALLOWED || state.pendingDecision != null ||
+        state.pendingRevocation != null || state.pendingSessionEnd != null || state.commandSessionId != null ||
+        state.receipts.any { it.state == RECEIPT_RESERVED || it.sequence > state.lastAcknowledgedSequence }
+
 /**
  * One small, synchronously committed safety journal. Consent, revoke, Stop and
  * command execution identities must survive response loss and process death;
  * none of them belongs in the financial Room database or its outbox.
  */
 internal class RemoteAssistanceStore(
-    context: Context,
+    private val prefs: SharedPreferences,
     private val currentScope: () -> RemoteAssistanceJournalScope?,
     private val uuid: () -> String = { UUID.randomUUID().toString() },
 ) {
-    private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    constructor(context: Context, currentScope: () -> RemoteAssistanceJournalScope?, uuid: () -> String = { UUID.randomUUID().toString() }) :
+        this(context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE), currentScope, uuid)
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
     private val lock = STORE_LOCK
 
@@ -265,18 +280,28 @@ internal class RemoteAssistanceStore(
         readCurrentLocked()?.state ?: PersistedRemoteAssistanceState()
     }
 
+    /** Presence across all private scopes; unreadable bytes never prove a clean handover. */
+    fun inspectHandoverWork(): RemoteJournalReadiness = synchronized(lock) {
+        if (WRITE_FAULTS.containsKey(prefs)) return@synchronized RemoteJournalReadiness(verified = false)
+        val retained = readJournalsLocked() ?: return@synchronized RemoteJournalReadiness(verified = false)
+        RemoteJournalReadiness(verified = true, pending = retained.journals.any { hasPendingRemoteHandoverWork(it.state) })
+    }
+
     fun recordDecision(
         grantId: String,
         allow: Boolean,
         grantKind: RemoteGrantKind,
         grantExpiresAt: Instant,
+        expectedScope: RemoteAssistanceJournalScope? = null,
     ): PendingRemoteGrantDecision? =
         synchronized(lock) {
             if (!isCanonicalUuidV4(grantId)) return@synchronized null
             val expiry = grantExpiresAt.toString()
             if (parseRemoteInstant(expiry) == null) return@synchronized null
             val journal = readCurrentLocked() ?: return@synchronized null
+            if (expectedScope != null && journal.scope != expectedScope) return@synchronized null
             val current = journal.state
+            if (current.pendingRevocation != null) return@synchronized null
             val decision = if (allow) {
                 RemoteGrantDecisionWire.ACCEPTED
             } else {
@@ -290,7 +315,7 @@ internal class RemoteAssistanceStore(
                     it.grantId == grantId &&
                         it.decision == decision &&
                         current.grantKind == grantKind.storedValue &&
-                        current.grantExpiresAt == expiry
+                        current.grantExpiresAt == expiry && writeLocked(journal.scope, current)
                 }
             }
             val mutation = PendingRemoteGrantDecision(grantId, decision, uuid())
@@ -322,6 +347,24 @@ internal class RemoteAssistanceStore(
         writeLocked(journal.scope, current.copy(pendingDecision = null))
     }
 
+    /** Exact original-owned full snapshot CAS; one action cannot acknowledge a sibling. */
+    fun checkpointPending(expectedScope: RemoteAssistanceJournalScope, expected: PersistedRemoteAssistanceState,
+        action: RemotePendingAction, resolution: RemotePendingResolution): Boolean = synchronized(lock) {
+        val journal = readCurrentLocked() ?: return@synchronized false
+        if (journal.scope != expectedScope || journal.state != expected || !action.matches(expected) ||
+            resolution.action != action || !resolution.valid()) return@synchronized false
+        val next = resolvedRemotePendingState(expected, action, resolution) ?: return@synchronized false
+        writeLocked(journal.scope, next, retainBeforeOnFailure = true)
+    }
+
+    fun pendingRecoverySnapshot(): PersistedRemoteAssistanceState? = synchronized(lock) { readCurrentLocked()?.state }
+    fun reassertPending(expectedScope: RemoteAssistanceJournalScope, expected: PersistedRemoteAssistanceState,
+        action: RemotePendingAction): Boolean = synchronized(lock) {
+        val journal = readCurrentLocked() ?: return@synchronized false
+        if (journal.scope != expectedScope || journal.state != expected || !action.matches(expected)) return@synchronized false
+        writeLocked(journal.scope, expected)
+    }
+
     /** Atomically binds a one-time grant to the first admitted session. */
     fun authorizeSession(grantId: String, sessionId: String, serverTimeRaw: String): Boolean =
         synchronized(lock) {
@@ -345,16 +388,17 @@ internal class RemoteAssistanceStore(
             writeLocked(journal.scope, current.copy(oneTimeSessionId = sessionId))
         }
 
-    fun recordRevocation(): PendingRemoteGrantRevocation? = synchronized(lock) {
+    fun recordRevocation(expectedScope: RemoteAssistanceJournalScope? = null, expectedGrantId: String? = null): PendingRemoteGrantRevocation? = synchronized(lock) {
         val journal = readCurrentLocked() ?: return@synchronized null
+        if (expectedScope != null && journal.scope != expectedScope) return@synchronized null
         val current = journal.state
-        current.pendingRevocation?.let { return@synchronized it }
+        if (expectedGrantId != null && current.grantId != expectedGrantId) return@synchronized null
+        current.pendingRevocation?.let { return@synchronized it.takeIf { writeLocked(journal.scope, current) } }
         val grantId = current.grantId?.takeIf(::isCanonicalUuidV4) ?: return@synchronized null
         val mutation = PendingRemoteGrantRevocation(grantId, uuid())
         if (!isCanonicalUuidV4(mutation.revocationId)) return@synchronized null
         val next = current.copy(
             consent = RemoteConsentChoice.REVOKED.storedValue,
-            pendingDecision = null,
             pendingRevocation = mutation,
         )
         mutation.takeIf { writeLocked(journal.scope, next) }
@@ -370,18 +414,19 @@ internal class RemoteAssistanceStore(
         writeLocked(journal.scope, current.copy(pendingRevocation = null))
     }
 
-    fun recordSessionEnd(sessionId: String, reason: String): PendingRemoteSessionEnd? =
+    fun recordSessionEnd(sessionId: String, reason: String, expectedScope: RemoteAssistanceJournalScope? = null): PendingRemoteSessionEnd? =
         synchronized(lock) {
             if (!isCanonicalUuidV4(sessionId) || reason !in REMOTE_DEVICE_END_REASONS) {
                 return@synchronized null
             }
             val journal = readCurrentLocked() ?: return@synchronized null
+            if (expectedScope != null && journal.scope != expectedScope) return@synchronized null
             val current = journal.state
             current.pendingSessionEnd?.let { pending ->
                 // End action IDs are immutable across response loss. A second
                 // session can be stopped locally, but it may not overwrite the
                 // first session's unacknowledged audit mutation.
-                return@synchronized pending.takeIf { it.sessionId == sessionId }
+                return@synchronized pending.takeIf { it.sessionId == sessionId && writeLocked(journal.scope, current) }
             }
             val mutation = PendingRemoteSessionEnd(sessionId, uuid(), reason)
             if (!isCanonicalUuidV4(mutation.endId)) return@synchronized null
@@ -443,6 +488,7 @@ internal class RemoteAssistanceStore(
         serverTimeRaw: String,
         protectedActiveGrantId: String? = null,
     ): Int = synchronized(lock) {
+        if (WRITE_FAULTS.containsKey(prefs)) return@synchronized 0
         val authenticatedScope = currentScope()?.takeIf(::validJournalScope)
             ?: return@synchronized 0
         if (
@@ -450,7 +496,7 @@ internal class RemoteAssistanceStore(
             !isCanonicalUuidV4(protectedActiveGrantId)
         ) return@synchronized 0
         val serverTime = parseRemoteInstant(serverTimeRaw) ?: return@synchronized 0
-        val current = readJournalsLocked()
+        val current = readJournalsLocked() ?: return@synchronized 0
         var retiredCount = 0
         val reconciled = current.journals.map { journal ->
             if (
@@ -475,9 +521,8 @@ internal class RemoteAssistanceStore(
             format = REMOTE_JOURNALS_FORMAT,
             journals = reconciled,
         )
-        if (!prefs.edit().putString(KEY_STATE, json.encodeToString(next)).commit()) {
-            return@synchronized 0
-        }
+        val before = try { prefs.getString(KEY_STATE, null) } catch (_: Exception) { return@synchronized 0 }
+        if (!commitRawLocked(before, json.encodeToString(next), retainBeforeOnFailure = true)) return@synchronized 0
         retiredCount
     }
 
@@ -598,17 +643,21 @@ internal class RemoteAssistanceStore(
 
     private fun readCurrentLocked(): ScopedRemoteAssistanceJournal? {
         val scope = currentScope()?.takeIf(::validJournalScope) ?: return null
-        val state = readJournalsLocked().journals.firstOrNull { it.scope == scope }?.state
+        val retained = readJournalsLocked() ?: return null
+        val state = retained.journals.firstOrNull { it.scope == scope }?.state
             ?: PersistedRemoteAssistanceState()
         return ScopedRemoteAssistanceJournal(scope, state)
     }
 
-    private fun readJournalsLocked(): PersistedRemoteAssistanceJournals {
+    private fun readJournalsLocked(): PersistedRemoteAssistanceJournals? {
         val empty = PersistedRemoteAssistanceJournals(REMOTE_JOURNALS_FORMAT, emptyList())
-        val raw = prefs.getString(KEY_STATE, null) ?: return empty
+        val actual = try { prefs.getString(KEY_STATE, null) } catch (_: Exception) { return null }
+        val fault = WRITE_FAULTS[prefs]
+        if (fault != null && actual != fault.attemptedRaw && actual != fault.retainedRaw && actual != fault.previousRaw) return null
+        val raw = fault?.retainedRaw ?: actual ?: return empty
         val decoded = runCatching {
             json.decodeFromString<PersistedRemoteAssistanceJournals>(raw)
-        }.getOrNull() ?: return empty
+        }.getOrNull() ?: return null
         if (
             decoded.format != REMOTE_JOURNALS_FORMAT ||
             decoded.journals.size > MAX_REMOTE_SCOPED_JOURNALS ||
@@ -617,19 +666,26 @@ internal class RemoteAssistanceStore(
             decoded.journals.any {
                 !validJournalScope(it.scope) || validRemoteAssistanceState(it.state) == null
             }
-        ) return empty
+        ) return null
         return decoded
     }
 
     private fun writeLocked(
         scope: RemoteAssistanceJournalScope,
         value: PersistedRemoteAssistanceState,
+        retainBeforeOnFailure: Boolean = false,
     ): Boolean {
         // Cache scope can be invalidated from another thread. Never commit an
         // A journal after the authenticated process has already moved to B.
         if (currentScope()?.takeIf(::validJournalScope) != scope) return false
         val valid = validRemoteAssistanceState(value) ?: return false
-        val current = readJournalsLocked()
+        val current = readJournalsLocked() ?: return false
+        val beforeRaw = try { prefs.getString(KEY_STATE, null) } catch (_: Exception) { return false }
+        WRITE_FAULTS[prefs]?.let { fault ->
+            // Reassert exactly the retained journal; never overwrite a different/newer scope or outcome.
+            if (current.journals.firstOrNull { it.scope == scope }?.state != value) return false
+            return commitRawLocked(beforeRaw, fault.retainedRaw, retainBeforeOnFailure = true)
+        }
         var retained = current.journals.filterNot { it.scope == scope }
         if (retained.size >= MAX_REMOTE_SCOPED_JOURNALS) {
             val evictionIndex = retained.indexOfFirst {
@@ -645,10 +701,23 @@ internal class RemoteAssistanceStore(
             format = REMOTE_JOURNALS_FORMAT,
             journals = retained + ScopedRemoteAssistanceJournal(scope, valid),
         )
-        return prefs.edit().putString(KEY_STATE, json.encodeToString(next)).commit()
+        return commitRawLocked(beforeRaw, json.encodeToString(next), retainBeforeOnFailure)
+    }
+
+    private fun commitRawLocked(before: String?, next: String, retainBeforeOnFailure: Boolean): Boolean {
+        val fault = WRITE_FAULTS[prefs]
+        if (fault != null && (next != fault.retainedRaw || (before != fault.attemptedRaw && before != fault.retainedRaw && before != fault.previousRaw))) return false
+        val committed = try { prefs.edit().putString(KEY_STATE, next).commit() } catch (_: Exception) { false }
+        if (committed) WRITE_FAULTS.remove(prefs)
+        else WRITE_FAULTS[prefs] = RemoteWriteFault(fault?.retainedRaw ?: before?.takeIf { retainBeforeOnFailure } ?: next, next, before)
+        return committed
+    }
+    private data class RemoteWriteFault(val retainedRaw: String, val attemptedRaw: String, val previousRaw: String?) {
+        override fun toString() = "RemoteWriteFault(<redacted>)"
     }
 
     private companion object {
+        val WRITE_FAULTS = WeakHashMap<SharedPreferences, RemoteWriteFault>()
         const val PREFS_NAME = "dcompany_remote_assistance"
         const val KEY_STATE = "state"
         const val MAX_REMOTE_SCOPED_JOURNALS = 16

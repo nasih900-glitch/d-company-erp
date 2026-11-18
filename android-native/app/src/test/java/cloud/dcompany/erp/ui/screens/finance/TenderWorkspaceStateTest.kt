@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.screens.finance
 
+import cloud.dcompany.erp.core.handover.standaloneOperationCaller
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.MeResponse
 import java.io.IOException
@@ -90,7 +91,7 @@ class TenderWorkspaceStateTest {
         val tasks=CoroutineScope(coroutineContext+SupervisorJob())
         try {
             val api=Api();val storage=Storage();val journal=TenderJournal(storage)
-            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},refreshReaders={_,_->emptyList()})
+            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},operations=standaloneOperationCaller(),refreshReaders={_,_->emptyList()})
             vm.bind(source,account);ready(vm);preview(vm)
             api.commitFailure=IOException("Reply lost")
             vm.commit();idle(vm)
@@ -109,11 +110,11 @@ class TenderWorkspaceStateTest {
         val tasks=CoroutineScope(coroutineContext+SupervisorJob())
         try {
             val api=Api();val journal=TenderJournal(Storage())
-            val a=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},refreshReaders={_,_->emptyList()})
+            val a=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},operations=standaloneOperationCaller(),refreshReaders={_,_->emptyList()})
             a.bind(source,account);ready(a);preview(a)
             api.commitFailure=IOException("Reply lost");a.commit();idle(a)
             val pending=requireNotNull(a.state.value.pending)
-            val b=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},refreshReaders={_,_->emptyList()})
+            val b=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},operations=standaloneOperationCaller(),refreshReaders={_,_->emptyList()})
             b.bind(source,account);ready(b)
             api.commitFailure=null;b.recover(requireNotNull(b.state.value.pending));idle(b)
             assertNull(journal.read(scope))
@@ -127,7 +128,7 @@ class TenderWorkspaceStateTest {
         val tasks=CoroutineScope(coroutineContext+SupervisorJob())
         try {
             val api=Api();val journal=TenderJournal(Storage())
-            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},refreshReaders={_,_->emptyList()})
+            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},operations=standaloneOperationCaller(),refreshReaders={_,_->emptyList()})
             vm.bind(source,account);ready(vm);preview(vm)
             val other=journal.reserve(paymentTenderCommand(scope,PaymentTenderCommit(secondPayment,fingerprint,"Different source"),"different-source",1000))
             vm.commit();idle(vm)
@@ -140,7 +141,7 @@ class TenderWorkspaceStateTest {
         val tasks=CoroutineScope(coroutineContext+SupervisorJob())
         try {
             val api=Api();val storage=Storage();val journal=TenderJournal(storage)
-            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},refreshReaders={_,_->emptyList()})
+            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},operations=standaloneOperationCaller(),refreshReaders={_,_->emptyList()})
             vm.bind(source,account);ready(vm);preview(vm)
             storage.failPut=true;vm.commit();idle(vm)
             val saved=requireNotNull(vm.state.value.pending)
@@ -156,7 +157,7 @@ class TenderWorkspaceStateTest {
         try {
             var elapsed=1000L
             val api=Api();val journal=TenderJournal(Storage())
-            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{elapsed},{1000},refreshReaders={_,_->emptyList()})
+            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{elapsed},{1000},operations=standaloneOperationCaller(),refreshReaders={_,_->emptyList()})
             vm.bind(source,account);ready(vm);preview(vm)
             api.blockCommit=true;vm.commit()
             withTimeout(5000){while(api.blocked==null)delay(5)}
@@ -177,7 +178,7 @@ class TenderWorkspaceStateTest {
         try {
             var active=account
             val api=Api();val journal=TenderJournal(Storage())
-            val vm=TenderWorkspaceViewModel(api.api,journal,{active},tasks,{1000},{1000},refreshReaders={_,_->emptyList()})
+            val vm=TenderWorkspaceViewModel(api.api,journal,{active},tasks,{1000},{1000},operations=standaloneOperationCaller(),refreshReaders={_,_->emptyList()})
             vm.bind(source,active);ready(vm);preview(vm)
             api.blockCommit=true;vm.commit()
             withTimeout(5000){while(api.blocked==null)delay(5)}
@@ -197,7 +198,7 @@ class TenderWorkspaceStateTest {
         val tasks=CoroutineScope(coroutineContext+SupervisorJob())
         try {
             val api=Api();val storage=Storage().also{it.failRead=true}
-            val vm=TenderWorkspaceViewModel(api.api,TenderJournal(storage),{account},tasks,{1000},{1000},refreshReaders={_,_->emptyList()})
+            val vm=TenderWorkspaceViewModel(api.api,TenderJournal(storage),{account},tasks,{1000},{1000},operations=standaloneOperationCaller(),refreshReaders={_,_->emptyList()})
             vm.bind(source,account);ready(vm)
             assertFalse(vm.state.value.savedWorkVerified);assertNotNull(vm.state.value.storageError)
             vm.prepare();vm.confirm(true);vm.commit();idle(vm)
@@ -210,7 +211,7 @@ class TenderWorkspaceStateTest {
         try {
             for(failure in listOf(ApiException("Expired",401),ApiException("Forbidden",403),ApiException("Retry later",409,"conflict",retryable=true),IOException("Offline"))) {
                 val api=Api();val journal=TenderJournal(Storage())
-                val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},refreshReaders={_,_->emptyList()})
+                val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},operations=standaloneOperationCaller(),refreshReaders={_,_->emptyList()})
                 vm.bind(source,account);ready(vm);preview(vm)
                 api.commitFailure=failure;vm.commit();idle(vm)
                 assertNotNull(vm.state.value.pending);assertNull(vm.state.value.reviewedRejection)
@@ -223,7 +224,7 @@ class TenderWorkspaceStateTest {
         val tasks=CoroutineScope(coroutineContext+SupervisorJob())
         try {
             val api=Api();val storage=Storage();val journal=TenderJournal(storage)
-            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},refreshReaders={_,_->emptyList()})
+            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},operations=standaloneOperationCaller(),refreshReaders={_,_->emptyList()})
             vm.bind(source,account);ready(vm);preview(vm)
             api.commitFailure=ApiException("Source changed",409,"conflict",retryable=false)
             vm.commit();idle(vm)
@@ -249,7 +250,7 @@ class TenderWorkspaceStateTest {
             var refreshes=0;var failRefresh=true
             val notices=mutableListOf<TenderReceipt>()
             val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},
-                refreshReaders={owner,row-> assertEquals(scope,owner);assertEquals("payment_method_corrected",row.operation);refreshes++
+                operations=standaloneOperationCaller(),refreshReaders={owner,row-> assertEquals(scope,owner);assertEquals("payment_method_corrected",row.operation);refreshes++
                     if(failRefresh) throw IOException("Read failed") else emptyList() },
                 notifyReaders={owner,row->assertEquals(scope,owner);notices+=row})
             vm.bind(source,account);ready(vm);preview(vm)
@@ -270,7 +271,7 @@ class TenderWorkspaceStateTest {
         val tasks=CoroutineScope(coroutineContext+SupervisorJob())
         try {
             val api=Api();val storage=Storage();val journal=TenderJournal(storage);var refreshed=0
-            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},refreshReaders={_,_->refreshed++;emptyList()})
+            val vm=TenderWorkspaceViewModel(api.api,journal,{account},tasks,{1000},{1000},operations=standaloneOperationCaller(),refreshReaders={_,_->refreshed++;emptyList()})
             vm.bind(source,account);ready(vm);preview(vm);storage.failRemove=true;vm.commit();idle(vm)
             val pending=requireNotNull(vm.state.value.pending)
             assertNotNull(vm.state.value.receipt);assertNotNull(vm.state.value.storageError);assertNull(vm.state.value.error)
@@ -287,7 +288,7 @@ class TenderWorkspaceStateTest {
             var active=account;var refreshStarted=false
             val waiting=CompletableDeferred<List<String>>()
             val api=Api();val journal=TenderJournal(Storage())
-            val vm=TenderWorkspaceViewModel(api.api,journal,{active},tasks,{1000},{1000},refreshReaders={_,_->refreshStarted=true;waiting.await()})
+            val vm=TenderWorkspaceViewModel(api.api,journal,{active},tasks,{1000},{1000},operations=standaloneOperationCaller(),refreshReaders={_,_->refreshStarted=true;waiting.await()})
             vm.bind(source,active);ready(vm);preview(vm);vm.commit()
             withTimeout(5000){while(!refreshStarted)delay(5)}
             assertNotNull(vm.state.value.receipt);assertNull(journal.read(scope))

@@ -4,6 +4,10 @@ import android.util.Log
 import android.os.SystemClock
 import androidx.room.withTransaction
 import cloud.dcompany.erp.DCompanyApp
+import cloud.dcompany.erp.core.handover.OriginalOperationBinding
+import cloud.dcompany.erp.core.handover.OperationDispatchContext
+import cloud.dcompany.erp.core.handover.OperationResult
+import cloud.dcompany.erp.core.handover.OperationOutcome
 import cloud.dcompany.erp.core.diagnostics.AppHealthRecorder
 import cloud.dcompany.erp.core.alarm.GamingAlarmReconciler
 import cloud.dcompany.erp.core.auth.CacheIsolationCoordinator
@@ -280,6 +284,26 @@ private class FinanceReferenceRefreshException(labels: List<String>) : Exception
  * trailing pass. The worker retires atomically only after observing no pending
  * request, so a request at the pass/idle boundary cannot be stranded.
  */
+/** A refused admission has not entered the old worker body, including its gate-release loop. */
+internal suspend fun runSessionWorkerWithAdmission(
+    admit: suspend (suspend () -> Unit) -> Unit,
+    onRegistrationRejected: () -> Unit,
+    onAdmissionRefused: (Exception) -> Unit,
+    block: suspend () -> Unit,
+) {
+    var entered = false
+    try {
+        admit { entered = true; block() }
+    } catch (cancelled: CancellationException) {
+        if (!entered) onRegistrationRejected()
+        throw cancelled
+    } catch (failure: Exception) {
+        if (entered) throw failure
+        onRegistrationRejected()
+        onAdmissionRefused(failure)
+    }
+}
+
 internal class ConflatedSyncRequestGate {
     internal data class WorkerLease(
         val cohort: Long,
@@ -1091,7 +1115,7 @@ class SyncEngine private constructor(
     private val resourceRefreshFeedback = ResourceRefreshFeedbackStore()
     private val sessionWorkerMonitor = Any()
     private var sessionWorkerEpoch = 0L
-    private val sessionWorkers = mutableSetOf<Job>()
+    private val sessionWorkers = mutableMapOf<Job, SessionWorkLease>()
 
     /**
      * A cache lease prevents stale Room commits; this extra epoch also closes
@@ -1101,6 +1125,7 @@ class SyncEngine private constructor(
     private data class SessionWorkLease(
         val cache: CacheScopeLease,
         val epoch: Long,
+        val operation: OriginalOperationBinding,
     )
 
     private val sessionWorkGuard = SessionWorkGuard<SessionWorkLease>(
@@ -1355,10 +1380,12 @@ class SyncEngine private constructor(
                 // explicitly reinstall the caller's session context inside that
                 // worker. Late nested failures can then never leak onto the next
                 // employee's workspace after cancellation/account switching.
-                sessionWorkGuard.withLease(sessionLease) {
-                    ensureCurrentSessionWork(sessionLease)
-                    withSessionResourceSerialisation(sessionLease, key) {
-                        refreshAlreadyLocked(key, sessionLease.cache)
+                withOriginalOperation(sessionLease.operation) {
+                    sessionWorkGuard.withLease(sessionLease) {
+                        ensureCurrentSessionWork(sessionLease)
+                        withSessionResourceSerialisation(sessionLease, key) {
+                            refreshAlreadyLocked(key, sessionLease.cache)
+                        }
                     }
                 }
             }
@@ -1393,7 +1420,9 @@ class SyncEngine private constructor(
     private suspend fun <T> withResourceSerialisation(
         resource: String,
         block: suspend () -> T,
-    ): T = resourceRefreshSerialiser.run(resource, block)
+    ): T = withOriginalOperation {
+        resourceRefreshSerialiser.run(resource, block)
+    }
 
     /**
      * Cross-resource writes acquire distinct canonical locks in sorted order.
@@ -1403,7 +1432,9 @@ class SyncEngine private constructor(
     private suspend fun <T> withResourceSerialisations(
         vararg resources: String,
         block: suspend () -> T,
-    ): T = resourceRefreshSerialiser.runAll(resources.asList(), block)
+    ): T = withOriginalOperation {
+        resourceRefreshSerialiser.runAll(resources.asList(), block)
+    }
 
     /**
      * A broad sync may wait behind a screen refresh. Recheck its authenticated
@@ -1484,11 +1515,28 @@ class SyncEngine private constructor(
         }
     }
 
+    private fun captureOriginalOperation(): OriginalOperationBinding? {
+        val app = DCompanyApp.instance
+        val inherited = OperationDispatchContext.captured()?.binding
+        if (inherited != null) return inherited.takeIf { it.isCurrent() && it.cacheLease == cacheIsolation.currentLease() }
+        return app.handoverOperations.captureOriginal(app.shiftCache.profile.value, cacheIsolation.currentLease())
+    }
+
+    private suspend fun <T> withOriginalOperation(
+        original: OriginalOperationBinding = checkNotNull(captureOriginalOperation()) { "The original sync workspace is unavailable." },
+        block: suspend () -> T,
+    ): T = DCompanyApp.instance.handoverOperations.run(original) {
+        // These workflows retain their unresolved writes/decisions in the domain outbox.
+        // A completed pass is not permission to bypass that separate readiness gate.
+        OperationResult(block(), OperationOutcome.DURABLE_OUTCOME)
+    }
+
     private fun captureSessionWorkLease(): SessionWorkLease? {
         val cacheLease = cacheIsolation.currentLease() ?: return null
+        val original = captureOriginalOperation()?.takeIf { it.cacheLease == cacheLease } ?: return null
         return synchronized(sessionWorkerMonitor) {
             if (cacheIsolation.currentLease() != cacheLease) null
-            else SessionWorkLease(cache = cacheLease, epoch = sessionWorkerEpoch)
+            else SessionWorkLease(cache = cacheLease, epoch = sessionWorkerEpoch, operation = original)
         }
     }
 
@@ -1533,32 +1581,52 @@ class SyncEngine private constructor(
         onRegistrationRejected: () -> Unit = {},
         block: suspend () -> Unit,
     ) {
-        lateinit var worker: Job
-        worker = scope.launch(start = CoroutineStart.LAZY) {
-            try {
-                sessionWorkGuard.withLease(lease) { block() }
-            } finally {
-                synchronized(sessionWorkerMonitor) { sessionWorkers.remove(worker) }
-            }
-        }
-        val registered = synchronized(sessionWorkerMonitor) {
-            if (
-                lease.epoch != sessionWorkerEpoch ||
-                cacheIsolation.currentLease() != lease.cache
-            ) {
-                false
-            } else {
-                sessionWorkers += worker
-                true
-            }
-        }
-        if (registered) {
-            worker.start()
-        } else {
-            onRegistrationRejected()
-            worker.cancel(CancellationException("Authenticated sync scope changed"))
+        launchRegisteredSessionWorker(scope,
+            register = { worker -> synchronized(sessionWorkerMonitor) {
+                if (lease.epoch != sessionWorkerEpoch || cacheIsolation.currentLease() != lease.cache) false
+                else { sessionWorkers[worker] = lease; true }
+            } },
+            unregister = { worker -> synchronized(sessionWorkerMonitor) {
+                if (sessionWorkers[worker] === lease) sessionWorkers.remove(worker)
+            } },
+            onRegistrationRejected = onRegistrationRejected,
+        ) { rejectBeforeBody ->
+            runSessionWorkerWithAdmission(
+                admit = { body -> withOriginalOperation(lease.operation) { body() } },
+                onRegistrationRejected = rejectBeforeBody,
+                onAdmissionRefused = { failure -> Log.w(REFRESH_LOG_TAG, "Sync worker admission was refused before work started", failure) },
+                block = { sessionWorkGuard.withLease(lease) { block() } },
+            )
         }
     }
+
+    /** Join actual exact-A jobs without cancelling them or holding the registry/cache/coordinator locks. */
+    internal suspend fun awaitOriginalSessionWorkers(
+        original: OriginalOperationBinding,
+        cap: cloud.dcompany.erp.core.handover.HandoverCoordinator.Preparation,
+        timeoutMillis: Long = 15_000,
+    ): Boolean = awaitOriginalWorkerLifetimes(timeoutMillis,
+        requireOriginalClosed = { DCompanyApp.instance.handoverOperations.requirePreparing(original, cap) },
+        snapshot = {
+            synchronized(sessionWorkerMonitor) {
+                sessionWorkers.filterValues { lease -> lease.cache == original.cacheLease &&
+                    lease.operation.authority == original.authority &&
+                    lease.operation.loginLease.session.lineage === original.loginLease.session.lineage }.keys.toList()
+            }
+        })
+
+    internal suspend fun awaitWorkspaceExitWorkers(original: OriginalOperationBinding,
+        cap: cloud.dcompany.erp.core.handover.HandoverCoordinator.WorkspaceExit,
+        timeoutMillis: Long = 15_000): Boolean = awaitOriginalWorkerLifetimes(timeoutMillis,
+        requireOriginalClosed = {
+            check(original.isCurrent())
+            DCompanyApp.instance.handoverOperations.coordinator.requireWorkspaceExit(cap)
+        },
+        snapshot = { synchronized(sessionWorkerMonitor) {
+            sessionWorkers.filterValues { lease -> lease.cache == original.cacheLease &&
+                lease.operation.authority == original.authority &&
+                lease.operation.loginLease.session.lineage === original.loginLease.session.lineage }.keys.toList()
+        } })
 
     /** Session-scoped status must not leak onto the next employee's workspace. */
     fun clearSessionFeedback() {
@@ -1566,7 +1634,7 @@ class SyncEngine private constructor(
             sessionWorkerEpoch += 1L
             syncRequests.reset()
             kitchenSyncRequests.reset()
-            sessionWorkers.toList().also { sessionWorkers.clear() }
+            sessionWorkers.keys.toList()
                 .also {
                     resourceRefreshFeedback.clear()
                     sessionAwareLastError = null
@@ -1582,21 +1650,77 @@ class SyncEngine private constructor(
     }
 
     /**
-     * Login must not clear the terminal's replaceable shift authority cache
-     * while an older shift GET is still able to commit. Clear and repopulate
-     * it as one ordered shift-resource operation.
+     * Read authoritative open-shift state under the exact verified login.
+     * A failed or stale read cannot replace the cache or publish a workspace.
      */
-    suspend fun refreshShiftAuthorityAtLogin(): ResourceRefreshResult =
-        withResourceSerialisation("shifts") {
-            val terminalId = DCompanyApp.instance.terminalStore.terminalId()
-                ?: return@withResourceSerialisation ResourceRefreshResult.Skipped("shifts")
-            val lease = cacheIsolation.currentLease()
-                ?: return@withResourceSerialisation ResourceRefreshResult.Skipped("shifts")
-            if (!commitToCurrentScope(lease) { db.shiftDao().deleteServerOpen(terminalId) }) {
-                return@withResourceSerialisation ResourceRefreshResult.Skipped("shifts")
+    internal suspend fun refreshShiftAuthorityAtLogin(original: OriginalOperationBinding) =
+        withOriginalOperation(original) {
+            resourceRefreshSerialiser.run("shifts") {
+                check(original.isCurrent()) { "The verified till changed before reading the current shift." }
+                check(pullOpenShift(original)) { "The current shift could not be verified for this till." }
+                runAndRecordRefreshAlreadyLocked("shifts", { pullShiftHistory() }, original.cacheLease)
+                check(original.isCurrent()) { "The verified till changed while reading the current shift." }
+                DCompanyApp.instance.handoverOperations.requireOperationalReadiness()
             }
-            refreshAlreadyLocked("shifts", lease)
         }
+
+    /** Rebuild just the verified incoming shift and board while ordinary operation admission is closed. */
+    internal suspend fun hydrateAcceptedTill(lease: CacheScopeLease, shiftId: String, branchId: String, shifts: ShiftApi,
+        gaming: GamingApi?, requireRunningGame: Boolean, stillCurrent: () -> Boolean) {
+        resourceRefreshSerialiser.runAll(listOf("shifts", "gaming")) {
+            check(stillCurrent())
+            val terminalId = requireNotNull(lease.scope.terminalId)
+            val shift = shifts.shifts(onlyOpen = true, installationId = checkoutClientInstance()).single()
+            check(shift.id == shiftId && shift.branchId == branchId &&
+                (lease.scope.branchId == null || lease.scope.branchId == branchId) &&
+                shift.terminalId == terminalId && shift.status == "open")
+            val observedAt = System.currentTimeMillis()
+            val cached = shift.toServerOpenShiftCache(terminalId, Instant.parse(shift.openedAt).toEpochMilli(), observedAt)
+            check(commitToCurrentScope(lease) {
+                check(stillCurrent())
+                db.withTransaction {
+                    db.shiftDao().reconcileServerOpen(terminalId, cached, observedAt)
+                    db.syncMetaDao().put(SyncMetaEntity("shifts", observedAt))
+                }
+            })
+            if (gaming != null) {
+                check(pullGamingDataForLease(lease, gaming, shiftId, requireRunningGame, stillCurrent))
+            } else {
+                check(!requireRunningGame)
+            }
+        }
+    }
+
+    /** Exact online-start observation and publication share the normal shift refresh lock. */
+    internal suspend fun hydrateStartedWorkShift(
+        lease: CacheScopeLease, shiftId: String, actorId: String, companyId: String,
+        branchId: String, terminalId: String, installationId: String, platform: String,
+        openingFloatMinor: Long, openedAt: Instant, shifts: ShiftApi, stillCurrent: () -> Boolean,
+    ) = resourceRefreshSerialiser.run("shifts") {
+        check(stillCurrent())
+        check(lease.scope.companyId == companyId && lease.scope.terminalId == terminalId &&
+            (lease.scope.branchId == null || lease.scope.branchId == branchId))
+        val shift = shifts.shifts(onlyOpen = false, limit = 1, installationId = installationId,
+            shiftId = shiftId).single()
+        check(stillCurrent())
+        check(shift.id == shiftId && shift.openedByUserId == actorId &&
+            shift.branchId == branchId && shift.terminalId == terminalId &&
+            shift.openingProtocolRevision == 1 && shift.openingClientPlatform == platform &&
+            shift.openingClientInstallationId == installationId &&
+            shift.openingFloatMinor == openingFloatMinor && Instant.parse(shift.openedAt) == openedAt &&
+            shift.status in setOf("open", "closed"))
+        val observedAt = System.currentTimeMillis()
+        check(commitToCurrentScope(lease) {
+            check(stillCurrent())
+            db.withTransaction {
+                if (shift.status == "open") db.shiftDao().reconcileServerOpen(terminalId,
+                    shift.toServerOpenShiftCache(terminalId, openedAt.toEpochMilli(), observedAt), observedAt)
+                else db.shiftDao().deleteExactServerOpen(terminalId, shift.id)
+            }
+        })
+        check(stillCurrent())
+        shift
+    }
 
     /** Narrow settings refreshes used after direct online writes. */
     suspend fun refreshSettingsCompany() = withResourceSerialisation("settings") {
@@ -1753,11 +1877,13 @@ class SyncEngine private constructor(
     private suspend fun syncInternal(scheduleForProcessDeath: Boolean) {
         val sessionLease = captureSessionWorkLease() ?: return
         if (scheduleForProcessDeath) scheduleDurableSync()
-        sessionWorkGuard.withLease(sessionLease) {
-            mutex.withLock {
-                ensureCurrentSessionWork(sessionLease)
-                syncRequests.absorbPendingIntoDirectPass(sessionLease.cache.generation)
-                runSyncPass(sessionLease)
+        withOriginalOperation(sessionLease.operation) {
+            sessionWorkGuard.withLease(sessionLease) {
+                mutex.withLock {
+                    ensureCurrentSessionWork(sessionLease)
+                    syncRequests.absorbPendingIntoDirectPass(sessionLease.cache.generation)
+                    runSyncPass(sessionLease)
+                }
             }
         }
     }
@@ -2666,23 +2792,32 @@ class SyncEngine private constructor(
      * enforces one open shift per terminal, so retaining a formerly valid row
      * would incorrectly leave money actions enabled after an authority error.
      */
-    private suspend fun pullOpenShift() {
-        val lease = cacheIsolation.currentLease() ?: return
-        val terminalId = DCompanyApp.instance.terminalStore.terminalId() ?: return
+    private suspend fun pullOpenShift(original: OriginalOperationBinding? = null): Boolean {
+        val lease = original?.cacheLease ?: cacheIsolation.currentLease() ?: return false
+        val terminalId = if (original != null) original.authority.scope.terminalId
+            else DCompanyApp.instance.terminalStore.terminalId()
+        if (terminalId == null) return false
+
+        suspend fun reject(message: String): Boolean {
+            if (original == null) {
+                commitToCurrentScope(lease) {
+                    db.shiftDao().deleteServerOpen(terminalId)
+                    sessionAwareLastError = message
+                }
+            }
+            return false
+        }
+
         val rows = shiftApi.shifts(
             onlyOpen = true,
             installationId = checkoutClientInstance(),
         )
-        if (rows.size > 1) {
-            commitToCurrentScope(lease) {
-                db.shiftDao().deleteServerOpen(terminalId)
-                sessionAwareLastError =
-                    "The server returned multiple open shifts for this terminal. POS money actions are locked until an owner reconciles them."
-            }
-            return
-        }
-        val detail = rows.firstOrNull()
-        val profileBranchId = DCompanyApp.instance.shiftCache.profile.value?.branchId
+        if (rows.size > 1) return reject(
+            "The server returned multiple open shifts for this terminal. POS money actions are locked until an owner reconciles them.",
+        )
+        val detail = rows.singleOrNull()
+        val profileBranchId = if (original != null) original.authority.scope.branchId
+            else DCompanyApp.instance.shiftCache.profile.value?.branchId
         if (
             detail != null && (
                 detail.terminalId != terminalId ||
@@ -2690,34 +2825,22 @@ class SyncEngine private constructor(
                     detail.branchId != profileBranchId ||
                     detail.status != "open"
             )
-        ) {
-            commitToCurrentScope(lease) {
-                db.shiftDao().deleteServerOpen(terminalId)
-                sessionAwareLastError =
-                    "The server shift did not match this signed-in branch and terminal. POS money actions are locked."
-            }
-            return
-        }
+        ) return reject(
+            "The server shift did not match this signed-in branch and terminal. POS money actions are locked.",
+        )
         val observedAt = System.currentTimeMillis()
         val cached = if (detail == null) {
             null
         } else {
             val openedAt = runCatching { Instant.parse(detail.openedAt).toEpochMilli() }.getOrNull()
-            if (openedAt == null) {
-                commitToCurrentScope(lease) {
-                    db.shiftDao().deleteServerOpen(terminalId)
-                    sessionAwareLastError =
-                        "The server shift opening time was invalid. POS money actions are locked."
-                }
-                return
-            }
+                ?: return reject("The server shift opening time was invalid. POS money actions are locked.")
             detail.toServerOpenShiftCache(
                 terminalId = terminalId,
                 openedAtMillis = openedAt,
                 verifiedAtMillis = observedAt,
             )
         }
-        commitToCurrentScope(lease) {
+        return commitToCurrentScope(lease) {
             db.withTransaction {
                 db.shiftDao().reconcileServerOpen(terminalId, cached, observedAt)
                 db.syncMetaDao().put(SyncMetaEntity("shifts", observedAt))
@@ -3724,11 +3847,23 @@ class SyncEngine private constructor(
      */
     private suspend fun pullGamingData() {
         val lease = cacheIsolation.currentLease() ?: return
-        acknowledgeCleanupRetirements(lease)
+        pullGamingDataForLease(lease, gamingApi)
+    }
+
+    private suspend fun pullGamingDataForLease(lease: CacheScopeLease, reads: GamingApi,
+        incomingShiftId: String? = null, requireRunningGame: Boolean = false,
+        stillCurrent: () -> Boolean = { true }): Boolean {
+        val includePosLinkedReviewable = incomingShiftId == null && posLinkedGamingReviewPullAllowed(
+            profile = DCompanyApp.instance.shiftCache.profile.value,
+            lease = lease,
+        )
+        if (incomingShiftId == null) acknowledgeCleanupRetirements(lease)
         val (stations, packages, sessions) = coroutineScope {
-            val stationRequest = async { gamingApi.stations() }
-            val packageRequest = async { gamingApi.packages() }
-            val sessionRequest = async { gamingApi.sessions() }
+            val stationRequest = async { reads.stations() }
+            val packageRequest = async { reads.packages() }
+            val sessionRequest = async {
+                reads.sessions(includePosLinkedReviewable = includePosLinkedReviewable)
+            }
             Triple(stationRequest.await(), packageRequest.await(), sessionRequest.await())
         }
         // An owner can cancel a session from web, or another client can finish
@@ -3738,12 +3873,16 @@ class SyncEngine private constructor(
         // this tablet's durable overlays. A definitive 404 retains that local
         // evidence without preventing the shared board from refreshing; every
         // other failure keeps the previous cache intact for a later retry.
-        val authoritativeSessions = resolveMissingGamingSessions(
+        if (incomingShiftId != null) {
+            check(sessions.size < 500 && (!requireRunningGame ||
+                sessions.any { it.shiftId == incomingShiftId && it.status in setOf("active", "paused") }))
+        }
+        val authoritativeSessions = if (incomingShiftId != null) sessions else resolveMissingGamingSessions(
             boardSessions = sessions,
             localServerIds = db.gamingDao()
                 .localSessionsForServerReconciliation()
                 .map { it.serverId },
-            fetchExact = gamingApi::session,
+            fetchExact = reads::session,
             onNotFound = { serverId ->
                 Log.w(
                     "SyncEngine",
@@ -3762,7 +3901,7 @@ class SyncEngine private constructor(
             items = gamingAddonSessionIdsForPull(sessions),
             concurrency = 3,
         ) { sessionId ->
-            gamingApi.sessionAddons(sessionId).also { rows ->
+            reads.sessionAddons(sessionId).also { rows ->
                 check(rows.all { it.gamingSessionId == sessionId }) {
                     "Gaming add-on response contained a different session."
                 }
@@ -3772,13 +3911,15 @@ class SyncEngine private constructor(
             items = authoritativeSessions.filter { it.participantRevision > 0 }.map { it.id },
             concurrency = 3,
         ) { sessionId ->
-            gamingApi.participants(sessionId).also { response ->
+            reads.participants(sessionId).also { response ->
                 check(response.sessionId == sessionId) {
                     "Gaming participant response contained a different session."
                 }
             }
         }
-        commitToCurrentScope(lease) {
+        var alarmsVerified = false
+        return commitToCurrentScope(lease) {
+            check(stillCurrent())
             db.withTransaction {
                 db.gamingDao().replaceStations(
                     stations.map {
@@ -3830,8 +3971,8 @@ class SyncEngine private constructor(
             // Gaming may be closed while a realtime event reports a stop from
             // another terminal. Keep alarm reconciliation under the same scope
             // lease so A cannot schedule a notification after B activates.
-            GamingAlarmReconciler.reconcile(DCompanyApp.instance)
-        }
+            alarmsVerified = GamingAlarmReconciler.reconcile(DCompanyApp.instance)
+        } && alarmsVerified
     }
 
     private suspend fun reportAndApplyCleanupCandidate(
@@ -5202,8 +5343,16 @@ class SyncEngine private constructor(
             }
         }
         while (true) {
+            var terminalReplay = false
             if (paymentNeedsClaim && token == null) {
-                token = acquireMatchingClaimForConfirmedPayment(row)
+                val canonical = ApiClient.api.order(row.targetOrderId)
+                check(canonical.id == row.targetOrderId) {
+                    "The live payment recovery bill belongs to a different order."
+                }
+                terminalReplay = HeldOrderClaimPolicy.canReplayWithoutClaim(row.targetOrderId, canonical)
+                if (!terminalReplay) {
+                    token = acquireMatchingClaimForConfirmedPayment(row)
+                }
             }
             try {
                 val idempotencyKey = HeldOrderClaimPolicy.paymentIdempotencyKey(row.localId)
@@ -5247,25 +5396,8 @@ class SyncEngine private constructor(
                 // Fetch the authoritative post-payment order before resolving
                 // the outbox. If this GET is interrupted, the same idempotent
                 // payment replay remains pending and the receipt is never lost.
-                val finalOrder = try {
+                val finalOrder = HeldOrderClaimPolicy.readOrderAfterAcceptedPayment {
                     ApiClient.api.order(row.targetOrderId)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (failure: Exception) {
-                    if (splitPaid != null) {
-                        // The bundle POST returned an authoritative receipt,
-                        // so even a definitive-looking failure from this
-                        // follow-up read cannot prove that no money committed.
-                        // Convert it to an app reconciliation failure: the
-                        // outer outbox loop keeps the one durable row pending
-                        // and replays the same body and idempotency key.
-                        throw IllegalStateException(
-                            "The split payment may already be committed, but its final invoice " +
-                                "could not be verified yet. Do not collect again.",
-                            failure,
-                        )
-                    }
-                    throw failure
                 }
                 if (splitPaid != null) {
                     requireAuthoritativeSplitSettlement(
@@ -5308,7 +5440,7 @@ class SyncEngine private constructor(
                 return
             } catch (e: ApiException) {
                 if (
-                    !paymentNeedsClaim ||
+                    !paymentNeedsClaim || terminalReplay ||
                     !HeldOrderClaimPolicy.shouldReacquireAfterPaymentError(e.code) ||
                     reacquisitions >= 2
                 ) {

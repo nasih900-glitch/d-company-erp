@@ -1,6 +1,7 @@
 package cloud.dcompany.erp.ui.screens.settings
 
 import android.content.Context
+import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import android.util.Log
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
@@ -254,12 +255,23 @@ internal data class BugReportDeliveryOutcome(
 private const val BUG_REPORT_DELIVERY_BATCH_SIZE = 20
 
 /** Testable drain loop; every write is owner-scoped even after network IO. */
+internal fun ownerSupportDeliveryClient(context: cloud.dcompany.erp.core.handover.OwnerSupportDeliveryContext,
+    bearer: String): okhttp3.OkHttpClient = ApiClient.ephemeralAuthorityClient(bearer, terminalId = null,
+    beforeDispatch = { check(context.originalLoginIsCurrent()) }, singleAttempt = true, operationGate = context.gate)
+
+internal fun ownerSupportDeliveryApi(context: cloud.dcompany.erp.core.handover.OwnerSupportDeliveryContext,
+    bearer: String): BugReportApi = retrofit2.Retrofit.Builder().baseUrl(cloud.dcompany.erp.BuildConfig.API_BASE_URL)
+    .callFactory(ownerSupportDeliveryClient(context, bearer))
+    .addConverterFactory(ApiClient.json.asConverterFactory("application/json".toMediaType()))
+    .build().create(BugReportApi::class.java)
+
 internal class BugReportDeliveryRunner(
     private val dao: BugReportDao,
     private val authority: BugReportRunAuthority,
     /** Always builds a non-refreshing client with no live terminal header. */
     private val apiForBearer: (String) -> BugReportApi,
     private val nowMillis: () -> Long = System::currentTimeMillis,
+    private val commitOwned: suspend (suspend () -> Unit) -> Unit,
 ) {
     private val companyId = authority.owner.companyId
     private val userId = authority.owner.userId
@@ -272,6 +284,12 @@ internal class BugReportDeliveryRunner(
             cachedBearer = bearer
             cachedApi = it
         }
+    }
+
+    private suspend fun ownedWrite(write: suspend () -> Unit): Boolean {
+        if (authority.currentBearer() == null) return false
+        commitOwned(write)
+        return true
     }
 
     suspend fun drain(): BugReportDeliveryOutcome {
@@ -293,20 +311,20 @@ internal class BugReportDeliveryRunner(
                 val request = try {
                     ApiClient.json.decodeFromString<BugReportCreateRequest>(row.requestJson)
                 } catch (_: Exception) {
-                    dao.markActionRequired(
+                    if (!ownedWrite { dao.markActionRequired(
                         localId = row.localId,
                         companyId = companyId,
                         userId = userId,
                         message = "This saved request cannot be read by this app version. Update the app, then retry it.",
                         attemptedAtMillis = nowMillis(),
-                    )
+                    ) }) return BugReportDeliveryOutcome(retryNeeded, identityChanged = true)
                     continue
                 }
                 val bearer = authority.currentBearer()
                     ?: return BugReportDeliveryOutcome(retryNeeded, identityChanged = true)
                 try {
                     val response = api(bearer).create(request, row.localId)
-                    dao.markSent(
+                    if (!ownedWrite { dao.markSent(
                         localId = row.localId,
                         companyId = companyId,
                         userId = userId,
@@ -314,30 +332,30 @@ internal class BugReportDeliveryRunner(
                         serverStatus = response.status,
                         serverCreatedAt = response.createdAt,
                         attemptedAtMillis = nowMillis(),
-                    )
+                    ) }) return BugReportDeliveryOutcome(retryNeeded, identityChanged = true)
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Exception) {
                     val readable = error.bugReportReadable()
                     when (bugReportFailureDisposition(error)) {
                         BugReportFailureDisposition.Retry -> {
-                            dao.noteRetryableFailure(
+                            if (!ownedWrite { dao.noteRetryableFailure(
                                 row.localId,
                                 companyId,
                                 userId,
                                 readable,
                                 nowMillis(),
-                            )
+                            ) }) return BugReportDeliveryOutcome(retryNeeded, identityChanged = true)
                             retryNeeded = true
                         }
                         BugReportFailureDisposition.ActionRequired -> {
-                            dao.markActionRequired(
+                            if (!ownedWrite { dao.markActionRequired(
                                 row.localId,
                                 companyId,
                                 userId,
                                 readable,
                                 nowMillis(),
-                            )
+                            ) }) return BugReportDeliveryOutcome(retryNeeded, identityChanged = true)
                         }
                     }
                     Log.w("BugReportSync", "Support request delivery was not confirmed")
@@ -379,36 +397,36 @@ internal class BugReportDeliveryRunner(
                         part,
                         attachment.localId,
                     )
-                    dao.markAttachmentSent(
+                    if (!ownedWrite { dao.markAttachmentSent(
                         localId = attachment.localId,
                         companyId = companyId,
                         userId = userId,
                         serverId = response.id,
                         attemptedAtMillis = nowMillis(),
-                    )
+                    ) }) return BugReportDeliveryOutcome(retryNeeded, identityChanged = true)
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Exception) {
                     val readable = error.bugReportReadable()
                     when (bugReportFailureDisposition(error)) {
                         BugReportFailureDisposition.Retry -> {
-                            dao.noteAttachmentRetryableFailure(
+                            if (!ownedWrite { dao.noteAttachmentRetryableFailure(
                                 attachment.localId,
                                 companyId,
                                 userId,
                                 readable,
                                 nowMillis(),
-                            )
+                            ) }) return BugReportDeliveryOutcome(retryNeeded, identityChanged = true)
                             retryNeeded = true
                         }
                         BugReportFailureDisposition.ActionRequired -> {
-                            dao.markAttachmentActionRequired(
+                            if (!ownedWrite { dao.markAttachmentActionRequired(
                                 attachment.localId,
                                 companyId,
                                 userId,
                                 readable,
                                 nowMillis(),
-                            )
+                            ) }) return BugReportDeliveryOutcome(retryNeeded, identityChanged = true)
                         }
                     }
                     Log.w("BugReportSync", "Support attachment delivery was not confirmed")
@@ -478,25 +496,20 @@ class BugReportSyncWorker(
         // Do not even select rows unless its exact authenticated identity still
         // owns the captured session lineage.
         if (authority.currentBearer() == null) return Result.success()
-        val dao = app.db.bugReportDao()
-        val outcome = BugReportDeliveryRunner(
-            dao = dao,
-            authority = authority,
-            // Support requests carry their historical branch/till as evidence
-            // in the body. They deliberately do not inherit the tablet's live
-            // terminal header, so a later workspace change cannot alter the
-            // server idempotency scope or conflict with the saved context.
-            apiForBearer = { bearer ->
-                ApiClient.createEphemeralAuthorityApi<BugReportApi>(
-                    accessToken = bearer,
-                    terminalId = null,
-                )
-            },
-        ).drain()
-        return if (outcome.retryNeeded && !outcome.identityChanged) {
-            Result.retry()
-        } else {
-            Result.success()
+        return try {
+            app.handoverOperations.runOwnerSupport(authenticatedOwner, sessionLease) { context ->
+                val outcome = BugReportDeliveryRunner(
+                    dao = app.db.bugReportDao(),
+                    authority = authority,
+                    apiForBearer = { bearer -> ownerSupportDeliveryApi(context, bearer) },
+                    commitOwned = context::commitOwnedRow,
+                ).drain()
+                if (outcome.retryNeeded && !outcome.identityChanged) Result.retry() else Result.success()
+            }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) {
+            // A fenced/stale delivery never changes owner; its durable rows remain recoverable.
+            if (authority.currentBearer() == null) Result.success() else Result.retry()
         }
     }
 }

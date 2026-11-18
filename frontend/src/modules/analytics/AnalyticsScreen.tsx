@@ -5,7 +5,7 @@
  * inventory value, low-stock count, open gaming sessions, net profit).
  * Demo mode: HOURLY_REVENUE + TOP_ITEMS fixtures.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { internalAppRouteOr } from '@/lib/internal-navigation';
 import {
@@ -17,6 +17,7 @@ import {
   FileText, Utensils, Users, Activity,
 } from 'lucide-react';
 
+import { readSessionGeneration, type ApiError } from '@/lib/api';
 import { inr, inrShort } from '@/lib/inr';
 import { isAppStoreAllowedType } from '@/lib/app-store-compliance';
 import { isProfileRouteEnabled, profileMembershipMoneyLabel } from '@/lib/product-profile';
@@ -25,39 +26,72 @@ import { useAuth } from '@/modules/auth/AuthContext';
 import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh';
 import { useLatestRequest } from '@/hooks/useLatestRequest';
 
+export function canReadFinancialDashboard(permissions: readonly string[] | undefined): boolean {
+  return permissions?.includes('analytics.read') === true && permissions.includes('finance.read');
+}
+
+export function dashboardValueAfterFailure<T>(value: T | null, error: unknown): T | null {
+  const status = (error as ApiError | null)?.status;
+  return status === 401 || status === 403 ? null : value;
+}
+
 export default function AnalyticsScreen() {
   const requests = useLatestRequest();
   const { me, demo } = useAuth();
+  const canReadDashboard = canReadFinancialDashboard(me?.effective_permissions);
+  const scope = JSON.stringify([readSessionGeneration(), me?.company_id, me?.user_id, me?.branch_id,
+    canReadDashboard]);
+  const activeScope = useRef(scope);
+  activeScope.current = scope;
   const [data, setData] = useState<DashboardKPIsDTO | null>(null);
+  const [dataScope, setDataScope] = useState<string | null>(null);
   const [costing, setCosting] = useState<CostingCoverageDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async (silent = false) => {
-    const isCurrent = requests.begin();
+    const latest = requests.begin();
+    const generation = readSessionGeneration();
+    const isCurrent = () => latest() && activeScope.current === scope && readSessionGeneration() === generation;
+    if (!canReadDashboard) {
+      setData(null); setCosting(null); setLoading(false); setRefreshing(false);
+      setErr('Analytics and finance read permissions are required.');
+      return;
+    }
     if (!silent) setLoading(true);
     setRefreshing(true);
     try {
       const [snapshot, coverage] = await Promise.all([
         analytics.dashboard(),
-        insights.costingCoverage().catch(() => null),
+        insights.costingCoverage().catch((error: unknown) => {
+          if (dashboardValueAfterFailure(true, error) === null) throw error;
+          return null;
+        }),
       ]);
       if (!isCurrent()) return;
       setData(snapshot);
+      setDataScope(scope);
       setCosting(coverage);
       setErr(null);
-    } catch (e) { if (isCurrent()) setErr((e as Error).message); }
+    } catch (e) {
+      if (isCurrent()) {
+        setData((value) => dashboardValueAfterFailure(value, e));
+        setCosting((value) => dashboardValueAfterFailure(value, e));
+        setErr(e instanceof Error ? e.message : 'Analytics could not load.');
+      }
+    }
     finally { if (isCurrent()) { setLoading(false); setRefreshing(false); } }
-  }, [requests]);
+  }, [requests, scope, canReadDashboard]);
   useEffect(() => { void load(); }, [load]);
   useRealtimeRefresh({
     resources: ['finance', 'gaming', 'inventory', 'shifts'],
     refresh: () => load(true),
   });
 
-  const empty = data && data.orders_count === 0 && data.tickets_count === 0
-    && data.revenue_total_minor === 0;
+  const admittedData = canReadDashboard && dataScope === scope ? data : null;
+  const empty = admittedData && admittedData.orders_count === 0 && admittedData.tickets_count === 0
+    && admittedData.revenue_total_minor === 0;
   // Gates the Audit quick-action below — admin.audit.read specifically, not
   // the broader protected_access (co_owner has that but not audit access).
   const canSeeProtected = Boolean(demo || me?.audit_access);
@@ -71,7 +105,7 @@ export default function AnalyticsScreen() {
         <div>
           <h2 className="text-2xl font-bold">Analytics</h2>
           <p className="text-fg-muted text-sm">
-            Today's performance{data ? ` · shop date ${data.date}` : ''} · updates automatically
+            Today's performance{admittedData ? ` · shop date ${admittedData.date}` : ''} · updates automatically
           </p>
         </div>
         <button className="btn btn-ghost" aria-label="Refresh analytics" disabled={refreshing} onClick={() => void load()}>
@@ -82,15 +116,15 @@ export default function AnalyticsScreen() {
 
       {err && (
         <div className="card mb-4 border-accent-bad/40 bg-accent-bad/10 text-sm" role="alert">
-          <p className="font-medium text-accent-bad">{data ? 'Analytics could not refresh. These are the last verified figures.' : 'Analytics could not load.'}</p>
+          <p className="font-medium text-accent-bad">{admittedData ? 'Analytics could not refresh. These are the last verified figures.' : 'Analytics could not load.'}</p>
           <p className="mt-1 text-fg-muted">{err} Use Refresh after the connection returns.</p>
         </div>
       )}
-      {loading && !data ? (
+      {loading && !admittedData ? (
         <div className="card flex items-center gap-3 text-fg-muted">
           <Loader2 className="animate-spin" size={16}/> Loading…
         </div>
-      ) : !data ? null : (
+      ) : !admittedData || !data ? null : (
         <>
           {empty && (
             <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-accent-gold text-sm">
@@ -163,9 +197,9 @@ export default function AnalyticsScreen() {
                     : []),
                 ]}>
                   <XAxis dataKey="name" stroke="#999"/>
-                  <YAxis stroke="#999" tickFormatter={(v) => `₹${v >= 1000 ? (v/1000).toFixed(0) + 'K' : v}`}/>
+                  <YAxis stroke="#999" tickFormatter={(v) => `${v >= 1000 ? (v/1000).toFixed(0) + 'K' : v}`}/>
                   <Tooltip contentStyle={{ background: '#1a1d2e', border: '1px solid #2d3149' }}
-                    formatter={(v: number) => [`₹${v.toLocaleString('en-IN')}`, 'Revenue']}/>
+                    formatter={(v: number) => [`${v.toLocaleString('en-IN')}`, 'Revenue']}/>
                   <Bar dataKey="value" fill="#7c3aed" radius={[6, 6, 0, 0]}/>
                 </BarChart>
               </ResponsiveContainer>

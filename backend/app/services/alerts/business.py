@@ -37,7 +37,7 @@ class BusinessAlert:
 
 
 def _rs(minor: int) -> str:
-    return f"₹{minor / 100:,.2f}"
+    return f"{minor / 100:,.2f}"
 
 
 def build_pnl_alerts(report: PnLReport, previous: PnLReport | None = None) -> list[BusinessAlert]:

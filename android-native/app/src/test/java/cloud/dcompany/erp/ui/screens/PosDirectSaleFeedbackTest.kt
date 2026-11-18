@@ -62,7 +62,7 @@ class PosDirectSaleFeedbackTest {
 
         assertTrue(message.contains("confirmed by the server"))
         assertTrue(message.contains("INV-2042"))
-        assertTrue(message.contains("₹123.45"))
+        assertTrue(message.contains("123.45"))
         assertTrue(message.contains("No further action"))
     }
 

@@ -61,6 +61,9 @@ from app.services.accounting.depreciation import asset_depreciation_expense_mino
 from app.services.accounting.refund_allocation import cumulative_refunded_tip_minor
 from app.services.inventory.accounting import load_inventory_value_changes
 from app.services.reports.metrics import average_ticket_minor
+from app.services.pos.receipt_correction_projection import (
+    corrected_sale_cohort, period_corrections, uncorrected_sale,
+)
 
 ReportPeriod = Literal["daily", "monthly", "quarterly", "yearly", "custom"]
 _INVENTORY_COSTED_ORDER_LINE_TYPES = frozenset(
@@ -314,6 +317,12 @@ class PnLReport:
     # refunded (what the "Less: refunds" UI row and net_payments_received_minor
     # both need).
     refunded_tips_minor: int = 0
+    # Accounting-period reversals of wholly mistaken, unpaid-in-reality sales.
+    # These are neither customer payouts nor changes to original invoice gross.
+    receipt_corrections_minor: int = 0
+    receipt_corrections_count: int = 0
+    original_orders_count: int = 0
+    corrected_cohort_orders_count: int = 0
     cogs_minor: int = 0
     expenses: list[ExpenseLine] = field(default_factory=list)
     expense_total_minor: int = 0
@@ -331,6 +340,10 @@ class PnLReport:
         return self.revenue.total_minor
 
     @property
+    def effective_gross_revenue_minor(self) -> int:
+        return self.gross_revenue_minor - self.receipt_corrections_minor
+
+    @property
     def manual_collections_minor(self) -> int:
         return self.revenue.manual_collections_minor
 
@@ -345,7 +358,7 @@ class PnLReport:
         non-tip portion of refunds should reduce revenue.
         """
         return (
-            self.gross_revenue_minor
+            self.effective_gross_revenue_minor
             - (self.refunds_issued_minor - self.refunded_tips_minor)
             - self.tax_collected.total_minor
         )
@@ -371,7 +384,12 @@ class PnLReport:
             "settled_refunds_issued_minor",
             self.refunds_issued_minor,
         )
-        return self.payments_received.total_minor - settled_refunds
+        return self.payments_received.total_minor - settled_refunds - self.receipt_corrections_minor
+
+    @property
+    def effective_upi_received_minor(self) -> int:
+        """UPI collection before actual refund payouts, after no-value corrections."""
+        return self.payments_received.upi_minor - self.receipt_corrections_minor
 
 
 def _proportional_cumulative(component: int, refunded: int, total: int) -> int:
@@ -444,6 +462,7 @@ class ReportsAggregator:
                 .join(MenuItem, MenuItem.id == OrderLine.menu_item_id)
                 .where(
                     Order.company_id == company_id,
+                    uncorrected_sale(as_of=end_at),
                     *branch_predicates,
                     sale_at >= start_at,
                     sale_at < end_at,
@@ -666,6 +685,17 @@ class ReportsAggregator:
         )
         orders_row = (await self.session.execute(orders_q)).one()
         orders_count = int(orders_row.n)
+        original_orders_count = orders_count
+        corrected_cohort_count, corrected_cohort_minor = await corrected_sale_cohort(
+            self.session, company_id=company_id, branch_id=branch_id,
+            start_at=start_at, end_at=end_at,
+        )
+        orders_count = max(0, orders_count - corrected_cohort_count)
+        receipt_corrections = await period_corrections(
+            self.session, company_id=company_id, branch_id=branch_id,
+            start_at=start_at, end_at=end_at,
+        )
+        receipt_corrections_minor = sum(row.amount_minor for row in receipt_corrections)
         gross_total = int(orders_row.gross) - int(orders_row.tips)
         # Final average ticket is calculated after refund aggregation below,
         # from reconciled invoice/category totals rather than this count query.
@@ -837,7 +867,7 @@ class ReportsAggregator:
         cogs_minor = -sum(
             change.inventory_delta_minor
             for change in inventory_changes
-            if change.movement.type in {"sale", "refund_restock"}
+            if change.movement.type in {"sale", "refund_restock", "receipt_restore"}
         )
         inventory_variance_minor = -sum(
             change.inventory_delta_minor
@@ -1150,7 +1180,7 @@ class ReportsAggregator:
         # belong to net revenue/payment movement but not today's AOV.
         avg_ticket = average_ticket_minor(
             gross_sale_cohort_minor=gross_total,
-            same_cohort_refunds_minor=cohort_refunds_for_average,
+            same_cohort_refunds_minor=cohort_refunds_for_average + corrected_cohort_minor,
             orders_count=orders_count,
         )
 
@@ -1279,6 +1309,10 @@ class ReportsAggregator:
             settled_refunds_issued_minor=settled_refunds_issued,
             membership_refunds_issued_minor=membership_refunds_issued,
             refunded_tips_minor=refund_tips,
+            receipt_corrections_minor=receipt_corrections_minor,
+            receipt_corrections_count=len(receipt_corrections),
+            original_orders_count=original_orders_count,
+            corrected_cohort_orders_count=corrected_cohort_count,
             cogs_minor=cogs_minor,
             expenses=expense_lines,
             expense_total_minor=expense_total,

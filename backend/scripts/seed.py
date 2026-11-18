@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from app.core.db import AsyncSessionLocal
 from app.core.errors import BusinessRuleError
+from app.core.roles import role_name
 from app.core.security import hash_password
 from app.models import (
     Account,
@@ -51,9 +52,12 @@ DEFAULT_ROLES: list[tuple[str, str]] = [
     ("super_owner", "Super owner — protected full access"),
     ("co_owner", "Co-owner — full operational access, no audit log/Access Control"),
     ("owner", "Business owner — operational, finance, asset, and payroll access"),
-    ("partner", "Business partner — read-only business and finance visibility"),
-    ("manager", "Operations manager — daily operations and staff management"),
+    ("partner", "Legacy business partner — configurable business and finance access; not guaranteed read-only"),
+    ("manager", "Legacy manager — broad operations, finance writes and staff management; no payroll by default"),
     ("cashier", "Cashier — POS, table orders, and shift operation"),
+    ("gaming_cashier", "Legacy Gaming & POS staff — sessions, sales, POS voids, shop shifts and attendance"),
+    ("store_staff", "Store Staff — POS sales and manual discounts, Gaming sessions, shop shifts and attendance; no POS void/refund, finance, payroll or staff administration"),
+    ("pos_discount", "Supplemental manual POS discount access; assigned separately by an Owner"),
     ("kitchen", "Kitchen team — kitchen display and ticket status only"),
     ("gaming_supervisor", "Gaming team — sessions, bookings, and tournaments"),
     ("auditor", "External auditor / CA — read-only finance and operational access"),
@@ -165,7 +169,7 @@ async def seed() -> None:
                 id=uuid4(),
                 company_id=company.id,
                 code=code,
-                name=code.title().replace("_", " "),
+                name=role_name(code),
                 description=desc,
                 permissions=[],
             )

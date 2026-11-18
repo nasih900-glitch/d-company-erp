@@ -36,6 +36,78 @@ class MigrationTest {
     )
 
     @Test
+    fun migrate56To57PreservesSessionsAndLeavesNewVoidPolicyUnknown() {
+        helper.createDatabase(dbName, 56).apply {
+            execSQL(
+                "INSERT INTO gaming_session_cache " +
+                    "(id,stationId,status,startAtMillis,extraControllers,participantRevision,billingRevision) " +
+                    "VALUES ('session-1','station-1','active',1000,0,0,0)",
+            )
+            close()
+        }
+        val migrated = helper.runMigrationsAndValidate(dbName, 57, true, MIGRATION_56_57)
+        migrated.query(
+            "SELECT id,status,serverPlayElapsedMs,voidReasonRequired " +
+                "FROM gaming_session_cache WHERE id='session-1'",
+        ).use { row ->
+            assertTrue(row.moveToFirst())
+            assertEquals("session-1", row.getString(0))
+            assertEquals("active", row.getString(1))
+            assertTrue(row.isNull(2))
+            assertTrue(row.isNull(3))
+        }
+        migrated.close()
+    }
+
+    @Test
+    fun migrate57To58PreservesVoidPolicyAndRetainedOrderAcrossReopen() {
+        helper.createDatabase(dbName, 57).apply {
+            execSQL(
+                "INSERT INTO gaming_session_cache " +
+                    "(id,stationId,shiftId,status,startAtMillis,amountMinor,billableMinutes," +
+                    "extraControllers,participantRevision,billingRevision,orderId," +
+                    "serverPlayElapsedMs,voidReasonRequired) VALUES " +
+                    "('session-57','station-1','shift-1','cancelled',1000,0,0,0,3,5,NULL,1800000,1)",
+            )
+            close()
+        }
+        val migrated = helper.runMigrationsAndValidate(dbName, 58, true, MIGRATION_57_58)
+        migrated.query(
+            "SELECT id,status,amountMinor,billableMinutes,participantRevision,billingRevision," +
+                "serverPlayElapsedMs,voidReasonRequired,retainedAddonOrderId " +
+                "FROM gaming_session_cache WHERE id='session-57'",
+        ).use { row ->
+            assertTrue(row.moveToFirst())
+            assertEquals("session-57", row.getString(0))
+            assertEquals("cancelled", row.getString(1))
+            assertEquals(0L, row.getLong(2))
+            assertEquals(0, row.getInt(3))
+            assertEquals(3, row.getInt(4))
+            assertEquals(5, row.getInt(5))
+            assertEquals(1_800_000L, row.getLong(6))
+            assertEquals(1, row.getInt(7))
+            assertTrue(row.isNull(8))
+        }
+        migrated.execSQL(
+            "UPDATE gaming_session_cache SET retainedAddonOrderId='retained-order-1' " +
+                "WHERE id='session-57'",
+        )
+        migrated.close()
+
+        val reopened = helper.runMigrationsAndValidate(dbName, 58, true)
+        reopened.query(
+            "SELECT retainedAddonOrderId,serverPlayElapsedMs,voidReasonRequired " +
+                "FROM gaming_session_cache WHERE id='session-57'",
+        ).use { row ->
+            assertTrue(row.moveToFirst())
+            assertEquals("retained-order-1", row.getString(0))
+            assertEquals(1_800_000L, row.getLong(1))
+            assertEquals(1, row.getInt(2))
+        }
+        reopened.close()
+    }
+
+    @Test
     fun migrate55To56PreservesRecordedCloseAndCapturedWorkWithUnknownReconstruction() {
         helper.createDatabase(dbName, 55).apply {
             execSQL("INSERT INTO shift_history_cache " +

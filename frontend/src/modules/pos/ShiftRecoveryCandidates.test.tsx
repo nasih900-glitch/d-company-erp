@@ -90,8 +90,8 @@ describe('other-terminal Android shift recovery presentation', () => {
     expect(markup).toContain('Installation identity recorded');
     expect(markup).toContain('Registered device tablet-device-2');
     expect(markup).toContain('another terminal&#x27;s shift');
-    expect(markup).toContain('₹500.00');
-    expect(markup).toContain('₹820.00');
+    expect(markup).toContain('500.00');
+    expect(markup).toContain('820.00');
     expect(markup).toContain('aria-label="Recover other-terminal Android shift on Gaming tablet opened by Sameer"');
     expect(markup).not.toContain('Current register');
   });

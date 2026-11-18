@@ -1,13 +1,11 @@
 # syntax=docker/dockerfile:1.7.1@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
-# Preserve Redis 7.4.11 and upgrade only its OpenSSL security packages.
-# Install packages before overlaying the independently verified zlib runtime
-# so package transactions cannot replace the reviewed shared object.
-FROM redis:7.4.11-alpine3.21@sha256:520775a41a63e77e06c73e35d2fd9cc15921a609516818796b4ecbb813078bc7 AS zlib-builder
-WORKDIR /tmp/dcompany-zlib
-RUN apk add --no-cache --virtual .zlib-build-deps build-base patch
-COPY infra/docker/zlib/ /tmp/dcompany-zlib/
-RUN sh /tmp/dcompany-zlib/build-patched-zlib.sh
+# Preserve Redis 7.4.11 and upgrade its OpenSSL and zlib security packages.
+# Authenticate the exact official zlib package and prove the final mapped runtime.
+FROM redis:7.4.11-alpine3.21@sha256:520775a41a63e77e06c73e35d2fd9cc15921a609516818796b4ecbb813078bc7 AS zlib-probe-builder
+RUN apk add --no-cache --virtual .zlib-probe-build-deps build-base
+COPY infra/docker/caddy-zlib/runtime-probe.c /tmp/zlib-runtime-probe.c
+RUN cc -O2 -Wall -Wextra -Werror /tmp/zlib-runtime-probe.c -ldl -o /tmp/dcompany-caddy-zlib-probe
 
 FROM redis:7.4.11-alpine3.21@sha256:520775a41a63e77e06c73e35d2fd9cc15921a609516818796b4ecbb813078bc7
 
@@ -19,31 +17,60 @@ LABEL org.opencontainers.image.title="D Company ERP Redis" \
       org.opencontainers.image.revision="${APP_REVISION}" \
       org.opencontainers.image.source="https://github.com/redis/docker-library-redis" \
       com.dcompany.upstream.version="7.4.11-alpine3.21" \
-      com.dcompany.zlib.version="1.3.2" \
-      com.dcompany.zlib.source.sha256="bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16" \
-      com.dcompany.zlib.null-guard.commit="e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca" \
-      com.dcompany.zlib.null-guard.sha256="183bc8b9dd078a41a62de5c2d905d9b0196b45bc46f100d7e4147ec228207c74" \
-      com.dcompany.zlib.printf-return.commit="bbc2ccf3d0de267576b524b875c769a724a513b0" \
-      com.dcompany.zlib.printf-return.sha256="7d00ee29be5e636d30da2890961e83e35cee0b152333ecd97a46ae2e71eb5d47" \
-      com.dcompany.zlib.patch.commit="df84af25dc1942490e1d1c899a07619152a46148" \
-      com.dcompany.zlib.patch.sha256="110ff14375733173d8aa54574473424fbd7dfe4b81f1ca34a759c6fe14b15b14" \
-      com.dcompany.zlib.followup.commit="7235b0a581227c56a79a43ff828f8ef6794194c8" \
-      com.dcompany.zlib.followup.sha256="96040ee84d0d187905283912dbd3f7b66ac2033976a2ceefe9b8cca63143d9c2"
+      com.dcompany.zlib.version="1.4-r0" \
+      com.dcompany.zlib.provenance="signed-alpine-apk" \
+      com.dcompany.zlib.apk-port.commit="d3332621d44c2c4cf52e52217b16674db190212c"
+
+
+
+COPY --from=zlib-probe-builder /tmp/dcompany-caddy-zlib-probe /usr/local/bin/dcompany-caddy-zlib-probe
+COPY infra/docker/caddy-zlib/verify-official-zlib.sh /usr/local/bin/verify-caddy-zlib
+
+# Retain only the authenticated exact archive; downloaded dependencies are discarded.
+RUN set -eux; \
+    mkdir -p /etc/dcompany/zlib; \
+    zlib_download_dir="$(mktemp -d)"; \
+    trap 'rm -rf -- "$zlib_download_dir"' EXIT; \
+    mkdir "$zlib_download_dir/cache"; \
+    apk --cache-dir "$zlib_download_dir/cache" update; \
+    apk --cache-dir "$zlib_download_dir/cache" cache download 'zlib=1.4-r0'; \
+    zlib_archive=; \
+    zlib_archive_count=0; \
+    for cached_apk in "$zlib_download_dir/cache"/zlib*; do \
+      if [ ! -e "$cached_apk" ] && [ ! -L "$cached_apk" ]; then continue; fi; \
+      test -f "$cached_apk"; \
+      test ! -L "$cached_apk"; \
+      case "${cached_apk##*/}" in \
+        zlib-1.4-r0.[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].apk) ;; \
+        *) echo 'Invalid cached zlib archive.' >&2; exit 1 ;; \
+      esac; \
+      zlib_archive_count=$((zlib_archive_count + 1)); \
+      zlib_archive=$cached_apk; \
+    done; \
+    if [ "$zlib_archive_count" -ne 1 ]; then \
+      apk --no-network --cache-dir "$zlib_download_dir/cache" policy zlib 2>&1 | head -n 30 >&2 || true; \
+      exit 1; \
+    fi; \
+    apk verify --no-network "$zlib_archive"; \
+    cp "$zlib_archive" /etc/dcompany/zlib/zlib-1.4-r0.apk; \
+    chmod 0444 /etc/dcompany/zlib/zlib-1.4-r0.apk; \
+    rm -rf -- "$zlib_download_dir"; \
+    trap - EXIT
 
 RUN apk add --no-cache --upgrade \
+      'zlib=1.4-r0' \
       'libcrypto3=3.3.7-r2' \
       'libssl3=3.3.7-r2'
 
-COPY --from=zlib-builder /out/usr/lib/libz.so.1.3.2 /usr/lib/libz.so.1.3.2
-COPY --from=zlib-builder /out/etc/dcompany/zlib-patch-evidence.env /etc/dcompany/zlib-patch-evidence.env
-COPY --from=zlib-builder /out/zlib-runtime-probe /tmp/zlib-runtime-probe
-COPY infra/docker/zlib/verify-patched-zlib.sh /tmp/verify-patched-zlib.sh
 
 RUN set -eux; \
     installed_packages="$(apk info -v)"; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.3.7-r2'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.3.7-r2'; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'zlib-1.3.2-r0'; \
-    sh /tmp/verify-patched-zlib.sh; \
-    redis-server --version | grep -F 'v=7.4.11'; \
-    rm -f /tmp/zlib-runtime-probe /tmp/verify-patched-zlib.sh
+    printf '%s\n' "$installed_packages" | grep -Fx 'zlib-1.4-r0'; \
+    redis-server --version | grep -F 'v=7.4.11'
+
+RUN --mount=type=bind,source=infra/docker/install-pinned-musl-utils.sh,target=/tmp/install-pinned-musl-utils.sh,ro \
+    sh /tmp/install-pinned-musl-utils.sh 3.21
+
+RUN /usr/local/bin/verify-caddy-zlib redis

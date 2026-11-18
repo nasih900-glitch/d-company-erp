@@ -37,11 +37,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -62,6 +61,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -99,6 +99,7 @@ import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
 import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.components.ActionBar
+import cloud.dcompany.erp.ui.components.LiquidDropdownMenu
 import cloud.dcompany.erp.ui.components.ActionIntent
 import cloud.dcompany.erp.ui.components.AdaptiveStatGrid
 import cloud.dcompany.erp.ui.components.CompactStatCard
@@ -110,6 +111,8 @@ import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.components.FormDialog
 import cloud.dcompany.erp.ui.components.InfoRow
 import cloud.dcompany.erp.ui.components.OperationalBanner
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
+import cloud.dcompany.erp.ui.components.workspaceContentCanvas
 import cloud.dcompany.erp.ui.components.OperationalStatusBadge
 import cloud.dcompany.erp.ui.components.PanelDivider
 import cloud.dcompany.erp.ui.components.PickerField
@@ -121,6 +124,7 @@ import cloud.dcompany.erp.ui.components.TabOption
 import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import kotlin.math.abs
 
@@ -186,7 +190,7 @@ fun InventoryScreen(
     SideEffect { vm.updateAccess(access) }
 
     Column(
-        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(16.dp),
+        Modifier.fillMaxSize().workspaceContentCanvas().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         if (!access.canManageInventory) ViewOnlyNotice()
@@ -486,7 +490,7 @@ private fun PendingRow(
     Column(
         Modifier.fillMaxWidth()
             .clip(Radius.shapeSm)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.UTILITY)
             .padding(8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -631,7 +635,7 @@ private fun RestockStrip(state: InventoryUiState, actions: InventoryPresentation
                     Row(
                         Modifier.width(205.dp).heightIn(min = 64.dp)
                             .clip(Radius.shapeSm)
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.CONTROL)
                             .clickable { actions.selectIngredient(ingredient) }
                             .padding(horizontal = 10.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -941,7 +945,7 @@ internal fun RecipeDetailPresentation(
                         val ingredient = state.syncedIngredients.firstOrNull { it.id == line.ingredientId }
                         Column(
                             Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                                .background(MaterialTheme.colorScheme.surfaceVariant).padding(10.dp),
+                                .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.UTILITY).padding(10.dp),
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f)) {
@@ -1155,8 +1159,10 @@ private fun IngredientRowCard(
 
     Column(
         Modifier.fillMaxWidth()
-            .background(if (selected) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface)
-            .border(1.dp, if (selected) MaterialTheme.colorScheme.secondary else Color.Transparent),
+            .liquidWorkspaceSurface(
+                RectangleShape,
+                if (selected) WorkspaceGlassRole.SELECTED_OUTLINE else WorkspaceGlassRole.UTILITY,
+            ),
     ) {
         DataListRow(
             modifier = Modifier.testTag(inventoryIngredientRowTag(ingredient.sku)),
@@ -1267,7 +1273,7 @@ private fun IngredientActionsMenu(
             IconButton(onClick = { expanded = true }) {
                 Icon(Icons.Default.MoreVert, contentDescription = "More ingredient actions", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            LiquidDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 DropdownMenuItem(
                     text = { Text("Edit ingredient") },
                     leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
@@ -1459,7 +1465,8 @@ private fun DetailPanel(
 private fun BatchRow(batch: BatchCacheEntity, unit: String, branchName: String?) {
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeSm)
-            .background(MaterialTheme.colorScheme.surfaceVariant).testTag(inventoryBatchRowTag(batch.id)).padding(10.dp),
+            .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.UTILITY)
+            .testTag(inventoryBatchRowTag(batch.id)).padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -1604,7 +1611,8 @@ private fun SupplierRowCard(
         else -> "Ready" to UiTone.Success
     }
     Column(
-        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface),
+        Modifier.fillMaxWidth().clip(Radius.shapeSm)
+            .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.UTILITY),
     ) {
         DataListRow(
             content = {
@@ -1708,7 +1716,7 @@ private fun SupplierActionsMenu(onEdit: () -> Unit, onDelete: () -> Unit) {
         IconButton(onClick = { expanded = true }) {
             Icon(Icons.Default.MoreVert, contentDescription = "More supplier actions", tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        LiquidDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
                 text = { Text("Edit supplier") },
                 leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
@@ -1997,7 +2005,8 @@ private fun RecipeCreateDialog(
         lines.forEachIndexed { index, line ->
             Column(
                 Modifier.fillMaxWidth().clip(Radius.shapeSm)
-                    .background(MaterialTheme.colorScheme.surfaceVariant).padding(10.dp),
+                    .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.UTILITY)
+                    .padding(10.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 PickerField(
@@ -2213,7 +2222,7 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
         DecimalField(
             value = invoiceTotal,
             onValueChange = { invoiceTotal = it },
-            label = "Supplier invoice total (₹)",
+            label = "Supplier invoice total",
             modifier = Modifier.fillMaxWidth(),
         )
         Text(
@@ -2256,7 +2265,7 @@ private fun GrnDialog(state: InventoryUiState, vm: InventoryViewModel) {
                         onValueChange = { v ->
                             lines = lines.replaceAt(index) { it.copy(unitCostRupees = v) }
                         },
-                        label = "₹ / unit",
+                        label = "Per unit",
                         modifier = Modifier.weight(0.7f),
                     )
                     if (lines.size > 1) {

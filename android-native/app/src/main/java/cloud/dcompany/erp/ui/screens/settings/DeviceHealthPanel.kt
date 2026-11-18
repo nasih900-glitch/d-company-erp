@@ -22,11 +22,13 @@ import java.util.Locale
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun DeviceHealthPanel(profile:MeResponse?,vm:DeviceHealthViewModel=viewModel()) {
+internal fun DeviceHealthPanel(profile:MeResponse?,vm:DeviceHealthViewModel=viewModel(),
+    policyVm:AndroidUpdatePolicyViewModel=viewModel()) {
     val authority=deviceHealthAuthority(profile)
     val state by vm.state.collectAsStateWithLifecycle()
-    LaunchedEffect(profile){vm.bind(profile)}
-    if(authority==null || state.authority!=authority) {
+    LaunchedEffect(profile){vm.bind(profile);policyVm.bind(profile)}
+    DisposableEffect(policyVm){onDispose{policyVm.bind(null)}}
+    if((authority==null && profile?.releaseControlAccess != true) || state.authority!=authority) {
         Text("Device and support reports require current account verification.",color=MaterialTheme.colorScheme.onSurfaceVariant)
         return
     }
@@ -41,7 +43,8 @@ internal fun DeviceHealthPanel(profile:MeResponse?,vm:DeviceHealthViewModel=view
                 TextButton({vm.refresh()},enabled=!state.readingDevices && !state.readingHealth && !state.readingIncidents){Text("Refresh reports")}
             }
         }
-        if(authority.support) item {
+        if(profile?.releaseControlAccess == true) item { AndroidUpdatePolicyPanel(profile,policyVm) }
+        if(authority?.support == true) item {
             SectionCard(title="Service evidence",subtitle=state.health?.serverTime?.let{"Server check · ${statusTime(it)}"} ?: "No service evidence loaded") {
                 if(state.readingHealth) LinearProgressIndicator(Modifier.fillMaxWidth())
                 state.healthError?.let{Text("Refresh failed: $it. ${if(state.health!=null) "Retained evidence remains as of its displayed check." else "No authorized service evidence is shown."}",color=MaterialTheme.colorScheme.error)}
@@ -57,7 +60,7 @@ internal fun DeviceHealthPanel(profile:MeResponse?,vm:DeviceHealthViewModel=view
                 }
             }
         }
-        if(authority.devices) {
+        if(authority?.devices == true) {
             item {
                 SectionCard(title="Last reported tablet state",subtitle=state.installations?.let{"${it.items.size} of ${it.total} loaded · server check ${statusTime(it.serverTime)}"} ?: "No tablet report loaded") {
                     if(state.readingDevices) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -89,7 +92,7 @@ internal fun DeviceHealthPanel(profile:MeResponse?,vm:DeviceHealthViewModel=view
                 TextButton({vm.moreDevices()},enabled=!state.readingDevices){Text("Older tablet reports")}
             }
         }
-        if(authority.support) {
+        if(authority?.support == true) {
             item {
                 SectionCard(title="Reported incidents",subtitle=state.incidentReadAt?.let{"Client read at ${statusTime(it)} · ${state.incidents?.retentionDays ?: "unknown"} days of retained evidence"} ?: "No incident evidence loaded") {
                     FlowRow(horizontalArrangement=Arrangement.spacedBy(Spacing.sm)) {

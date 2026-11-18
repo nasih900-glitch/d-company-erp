@@ -35,11 +35,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -53,6 +55,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
@@ -63,29 +66,30 @@ import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.LocalCafe
-import androidx.compose.material.icons.filled.LocalDrink
-import androidx.compose.material.icons.filled.Fastfood
 import androidx.compose.material.icons.filled.RestaurantMenu
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.ShoppingCart
-import androidx.compose.material.icons.filled.SportsEsports
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.WifiOff
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -98,9 +102,13 @@ import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -114,8 +122,11 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlin.math.max
+import kotlin.math.roundToInt
 import cloud.dcompany.erp.core.db.HeldOrderCacheEntity
 import cloud.dcompany.erp.core.db.HeldOrderPaymentState
+import cloud.dcompany.erp.core.db.PosReceiptSource
 import cloud.dcompany.erp.core.db.MenuCategoryEntity
 import cloud.dcompany.erp.core.db.MenuItemEntity
 import cloud.dcompany.erp.core.db.MenuModifierEntity
@@ -134,6 +145,7 @@ import cloud.dcompany.erp.core.money.minorToRupeesInput
 import cloud.dcompany.erp.core.money.normalizeRupeeInput
 import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.core.net.currencyFreeLabel
 import cloud.dcompany.erp.core.net.CanonicalReceipt
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import cloud.dcompany.erp.ui.WorkspacePresentationPolicy
@@ -152,31 +164,41 @@ import cloud.dcompany.erp.ui.components.TouchMoneyEntry
 import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import cloud.dcompany.erp.ui.components.VoidReasonInput
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
 import cloud.dcompany.erp.ui.components.resolvedVoidReason
 import cloud.dcompany.erp.ui.screens.gaming.OperationalAlarmPermissionCard
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Motion
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.LocalWorkspaceGlassScene
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
+import cloud.dcompany.erp.ui.theme.WorkspacePanelShape
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRoleStyle
+import cloud.dcompany.erp.ui.theme.workspacePresentationAccent
+import cloud.dcompany.erp.ui.theme.workspaceGlass
+import cloud.dcompany.erp.ui.theme.workspaceGlassRoleStyle
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 
-/** A visual hint only. Product identity, price and availability always come from the catalogue. */
-private fun posProductIcon(item: MenuItemEntity, categoryName: String?): ImageVector {
-    val label = "${item.type} ${categoryName.orEmpty()} ${item.name}".lowercase(Locale.ROOT)
-    return when {
-        item.type.equals("gaming", ignoreCase = true) -> Icons.Filled.SportsEsports
-        listOf("coffee", "tea", "latte", "cappuccino").any(label::contains) -> Icons.Filled.LocalCafe
-        listOf("drink", "beverage", "cola", "soda", "juice", "water", "shake", "mojito")
-            .any(label::contains) -> Icons.Filled.LocalDrink
-        listOf("crisps", "chips", "fries", "nachos", "burger", "pizza", "sandwich", "snack")
-            .any(label::contains) -> Icons.Filled.Fastfood
-        else -> Icons.Filled.RestaurantMenu
-    }
-}
+/** POS opts its owned surfaces into the shared workspace scene without creating another scene owner. */
+@Composable
+private fun Modifier.posGlass(role: WorkspaceGlassRole, shape: Shape): Modifier = workspaceGlass(
+    scene = LocalWorkspaceGlassScene.current,
+    role = role,
+    day = MaterialTheme.colorScheme.background.luminance() > 0.5f,
+    shape = shape,
+)
+
+@Composable
+private fun posGlassStyle(role: WorkspaceGlassRole): WorkspaceGlassRoleStyle =
+    workspaceGlassRoleStyle(
+        role = role,
+        day = MaterialTheme.colorScheme.background.luminance() > 0.5f,
+    )
 
 @Composable
 fun PosScreen(
@@ -222,7 +244,7 @@ fun PosScreen(
     onConfirmHeldOrder: (String, String, Long) -> Boolean,
     onConfirmHeldOrderSplit: (String, SplitPaymentPlan) -> Boolean,
     onConfirmHeldOrderZero: (String) -> Unit,
-    onVoidOrder: (String, String) -> Unit,
+    onVoidOrder: (String, String, Boolean) -> Unit,
     onDismissHeldOrderReview: () -> Unit,
     onDismissHeldOrder: () -> Unit,
     onDismissNotice: () -> Unit,
@@ -240,6 +262,8 @@ fun PosScreen(
     onRefreshEligibleRewards: () -> Unit = {},
     eligibleRewardCatalog: EligibleRewardCatalogState = EligibleRewardCatalogState(),
     presentation: WorkspacePresentationPolicy = WorkspaceFeatureProfiles.Active.presentationPolicy(),
+    favouriteItemIds: Set<String> = emptySet(),
+    onToggleFavourite: ((String) -> Unit)? = null,
 ) {
     var offlinePaymentConfirmation by remember { mutableStateOf<DirectPaymentConfirmation?>(null) }
     var showStatusDetails by rememberSaveable { mutableStateOf(false) }
@@ -266,8 +290,8 @@ fun PosScreen(
             state.operationalItems.filter { it.categoryId == selected }
         } ?: state.operationalItems
     }
-    val searchedItems = remember(categoryItems, menuQuery) {
-        filterPosMenuItems(categoryItems, menuQuery)
+    val searchedItems = remember(categoryItems, menuQuery, state.selectedCategoryId, favouriteItemIds) {
+        prioritisePosFavourites(filterPosMenuItems(categoryItems, menuQuery), state.selectedCategoryId, favouriteItemIds)
     }
     val overdueOrderIds = remember(state.overdueHeldOrderIds) {
         state.overdueHeldOrderIds.toSet()
@@ -434,6 +458,10 @@ fun PosScreen(
                 posWorkspaceMetrics(maxWidth = maxWidth, horizontalGap = Spacing.md)
             }
             val compactWorkspace = maxHeight < 480.dp
+            // A stacked workspace gives each pane only a share of the parent height.
+            // Use the actual presentation mode as well as the outer height so the
+            // cart never applies tablet footer density to a short stacked pane.
+            val compactCart = posCartUsesCompactDensity(workspace.sideBySide, maxHeight)
             val cartHeight = maxHeight
             val cataloguePane: @Composable (Modifier) -> Unit = { modifier ->
                 val paneModifier = modifier.testTag("pos-catalog")
@@ -453,6 +481,8 @@ fun PosScreen(
                         visibleItems = searchedItems,
                         query = menuQuery,
                         canWrite = cartEditingEnabled,
+                        favouriteItemIds = favouriteItemIds,
+                        onToggleFavourite = onToggleFavourite?.takeIf { access.canCreateAndCollect },
                         onQueryChange = { menuQuery = it },
                         onClearSearch = { menuQuery = "" },
                         onSelectCategory = onSelectCategory,
@@ -618,10 +648,12 @@ fun PosScreen(
                                     online = state.online,
                                     confirmEnabled = state.canCollectPayment && !state.checkoutBusy,
                                     onDismiss = onDismissHeldOrder,
-                                    onVoid = if (access.canVoid) ({
+                                    onVoid = if (access.canVoid && (checkout.allowsGenericVoid ||
+                        (access.canCorrectRetainedMistakes && checkout.retainedMistakeReview != null))) ({
                                         voidTarget = PosVoidTarget(
                                             checkout.orderId,
                                             checkout.sourceLabel ?: "Held bill ${checkout.orderId.take(8)}",
+                                            retainedMistake = checkout.retainedMistakeReview != null,
                                         )
                                     }) else null,
                                     onConfirm = { onConfirmHeldOrderZero(checkout.orderId) },
@@ -636,6 +668,7 @@ fun PosScreen(
                                     confirmEnabled = state.canCollectPayment && !state.checkoutBusy,
                                     verifiedSharedOrder = true,
                                     paymentSubject = checkout.sourceLabel,
+                                    voidLabel = if (checkout.retainedMistakeReview != null) "Cancel mistaken items" else "Void bill",
                                     confirmationIdentity = checkout.claimToken,
                                     subtotalMinor = checkout.subtotalMinor,
                                     discountMinor = checkout.discountMinor,
@@ -650,10 +683,12 @@ fun PosScreen(
                                     inline = true,
                                     modifier = paneModifier,
                                     onDismiss = onDismissHeldOrder,
-                                    onVoid = if (access.canVoid) ({
+                                    onVoid = if (access.canVoid && (checkout.allowsGenericVoid ||
+                        (access.canCorrectRetainedMistakes && checkout.retainedMistakeReview != null))) ({
                                         voidTarget = PosVoidTarget(
                                             checkout.orderId,
                                             checkout.sourceLabel ?: "Held bill ${checkout.orderId.take(8)}",
+                                            retainedMistake = checkout.retainedMistakeReview != null,
                                         )
                                     }) else null,
                                     onConfirm = { method, tendered ->
@@ -668,7 +703,7 @@ fun PosScreen(
                     }
                     else -> CartPanel(
                         state = state,
-                        compact = compactWorkspace,
+                        compact = compactCart,
                         severelyConstrained = compactWorkspace && maxHeight < 240.dp,
                         inlineShiftContent = if (inlineShiftOpen) ({
                             InlineShiftOpeningWorkspace(shiftAccess, onReturn = { inlineShiftOpen = false })
@@ -986,11 +1021,13 @@ fun PosScreen(
                     online = state.online,
                     confirmEnabled = state.canCollectPayment && !state.checkoutBusy,
                     onDismiss = onDismissHeldOrder,
-                    onVoid = if (access.canVoid) {
+                    onVoid = if (access.canVoid && (checkout.allowsGenericVoid ||
+                        (access.canCorrectRetainedMistakes && checkout.retainedMistakeReview != null))) {
                         {
                             voidTarget = PosVoidTarget(
                                 checkout.orderId,
                                 checkout.sourceLabel ?: "Held bill ${checkout.orderId.take(8)}",
+                                            retainedMistake = checkout.retainedMistakeReview != null,
                             )
                         }
                     } else null,
@@ -1004,6 +1041,7 @@ fun PosScreen(
                     confirmEnabled = state.canCollectPayment && !state.checkoutBusy,
                     verifiedSharedOrder = true,
                     paymentSubject = checkout.sourceLabel,
+                    voidLabel = if (checkout.retainedMistakeReview != null) "Cancel mistaken items" else "Void bill",
                     confirmationIdentity = checkout.claimToken,
                     subtotalMinor = checkout.subtotalMinor,
                     discountMinor = checkout.discountMinor,
@@ -1016,11 +1054,13 @@ fun PosScreen(
                     pointsRedeemedMinor = checkout.pointsRedeemedMinor,
                     showCustomerBenefits = presentation.showsCustomers,
                     onDismiss = onDismissHeldOrder,
-                    onVoid = if (access.canVoid) {
+                    onVoid = if (access.canVoid && (checkout.allowsGenericVoid ||
+                        (access.canCorrectRetainedMistakes && checkout.retainedMistakeReview != null))) {
                         {
                             voidTarget = PosVoidTarget(
                                 checkout.orderId,
                                 checkout.sourceLabel ?: "Held bill ${checkout.orderId.take(8)}",
+                                            retainedMistake = checkout.retainedMistakeReview != null,
                             )
                         }
                     } else null,
@@ -1041,7 +1081,7 @@ fun PosScreen(
             online = state.online,
             busy = state.checkoutBusy,
             onDismiss = { if (!state.checkoutBusy) voidTarget = null },
-            onConfirm = { reason -> onVoidOrder(target.orderId, reason) },
+            onConfirm = { reason, attestation -> onVoidOrder(target.orderId, reason, attestation) },
         )
     }
 
@@ -1081,7 +1121,7 @@ fun PosScreen(
 
 }
 
-private data class PosVoidTarget(val orderId: String, val label: String)
+private data class PosVoidTarget(val orderId: String, val label: String, val retainedMistake: Boolean = false)
 
 /**
  * A successful void removes the prepared checkout before the request's busy
@@ -1097,6 +1137,11 @@ internal fun shouldDismissPosVoidTarget(
     !checkoutBusy &&
     targetOrderId != preparedDirectOrderId &&
     targetOrderId != preparedHeldOrderId
+
+internal fun posReceiptConfirmationTitle(sourceKind: String): String = when (sourceKind) {
+    PosReceiptSource.ZERO_DIRECT, PosReceiptSource.ZERO_HELD -> "Bill completed — no payment due"
+    else -> "Payment confirmed"
+}
 
 @Composable
 private fun PosReceiptDialog(
@@ -1116,7 +1161,7 @@ private fun PosReceiptDialog(
             ) {
                 item {
                     OperationalBanner(
-                        title = "Payment confirmed",
+                        title = posReceiptConfirmationTitle(receipt.sourceKind),
                         detail = buildString {
                             append(receipt.method.paymentMethodLabel())
                             receipt.paidAt?.let { append(" · ${it.receiptDateTime()}") }
@@ -1314,24 +1359,33 @@ private fun PosVoidDialog(
     online: Boolean,
     busy: Boolean,
     onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit,
+    onConfirm: (String, Boolean) -> Unit,
 ) {
     var selectedReasonId by rememberSaveable(target.orderId) { mutableStateOf<String?>(null) }
     var customReason by rememberSaveable(target.orderId) { mutableStateOf("") }
     val reason = resolvedVoidReason(selectedReasonId, customReason)
+    var allMistakenNotSupplied by rememberSaveable(target.orderId) { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = { if (!busy) onDismiss() },
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
-        title = { Text("Void ${target.label}?") },
+        title = { Text(if (target.retainedMistake) "Cancel mistaken items?" else "Void ${target.label}?") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 Text(
-                    "This cancels the unpaid bill, keeps its audit history, and notifies any linked fulfilment workflow.",
+                    if (target.retainedMistake)
+                        "Cancel every item on ${target.label} only if all were added by mistake and none were supplied. Original Gaming and bill history stays intact. No payment, refund or stock adjustment is recorded."
+                    else "This cancels the unpaid bill, keeps its audit history, and notifies any linked fulfilment workflow.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
+                if (target.retainedMistake) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = allMistakenNotSupplied, onCheckedChange = { allMistakenNotSupplied = it }, enabled = !busy)
+                        Text("Every retained item was added by mistake and none were supplied.")
+                    }
+                }
                 VoidReasonInput(
                     selectedId = selectedReasonId,
                     customReason = customReason,
@@ -1356,9 +1410,10 @@ private fun PosVoidDialog(
         },
         confirmButton = {
             ErpButton(
-                text = if (busy) "Voiding bill" else "VOID BILL",
-                onClick = { onConfirm(reason) },
-                enabled = online && reason.isNotBlank() && !busy,
+                text = if (busy) "Saving cancellation" else if (target.retainedMistake) "CANCEL MISTAKEN ITEMS" else "VOID BILL",
+                onClick = { onConfirm(reason, target.retainedMistake && allMistakenNotSupplied) },
+                enabled = online && reason.trim().length >= (if (target.retainedMistake) 3 else 1) &&
+                    (!target.retainedMistake || allMistakenNotSupplied) && !busy,
                 busy = busy,
                 intent = ActionIntent.Destructive,
             )
@@ -1376,8 +1431,9 @@ internal data class PosWorkspaceMetrics(
 )
 
 /**
- * The approved tablet workspace gives catalogue and checkout equal weight so
- * quantity, totals and collection actions remain readable at the register.
+ * The approved tablet workspace is catalogue dominant while reserving a
+ * practical checkout minimum. When that minimum binds, readability takes
+ * precedence over the ideal two-thirds / one-third proportion.
  */
 internal fun posWorkspaceMetrics(
     maxWidth: androidx.compose.ui.unit.Dp,
@@ -1390,13 +1446,20 @@ internal fun posWorkspaceMetrics(
             cartWidth = null,
         )
     }
-    val cartWidth = ((maxWidth - horizontalGap) / 2f).coerceAtLeast(300.dp)
+    val usableWidth = (maxWidth - horizontalGap).coerceAtLeast(0.dp)
+    val cartWidth = (usableWidth / 3f).coerceAtLeast(320.dp)
     return PosWorkspaceMetrics(
         sideBySide = true,
-        productWidth = (maxWidth - cartWidth - horizontalGap).coerceAtLeast(0.dp),
+        productWidth = (usableWidth - cartWidth).coerceAtLeast(0.dp),
         cartWidth = cartWidth,
     )
 }
+
+/** A stacked pane receives only part of the outer height, so it always uses compact footer density. */
+internal fun posCartUsesCompactDensity(
+    sideBySide: Boolean,
+    outerHeight: androidx.compose.ui.unit.Dp,
+): Boolean = !sideBySide || outerHeight < 480.dp
 
 /** Match the explicit 3–4 column tablet contract without shrinking cards. */
 internal fun posProductColumnCount(
@@ -1438,6 +1501,20 @@ internal fun hasPosOperationalAlerts(state: PosUiState): Boolean =
     !state.online || state.pendingCount > 0 || state.rejectedCount > 0 ||
         state.shiftAccessMessage != null || state.rejectedDirectSales.isNotEmpty() ||
         state.heldPaymentStatuses.isNotEmpty() || state.overdueHeldOrderIds.isNotEmpty()
+
+@Composable
+private fun PosReceiptsButton(receiptCount: Int, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val glass = posGlassStyle(WorkspaceGlassRole.CONTROL)
+    ErpButton(
+        text = if (receiptCount > 0) "Receipts ($receiptCount)" else "Receipts",
+        onClick = onClick,
+        intent = ActionIntent.Quiet,
+        contentColor = glass.primaryContent,
+        modifier = modifier.clip(Radius.shapeMd)
+            .posGlass(WorkspaceGlassRole.CONTROL, Radius.shapeMd)
+            .testTag("pos-receipts-action"),
+    )
+}
 
 @Composable
 private fun PosContextBar(
@@ -1489,7 +1566,8 @@ private fun PosContextBar(
 
     BoxWithConstraints(
         Modifier.fillMaxWidth().padding(horizontal = Spacing.md, vertical = Spacing.xs)
-            .padding(horizontal = Spacing.sm, vertical = Spacing.xs)
+            .heightIn(min = 48.dp)
+            .testTag("pos-context-bar")
             .semantics { liveRegion = LiveRegionMode.Polite },
     ) {
         if (maxWidth >= 740.dp) {
@@ -1498,7 +1576,6 @@ private fun PosContextBar(
                 horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                PosTitle(Modifier.width(200.dp))
                 if (showContext) {
                     PosContextSummary(
                         title = title,
@@ -1511,11 +1588,7 @@ private fun PosContextBar(
                     Spacer(Modifier.weight(1f))
                 }
                 ErpButton("Status", onOpenStatus, intent = ActionIntent.Secondary)
-                ErpButton(
-                    if (receiptCount > 0) "Receipts ($receiptCount)" else "Receipts",
-                    onOpenReceipts,
-                    intent = ActionIntent.Quiet,
-                )
+                PosReceiptsButton(receiptCount, onOpenReceipts)
                 if (state.heldOrders.isNotEmpty()) {
                     ErpButton(
                         text = "Held (${state.heldOrders.size})",
@@ -1529,14 +1602,14 @@ private fun PosContextBar(
                 Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(Spacing.xs),
             ) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    PosTitle(Modifier.weight(1f))
-                    if (showContext) {
-                        PosContextSummary(title, details, tone, icon, Modifier.weight(1f))
-                    }
+                if (showContext) {
+                    PosContextSummary(
+                        title = title,
+                        details = details,
+                        tone = tone,
+                        icon = icon,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
                 Row(
                     Modifier.fillMaxWidth(),
@@ -1548,12 +1621,7 @@ private fun PosContextBar(
                         modifier = Modifier.weight(1f),
                         intent = ActionIntent.Secondary,
                     )
-                    ErpButton(
-                        if (receiptCount > 0) "Receipts ($receiptCount)" else "Receipts",
-                        onOpenReceipts,
-                        modifier = Modifier.weight(1f),
-                        intent = ActionIntent.Quiet,
-                    )
+                    PosReceiptsButton(receiptCount, onOpenReceipts, Modifier.weight(1f))
                     if (state.heldOrders.isNotEmpty()) {
                         ErpButton(
                             text = if (focused) "Review" else "Held (${state.heldOrders.size})",
@@ -1569,36 +1637,6 @@ private fun PosContextBar(
 }
 
 @Composable
-private fun PosTitle(modifier: Modifier = Modifier) {
-    Row(
-        modifier,
-        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            Icons.Filled.LocalCafe,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-            modifier = Modifier.size(32.dp),
-        )
-        Column {
-            Text(
-                "POS",
-                color = MaterialTheme.colorScheme.onSurface,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                "Snacks, drinks & more",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = 1,
-            )
-        }
-    }
-}
-
-@Composable
 private fun PosContextSummary(
     title: String,
     details: String,
@@ -1606,8 +1644,11 @@ private fun PosContextSummary(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     modifier: Modifier = Modifier,
 ) {
+    val glass = posGlassStyle(WorkspaceGlassRole.CONTROL)
     Row(
-        modifier,
+        modifier.clip(Radius.shapeMd)
+            .posGlass(WorkspaceGlassRole.CONTROL, Radius.shapeMd)
+            .padding(horizontal = Spacing.sm, vertical = Spacing.xs),
         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1618,14 +1659,14 @@ private fun PosContextSummary(
                 UiTone.Danger -> MaterialTheme.colorScheme.operationalDanger
                 UiTone.Warning -> MaterialTheme.colorScheme.operationalWarning
                 UiTone.Information -> MaterialTheme.colorScheme.operationalInformation
-                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                else -> glass.iconContent
             },
             modifier = Modifier.size(22.dp),
         )
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
                 title,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = glass.primaryContent,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
@@ -1633,7 +1674,7 @@ private fun PosContextSummary(
             )
             Text(
                 details,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = glass.secondaryContent,
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -1667,8 +1708,7 @@ private fun PosOperationalAlerts(
     Column(
         Modifier.fillMaxWidth().padding(horizontal = Spacing.md, vertical = Spacing.xs)
             .heightIn(max = 360.dp)
-            .clip(Radius.shapeLg).background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg)
+            .clip(WorkspacePanelShape).posGlass(WorkspaceGlassRole.PANEL, WorkspacePanelShape)
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(Spacing.xs),
     ) {
@@ -1699,7 +1739,6 @@ private fun PosOperationalAlerts(
                 tone = if (urgent) UiTone.Danger else UiTone.Warning,
             )
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         SyncBanner(state, onRefresh)
         state.shiftAccessMessage?.let { ShiftAccessBanner(it) }
         if (state.rejectedDirectSales.isNotEmpty()) {
@@ -2221,10 +2260,10 @@ private fun EmptyMenuPanel(
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val glass = posGlassStyle(WorkspaceGlassRole.PANEL)
     Column(
-        modifier = modifier.fillMaxWidth().clip(Radius.shapeLg)
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg),
+        modifier = modifier.fillMaxWidth().clip(WorkspacePanelShape)
+            .posGlass(WorkspaceGlassRole.PANEL, WorkspacePanelShape),
     ) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.md),
@@ -2232,10 +2271,10 @@ private fun EmptyMenuPanel(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("Menu catalogue", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium)
+                Text("Menu catalogue", color = glass.primaryContent, style = MaterialTheme.typography.titleMedium)
                 Text(
                     "Products available in this shop",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = glass.secondaryContent,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -2244,7 +2283,6 @@ private fun EmptyMenuPanel(
                 tone = if (everSynced) UiTone.Neutral else UiTone.Warning,
             )
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         DesignedEmptyState(
             title = if (everSynced) "The menu is empty" else "No menu on this tablet yet",
             body = if (everSynced) {
@@ -2520,7 +2558,7 @@ private fun OrderDetailsDialog(
                         }
                     },
                     enabled = canDiscount,
-                    label = { Text("Manual discount (₹)") },
+                    label = { Text("Manual discount") },
                     supportingText = {
                         Text(
                             when {
@@ -2562,20 +2600,23 @@ private fun ProductCatalogPanel(
     visibleItems: List<MenuItemEntity>,
     query: String,
     canWrite: Boolean,
+    favouriteItemIds: Set<String>,
+    onToggleFavourite: ((String) -> Unit)?,
     onQueryChange: (String) -> Unit,
     onClearSearch: () -> Unit,
     onSelectCategory: (String?) -> Unit,
     onAdd: (MenuItemEntity) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val glass = posGlassStyle(WorkspaceGlassRole.PANEL)
     val categoryNames = remember(categories) {
         categories.associate { category -> category.id to category.name }
     }
     Column(
-        // Let the shared light treatment show through a sparse real catalogue.
+        // One lightly framed catalogue plane lets the shared scene remain visible;
+        // individual products carry the stronger material separation.
         modifier = modifier.clip(Radius.shapeLg)
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f))
-            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), Radius.shapeLg),
+            .border(1.dp, glass.stroke, Radius.shapeLg),
     ) {
         SearchInput(
             value = query,
@@ -2597,13 +2638,13 @@ private fun ProductCatalogPanel(
             ) {
                 Text(
                     "MENU",
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    color = glass.primaryContent,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
                     "${visibleItems.size} ITEM${if (visibleItems.size == 1) "" else "S"}",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = glass.secondaryContent,
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
@@ -2635,21 +2676,31 @@ private fun ProductCatalogPanel(
                     )
                 }
                 val compactTiles = maxHeight < 300.dp
+                val catalogueScroll = rememberLazyGridState()
                 LazyVerticalGrid(
                     modifier = Modifier.fillMaxSize(),
                     columns = GridCells.Fixed(columnCount),
+                    state = catalogueScroll,
                     contentPadding = PaddingValues(Spacing.sm),
                     horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
                     verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                 ) {
                     items(visibleItems, key = { it.id }) { item ->
-                        MenuTile(
-                            item = item,
-                            categoryName = categoryNames[item.categoryId],
-                            enabled = canWrite,
-                            compact = compactTiles,
-                            modifier = Modifier.animateItem(),
-                        ) { onAdd(item) }
+                        // Keep moving tiles legible without projecting the
+                        // backdrop at every new position during a scroll.
+                        val scene = if (catalogueScroll.isScrollInProgress) null
+                            else LocalWorkspaceGlassScene.current
+                        CompositionLocalProvider(LocalWorkspaceGlassScene provides scene) {
+                            MenuTile(
+                                item = item,
+                                categoryName = categoryNames[item.categoryId],
+                                enabled = canWrite,
+                                compact = compactTiles,
+                                favourite = item.id in favouriteItemIds,
+                                onToggleFavourite = onToggleFavourite?.let { toggle -> { toggle(item.id) } },
+                                modifier = Modifier.animateItem(),
+                            ) { onAdd(item) }
+                        }
                     }
                 }
             }
@@ -2663,11 +2714,13 @@ private fun CategoryStrip(
     selectedCategoryId: String?,
     onSelect: (String?) -> Unit,
 ) {
+    val selectedGlass = posGlassStyle(WorkspaceGlassRole.SELECTED)
+    val controlGlass = posGlassStyle(WorkspaceGlassRole.CONTROL)
     val colors = FilterChipDefaults.filterChipColors(
-        containerColor = MaterialTheme.colorScheme.surfaceContainer,
-        labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        selectedContainerColor = MaterialTheme.colorScheme.primary,
-        selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
+        labelColor = controlGlass.primaryContent,
+        selectedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+        selectedLabelColor = selectedGlass.primaryContent,
     )
     LazyRow(
         contentPadding = PaddingValues(horizontal = Spacing.sm),
@@ -2681,6 +2734,12 @@ private fun CategoryStrip(
                 label = { Text("All") },
                 shape = Radius.shapeMd,
                 colors = colors,
+                modifier = Modifier.heightIn(min = 48.dp).clip(Radius.shapeMd)
+                    .posGlass(
+                        if (selectedCategoryId == null) WorkspaceGlassRole.SELECTED
+                        else WorkspaceGlassRole.CONTROL,
+                        Radius.shapeMd,
+                    ),
             )
         }
         items(categories, key = { it.id }) { category ->
@@ -2690,6 +2749,12 @@ private fun CategoryStrip(
                 label = { Text(category.name, maxLines = 1) },
                 shape = Radius.shapeMd,
                 colors = colors,
+                modifier = Modifier.heightIn(min = 48.dp).clip(Radius.shapeMd)
+                    .posGlass(
+                        if (selectedCategoryId == category.id) WorkspaceGlassRole.SELECTED
+                        else WorkspaceGlassRole.CONTROL,
+                        Radius.shapeMd,
+                    ),
             )
         }
     }
@@ -2702,81 +2767,93 @@ private fun MenuTile(
     categoryName: String?,
     enabled: Boolean,
     compact: Boolean,
+    favourite: Boolean,
+    onToggleFavourite: (() -> Unit)?,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
+    val glassRole = if (enabled) WorkspaceGlassRole.PANEL else WorkspaceGlassRole.DISABLED
+    val glass = posGlassStyle(glassRole)
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(if (pressed) 0.94f else 1f, tween(Motion.fast, easing = Motion.emphasized), label = "tileScale")
-    val icon = remember(item.type, item.name, categoryName) { posProductIcon(item, categoryName) }
-    Column(
+    val scale by animateFloatAsState(if (pressed) 0.98f else 1f, tween(Motion.fast, easing = Motion.emphasized), label = "tileScale")
+    Box(
         modifier = modifier
-            .height(if (compact) 124.dp else 156.dp)
-            .testTag("pos-product-${item.id}")
+            .height(if (compact) 112.dp else 128.dp)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
-                alpha = if (enabled) 1f else 0.55f
             }
-            .clip(Radius.shapeLg)
-            .background(MaterialTheme.colorScheme.surface)
-            .border(
-                1.dp,
-                if (pressed && enabled) MaterialTheme.colorScheme.onPrimaryContainer
-                else MaterialTheme.colorScheme.outlineVariant,
-                Radius.shapeLg,
-            )
-            .semantics {
-                role = Role.Button
-                contentDescription = if (enabled) {
-                    "Add ${item.name}, ${item.basePriceMinor.asRupees()}" +
-                        (categoryName?.let { ", $it" } ?: "") + " to the current order"
-                } else {
-                    "${item.name}, view only"
-                }
-            }
-            .clickable(
-                enabled = enabled,
-                interactionSource = interaction,
-                indication = null,
-                onClick = onClick,
-            )
-            .padding(Spacing.sm),
-        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+            .clip(WorkspacePanelShape)
+            .posGlass(glassRole, WorkspacePanelShape),
     ) {
-        Box(
-            Modifier.fillMaxWidth().weight(1f).clip(Radius.shapeSm)
-                .background(MaterialTheme.colorScheme.surfaceContainerLow),
-            contentAlignment = Alignment.Center,
+        Column(
+            modifier = Modifier.fillMaxSize().testTag("pos-product-${item.id}")
+                .semantics {
+                    role = Role.Button
+                    contentDescription = if (enabled) {
+                        "Add ${item.name}, ${item.basePriceMinor.asRupees()}" +
+                            (categoryName?.let { ", $it" } ?: "") + " to the current order"
+                    } else {
+                        "${item.name}, view only"
+                    }
+                }
+                .clickable(
+                    enabled = enabled,
+                    interactionSource = interaction,
+                    indication = null,
+                    onClick = onClick,
+                )
+                .padding(Spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(Spacing.xs),
         ) {
-            Box(
-                Modifier.size(if (compact) 44.dp else 68.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape),
-                contentAlignment = Alignment.Center,
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Reserve the existing media area for the separate favourite control.
+                Spacer(Modifier.size(32.dp).testTag("pos-product-media-empty-${item.id}"))
+                Text(
+                    item.sku.takeIf(String::isNotBlank) ?: categoryName.orEmpty(),
+                    modifier = Modifier.weight(1f),
+                    color = glass.secondaryContent,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(
+                item.name,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+                color = glass.primaryContent,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            NumericValue(
+                value = item.basePriceMinor.asRupees(),
+                color = glass.iconContent,
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+        if (onToggleFavourite != null || favourite) {
+            IconToggleButton(
+                checked = favourite,
+                onCheckedChange = { onToggleFavourite?.invoke() },
+                enabled = onToggleFavourite != null,
+                modifier = Modifier.align(Alignment.TopStart).size(48.dp)
+                    .testTag("pos-product-favourite-${item.id}"),
             ) {
                 Icon(
-                    icon,
-                    contentDescription = null,
-                    tint = if (enabled) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(if (compact) 27.dp else 36.dp),
+                    if (favourite) Icons.Filled.Star else Icons.Filled.StarBorder,
+                    contentDescription = if (favourite) "Unpin ${item.name} from favourites"
+                    else "Pin ${item.name} to favourites",
+                    tint = if (favourite) workspacePresentationAccent() else glass.iconContent,
                 )
             }
         }
-        Text(
-            item.name,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        NumericValue(
-            value = item.basePriceMinor.asRupees(),
-            color = MaterialTheme.colorScheme.onPrimaryContainer,
-            style = MaterialTheme.typography.labelLarge,
-        )
     }
 }
 
@@ -2845,9 +2922,12 @@ internal fun CartPanel(
     modifier: Modifier = Modifier,
     onPay: () -> Unit,
 ) {
+    val panelGlass = posGlassStyle(WorkspaceGlassRole.PANEL)
+    val controlGlass = posGlassStyle(WorkspaceGlassRole.CONTROL)
+    val selectedGlass = posGlassStyle(WorkspaceGlassRole.SELECTED)
     val paymentMethodSelector: @Composable () -> Unit = {
         Row(
-            Modifier.fillMaxWidth(),
+            Modifier.fillMaxWidth().testTag("pos-payment-method-selector"),
             horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
         ) {
             listOf("cash" to "Cash", "upi" to "UPI", "split" to "Split").forEach { (value, label) ->
@@ -2856,7 +2936,21 @@ internal fun CartPanel(
                     onClick = { onPaymentMethodChanged(value) },
                     enabled = state.online || value == "cash",
                     label = { Text(label) },
-                    modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                    colors = FilterChipDefaults.filterChipColors(
+                        containerColor = androidx.compose.ui.graphics.Color.Transparent,
+                        labelColor = controlGlass.primaryContent,
+                        selectedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                        selectedLabelColor = selectedGlass.primaryContent,
+                        disabledContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                        disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    ),
+                    modifier = Modifier.weight(1f).heightIn(min = 48.dp).clip(Radius.shapeMd)
+                        .posGlass(
+                            if (paymentMethod == value) WorkspaceGlassRole.SELECTED
+                            else if (state.online || value == "cash") WorkspaceGlassRole.CONTROL
+                            else WorkspaceGlassRole.DISABLED,
+                            Radius.shapeMd,
+                        ),
                 )
             }
         }
@@ -2868,11 +2962,13 @@ internal fun CartPanel(
                 normalizeRupeeInput(entered)?.let(onCashTenderedChanged)
             },
             label = { Text("Cash received") },
-            prefix = { Text("₹") },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             modifier = detailModifier
-                .then(if (severelyConstrained) Modifier.height(48.dp) else Modifier)
+                .then(
+                    if (severelyConstrained) Modifier.height(48.dp)
+                    else Modifier.heightIn(min = 48.dp),
+                )
                 .testTag("pos-inline-cash-received"),
         ) else Text(
             if (paymentMethod == "split") "Split amounts follow the verified bill."
@@ -2884,9 +2980,7 @@ internal fun CartPanel(
     }
     val cartHeader: @Composable () -> Unit = {
         Row(
-            Modifier.fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                .padding(
+            Modifier.fillMaxWidth().padding(
                     horizontal = Spacing.md,
                     vertical = if (compact) 0.dp else Spacing.sm,
                 ),
@@ -2901,7 +2995,7 @@ internal fun CartPanel(
                 "Current order",
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = panelGlass.primaryContent,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
             )
@@ -2930,13 +3024,11 @@ internal fun CartPanel(
     }
     val scrollCartHeader = severelyConstrained && state.cart.isNotEmpty() && inlineShiftContent == null
     Column(
-        modifier = modifier.clip(Radius.shapeLg)
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg),
+        modifier = modifier.clip(WorkspacePanelShape)
+            .posGlass(WorkspaceGlassRole.PANEL, WorkspacePanelShape),
     ) {
         if (!scrollCartHeader) {
             cartHeader()
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         }
 
         if (inlineShiftContent != null) {
@@ -2946,7 +3038,7 @@ internal fun CartPanel(
             DesignedEmptyState(
                 title = if (canWrite) "Build this order" else "View-only POS",
                 body = if (canWrite) {
-                    "Choose a product from the menu. Quantity controls, the running estimate, and payment stay together here."
+                    "Choose products from the menu. Review quantities and payment here."
                 } else {
                     "You can browse the menu and current order, but this role cannot add items or collect payment."
                 },
@@ -2959,7 +3051,6 @@ internal fun CartPanel(
             ) {
                 if (scrollCartHeader) item(key = "compact-cart-header") {
                     cartHeader()
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 }
                 items(state.cart, key = { it.lineId }) { line ->
                     Column(
@@ -2975,7 +3066,7 @@ internal fun CartPanel(
                             ) {
                                 Text(
                                     line.item.name,
-                                    color = MaterialTheme.colorScheme.onSurface,
+                                    color = panelGlass.primaryContent,
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = FontWeight.SemiBold,
                                     maxLines = 2,
@@ -2993,7 +3084,7 @@ internal fun CartPanel(
                                     Text(
                                         optionLabel,
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        color = panelGlass.secondaryContent,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                     )
@@ -3001,7 +3092,7 @@ internal fun CartPanel(
                                 Text(
                                     line.lineTotalMinor.asRupees(),
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    color = panelGlass.iconContent,
                                     fontWeight = FontWeight.SemiBold,
                                 )
                             }
@@ -3024,7 +3115,7 @@ internal fun CartPanel(
                                 Text(
                                     "$qty",
                                     modifier = Modifier.padding(horizontal = Spacing.xs),
-                                    color = MaterialTheme.colorScheme.onSurface,
+                                    color = panelGlass.primaryContent,
                                     fontWeight = FontWeight.Bold,
                                 )
                             }
@@ -3064,8 +3155,7 @@ internal fun CartPanel(
             }
             Box(
                 Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
+                    .posGlass(WorkspaceGlassRole.CONTROL, Radius.shapeMd)
                     .padding(
                         horizontal = Spacing.sm,
                         vertical = if (severelyConstrained) 2.dp else Spacing.xs,
@@ -3079,13 +3169,13 @@ internal fun CartPanel(
                 ) {
                     Text(
                         "Total estimate",
-                        color = MaterialTheme.colorScheme.onSurface,
+                        color = controlGlass.primaryContent,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                     )
                     NumericValue(
                         value = state.estimatedDueMinor.asRupees(),
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        color = controlGlass.iconContent,
                         style = MaterialTheme.typography.headlineSmall,
                     )
                 }
@@ -3106,12 +3196,7 @@ internal fun CartPanel(
                             Modifier
                         } else {
                             Modifier.clip(Radius.shapeMd)
-                                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                                .border(
-                                    1.dp,
-                                    MaterialTheme.colorScheme.outlineVariant,
-                                    Radius.shapeMd,
-                                )
+                                .posGlass(WorkspaceGlassRole.CONTROL, Radius.shapeMd)
                                 .padding(horizontal = Spacing.sm, vertical = Spacing.xs)
                         },
                     ),
@@ -3122,14 +3207,10 @@ internal fun CartPanel(
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(Modifier.weight(0.58f)) { paymentMethodSelector() }
-                        paymentDetail(Modifier.weight(0.42f))
-                    }
+                    PosResponsivePaymentLayout(
+                        selector = paymentMethodSelector,
+                        detail = paymentDetail,
+                    )
                 }
             }
             PosCheckoutButton(
@@ -3189,6 +3270,72 @@ internal fun CartPanel(
                     canOpen = onOpenShift != null,
                     missingShift = state.activeShiftId == null,
                     onOpen = { onOpenShift?.invoke() }, onSync = onSyncShift,
+                )
+            }
+        }
+    }
+}
+
+internal fun posPaymentFooterStacks(availableWidth: androidx.compose.ui.unit.Dp): Boolean =
+    availableWidth < 420.dp
+
+/**
+ * Measures one selector subtree and one payment-detail subtree in either geometry. Keeping both
+ * slots composed while the cart crosses its responsive boundary preserves focus and tender input.
+ */
+@Composable
+private fun PosResponsivePaymentLayout(
+    selector: @Composable () -> Unit,
+    detail: @Composable (Modifier) -> Unit,
+) {
+    val gap = Spacing.sm
+    Layout(
+        modifier = Modifier.fillMaxWidth().testTag("pos-payment-method-layout"),
+        content = {
+            Box(Modifier.fillMaxWidth()) { selector() }
+            Box(Modifier.fillMaxWidth().testTag("pos-payment-detail")) {
+                detail(Modifier.fillMaxWidth())
+            }
+        },
+    ) { measurables, constraints ->
+        check(constraints.hasBoundedWidth) { "POS payment layout requires a bounded cart width." }
+        val gapPx = gap.roundToPx()
+        val fullWidth = constraints.maxWidth
+        val stacked = posPaymentFooterStacks(fullWidth.toDp())
+        val availableWidth = (fullWidth - gapPx).coerceAtLeast(0)
+        val selectorWidth = if (stacked) fullWidth else (availableWidth * 0.58f).roundToInt()
+        val detailWidth = if (stacked) fullWidth else availableWidth - selectorWidth
+        val childMaxHeight = constraints.maxHeight
+        val selectorPlaceable = measurables[0].measure(
+            androidx.compose.ui.unit.Constraints(
+                minWidth = selectorWidth,
+                maxWidth = selectorWidth,
+                minHeight = 0,
+                maxHeight = childMaxHeight,
+            ),
+        )
+        val detailPlaceable = measurables[1].measure(
+            androidx.compose.ui.unit.Constraints(
+                minWidth = detailWidth,
+                maxWidth = detailWidth,
+                minHeight = 0,
+                maxHeight = childMaxHeight,
+            ),
+        )
+        val contentHeight = if (stacked) {
+            selectorPlaceable.height + gapPx + detailPlaceable.height
+        } else {
+            max(selectorPlaceable.height, detailPlaceable.height)
+        }
+        layout(fullWidth, contentHeight.coerceIn(constraints.minHeight, constraints.maxHeight)) {
+            if (stacked) {
+                selectorPlaceable.placeRelative(0, 0)
+                detailPlaceable.placeRelative(0, selectorPlaceable.height + gapPx)
+            } else {
+                selectorPlaceable.placeRelative(0, (contentHeight - selectorPlaceable.height) / 2)
+                detailPlaceable.placeRelative(
+                    selectorWidth + gapPx,
+                    (contentHeight - detailPlaceable.height) / 2,
                 )
             }
         }
@@ -3269,12 +3416,60 @@ private fun HeldOrderReviewDialog(
     }
     val discountMinor = heldDiscountMinor(discountText)
     val discountError = heldDiscountEntryError(discountText, review.maxManualDiscountMinor)
-    val hasUnsavedDiscount = canApplyDiscount &&
+    val financialEvidenceLocked = review.gamingVoidProvenance?.financialEvidenceLocked == true
+    val hasUnsavedDiscount = canApplyDiscount && !financialEvidenceLocked &&
         discountMinor != null && discountMinor != review.manualDiscountMinor
-    val canMutateDiscount = canApplyDiscount && review.paidMinor == 0L &&
+    val canMutateDiscount = canApplyDiscount && !financialEvidenceLocked && review.paidMinor == 0L &&
         online && canCollectPayment && !busy
     val canContinue = online && canCollectPayment && !busy &&
         discountError == null && !hasUnsavedDiscount
+    val imeVisible = inline && WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    val prioritizeDiscountActions = imeVisible && (hasUnsavedDiscount || discountError != null)
+    val compactDiscountActions = prioritizeDiscountActions && discountError == null
+
+    // The keypad and item details can scroll. Applying a discount must not
+    // disappear beneath them while the cashier is editing the amount.
+    val discountActions: @Composable () -> Unit = {
+        if (canApplyDiscount && !financialEvidenceLocked) {
+            Column(
+                Modifier.fillMaxWidth().padding(vertical = if (compactDiscountActions) 0.dp else Spacing.xs),
+                verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+            ) {
+                discountError?.let {
+                    Text(it, color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.labelSmall)
+                }
+                if (hasUnsavedDiscount && discountError == null && !compactDiscountActions) {
+                    Text(
+                        "Apply this edited amount or restore ${review.manualDiscountMinor.asRupees()} before continuing.",
+                        color = MaterialTheme.colorScheme.operationalWarning,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                ) {
+                    ErpButton(
+                        text = if (busy) "Updating" else "Apply discount",
+                        onClick = { discountMinor?.let(onUpdateDiscount) },
+                        enabled = canMutateDiscount && discountError == null && hasUnsavedDiscount,
+                        busy = busy,
+                        intent = ActionIntent.Secondary,
+                        modifier = Modifier.weight(1f).testTag("pos-held-review-apply-discount"),
+                    )
+                    if (review.manualDiscountMinor > 0L) {
+                        ErpButton(
+                            text = "Clear discount",
+                            onClick = { onUpdateDiscount(0L) },
+                            enabled = canMutateDiscount,
+                            intent = ActionIntent.Quiet,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
+        }
+    }
 
     val reviewContent: @Composable (Modifier) -> Unit = { contentModifier ->
             Column(
@@ -3292,8 +3487,7 @@ private fun HeldOrderReviewDialog(
 
                 Column(
                     Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
+                        .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.UTILITY)
                         .padding(Spacing.md),
                     verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                 ) {
@@ -3357,8 +3551,7 @@ private fun HeldOrderReviewDialog(
 
                 Column(
                     Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
+                        .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.UTILITY)
                         .padding(Spacing.md),
                     verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                 ) {
@@ -3391,7 +3584,13 @@ private fun HeldOrderReviewDialog(
                     PaymentAmountRow("Amount due", review.dueMinor, emphasized = true)
                 }
 
-                if (canApplyDiscount) {
+                if (financialEvidenceLocked) {
+                    Text(
+                        "Gaming Void amounts are preserved as audit evidence. Discounts cannot change this bill. An Owner can use Cancel mistaken items after continuing if every retained item was added by mistake and none were supplied.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.operationalInformation,
+                    )
+                } else if (canApplyDiscount) {
                     Text(
                         "Manual discount",
                         style = MaterialTheme.typography.titleSmall,
@@ -3400,7 +3599,7 @@ private fun HeldOrderReviewDialog(
                     TouchMoneyEntry(
                         value = discountText,
                         onValueChange = { discountText = it },
-                        label = "Manual discount (₹)",
+                        label = "Manual discount",
                         enabled = canMutateDiscount,
                         maxMinor = review.maxManualDiscountMinor,
                         modifier = Modifier.fillMaxWidth(),
@@ -3408,38 +3607,6 @@ private fun HeldOrderReviewDialog(
                     if (review.paidMinor > 0L) {
                         Text(
                             "This bill already has a recorded payment, so its manual discount is locked.",
-                            color = MaterialTheme.colorScheme.operationalWarning,
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                    }
-                    discountError?.let {
-                        Text(it, color = MaterialTheme.colorScheme.operationalDanger, style = MaterialTheme.typography.labelSmall)
-                    }
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
-                    ) {
-                        ErpButton(
-                            text = if (busy) "Updating" else "Apply discount",
-                            onClick = { discountMinor?.let(onUpdateDiscount) },
-                            enabled = canMutateDiscount && discountError == null && hasUnsavedDiscount,
-                            busy = busy,
-                            intent = ActionIntent.Secondary,
-                            modifier = Modifier.weight(1f),
-                        )
-                        if (review.manualDiscountMinor > 0L) {
-                            ErpButton(
-                                text = "Clear discount",
-                                onClick = { onUpdateDiscount(0L) },
-                                enabled = canMutateDiscount,
-                                intent = ActionIntent.Quiet,
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
-                    }
-                    if (hasUnsavedDiscount) {
-                        Text(
-                            "Apply this edited amount or restore ${review.manualDiscountMinor.asRupees()} before continuing.",
                             color = MaterialTheme.colorScheme.operationalWarning,
                             style = MaterialTheme.typography.labelSmall,
                         )
@@ -3462,25 +3629,33 @@ private fun HeldOrderReviewDialog(
             }
     }
     if (inline) {
+        // Give the discount action room above the keyboard while an edit blocks payment.
         SectionCard(
             modifier = modifier.testTag("pos-held-review-inline"),
             title = review.sourceLabel?.let { "Review $it" } ?: "Review held bill",
             subtitle = "Live server bill · payment has not started",
             icon = Icons.AutoMirrored.Filled.ReceiptLong,
+            contentPadding = PaddingValues(
+                horizontal = Spacing.lg,
+                vertical = if (compactDiscountActions) Spacing.sm else Spacing.lg,
+            ),
             action = {
                 TextButton(onClick = onDismiss, enabled = !busy) { Text("Close") }
             },
         ) {
             reviewContent(Modifier.weight(1f).fillMaxWidth())
-            PrimaryButton(
-                enabled = canContinue,
-                onClick = onContinue,
-                modifier = Modifier.fillMaxWidth().testTag("pos-held-review-continue"),
-            ) {
-                Text(
-                    if (busy) "VERIFYING LATEST BILL"
-                    else "CONTINUE TO PAYMENT · ${review.dueMinor.asRupees()}",
-                )
+            discountActions()
+            if (!prioritizeDiscountActions) {
+                PrimaryButton(
+                    enabled = canContinue,
+                    onClick = onContinue,
+                    modifier = Modifier.fillMaxWidth().testTag("pos-held-review-continue"),
+                ) {
+                    Text(
+                        if (busy) "VERIFYING LATEST BILL"
+                        else "CONTINUE TO PAYMENT · ${review.dueMinor.asRupees()}",
+                    )
+                }
             }
         }
         return
@@ -3494,7 +3669,12 @@ private fun HeldOrderReviewDialog(
         title = {
             Text(review.sourceLabel?.let { "Review $it" } ?: "Review held bill")
         },
-        text = { reviewContent(Modifier.fillMaxWidth().heightIn(max = 540.dp)) },
+        text = {
+            Column(Modifier.fillMaxWidth().heightIn(max = 540.dp)) {
+                reviewContent(Modifier.weight(1f, fill = false).fillMaxWidth())
+                discountActions()
+            }
+        },
         confirmButton = {
             PrimaryButton(enabled = canContinue, onClick = onContinue) {
                 Text(
@@ -3570,8 +3750,7 @@ private fun DirectCheckoutReviewDialog(
                 )
                 Column(
                     Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
+                        .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.UTILITY)
                         .padding(Spacing.md),
                     verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                 ) {
@@ -3592,8 +3771,7 @@ private fun DirectCheckoutReviewDialog(
                 if (showCustomerBenefits) {
                     Column(
                         Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
+                            .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.CONTROL)
                             .padding(Spacing.md),
                         verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                     ) {
@@ -3774,7 +3952,7 @@ private fun DirectCheckoutReviewDialog(
                                     else -> choices.forEach { choice ->
                                         Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                                             ErpButton(
-                                                text = "${choice.label} · ${choice.pointsCost} pts → ${choice.valueMinor.asRupees()}",
+                                                text = "${choice.label.currencyFreeLabel()} · ${choice.pointsCost} pts → ${choice.valueMinor.asRupees()}",
                                                 onClick = {
                                                     check(choice.eligible && choice.affordable)
                                                     rewardReview = ReviewedRewardRedemption(
@@ -3821,8 +3999,8 @@ private fun DirectCheckoutReviewDialog(
                                         .padding(Spacing.sm),
                                     verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                                 ) {
-                                    Text("Review ${selected.label}", fontWeight = FontWeight.SemiBold)
-                                    Text(selected.description, style = MaterialTheme.typography.bodySmall)
+                                    Text("Review ${selected.label.currencyFreeLabel()}", fontWeight = FontWeight.SemiBold)
+                                    Text(selected.description.currencyFreeLabel(), style = MaterialTheme.typography.bodySmall)
                                     Text(
                                         "${selected.pointsCost} points → ${selected.valueMinor.asRupees()} fixed bill credit · program revision ${selected.programRevision}",
                                         style = MaterialTheme.typography.labelSmall,
@@ -3925,6 +4103,7 @@ private fun PayDialog(
     modifier: Modifier = Modifier,
     onDismiss: () -> Unit,
     onVoid: (() -> Unit)? = null,
+    voidLabel: String = "Void bill",
     onConfirm: (String, Long) -> Boolean,
     onConfirmSplit: ((SplitPaymentPlan) -> Boolean)? = null,
 ) {
@@ -4021,8 +4200,7 @@ private fun PayDialog(
                 if (totalMinor != null) {
                     Column(
                         Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
+                            .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.UTILITY)
                             .padding(if (inline) Spacing.sm else Spacing.md),
                         verticalArrangement = Arrangement.spacedBy(Spacing.xs),
                     ) {
@@ -4130,8 +4308,7 @@ private fun PayDialog(
                 if (showCustomerBenefits && onApplyPoints != null) {
                     Column(
                         Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
+                            .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.CONTROL)
                             .padding(Spacing.md),
                         verticalArrangement = Arrangement.spacedBy(Spacing.sm),
                     ) {
@@ -4176,7 +4353,7 @@ private fun PayDialog(
                                 supportingText = {
                                     Text(
                                         pointsError
-                                            ?: "10 points = ₹1 · the server verifies the live balance",
+                                            ?: "10 points = 1 · the server verifies the live balance",
                                     )
                                 },
                                 isError = pointsError != null,
@@ -4270,7 +4447,7 @@ private fun PayDialog(
                         value = tendered,
                         onValueChange = { tendered = it },
                         enabled = !confirmationConsumed,
-                        label = "Cash received (₹)",
+                        label = "Cash received",
                         presetsMinor = cashTenderPresets(dueMinor),
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -4336,13 +4513,14 @@ private fun PayDialog(
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                 onVoid?.let {
                     TextButton(onClick = it, enabled = !confirmationConsumed) {
-                        Text("Void bill", color = MaterialTheme.colorScheme.operationalDanger)
+                        Text(voidLabel, color = MaterialTheme.colorScheme.operationalDanger)
                     }
                 }
                 TextButton(onClick = onDismiss, enabled = !confirmationConsumed) { Text("Cancel") }
             }
     }
     if (inline) {
+        val inlineBodyScroll = rememberScrollState()
         SectionCard(
             title = title,
             modifier = modifier.testTag("pos-payment-confirmation-inline"),
@@ -4352,9 +4530,15 @@ private fun PayDialog(
                 Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(Spacing.sm),
             ) {
-                paymentBody(
-                    Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
-                )
+                Box(
+                    Modifier.fillMaxWidth().weight(1f).clipToBounds()
+                        .testTag("pos-payment-confirmation-body-viewport"),
+                ) {
+                    paymentBody(
+                        Modifier.fillMaxSize().verticalScroll(inlineBodyScroll),
+                    )
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Row(
                     Modifier.fillMaxWidth().testTag("pos-payment-confirmation-actions"),
                     horizontalArrangement = Arrangement.spacedBy(Spacing.sm, Alignment.End),
@@ -4425,8 +4609,7 @@ private fun SplitTenderEditor(
 
     Column(
         Modifier.fillMaxWidth().clip(Radius.shapeMd)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeMd)
+            .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.CONTROL)
             .padding(Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm),
     ) {
@@ -4532,7 +4715,7 @@ private fun SplitTenderEditor(
                     onValueChange = { entered ->
                         normalizeRupeeInput(entered)?.let { onAmountChange(splitMethod, it) }
                     },
-                    label = { Text("${SplitPaymentPolicy.methodLabel(splitMethod)} amount (₹)") },
+                    label = { Text("${SplitPaymentPolicy.methodLabel(splitMethod)} amount") },
                     keyboardOptions = KeyboardOptions(
                         keyboardType = KeyboardType.Decimal,
                         imeAction = ImeAction.Next,
@@ -4557,7 +4740,7 @@ private fun SplitTenderEditor(
                 onValueChange = { entered ->
                     normalizeRupeeInput(entered)?.let(onCashTenderedChange)
                 },
-                label = { Text("Cash received (₹)") },
+                label = { Text("Cash received") },
                 supportingText = { Text("This may exceed only the cash part; change is calculated below.") },
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Decimal,
@@ -4636,7 +4819,7 @@ private fun DirectZeroTotalCompletionDialog(
     }
     if (inline) {
         SectionCard(
-            title = "Complete bill · ₹0.00 due",
+            title = "Complete bill · 0.00 due",
             subtitle = "Final bill confirmation",
             modifier = modifier.testTag("pos-zero-confirmation-inline"),
             contentFillsAvailableHeight = true,
@@ -4697,7 +4880,7 @@ private fun DirectZeroTotalCompletionDialog(
                                 onConfirm()
                             }
                         },
-                    ) { Text(if (confirmationConsumed) "Submitted once" else "COMPLETE · ₹0.00") }
+                    ) { Text(if (confirmationConsumed) "Submitted once" else "COMPLETE · 0.00") }
                 }
             }
         }
@@ -4707,7 +4890,7 @@ private fun DirectZeroTotalCompletionDialog(
         onDismissRequest = { if (!confirmationConsumed) onDismiss() },
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = Radius.shapeLg,
-        title = { Text("Complete bill · ₹0.00 due") },
+        title = { Text("Complete bill · 0.00 due") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
                 Text(
@@ -4755,7 +4938,7 @@ private fun DirectZeroTotalCompletionDialog(
                         onConfirm()
                     }
                 },
-            ) { Text(if (confirmationConsumed) "Submitted once" else "COMPLETE · ₹0.00") }
+            ) { Text(if (confirmationConsumed) "Submitted once" else "COMPLETE · 0.00") }
         },
         dismissButton = {
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
@@ -4794,13 +4977,13 @@ private fun ZeroTotalCompletionDialog(
         confirmationConsumed -> "Completion submitted once"
         !online -> "Reconnect to complete"
         !confirmEnabled -> "Completion unavailable"
-        else -> "COMPLETE BENEFIT · ₹0 DUE"
+        else -> "COMPLETE BENEFIT · 0 DUE"
     }
 
     if (inline) {
         SectionCard(
-            title = checkout.sourceLabel?.let { "$it · ₹0.00 due" }
-                ?: "Member benefit · ₹0.00 due",
+            title = checkout.sourceLabel?.let { "$it · 0.00 due" }
+                ?: "Member benefit · 0.00 due",
             subtitle = "Final bill confirmation",
             modifier = modifier.testTag("pos-benefit-confirmation-inline"),
             contentFillsAvailableHeight = true,
@@ -4849,7 +5032,7 @@ private fun ZeroTotalCompletionDialog(
                 ) {
                     onVoid?.let {
                         TextButton(onClick = it, enabled = !confirmationConsumed) {
-                            Text("Void bill", color = MaterialTheme.colorScheme.operationalDanger)
+                            Text(if (checkout.retainedMistakeReview != null) "Cancel mistaken items" else "Void bill", color = MaterialTheme.colorScheme.operationalDanger)
                         }
                     }
                     TextButton(onClick = onDismiss, enabled = !confirmationConsumed) { Text("Cancel") }
@@ -4874,8 +5057,8 @@ private fun ZeroTotalCompletionDialog(
         shape = Radius.shapeLg,
         title = {
             Text(
-                checkout.sourceLabel?.let { "$it · ₹0.00 due" }
-                    ?: "Member benefit · ₹0.00 due",
+                checkout.sourceLabel?.let { "$it · 0.00 due" }
+                    ?: "Member benefit · 0.00 due",
             )
         },
         text = {
@@ -4965,7 +5148,7 @@ private fun ZeroTotalCompletionDialog(
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                 onVoid?.let {
                     TextButton(onClick = it, enabled = !confirmationConsumed) {
-                        Text("Void bill", color = MaterialTheme.colorScheme.operationalDanger)
+                        Text(if (checkout.retainedMistakeReview != null) "Cancel mistaken items" else "Void bill", color = MaterialTheme.colorScheme.operationalDanger)
                     }
                 }
                 TextButton(onClick = onDismiss, enabled = !confirmationConsumed) { Text("Cancel") }
@@ -5002,10 +5185,10 @@ private fun QtyButton(
     ) {
         Box(
             Modifier.size(32.dp).clip(Radius.shapeSm)
-                .background(if (pressed && enabled) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surfaceContainer)
+                .background(MaterialTheme.colorScheme.surfaceContainer)
                 .border(
                     1.dp,
-                    if (pressed && enabled) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
                     Radius.shapeSm,
                 ),
             contentAlignment = Alignment.Center,

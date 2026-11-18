@@ -37,6 +37,9 @@ from app.models import (
     Shift,
     Terminal,
 )
+from app.schemas.paid_bill_action_decision import PAID_BILL_ACTION_OUTCOME_PROTOCOL
+from app.schemas.paid_bill_recovery import PAID_BILL_HISTORICAL_RECOVERY_PROTOCOL
+from app.schemas.paid_bill_amendment import PAID_BILL_AMENDMENT_PROTOCOL
 from app.services.accounting.accounts import ACCOUNT_BY_CODE
 from app.services.pos.loyalty_program import (
     LoyaltyProgramRules,
@@ -320,6 +323,10 @@ class TerminalRead(BaseModel):
     device_id: str | None
     last_seen_at: datetime | None
     offline_shift_capture_supported: bool = True
+    online_start_work_supported: bool = True
+    paid_bill_amendment_protocol: int = PAID_BILL_AMENDMENT_PROTOCOL
+    paid_bill_action_outcome_protocol: int = PAID_BILL_ACTION_OUTCOME_PROTOCOL
+    paid_bill_historical_recovery_protocol: int = PAID_BILL_HISTORICAL_RECOVERY_PROTOCOL
 
 
 class TerminalCreate(BaseModel):

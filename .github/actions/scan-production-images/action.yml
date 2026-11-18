@@ -294,11 +294,22 @@ runs:
           backend.syft.json backend-hardened-grype.json \
           frontend.syft.json frontend-hardened-grype.json \
           caddy.syft.json caddy-hardened-grype.json \
+          backend-zlib-runtime.raw.json backend-zlib-runtime.json \
+          frontend-zlib-runtime.raw.json frontend-zlib-runtime.json \
+          caddy-zlib-runtime.raw.json caddy-zlib-runtime.json \
+          postgres-zlib-runtime.raw.json postgres-zlib-runtime.json \
+          redis-zlib-runtime.raw.json redis-zlib-runtime.json \
+          backend-grype-unfiltered.json backend-hashlib-runtime.json backend-hashlib-fixed.openvex.json \
+          backend-openssl-runtime.json backend-openssl-reviewed.openvex.json \
+          backend-grype-openssl-filtered.json backend-reviewed.openvex.json \
+          caddy-grype-unfiltered.json caddy-openssl-runtime.raw.txt caddy-openssl-runtime.json \
+          caddy-openssl-runtime-probe.sh caddy-openssl-reviewed.openvex.json \
+          frontend-grype-unfiltered.json frontend-openssl-runtime.raw.txt frontend-openssl-runtime.json \
+          frontend-openssl-runtime-probe.sh frontend-openssl-reviewed.openvex.json \
+          postgres-grype-unfiltered.json postgres-openssl-runtime.raw.txt postgres-openssl-runtime.json \
+          postgres-openssl-runtime-probe.sh postgres-openssl-reviewed.openvex.json \
           postgres.syft.json postgres-hardened-grype.json \
-          redis.syft.json redis-hardened-grype.json \
-          backend-zlib.openvex.json frontend-zlib.openvex.json \
-          postgres-zlib.openvex.json \
-          redis-zlib.openvex.json; do
+          redis.syft.json redis-hardened-grype.json; do
           if sudo test -f "$scanner_evidence/$evidence"; then
             sudo install -o "$runner_uid" -g "$runner_gid" -m 0600 \
               "$scanner_evidence/$evidence" "$evidence_dir/$evidence"
@@ -315,18 +326,97 @@ runs:
           backend.syft.json backend-hardened-grype.json \
           frontend.syft.json frontend-hardened-grype.json \
           caddy.syft.json caddy-hardened-grype.json \
+          backend-zlib-runtime.raw.json backend-zlib-runtime.json \
+          frontend-zlib-runtime.raw.json frontend-zlib-runtime.json \
+          caddy-zlib-runtime.raw.json caddy-zlib-runtime.json \
+          postgres-zlib-runtime.raw.json postgres-zlib-runtime.json \
+          redis-zlib-runtime.raw.json redis-zlib-runtime.json \
+          backend-grype-unfiltered.json backend-hashlib-runtime.json backend-hashlib-fixed.openvex.json \
+          backend-openssl-runtime.json backend-openssl-reviewed.openvex.json \
+          backend-grype-openssl-filtered.json backend-reviewed.openvex.json \
+          caddy-grype-unfiltered.json caddy-openssl-runtime.raw.txt caddy-openssl-runtime.json \
+          caddy-openssl-runtime-probe.sh caddy-openssl-reviewed.openvex.json \
+          frontend-grype-unfiltered.json frontend-openssl-runtime.raw.txt frontend-openssl-runtime.json \
+          frontend-openssl-runtime-probe.sh frontend-openssl-reviewed.openvex.json \
+          postgres-grype-unfiltered.json postgres-openssl-runtime.raw.txt postgres-openssl-runtime.json \
+          postgres-openssl-runtime-probe.sh postgres-openssl-reviewed.openvex.json \
           postgres.syft.json postgres-hardened-grype.json \
-          redis.syft.json redis-hardened-grype.json \
-          backend-zlib.openvex.json frontend-zlib.openvex.json \
-          postgres-zlib.openvex.json \
-          redis-zlib.openvex.json; do
+          redis.syft.json redis-hardened-grype.json; do
           sudo rm -f "$scanner_evidence/$evidence"
         done
         sudo rmdir "$scanner_work"
         sudo rmdir "$scanner_evidence"
 
-    # Keep SPDX SBOMs as retained audit evidence. The four r0 images use their
-    # per-image VEX; Caddy's fixed r1 APK is proved directly from its SBOM.
+    # Keep SPDX SBOMs as retained audit evidence. All five exact official
+    # fixed APKs require direct SBOM and immutable per-service runtime proof.
+    - name: Select the independently verified backend fix statement
+      id: backend-hashlib-vex
+      if: ${{ !cancelled() && steps.hardened-scan.outcome == 'success' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        evidence_dir="$RUNNER_TEMP/container-security"
+        vex="$evidence_dir/backend-hashlib-fixed.openvex.json"
+        validate_evidence_hash() {
+          local key=$1 file=$2 expected
+          [ -f "$file" ] && [ ! -L "$file" ]
+          expected=$(sed -n "s/^backend_hashlib_${key}_sha256=//p" "$evidence_dir/hardened-scan-metadata.txt")
+          [[ "$expected" =~ ^[a-f0-9]{64}$ ]]
+          printf '%s  %s\n' "$expected" "$file" | sha256sum -c -
+        }
+        validate_evidence_hash runtime_proof "$evidence_dir/backend-hashlib-runtime.json"
+        if [ -e "$vex" ] || [ -L "$vex" ]; then
+          validate_evidence_hash raw_grype "$evidence_dir/backend-grype-unfiltered.json"
+          validate_evidence_hash vex "$vex"
+          printf 'path=%s\n' "$vex" >> "$GITHUB_OUTPUT"
+          scan_vex="$vex"
+          combined="$evidence_dir/backend-reviewed.openvex.json"
+          if [ -e "$combined" ] || [ -L "$combined" ]; then
+            for binding in runtime_proof:backend-openssl-runtime.json vex:backend-openssl-reviewed.openvex.json combined_vex:backend-reviewed.openvex.json; do
+              key=${binding%%:*}; file="$evidence_dir/${binding#*:}"
+              [ -f "$file" ] && [ ! -L "$file" ]
+              expected=$(sed -n "s/^backend_openssl_${key}_sha256=//p" "$evidence_dir/hardened-scan-metadata.txt")
+              [[ "$expected" =~ ^[a-f0-9]{64}$ ]]
+              printf '%s  %s\n' "$expected" "$file" | sha256sum -c -
+            done
+            validate_evidence_hash assessed_grype "$evidence_dir/backend-grype-openssl-filtered.json"
+            scan_vex="$combined"
+            printf 'openssl_path=%s\n' "$combined" >> "$GITHUB_OUTPUT"
+          elif [ -e "$evidence_dir/backend-openssl-reviewed.openvex.json" ] || \
+               grep -q '^backend_openssl_' "$evidence_dir/hardened-scan-metadata.txt"; then
+            echo "Incomplete backend OpenSSL assessment evidence." >&2; exit 1
+          fi
+          printf 'scan_path=%s\n' "$scan_vex" >> "$GITHUB_OUTPUT"
+        elif [ -e "$evidence_dir/backend-grype-unfiltered.json" ] || \
+             grep -q '^backend_hashlib_vex_sha256=' "$evidence_dir/hardened-scan-metadata.txt"; then
+          echo "Incomplete verified hashlib assessment evidence." >&2
+          exit 1
+        fi
+
+    - name: Select separately verified service execution-path statements
+      id: service-openssl-vex
+      if: ${{ !cancelled() && steps.hardened-scan.outcome == 'success' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        evidence_dir="$RUNNER_TEMP/container-security"
+        for service in caddy frontend postgres; do
+          vex="$evidence_dir/$service-openssl-reviewed.openvex.json"
+          if [ -e "$vex" ] || [ -L "$vex" ]; then
+            for binding in runtime_proof:openssl-runtime.json raw_grype:grype-unfiltered.json vex:openssl-reviewed.openvex.json; do
+              key=${binding%%:*}; file="$evidence_dir/$service-${binding#*:}"
+              [ -f "$file" ] && [ ! -L "$file" ]
+              expected=$(sed -n "s/^${service}_openssl_${key}_sha256=//p" "$evidence_dir/hardened-scan-metadata.txt")
+              [[ "$expected" =~ ^[a-f0-9]{64}$ ]]
+              printf '%s  %s\n' "$expected" "$file" | sha256sum -c -
+            done
+            printf '%s_path=%s\n' "$service" "$vex" >> "$GITHUB_OUTPUT"
+          elif [ -e "$evidence_dir/$service-grype-unfiltered.json" ] || \
+               grep -q "^${service}_openssl_" "$evidence_dir/hardened-scan-metadata.txt"; then
+            echo "Incomplete service OpenSSL assessment evidence." >&2; exit 1
+          fi
+        done
+
     - name: Scan backend image
       if: ${{ !cancelled() && steps.hardened-scan.outcome == 'success' }}
       uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
@@ -336,9 +426,9 @@ runs:
         fail-build: true
         severity-cutoff: high
         only-fixed: false
-        vex: ${{ runner.temp }}/container-security/backend-zlib.openvex.json
         output-format: json
         output-file: ${{ runner.temp }}/container-security/backend-grype.json
+        vex: ${{ steps.backend-hashlib-vex.outputs.scan_path }}
 
     - name: Scan frontend image
       if: ${{ !cancelled() && steps.hardened-scan.outcome == 'success' }}
@@ -349,9 +439,9 @@ runs:
         fail-build: true
         severity-cutoff: high
         only-fixed: false
-        vex: ${{ runner.temp }}/container-security/frontend-zlib.openvex.json
         output-format: json
         output-file: ${{ runner.temp }}/container-security/frontend-grype.json
+        vex: ${{ steps.service-openssl-vex.outputs.frontend_path }}
 
     - name: Scan Caddy image
       if: ${{ !cancelled() && steps.hardened-scan.outcome == 'success' }}
@@ -364,6 +454,7 @@ runs:
         only-fixed: false
         output-format: json
         output-file: ${{ runner.temp }}/container-security/caddy-grype.json
+        vex: ${{ steps.service-openssl-vex.outputs.caddy_path }}
 
     - name: Scan PostgreSQL image
       if: ${{ !cancelled() && steps.hardened-scan.outcome == 'success' }}
@@ -374,9 +465,9 @@ runs:
         fail-build: true
         severity-cutoff: high
         only-fixed: false
-        vex: ${{ runner.temp }}/container-security/postgres-zlib.openvex.json
         output-format: json
         output-file: ${{ runner.temp }}/container-security/postgres-grype.json
+        vex: ${{ steps.service-openssl-vex.outputs.postgres_path }}
 
     - name: Scan Redis image
       if: ${{ !cancelled() && steps.hardened-scan.outcome == 'success' }}
@@ -387,7 +478,6 @@ runs:
         fail-build: true
         severity-cutoff: high
         only-fixed: false
-        vex: ${{ runner.temp }}/container-security/redis-zlib.openvex.json
         output-format: json
         output-file: ${{ runner.temp }}/container-security/redis-grype.json
 
@@ -400,6 +490,11 @@ runs:
         CADDY_IMAGE: ${{ inputs.caddy-image }}
         POSTGRES_IMAGE: ${{ inputs.postgres-image }}
         REDIS_IMAGE: ${{ inputs.redis-image }}
+        VERIFIED_HASHLIB_VEX: ${{ steps.backend-hashlib-vex.outputs.path }}
+        VERIFIED_OPENSSL_VEX: ${{ steps.backend-hashlib-vex.outputs.openssl_path }}
+        VERIFIED_CADDY_VEX: ${{ steps.service-openssl-vex.outputs.caddy_path }}
+        VERIFIED_FRONTEND_VEX: ${{ steps.service-openssl-vex.outputs.frontend_path }}
+        VERIFIED_POSTGRES_VEX: ${{ steps.service-openssl-vex.outputs.postgres_path }}
       run: |
         set -euo pipefail
         evidence_dir="$RUNNER_TEMP/container-security"
@@ -417,25 +512,43 @@ runs:
             '$1 == key {print substr($0, index($0, "=") + 1)}' "$identities")
           mapfile -t config_ids < <(awk -F= -v key="${service}_scanner_config_image_id" \
             '$1 == key {print substr($0, index($0, "=") + 1)}' "$hardened_metadata")
+          mapfile -t archive_platforms < <(awk -F= -v key="${service}_archive_platform" \
+            '$1 == key {print substr($0, index($0, "=") + 1)}' "$hardened_metadata")
           if [ "${#runtime_ids[@]}" -ne 1 ] || \
              [ "${#config_ids[@]}" -ne 1 ] || \
+             [ "${#archive_platforms[@]}" -ne 1 ] || [ "${archive_platforms[0]}" != linux/amd64 ] || \
              ! [[ "${runtime_ids[0]}" =~ ^sha256:[0-9a-f]{64}$ ]] || \
              ! [[ "${config_ids[0]}" =~ ^sha256:[0-9a-f]{64}$ ]] || \
              [ "$(docker image inspect --format '{{.Id}}' "$image")" != "${runtime_ids[0]}" ]; then
             echo "Candidate $service identity changed before final zlib evidence validation." >&2
             exit 1
           fi
-          if [ "$service" = caddy ]; then
-            python3 "$verifier" \
-              --caddy-fixed-sbom "$evidence_dir/caddy.syft.json" \
-              "$image" "${config_ids[0]}" \
-              "caddy=$evidence_dir/caddy-grype.json" >> "$validation"
-          else
-            python3 "$verifier" \
-              "$evidence_dir/$service-zlib.openvex.json" \
-              "$image" "${config_ids[0]}" \
-              "$service=$evidence_dir/$service-grype.json" >> "$validation"
+          hashlib_vex=()
+          openssl_vex=()
+          if [ "$service" = backend ] && [ -n "$VERIFIED_HASHLIB_VEX" ]; then
+            [ "$VERIFIED_HASHLIB_VEX" = "$evidence_dir/backend-hashlib-fixed.openvex.json" ]
+            hashlib_vex=("--hashlib-vex=$VERIFIED_HASHLIB_VEX")
+            if [ -n "$VERIFIED_OPENSSL_VEX" ]; then
+              [ "$VERIFIED_OPENSSL_VEX" = "$evidence_dir/backend-reviewed.openvex.json" ]
+              openssl_vex=("--openssl-assessment=$VERIFIED_OPENSSL_VEX")
+            fi
           fi
+          case "$service" in
+            caddy) service_vex=$VERIFIED_CADDY_VEX ;;
+            frontend) service_vex=$VERIFIED_FRONTEND_VEX ;;
+            postgres) service_vex=$VERIFIED_POSTGRES_VEX ;;
+            *) service_vex="" ;;
+          esac
+          if [ -n "$service_vex" ]; then
+            [ "$service_vex" = "$evidence_dir/$service-openssl-reviewed.openvex.json" ]
+            openssl_vex=("--openssl-assessment=$service_vex")
+          fi
+          python3 "$verifier" \
+            "--$service-fixed-sbom" "$evidence_dir/$service.syft.json" \
+            "$image" "${config_ids[0]}" \
+            "$service=$evidence_dir/$service-grype.json" \
+            "--runtime-proof=$evidence_dir/$service-zlib-runtime.json" \
+            "--archive-platform=${archive_platforms[0]}@${config_ids[0]}" "${hashlib_vex[@]}" "${openssl_vex[@]}" >> "$validation"
         done
 
     - name: Retain container security evidence

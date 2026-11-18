@@ -1,7 +1,12 @@
 package cloud.dcompany.erp.ui.screens.analytics
 
 import cloud.dcompany.erp.core.auth.BranchScopeMismatchException
+import cloud.dcompany.erp.core.auth.CacheScope
+import cloud.dcompany.erp.core.auth.CacheScopeLease
 import cloud.dcompany.erp.core.net.ApiClient
+import cloud.dcompany.erp.core.net.ApiException
+import cloud.dcompany.erp.core.net.MeResponse
+import org.junit.Assert.assertNull
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import cloud.dcompany.erp.ui.presentationPolicy
 import kotlinx.serialization.SerializationException
@@ -13,6 +18,47 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AnalyticsPresentationPolicyTest {
+    @Test
+    fun `financial dashboard requires both explicit capabilities`() {
+        fun profile(permissions: List<String>?) = MeResponse(
+            userId = "user", companyId = "company", branchId = "branch", name = "Operator",
+            email = "operator@test.local", roles = listOf("owner"), protectedAccess = true,
+            effectivePermissions = permissions,
+        )
+        listOf(null, emptyList(), listOf("analytics.read"), listOf("finance.read")).forEach {
+            assertFalse(canReadAnalyticsDashboard(profile(it)))
+        }
+        assertTrue(canReadAnalyticsDashboard(profile(listOf("analytics.read", "finance.read"))))
+    }
+
+    @Test
+    fun `definitive dashboard denial removes figures while transient failure retains stale data`() {
+        val state = AnalyticsUiState(dashboard = DashboardKpis(netProfitMinor = 123), dashboardFetchedAtMillis = 456)
+        listOf(401, 403).forEach {
+            val cleared = dashboardFailureState(state, ApiException("Denied", status = it))
+            assertNull(cleared.dashboard)
+            assertNull(cleared.dashboardFetchedAtMillis)
+        }
+        assertEquals(state, dashboardFailureState(state, ApiException("Offline")))
+        assertEquals(state, dashboardFailureState(state, ApiException("Busy", status = 503)))
+    }
+
+
+    @Test
+    fun `a newer login lease hides an older financial snapshot before effects run`() {
+        val scope = CacheScope("user", "company", "branch", "terminal")
+        val oldLease = CacheScopeLease(scope, 1)
+        val newLease = CacheScopeLease(scope, 2)
+        val profile = MeResponse(userId = "user", companyId = "company", branchId = "branch",
+            name = "Operator", email = "operator@test.local", roles = emptyList(), protectedAccess = false,
+            effectivePermissions = listOf("analytics.read", "finance.read"))
+        val state = AnalyticsUiState(scopeLease = oldLease, canReadToday = true, canReadGrowth = true,
+            dashboard = DashboardKpis(netProfitMinor = 123))
+        assertEquals(state, visibleAnalyticsState(state, profile, oldLease))
+        assertNull(visibleAnalyticsState(state, profile, newLease).dashboard)
+        assertNull(visibleAnalyticsState(state, profile.copy(effectivePermissions = listOf("analytics.read")), oldLease).dashboard)
+        assertTrue(visibleAnalyticsState(state, profile.copy(effectivePermissions = listOf("analytics.read")), oldLease).canReadGrowth)
+    }
 
     @Test
     fun `gaming centre groups dormant revenue without dropping a paise`() {

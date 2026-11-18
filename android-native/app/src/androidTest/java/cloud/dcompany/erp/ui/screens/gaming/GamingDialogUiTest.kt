@@ -12,7 +12,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MutableLongState
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -28,12 +30,14 @@ import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.junit4.StateRestorationTester
@@ -59,10 +63,12 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.ViewRootForTest
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Density
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.test.platform.app.InstrumentationRegistry
@@ -74,6 +80,7 @@ import cloud.dcompany.erp.core.db.GamingLegacyResolution
 import cloud.dcompany.erp.core.db.GamingLegacyResolutionAttemptState
 import cloud.dcompany.erp.core.db.LEGACY_PACKAGE_START_REVIEW_ERROR
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
+import kotlinx.serialization.json.JsonArray
 import java.time.Instant
 import java.io.File
 import java.io.FileInputStream
@@ -90,12 +97,14 @@ private fun rememberedWallClock(epochMillis: Long): MutableLongState =
     remember(epochMillis) { mutableLongStateOf(epochMillis) }
 
 private const val PINNED_ACTION_VIEWPORT_TAG = "pinned-gaming-action-viewport"
+private const val COMPACT_INPUT_FIXTURE_TAG = "compact-gaming-input-fixture"
 private val PINNED_ACTIVE_ACTION_LABELS = listOf(
     "Players",
     "Add drinks",
     "Extend",
     "Transfer",
     "Pause",
+    "Cancel",
     "Stop & calculate",
 )
 
@@ -159,8 +168,8 @@ class GamingDialogUiTest {
         compose.onNodeWithText("QA Cola").assertIsDisplayed()
         compose.onNodeWithText("PS5 1 · session session-").assertIsDisplayed()
         compose.onNodeWithText("Quantity · 2").assertIsDisplayed()
-        compose.onNodeWithText("Unit price · ₹40.00").assertIsDisplayed()
-        compose.onNodeWithText("Total · ₹80.00").assertIsDisplayed()
+        compose.onNodeWithText("Unit price · 40.00").assertIsDisplayed()
+        compose.onNodeWithText("Total · 80.00").assertIsDisplayed()
         compose.onNodeWithText("Modifiers · None").assertIsDisplayed()
         compose.onNodeWithText("Note · No ice").assertIsDisplayed()
         compose.onNodeWithText("Cancel").assertIsDisplayed().performClick()
@@ -169,7 +178,7 @@ class GamingDialogUiTest {
             assertEquals(0, confirmed)
         }
 
-        compose.onNodeWithText("Confirm add · ₹80.00").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Confirm add · 80.00").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(1, confirmed) }
     }
 
@@ -217,40 +226,53 @@ class GamingDialogUiTest {
             }
         }
 
-        val customerSearch = compose.onNodeWithTag("gaming-customer-search")
-        customerSearch.performClick().assertIsFocused().performTextReplacement("Amina")
-        val playersList = compose.onNodeWithTag("gaming-players-list")
-        playersList.performScrollToNode(hasText("Amina Rahman · 9876543210"))
-        compose.onNodeWithText("Amina Rahman · 9876543210").performClick()
-        // Selection recomposes this lazy item while the IME window is closing.
-        // Ask the list to materialize the updated row before checking its
-        // merged, clickable semantics and visible position.
-        playersList.performScrollToNode(hasText("Amina Rahman · 9876543210 · selected"))
-        compose.onNodeWithText("Amina Rahman · 9876543210 · selected").assertIsDisplayed()
-        // Re-materialize the search item before checking focus: LazyColumn may
-        // dispose its previous semantics node when the selected row recomposes.
-        playersList.performScrollToNode(hasTestTag("gaming-customer-search"))
-        compose.onNodeWithTag("gaming-customer-search").assertIsNotFocused()
-        compose.onNodeWithTag("gaming-add-player")
-            .performScrollTo()
-            .assertIsDisplayed()
-            .assertIsEnabled()
-            .performClick()
-        compose.runOnIdle { assertTrue(joins.isEmpty()) }
-        // The emulator IME reports its final onShown callback outside Compose's
-        // idling resources. Let the compact review window finish its inset
-        // layout, then keep the strict on-screen assertion below.
-        Thread.sleep(750)
-        saveImeScreenshot()
-        val reviewTitle = compose.onNodeWithText("Review friend join")
-        Log.i("GamingJoinReview", "Before strict review assertion: ${reviewTitle.dialogTouchSnapshot()}")
-        compose.onNodeWithText("Amina Rahman").assertIsDisplayed()
-        compose.onNodeWithText("Player-controller fees after join · ₹30.00 estimated")
-            .assertIsDisplayed()
-        reviewTitle.assertIsDisplayed()
-        compose.onNodeWithText("Confirm join").assertIsDisplayed().performClick()
-        compose.runOnIdle {
-            assertEquals(listOf(Triple("customer-amina", null, null)), joins)
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val originalFlags = automation.serviceInfo.flags
+        try {
+            automation.serviceInfo = automation.serviceInfo.apply {
+                flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            }
+            val customerSearch = compose.onNodeWithTag("gaming-customer-search")
+            customerSearch.performAndroidScreenTouchWithOptionalIme()
+                .assertIsFocused().performTextReplacement("Amina")
+            val nativeSearchRoot = (customerSearch.fetchSemanticsNode().root as ViewRootForTest).view
+            compose.runOnIdle {
+                check(nativeSearchRoot.isInTouchMode) { "Saved-customer finger input must enter native touch mode" }
+            }
+            customerSearch.awaitImeSettledTouchTarget()
+            val playersList = compose.onNodeWithTag("gaming-players-list")
+            playersList.performScrollToNode(hasText("Amina Rahman · 9876543210"))
+            compose.onNodeWithText("Amina Rahman · 9876543210").performClick()
+            // Selection recomposes this lazy item while the IME window is closing.
+            // Ask the list to materialize the updated row before checking its
+            // merged, clickable semantics and visible position.
+            playersList.performScrollToNode(hasText("Amina Rahman · 9876543210 · selected"))
+            compose.onNodeWithText("Amina Rahman · 9876543210 · selected").assertIsDisplayed()
+            // Re-materialize the search item before checking focus: LazyColumn may
+            // dispose its previous semantics node when the selected row recomposes.
+            playersList.performScrollToNode(hasTestTag("gaming-customer-search"))
+            compose.onNodeWithTag("gaming-customer-search")
+                .awaitImeHiddenSettledTouchTarget()
+            compose.onNodeWithTag("gaming-customer-search").assertIsNotFocused()
+            compose.onNodeWithTag("gaming-add-player")
+                .performScrollTo()
+                .assertIsDisplayed()
+                .assertIsEnabled()
+                .performClick()
+            compose.runOnIdle { assertTrue(joins.isEmpty()) }
+            compose.onNodeWithText("Confirm join").awaitImeHiddenSettledTouchTarget()
+            val reviewTitle = compose.onNodeWithText("Review friend join")
+            Log.i("GamingJoinReview", "Before strict review assertion: ${reviewTitle.dialogTouchSnapshot()}")
+            compose.onNodeWithText("Amina Rahman").assertIsDisplayed()
+            compose.onNodeWithText("Player-controller fees after join · 30.00 estimated")
+                .assertIsDisplayed()
+            reviewTitle.assertIsDisplayed()
+            compose.onNodeWithText("Confirm join").assertIsDisplayed().performClick()
+            compose.runOnIdle {
+                assertEquals(listOf(Triple("customer-amina", null, null)), joins)
+            }
+        } finally {
+            automation.serviceInfo = automation.serviceInfo.apply { flags = originalFlags }
         }
     }
 
@@ -312,10 +334,10 @@ class GamingDialogUiTest {
             }
         }
 
-        compose.onNodeWithText("Fixed packages from ₹80.00").assertIsDisplayed()
-        compose.onAllNodesWithText("₹200.00/hour").assertCountEquals(0)
+        compose.onNodeWithText("Fixed packages from 80.00").assertIsDisplayed()
+        compose.onAllNodesWithText("200.00/hour").assertCountEquals(0)
         compose.onNodeWithContentDescription(
-            "PS5 Station Fixed. Available. Ready. Fixed packages from ₹80.00. Select station",
+            "PS5 Station Fixed. Available. Ready. Fixed packages from 80.00. Select station",
         ).assertIsDisplayed()
     }
 
@@ -430,7 +452,7 @@ class GamingDialogUiTest {
         }
 
         compose.onNodeWithText("01:00:00").assertIsDisplayed()
-        compose.onNodeWithText("Estimated now · ₹200.00").assertIsDisplayed()
+        compose.onNodeWithText("Estimated now · 200.00").assertIsDisplayed()
         compose.onNodeWithText("Extend").assertIsDisplayed()
         compose.onNodeWithText("Transfer").assertIsDisplayed()
         compose.onNodeWithText("Stop & calculate").assertIsDisplayed()
@@ -475,7 +497,7 @@ class GamingDialogUiTest {
                         onStart = {},
                         onStop = { actions += "stop" },
                         onSend = {},
-                        onCancelUnbilled = {},
+                        onCancelUnbilled = { actions += "cancel" },
                         onExtendTimer = { actions += "extend" },
                         onExtendPackage = { _, _ -> },
                         onTransfer = { actions += "transfer" },
@@ -536,18 +558,19 @@ class GamingDialogUiTest {
             )
         }
 
-        listOf("Extend", "Transfer", "Pause", "Stop & calculate").forEach { label ->
+        listOf("Extend", "Transfer", "Pause", "Cancel", "Stop & calculate").forEach { label ->
             assertCompleteAction(label)
             compose.onNodeWithText(label).performClick()
         }
         compose.runOnIdle {
-            assertEquals(listOf("extend", "transfer", "pause", "stop"), actions)
+            assertEquals(listOf("extend", "transfer", "pause", "cancel", "stop"), actions)
             session.value = session.value.copy(
                 status = "paused",
                 pausedAt = "2026-08-26T17:05:00Z",
                 pauseVersion = 1,
             )
         }
+        assertCompleteAction("Cancel")
         assertCompleteAction("Resume")
         compose.onNodeWithText("Resume").performClick()
         compose.onNodeWithText("Stop & calculate").assertIsDisplayed()
@@ -664,6 +687,9 @@ class GamingDialogUiTest {
         PINNED_ACTIVE_ACTION_LABELS.forEach { label ->
             assertPinnedActionInsideViewport(label, enabled = true)
         }
+        compose.onAllNodesWithText(
+            "Void 1 active Gaming item above with a reason before voiding the whole session.",
+        ).assertCountEquals(0)
         compose.onAllNodesWithText("00:05:00").assertCountEquals(0)
         compose.onNodeWithTag("gaming-primary-action-host").assertIsDisplayed()
         compose.onAllNodesWithText("+30 min").assertCountEquals(0)
@@ -676,6 +702,9 @@ class GamingDialogUiTest {
         PINNED_ACTIVE_ACTION_LABELS.forEach { label ->
             assertPinnedActionInsideViewport(label, enabled = true)
         }
+        compose.onAllNodesWithText(
+            "Void 1 active Gaming item above with a reason before voiding the whole session.",
+        ).assertCountEquals(0)
     }
 
     @Test
@@ -915,7 +944,7 @@ class GamingDialogUiTest {
 
         compose.onNodeWithText("PENDING SYNC").assertIsDisplayed()
         compose.onNodeWithText("00:15:00").assertIsDisplayed()
-        compose.onNodeWithText("Package total · ₹180.00").assertIsDisplayed()
+        compose.onNodeWithText("Booked package · 180.00").assertIsDisplayed()
         compose.onAllNodesWithText("+30 min").assertCountEquals(0)
         compose.onAllNodesWithText("Transfer").assertCountEquals(0)
         compose.onNodeWithText("Players").assertIsDisplayed().performClick()
@@ -1914,6 +1943,150 @@ class GamingDialogUiTest {
     }
 
     @Test
+    fun startSession_focusedInputsRelocateAfterCompactViewportResizeWithImeOpen() {
+        val viewportHeight = mutableStateOf(520.dp)
+        var submittedName: String? = null
+        var submittedPhone: String? = null
+        var starts = 0
+        compose.setContent {
+            DCompanyTheme {
+                Box(Modifier.width(600.dp).height(viewportHeight.value).testTag(COMPACT_INPUT_FIXTURE_TAG)) {
+                    StartSessionEditor(
+                        station = testStation().copy(type = "streaming"),
+                        embedded = true,
+                        onDismiss = {},
+                        onConfirm = { _, name, phone, _, _, _ ->
+                            starts += 1
+                            submittedName = name
+                            submittedPhone = phone
+                        },
+                    )
+                }
+            }
+        }
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val originalFlags = automation.serviceInfo.flags
+        try {
+            automation.serviceInfo = automation.serviceInfo.apply {
+                flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            }
+            val search = compose.onNodeWithContentDescription("Search saved customers by name or phone")
+            search.performScrollTo().performAndroidScreenTouchWithOptionalIme().assertIsFocused()
+                .performTextReplacement("A guest")
+            compose.runOnIdle { viewportHeight.value = 342.dp }
+            assertMeasuredCompactInputFixtureHeight()
+            // No test scroll after shrinking: the focused field must relocate
+            // itself, including the outline and its complete touch target.
+            search.assertIsFocused().performAndroidScreenTouch().assertIsFocused()
+
+            compose.onNodeWithText("Add new").bringIntoViewIfNeeded().performClick()
+            compose.runOnIdle { viewportHeight.value = 520.dp }
+            val name = compose.onNodeWithContentDescription("Customer name (optional)")
+            name.performScrollTo().performAndroidScreenTouchWithOptionalIme().assertIsFocused()
+                .performTextReplacement("Booking guest")
+            compose.runOnIdle { viewportHeight.value = 342.dp }
+            assertMeasuredCompactInputFixtureHeight()
+            name.assertIsFocused().performAndroidScreenTouch().assertIsFocused()
+
+            // Keep the next touch in the compact pane while the keyboard stays open.
+            val phone = compose.onNodeWithContentDescription("Customer phone (optional)")
+            phone.performScrollTo().performAndroidScreenTouch().assertIsFocused()
+                .performTextReplacement("+91 98765 43210")
+            compose.runOnIdle { viewportHeight.value = 320.dp }
+            assertMeasuredCompactInputFixtureHeight()
+            phone.assertIsFocused().performAndroidScreenTouch().assertIsFocused()
+            compose.runOnIdle { assertEquals(0, starts) }
+            compose.onNodeWithTag("gaming-start-action")
+                .assertIsDisplayed().assertIsEnabled().performAndroidScreenTouch()
+        } finally {
+            automation.serviceInfo = automation.serviceInfo.apply { flags = originalFlags }
+        }
+        compose.runOnIdle {
+            assertEquals(1, starts)
+            assertEquals("Booking guest", submittedName)
+            assertEquals("+91 98765 43210", submittedPhone)
+        }
+    }
+
+    @Test
+    fun startSession_removedInputNeverStealsFocusAfterModeSelectionOrDismissal() {
+        val viewportHeight = mutableStateOf(520.dp)
+        val visible = mutableStateOf(true)
+        val restoration = StateRestorationTester(compose)
+        val customer = GamingCustomerOption(
+            customerId = "customer-focus-review",
+            name = "QA Customer",
+            phone = "9876543210",
+            pending = false,
+        )
+        restoration.setContent {
+            DCompanyTheme {
+                if (visible.value) Box(Modifier.width(600.dp).height(viewportHeight.value).testTag(COMPACT_INPUT_FIXTURE_TAG)) {
+                    StartSessionEditor(
+                        station = testStation().copy(type = "streaming"),
+                        customers = listOf(customer),
+                        embedded = true,
+                        externallyHostedDial = true,
+                        pinActions = true,
+                        onDismiss = { visible.value = false },
+                        onConfirm = { _, _, _, _, _, _ -> error("No booking should be submitted") },
+                    )
+                } else Text("Booking editor dismissed")
+            }
+        }
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val originalFlags = automation.serviceInfo.flags
+        try {
+            automation.serviceInfo = automation.serviceInfo.apply {
+                flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            }
+            compose.onNodeWithText("Add new").bringIntoViewIfNeeded().performClick()
+            val name = compose.onNodeWithContentDescription("Customer name (optional)")
+            name.performScrollTo().performAndroidScreenTouchWithOptionalIme().assertIsFocused()
+                .performTextReplacement("Unlinked note")
+            compose.runOnIdle { viewportHeight.value = 342.dp }
+            assertMeasuredCompactInputFixtureHeight()
+            name.assertIsFocused().performAndroidScreenTouch()
+
+            compose.onNodeWithText("Saved customer").bringIntoViewIfNeeded().performClick()
+            val search = compose.onNodeWithContentDescription("Search saved customers by name or phone")
+            search.assertIsNotFocused()
+            search.performScrollTo().performAndroidScreenTouchWithOptionalIme().assertIsFocused()
+                .performTextReplacement("QA Customer")
+            compose.runOnIdle { viewportHeight.value = 520.dp }
+            compose.onNode(hasText("QA Customer") and hasText(customer.phone) and hasClickAction())
+                .bringIntoViewIfNeeded().performClick()
+            compose.onNodeWithContentDescription("Search saved customers by name or phone").assertDoesNotExist()
+            compose.runOnIdle { viewportHeight.value = 342.dp }
+            assertMeasuredCompactInputFixtureHeight()
+            compose.onNodeWithText("Change").bringIntoViewIfNeeded().performClick()
+            compose.onNodeWithContentDescription("Search saved customers by name or phone")
+                .assertIsNotFocused()
+                .performScrollTo().performAndroidScreenTouchWithOptionalIme().assertIsFocused()
+                .performTextReplacement("Another guest")
+            compose.onNodeWithContentDescription("Search saved customers by name or phone")
+                .performAndroidScreenTouch()
+            restoration.emulateSavedInstanceStateRestore()
+            compose.onNodeWithContentDescription("Search saved customers by name or phone")
+                .assertIsNotFocused()
+                .performScrollTo().performAndroidScreenTouchWithOptionalIme().assertIsFocused()
+                .performTextReplacement("After recreation")
+            compose.onNodeWithContentDescription("Search saved customers by name or phone")
+                .performAndroidScreenTouch()
+            // Removing the editor cancels relocation; no stale requester may
+            // reopen focus while the parent resizes or renders another screen.
+            compose.runOnIdle {
+                visible.value = false
+                viewportHeight.value = 520.dp
+            }
+            compose.onNodeWithText("Booking editor dismissed").assertIsDisplayed()
+            compose.waitForIdle()
+        } finally {
+            automation.serviceInfo = automation.serviceInfo.apply { flags = originalFlags }
+        }
+    }
+
+    @Test
     fun startSession_savedCustomerSearchSelectAndChangeNeverLeakHiddenSnapshots() {
         var submittedCustomerId: String? = "not-submitted"
         var submittedName: String? = "not-submitted"
@@ -2028,11 +2201,11 @@ class GamingDialogUiTest {
                 .bringIntoViewIfNeeded()
                 .performClick()
         }
-        compose.onNodeWithText("60 min · ₹180.00 total")
+        compose.onNodeWithText("60 min · 180.00 total")
             .bringIntoViewIfNeeded()
             .assertIsDisplayed()
             .performClick()
-        compose.onNodeWithText("Start 60 min · ₹180.00")
+        compose.onNodeWithText("Start 60 min · 180.00")
             .bringIntoViewIfNeeded()
             .assertIsDisplayed()
             .assertIsEnabled()
@@ -2062,37 +2235,43 @@ class GamingDialogUiTest {
             }
         }
 
-        compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
+        compose.onNodeWithText("Start 30 min · 80.00").assertIsDisplayed()
         compose.onNodeWithContentDescription("Session duration dial")
             .bringIntoViewIfNeeded()
             .performTouchInput {
-                swipe(
-                    start = Offset(width * 0.83f, height * 0.31f),
-                    end = Offset(width * 0.83f, height * 0.80f),
-                    durationMillis = 300,
-                )
+                down(Offset(width * 0.50f, height * 0.90f))
+                repeat(12) { step ->
+                    val radians = Math.toRadians((90f + (step + 1) * 15f).toDouble())
+                    moveTo(Offset(width * (0.5f + 0.4f * kotlin.math.cos(radians).toFloat()),
+                        height * (0.5f + 0.4f * kotlin.math.sin(radians).toFloat())), delayMillis = 16)
+                }
+                up()
             }
-        compose.onNodeWithText("Start 60 min · ₹120.00").assertIsDisplayed()
+        compose.onNodeWithText("Start 60 min · 120.00").assertIsDisplayed()
         compose.onNodeWithContentDescription("Session duration dial")
             .bringIntoViewIfNeeded()
             .performTouchInput {
-                swipe(
-                    start = Offset(width * 0.83f, height * 0.31f),
-                    end = Offset(width * 0.17f, height * 0.31f),
-                    durationMillis = 300,
-                )
+                down(Offset(width * 0.50f, height * 0.10f))
+                repeat(12) { step ->
+                    val radians = Math.toRadians((270f - (step + 1) * 15f).toDouble())
+                    moveTo(Offset(width * (0.5f + 0.4f * kotlin.math.cos(radians).toFloat()),
+                        height * (0.5f + 0.4f * kotlin.math.sin(radians).toFloat())), delayMillis = 16)
+                }
+                up()
             }
-        compose.onNodeWithText("Start 30 min · ₹80.00").assertIsDisplayed()
+        compose.onNodeWithText("Start 30 min · 80.00").assertIsDisplayed()
         compose.onNodeWithContentDescription("Session duration dial")
             .bringIntoViewIfNeeded()
             .performTouchInput {
-                swipe(
-                    start = Offset(width * 0.17f, height * 0.31f),
-                    end = Offset(width * 0.83f, height * 0.31f),
-                    durationMillis = 300,
-                )
+                down(Offset(width * 0.50f, height * 0.90f))
+                repeat(12) { step ->
+                    val radians = Math.toRadians((90f + (step + 1) * 15f).toDouble())
+                    moveTo(Offset(width * (0.5f + 0.4f * kotlin.math.cos(radians).toFloat()),
+                        height * (0.5f + 0.4f * kotlin.math.sin(radians).toFloat())), delayMillis = 16)
+                }
+                up()
             }
-        compose.onNodeWithText("Start 60 min · ₹120.00")
+        compose.onNodeWithText("Start 60 min · 120.00")
             .bringIntoViewIfNeeded()
             .assertIsDisplayed()
             .performClick()
@@ -2119,16 +2298,22 @@ class GamingDialogUiTest {
         val dial = compose.onNodeWithContentDescription("Session duration dial")
             .bringIntoViewIfNeeded()
         dial.performTouchInput {
-            click(Offset(width * 0.83f, height * 0.31f))
+down(Offset(width * 0.50f, height * 0.90f))
+                repeat(12) { step ->
+                    val radians = Math.toRadians((90f + (step + 1) * 15f).toDouble())
+                    moveTo(Offset(width * (0.5f + 0.4f * kotlin.math.cos(radians).toFloat()),
+                        height * (0.5f + 0.4f * kotlin.math.sin(radians).toFloat())), delayMillis = 16)
+                }
+                up()
         }
-        compose.onNodeWithText("Start 60 min · ₹120.00")
+        compose.onNodeWithText("Start 60 min · 120.00")
             .bringIntoViewIfNeeded()
             .assertIsDisplayed()
 
         dial.performSemanticsAction(SemanticsActions.SetProgress) { setProgress ->
             assertTrue(setProgress(0f))
         }
-        compose.onNodeWithText("Start 30 min · ₹80.00")
+        compose.onNodeWithText("Start 30 min · 80.00")
             .bringIntoViewIfNeeded()
             .assertIsDisplayed()
             .assertIsEnabled()
@@ -2160,11 +2345,11 @@ class GamingDialogUiTest {
         compose.onNodeWithText("VR Racing Sim").performClick()
         compose.onNodeWithContentDescription("Session duration dial")
             .bringIntoViewIfNeeded()
-            .performTouchInput { click(Offset(width * 0.83f, height * 0.31f)) }
+            .performTouchInput { click(Offset(width * 0.50f, height * 0.90f)) }
         compose.onNodeWithContentDescription("Expected finish if started now", substring = true)
             .bringIntoViewIfNeeded()
             .assertIsDisplayed()
-        compose.onNodeWithText("Start 30 min · ₹140.00").bringIntoViewIfNeeded().performClick()
+        compose.onNodeWithText("Start 30 min · 140.00").bringIntoViewIfNeeded().performClick()
         compose.runOnIdle { assertEquals("vr-racing-30", submittedPackage) }
     }
 
@@ -2241,6 +2426,200 @@ class GamingDialogUiTest {
         }
     }
 
+    @Test
+    fun sessionVoidReviewCrossesThirtyMinutesWithoutRecreationAndKeepsDraft() {
+        val start = Instant.parse("2026-10-26T08:00:00Z").toEpochMilli()
+        val clock = mutableLongStateOf(start + 1_799_999L)
+        val session = GameSession(
+            id = "session-boundary",
+            stationId = "station-1",
+            shiftId = "shift-1",
+            status = "active",
+            startAt = "2026-10-26T08:00:00Z",
+            amountMinor = 12_000,
+            serverPlayElapsedMs = 1_799_999L,
+            voidReasonRequired = false,
+        )
+
+        compose.setContent {
+            DCompanyTheme {
+                SessionVoidReviewDialog(
+                    session = session,
+                    stationName = "PS5 Station 1",
+                    wallClock = clock,
+                    onDismiss = {},
+                    onConfirm = { _, _ -> },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Reason is optional under 30 minutes", substring = true)
+            .assertIsDisplayed()
+        compose.onNodeWithText("Void session").assertIsEnabled()
+        compose.onNodeWithContentDescription("Cancellation reason: Other or add details")
+            .performClick()
+        val custom = compose.onNodeWithContentDescription("Custom cancellation reason")
+            .assert(
+                SemanticsMatcher.expectValue(
+                    SemanticsProperties.StateDescription,
+                    "Optional, empty",
+                ),
+            )
+
+        compose.runOnIdle { clock.longValue = start + 1_800_000L }
+
+        compose.onNodeWithText("Void session").assertIsNotEnabled()
+        custom.assert(
+            SemanticsMatcher.expectValue(
+                SemanticsProperties.StateDescription,
+                "Required, empty",
+            ),
+        ).performTextReplacement("Customer asked to stop after review")
+        compose.runOnIdle { clock.longValue = start + 1_801_000L }
+        compose.onNodeWithText("Void session").assertIsEnabled()
+        custom.assertTextContains("Customer asked to stop after review")
+        compose.onNodeWithText("Presets").performClick()
+        compose.onNodeWithText("A reason is required after 30 minutes", substring = true)
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun optionalVoidReasonSubmitsBlankWithoutAnnouncingRequired() {
+        var submitted: Pair<String, String?>? = null
+        compose.setContent {
+            DCompanyTheme {
+                CancelUnbilledSessionDialog(
+                    stationName = "PS5 Station 1",
+                    amountMinor = 0,
+                    activeSession = true,
+                    reasonRequired = false,
+                    serverPlayElapsedMs = 1_799_999L,
+                    onDismiss = {},
+                    onConfirm = {},
+                    onConfirmWithTarget = { reason, target -> submitted = reason to target },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Void decision stay in the audit trail", substring = true)
+            .assertIsDisplayed()
+        compose.onAllNodesWithText("required reason", substring = true)
+            .assertCountEquals(0)
+        compose.onNodeWithContentDescription("Cancellation reason: Other or add details")
+            .performClick()
+        compose.onNodeWithContentDescription("Custom cancellation reason")
+            .assert(
+                SemanticsMatcher.expectValue(
+                    SemanticsProperties.StateDescription,
+                    "Optional, empty",
+                ),
+            )
+        compose.onNodeWithText("Void session").assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals("" to null, submitted) }
+    }
+
+    @Test
+    fun retainedAddonsUseTruthfulBillCopyAndRequireExplicitTarget() {
+        var submitted: Pair<String, String?>? = null
+        val target = retainedVoidTarget()
+        compose.setContent {
+            DCompanyTheme {
+                CancelUnbilledSessionDialog(
+                    stationName = "PS5 Station 1",
+                    amountMinor = 15_000,
+                    activeSession = true,
+                    reasonRequired = false,
+                    serverPlayElapsedMs = 1_200_000L,
+                    activeAddons = listOf(retainedVoidAddon()),
+                    eligibleTargets = listOf(target),
+                    onDismiss = {},
+                    onConfirm = {},
+                    onConfirmWithTarget = { reason, targetId -> submitted = reason to targetId },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Those items stay payable on a retained POS bill", substring = true)
+            .assertIsDisplayed()
+        compose.onAllNodesWithText("without creating a POS bill", substring = true)
+            .assertCountEquals(0)
+        compose.onAllNodesWithText("No POS bill is required", substring = true)
+            .assertCountEquals(0)
+        compose.onNodeWithText("Void session").assertIsNotEnabled()
+        compose.onNodeWithText("${target.terminalName} · ${target.openedByName}")
+            .performScrollTo()
+            .performClick()
+        compose.onNodeWithText("Void session").assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals("" to target.shiftId, submitted) }
+    }
+
+    @Test
+    fun linkedOwnerVoidRequiresReasonAndNeverOffersReceivingShift() {
+        var submittedReason: String? = null
+        val unrelatedTarget = retainedVoidTarget()
+        compose.setContent {
+            DCompanyTheme {
+                CancelUnbilledSessionDialog(
+                    stationName = "PS5 Station 1",
+                    amountMinor = 15_000,
+                    reasonRequired = true,
+                    postPosOwnerReview = true,
+                    eligibleTargets = listOf(unrelatedTarget),
+                    onDismiss = {},
+                    onConfirm = { submittedReason = it },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Owner review of the exact unpaid POS bill", substring = true)
+            .assertIsDisplayed()
+        compose.onAllNodesWithText(unrelatedTarget.terminalName, substring = true)
+            .assertCountEquals(0)
+        compose.onAllNodesWithText("Choose the exact open shift", substring = true)
+            .assertCountEquals(0)
+        compose.onNodeWithText("Void session").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Cancellation reason: Entered by mistake")
+            .performClick()
+        compose.onNodeWithText("Void session").assertIsEnabled().performClick()
+        compose.runOnIdle { assertEquals("Entered by mistake", submittedReason) }
+    }
+
+    private fun retainedVoidAddon() = SessionAddon(
+        id = "addon-retained-1",
+        gamingSessionId = "session-retained-1",
+        clientLineId = "client-line-retained-1",
+        menuItemId = "menu-water",
+        menuItemName = "Water",
+        menuItemType = "drink",
+        modifiers = JsonArray(emptyList()),
+        qty = 1,
+        catalogUnitPriceMinor = 700,
+        unitPriceMinor = 700,
+        lineTotalMinor = 700,
+        discountMinor = 0,
+        taxRate = 18.0,
+        taxableValueMinor = 600,
+        cgstMinor = 50,
+        sgstMinor = 50,
+        igstMinor = 0,
+        cessMinor = 0,
+        createdBy = "owner-1",
+        createdTerminalId = "terminal-gaming-1",
+        createdAt = "2026-10-26T08:10:00Z",
+    )
+
+    private fun retainedVoidTarget(
+        terminalName: String = "Cafe POS",
+        openedByName: String = "Cashier",
+    ) = PosTargetShift(
+        shiftId = "shift-pos-1",
+        terminalId = "terminal-pos-1",
+        terminalName = terminalName,
+        openedBy = "cashier-1",
+        openedByName = openedByName,
+        openedAt = "2026-10-26T08:00:00Z",
+    )
+
     private fun testStation() = Station(
         id = "station-1",
         code = "PS5-1",
@@ -2305,6 +2684,22 @@ class GamingDialogUiTest {
         return this
     }
 
+    private fun assertMeasuredCompactInputFixtureHeight() {
+        val node = compose.onNodeWithTag(COMPACT_INPUT_FIXTURE_TAG, useUnmergedTree = true)
+            .assertIsDisplayed().fetchSemanticsNode()
+        val density = (node.root as ViewRootForTest).view.resources.displayMetrics.density
+        val heightPx = node.size.height
+        val heightDp = heightPx / density
+        Log.i("GamingDialogTouch", "Measured compact input fixture: " +
+            "heightPx=$heightPx heightDp=$heightDp density=$density widthPx=${node.size.width}")
+        assertTrue("Compact fixture must have a positive measured height: $heightPx px", heightPx > 0)
+        assertTrue(
+            "Compact fixture must be at most 342dp after parent constraints: " +
+                "$heightDp dp ($heightPx px, density=$density)",
+            heightPx <= 342f * density + 1f,
+        )
+    }
+
     private fun SemanticsNodeInteraction.bringIntoViewIfNeeded(): SemanticsNodeInteraction =
         if (isDisplayed()) this else performScrollTo()
 
@@ -2320,7 +2715,8 @@ class GamingDialogUiTest {
         val windowFocused: Boolean,
         val layoutPending: Boolean,
     ) {
-        val ready: Boolean get() = imeVisible && imeBottom > 0 && windowFocused &&
+        val ready: Boolean get() = imeVisible && imeBottom > 0 && touchTargetReady
+        val touchTargetReady: Boolean get() = windowFocused &&
             !layoutPending && bounds.width >= minimumTouchSize && bounds.height >= minimumTouchSize &&
             abs(bounds.left - clippedBounds.left) <= 1 && abs(bounds.top - clippedBounds.top) <= 1 &&
             abs(bounds.right - clippedBounds.right) <= 1 && abs(bounds.bottom - clippedBounds.bottom) <= 1 &&
@@ -2361,7 +2757,7 @@ class GamingDialogUiTest {
                 usableBounds = Rect(
                     visibleFrame.left.toFloat(), visibleFrame.top.toFloat(),
                     visibleFrame.right.toFloat(),
-                    minOf(visibleFrame.bottom, keyboardBounds?.top ?: 0).toFloat(),
+                    minOf(visibleFrame.bottom, keyboardBounds?.top ?: visibleFrame.bottom).toFloat(),
                 ),
                 minimumTouchSize = 48 * view.resources.displayMetrics.density,
                 imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime()) && keyboardBounds != null,
@@ -2408,6 +2804,32 @@ class GamingDialogUiTest {
         return checkNotNull(previous)
     }
 
+    /** Observe native IME removal and layout, without polling or changing focus. */
+    private fun SemanticsNodeInteraction.awaitImeHiddenSettledTouchTarget(): DialogTouchSnapshot {
+        var previous: DialogTouchSnapshot? = null
+        var stableSamples = 0
+        try {
+            compose.waitUntil(timeoutMillis = 5_000) {
+                awaitAndroidFrame()
+                val view = (fetchSemanticsNode().root as ViewRootForTest).view
+                val rawImeHidden = compose.runOnIdle {
+                    val insets = ViewCompat.getRootWindowInsets(view)
+                    insets != null && !insets.isVisible(WindowInsetsCompat.Type.ime()) &&
+                        insets.getInsets(WindowInsetsCompat.Type.ime()).bottom == 0
+                }
+                val snapshot = dialogTouchSnapshot()
+                stableSamples = if (rawImeHidden && snapshot.imeBottom == 0 &&
+                    snapshot.touchTargetReady && snapshot == previous
+                ) stableSamples + 1 else 0
+                previous = snapshot
+                stableSamples >= 2
+            }
+        } finally {
+            saveImeScreenshot()
+        }
+        return checkNotNull(previous)
+    }
+
     private fun awaitAndroidFrame() {
         val nextFrame = CountDownLatch(1)
         InstrumentationRegistry.getInstrumentation().runOnMainSync {
@@ -2437,6 +2859,41 @@ class GamingDialogUiTest {
         instrumentation.uiAutomation.executeShellCommand(
             "cp ${file.absolutePath} /sdcard/Download/gaming-saved-customer-review.png",
         ).use { command -> FileInputStream(command.fileDescriptor).use { it.readBytes() } }
+    }
+
+    /** Initial real input touch; the keyboard need not be open before focus. */
+    private fun SemanticsNodeInteraction.performAndroidScreenTouchWithOptionalIme(): SemanticsNodeInteraction {
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val originalFlags = automation.serviceInfo.flags
+        try {
+            automation.serviceInfo = automation.serviceInfo.apply {
+                flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+            }
+            automation.waitForIdle(500, 5_000)
+            compose.waitForIdle()
+            var previous: DialogTouchSnapshot? = null
+            var stableSamples = 0
+            compose.waitUntil(timeoutMillis = 5_000) {
+                awaitAndroidFrame()
+                val snapshot = dialogTouchSnapshot()
+                stableSamples = if (snapshot.touchTargetReady && snapshot == previous) stableSamples + 1 else 0
+                previous = snapshot
+                stableSamples >= 3
+            }
+            automation.waitForIdle(500, 5_000)
+            compose.waitForIdle()
+            awaitAndroidFrame()
+            val target = checkNotNull(previous)
+            val finalSnapshot = dialogTouchSnapshot()
+            check(target.touchTargetReady && finalSnapshot.touchTargetReady && target == finalSnapshot) {
+                "Initial input target moved before touch: stable=$target final=$finalSnapshot"
+            }
+            injectAndroidTap(target.bounds.center.x, target.bounds.center.y)
+            compose.waitForIdle()
+        } finally {
+            automation.serviceInfo = automation.serviceInfo.apply { flags = originalFlags }
+        }
+        return this
     }
 
     private fun SemanticsNodeInteraction.performAndroidScreenTouch(): SemanticsNodeInteraction {

@@ -10,6 +10,7 @@ object ErpPermission {
     const val PosDiscountLarge = "pos.discount.large"
     const val PosShiftOpen = "pos.shift.open"
     const val PosShiftClose = "pos.shift.close"
+    const val PosShiftHandoverRecover = "pos.shift.handover.recover"
     const val PosRefund = "pos.refund"
     const val PosRefundReconcile = "pos.refund.reconcile"
     const val TablesRead = "tables.read"
@@ -32,11 +33,31 @@ object ErpPermission {
     const val StaffRead = "staff.read"
     const val StaffWrite = "staff.write"
     const val StaffAttendanceWrite = "staff.attendance.write"
+    const val StaffPayrollWrite = "staff.payroll.write"
     const val AnalyticsRead = "analytics.read"
+    const val AnalyticsExport = "analytics.export"
     const val SettingsManage = "settings.manage"
     const val MembershipsManage = "memberships.manage"
     const val AdminAuditRead = "admin.audit.read"
     const val AdminSystem = "admin.system"
+}
+
+private val NORMALIZED_OWNER_ROLE_CODES = setOf("owner", "co_owner", "super_owner")
+
+internal fun Iterable<String>.hasNormalizedOwnerRole(): Boolean = any(NORMALIZED_OWNER_ROLE_CODES::contains)
+
+/**
+ * One policy for the Owner-only, linked Gaming Void surface and its bounded
+ * board projection. The backend repeats every authority and financial check;
+ * this only decides whether the Android client may request that projection.
+ */
+internal fun MeResponse.canVoidPosLinkedSessions(): Boolean {
+    val permissions = EffectivePermissions.from(this)
+    return roles.hasNormalizedOwnerRole() &&
+        permissions.has(ErpPermission.GamingWrite) &&
+        permissions.has(ErpPermission.PosRead) &&
+        permissions.has(ErpPermission.PosWrite) &&
+        permissions.has(ErpPermission.PosVoid)
 }
 
 data class StaffAccess(
@@ -49,9 +70,14 @@ data class PosAccess(
     val canCreateAndCollect: Boolean = false,
     val canVoid: Boolean = false,
     val canApplyDiscount: Boolean = false,
+    val canCorrectRetainedMistakes: Boolean = false,
 )
 data class GamingAccess(
     val canManageSessions: Boolean = false,
+    /** UI hint only; the backend rechecks normalized Owner role and exact scope. */
+    val canVoidUnlinkedSessionsAcrossShifts: Boolean = false,
+    /** UI hint only; the backend rechecks public Owner role under row locks. */
+    val canVoidPosLinkedSessions: Boolean = false,
     /** UI hint only; the backend also requires protected/audit identity. */
     val canReconcileLegacySessions: Boolean = false,
     /** Gaming writes need the POS shift read contract even when POS is hidden. */
@@ -89,6 +115,14 @@ data class FinanceAccess(
 ) {
     val isViewOnly: Boolean
         get() = !canRecordExpenses && !canManageAssets && !canRecordPartnerCapital
+}
+data class ReportsAccess(
+    val canReadOverview: Boolean = false,
+    val canReadPnl: Boolean = false,
+    val canExportOverview: Boolean = false,
+    val canReadInventory: Boolean = false,
+) {
+    val canReadAny: Boolean get() = canReadOverview || canReadPnl
 }
 data class EventsAccess(
     val canManageEvents: Boolean = false,
@@ -149,7 +183,7 @@ fun StaffAccess.loadPlan(): StaffLoadPlan = StaffLoadPlan(
  * responses always use the exact post-override server set, including a
  * deliberately empty set.
  */
-class EffectivePermissions private constructor(private val granted: Set<String>) {
+class EffectivePermissions private constructor(private val granted: Set<String>, private val owner: Boolean) {
     fun has(permission: String): Boolean = permission in granted
 
     fun hasAny(vararg permissions: String): Boolean = permissions.any(::has)
@@ -184,6 +218,9 @@ class EffectivePermissions private constructor(private val granted: Set<String>)
         canCreateAndCollect = requiresOperationalWorkspace() && has(ErpPermission.PosWrite),
         canVoid = requiresOperationalWorkspace() && has(ErpPermission.PosVoid),
         canApplyDiscount = requiresOperationalWorkspace() && has(ErpPermission.PosDiscountLarge),
+        canCorrectRetainedMistakes = owner && requiresOperationalWorkspace() &&
+            has(ErpPermission.PosRead) && has(ErpPermission.PosWrite) &&
+            has(ErpPermission.PosVoid) && has(ErpPermission.GamingWrite),
     )
 
     fun staffAccess(): StaffAccess = StaffAccess(
@@ -232,6 +269,14 @@ class EffectivePermissions private constructor(private val granted: Set<String>)
         canRecordPartnerCapital = has(ErpPermission.FinancePartnerWrite),
     )
 
+    fun reportsAccess() = ReportsAccess(
+        canReadOverview = has(ErpPermission.AnalyticsRead),
+        canReadPnl = has(ErpPermission.FinanceRead),
+        canReadInventory = has(ErpPermission.AnalyticsRead) && has(ErpPermission.InventoryRead),
+        // Export is deliberately absent from all legacy role/module fallback grants.
+        canExportOverview = has(ErpPermission.AnalyticsRead) && has(ErpPermission.AnalyticsExport),
+    )
+
     fun eventsAccess() = EventsAccess(
         canManageEvents = has(ErpPermission.GamingTournamentManage),
         canCheckInTickets = has(ErpPermission.GamingWrite),
@@ -251,7 +296,9 @@ class EffectivePermissions private constructor(private val granted: Set<String>)
 
     companion object {
         fun from(profile: MeResponse): EffectivePermissions {
-            profile.effectivePermissions?.let { return EffectivePermissions(it.toSet()) }
+            profile.effectivePermissions?.let { return EffectivePermissions(it.toSet(), profile.roles.hasNormalizedOwnerRole()) }
+            // This role was introduced with exact server capabilities; it has no legacy payload.
+            if ("store_staff" in profile.roles) return EffectivePermissions(emptySet(), false)
 
             val legacy = when {
                 profile.protectedAccess -> LEGACY_OPERATIONAL_PERMISSIONS
@@ -272,7 +319,7 @@ class EffectivePermissions private constructor(private val granted: Set<String>)
                     PERMISSION_MODULE[permission]?.let { it !in modules } == true
                 }
             }
-            return EffectivePermissions(legacy)
+            return EffectivePermissions(legacy, profile.roles.hasNormalizedOwnerRole())
         }
     }
 }
@@ -389,5 +436,7 @@ private val PERMISSION_MODULE = mapOf(
     ErpPermission.StaffRead to "staff",
     ErpPermission.StaffWrite to "staff",
     ErpPermission.StaffAttendanceWrite to "staff",
+    ErpPermission.StaffPayrollWrite to "staff",
     ErpPermission.AnalyticsRead to "insights_reports",
+    ErpPermission.AnalyticsExport to "insights_reports",
 )

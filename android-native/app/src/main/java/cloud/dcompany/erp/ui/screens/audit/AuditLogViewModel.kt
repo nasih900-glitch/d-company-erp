@@ -61,11 +61,12 @@ data class AuditLogUiState(
 )
 
 /** Auth-scoped memory only. SessionViewModelScope also disposes this on logout. */
-class AuditLogViewModel(
+class AuditLogViewModel internal constructor(
     private val api: AuditLogApi = ApiClient.create(),
     private val staffApi: StaffApi = ApiClient.create(),
     private val suppliedScope: CoroutineScope? = null,
     private val elapsedNow: () -> Long = { SystemClock.elapsedRealtime() },
+    private val operations: cloud.dcompany.erp.core.handover.CallerOperations = cloud.dcompany.erp.core.handover.applicationCallerOperations(),
 ) : ViewModel() {
     private val tasks: CoroutineScope get() = suppliedScope ?: viewModelScope
     private val _state = MutableStateFlow(AuditLogUiState())
@@ -111,7 +112,10 @@ class AuditLogViewModel(
         val requestedAt = elapsedNow()
         request?.cancel()
         _state.value = _state.value.copy(unlocking = true, unlockError = null)
-        request = tasks.launch {
+        request = operations.launch(tasks, onRejected = {
+            if (current(operation, owner)) _state.value = _state.value.copy(unlocking = false,
+                unlockError = "Resolve the original till handover before unlocking audit history.")
+        }) {
             try {
                 val grant = api.unlock(AuditUnlockRequest(password))
                 if (!current(operation, owner)) return@launch
@@ -145,6 +149,7 @@ class AuditLogViewModel(
                     staffError = metadata.second.second,
                     filters = linked?.let { AuditFilters(reference = it) } ?: restored.filters,
                 )
+                reconciled()
                 if (linked != null) { requestedReference = null; find() }
                 else if (_state.value.page == null) load(Load.FIRST) else checkActivity()
             } catch (cancelled: CancellationException) { throw cancelled }

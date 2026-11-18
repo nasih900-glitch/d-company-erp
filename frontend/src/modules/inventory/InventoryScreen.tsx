@@ -13,7 +13,7 @@
  *  - Manage suppliers
  *  - Inspect FIFO batches per ingredient
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle, Boxes, Package, Plus, Edit2, Trash2, Truck,
   AlertCircle, Loader2, Minus, ListTree, Building2, RefreshCw,
@@ -35,13 +35,23 @@ type DeleteTarget =
   | { kind: 'ingredient'; item: IngredientDTO }
   | { kind: 'supplier'; item: SupplierDTO };
 
+const EMPTY_INGREDIENTS: IngredientDTO[] = [];
+const EMPTY_SUPPLIERS: SupplierDTO[] = [];
+const EMPTY_BRANCHES: BranchReferenceDTO[] = [];
+
 export default function InventoryScreen() {
   const notifications = useNotifications();
   const [tab, setTab] = useState<Tab>('ingredients');
-  const [ingredients, setIngredients] = useState<IngredientDTO[]>([]);
-  const [suppliers, setSuppliers] = useState<SupplierDTO[]>([]);
-  const [branches, setBranches] = useState<BranchReferenceDTO[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [snapshot, setSnapshot] = useState<{ ingredients: IngredientDTO[]; suppliers: SupplierDTO[]; branches: BranchReferenceDTO[] } | null>(null);
+  const ingredients = snapshot?.ingredients ?? EMPTY_INGREDIENTS;
+  const suppliers = snapshot?.suppliers ?? EMPTY_SUPPLIERS;
+  const branches = snapshot?.branches ?? EMPTY_BRANCHES;
+  const [readStatus, setReadStatus] = useState<'loading' | 'verified' | 'unverified'>('loading');
+  const loading = readStatus === 'loading';
+  const referencesVerified = readStatus === 'verified';
+  const requestEpoch = useRef(0);
+  const mounted = useRef(false);
+  const invalidateReads = useCallback(() => { requestEpoch.current++; }, []);
   const [error, setError] = useState<string | null>(null);
 
   const [addIngOpen, setAddIngOpen] = useState(false);
@@ -53,31 +63,35 @@ export default function InventoryScreen() {
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
 
-  async function load() {
-    setLoading(true); setError(null);
+  const load = useCallback(async (): Promise<boolean> => {
+    const epoch = ++requestEpoch.current;
+    const current = () => mounted.current && epoch === requestEpoch.current;
+    if (!current()) return false;
+    setReadStatus('loading'); setError(null);
     try {
-      if (LIVE_MODE) {
-        const [ings, sups, brs] = await Promise.all([
-          inventory.listIngredients(),
-          inventory.listSuppliers().catch(() => []),
-          inventory.listBranches().catch(() => []),
-        ]);
-        setIngredients(ings);
-        setSuppliers(sups);
-        setBranches(brs);
-      } else {
-        setIngredients(INGREDIENTS.map((i) => ({
-          id: i.id, sku: i.sku, name: i.name, base_unit: i.unit as 'ml' | 'g' | 'unit',
-          current_qty: i.current, reorder_threshold: i.threshold,
-          reorder_qty: 0, avg_cost_minor: i.cost_minor,
-        })));
-        setSuppliers([]); setBranches([]);
-      }
+      const [ings, sups, brs] = LIVE_MODE ? await Promise.all([
+        inventory.listIngredients(), inventory.listSuppliers(), inventory.listBranches(),
+      ]) : [INGREDIENTS.map((i) => ({
+        id: i.id, sku: i.sku, name: i.name, base_unit: i.unit as 'ml' | 'g' | 'unit',
+        current_qty: i.current, reorder_threshold: i.threshold, reorder_qty: 0, avg_cost_minor: i.cost_minor,
+      })), [], []];
+      if (!current()) return false;
+      setSnapshot({ ingredients: ings, suppliers: sups, branches: brs });
+      setReadStatus('verified');
+      return true;
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'failed to load inventory');
-    } finally { setLoading(false); }
-  }
-  useEffect(() => { load(); }, []);
+      if (current()) {
+        setError(`Inventory could not be verified, including its supplier and branch details. ${e instanceof Error ? e.message : 'Please retry.'}`);
+        setReadStatus('unverified');
+      }
+      return false;
+    }
+  }, []);
+  useEffect(() => {
+    mounted.current = true;
+    void load();
+    return () => { mounted.current = false; invalidateReads(); };
+  }, [invalidateReads, load]);
 
   const stats = useMemo(() => {
     const value = ingredients.reduce((s, i) => s + i.current_qty * i.avg_cost_minor, 0);
@@ -123,13 +137,13 @@ export default function InventoryScreen() {
           <p className="text-fg-muted text-sm">FIFO batches · recipe-driven deductions · low-stock alerts</p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <button className="btn btn-ghost" onClick={load}><RefreshCw size={14}/></button>
+          <button className="btn btn-ghost" aria-label="Refresh inventory" aria-busy={loading} disabled={loading} onClick={() => { void load(); }}><RefreshCw size={14}/></button>
           {tab === 'ingredients' && (
             <>
               <button className="btn btn-ghost" onClick={() => setAddIngOpen(true)}>
                 <Plus size={14}/> New ingredient
               </button>
-              <button className="btn btn-primary" onClick={() => setGrnOpen(true)}>
+              <button className="btn btn-primary" disabled={!referencesVerified} onClick={() => setGrnOpen(true)}>
                 <Truck size={14}/> Receive stock (GRN)
               </button>
             </>
@@ -142,12 +156,12 @@ export default function InventoryScreen() {
         </div>
       </header>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4 mb-6">
+      {snapshot && <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4 mb-6">
         <Stat label="Stock value" value={inr(stats.value)} icon={<Boxes/>}/>
         <Stat label="Ingredients" value={stats.total.toString()} icon={<Package/>}/>
         <Stat label="Low stock" value={stats.low.toString()} icon={<AlertTriangle/>}
           tone={stats.low ? 'bad' : 'good'}/>
-      </div>
+      </div>}
 
       {restockRows.length > 0 && (
         <section className="card mb-6">
@@ -182,13 +196,14 @@ export default function InventoryScreen() {
         </TabBtn>
       </div>
 
-      {error && <ErrorRow text={error}/>}
+      {error && <div role="alert"><ErrorRow text={error}/><p className="mb-2 text-sm">{snapshot ? 'Showing the last verified snapshot; it may be stale.' : 'No verified inventory snapshot is available yet.'} Stock receipts cannot be submitted until all references are verified.</p><button type="button" className="btn btn-ghost mb-3" onClick={() => { void load(); }}>Retry inventory</button></div>}
+      {loading && snapshot && <p role="status" className="mb-3 text-sm text-fg-muted">Refreshing the last verified inventory snapshot. Stock receipt submission is paused.</p>}
 
-      {loading ? (
+      {!snapshot && loading ? (
         <div className="card flex items-center gap-3 text-fg-muted">
           <Loader2 className="animate-spin" size={16}/> Loading…
         </div>
-      ) : tab === 'ingredients' ? (
+      ) : !snapshot ? <div className="card text-sm">Inventory is not verified. Use Retry inventory to load its required references.</div> : tab === 'ingredients' ? (
         <IngredientsList
           rows={ingredients}
           onEdit={setEditIng}
@@ -218,7 +233,7 @@ export default function InventoryScreen() {
         }}/>
       )}
       {grnOpen && (
-        <GRNForm ingredients={ingredients} suppliers={suppliers} branches={branches}
+        <GRNForm ingredients={ingredients} suppliers={suppliers} branches={branches} referencesVerified={referencesVerified} referencesLoading={loading} onRefresh={() => { void load(); }}
           onClose={() => setGrnOpen(false)} onSuccess={() => {
           setGrnOpen(false);
           void load();
@@ -564,8 +579,11 @@ function newInventoryIdempotencyKey(prefix: string): string {
 }
 
 function GRNForm({
-  ingredients, suppliers, branches, onClose, onSuccess,
+  ingredients, suppliers, branches, referencesVerified, referencesLoading, onRefresh, onClose, onSuccess,
 }: {
+  referencesVerified: boolean;
+  referencesLoading: boolean;
+  onRefresh: () => void;
   ingredients: IngredientDTO[];
   suppliers: SupplierDTO[];
   branches: BranchReferenceDTO[];
@@ -599,8 +617,10 @@ function GRNForm({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (!referencesVerified) return; // The visible reference-status message explains the paused submission.
     if (!branchId) { setErr('select a branch'); return; }
     if (!supplierId) { setErr('select a supplier'); return; }
+    if (!branches.some(b => b.id === branchId) || !suppliers.some(s => s.id === supplierId) || lines.some(line => line.ingredient_id && !ingredients.some(i => i.id === line.ingredient_id))) { setErr('A selected branch, supplier or ingredient is no longer in the verified references. Review the draft selections.'); return; }
     let linesOut;
     try {
       linesOut = lines
@@ -640,6 +660,7 @@ function GRNForm({
   return (
     <Modal open onClose={onClose} title="Receive stock (GRN)" size="lg">
       <form onSubmit={submit} className="space-y-3">
+        <div className={!referencesVerified ? 'rounded-lg border border-accent-gold/40 p-3 text-sm' : undefined}><p role="status" className="text-sm">{referencesVerified ? 'Supplier and stock options are verified.' : 'Inventory references need verification. Your stock receipt draft is kept; submission is paused.'}</p><button type="button" className="btn btn-ghost mt-2" disabled={referencesLoading} aria-busy={referencesLoading} onClick={onRefresh}>{referencesLoading ? 'Verifying inventory references…' : referencesVerified ? 'Refresh inventory references' : 'Retry inventory references'}</button></div>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Branch">
             <select className="input" required value={branchId}
@@ -663,37 +684,38 @@ function GRNForm({
           <div className="text-xs text-fg-muted mb-2">Lines</div>
           <div className="space-y-3">
             {lines.map((ln, i) => (
-              <div key={i} className="space-y-1.5 pb-2 border-b border-bg-border/60 last:border-0 last:pb-0">
-                <div className="grid grid-cols-[1fr_70px_90px_28px] gap-2 items-center">
-                  <select className="input !min-h-[36px] !py-1.5" required
+              <fieldset key={i} className="min-w-0 space-y-1.5 pb-2 border-b border-bg-border/60 last:border-0 last:pb-0">
+                <legend className="text-xs font-semibold">Line {i + 1}</legend>
+                <div className="grid grid-cols-[1fr_70px_90px_28px] gap-2 items-end">
+                  <Field label="Ingredient"><select className="input !min-h-[36px] !py-1.5" required
                     value={ln.ingredient_id}
                     onChange={(e) => updLine(i, { ingredient_id: e.target.value })}>
                     <option value="">— select ingredient —</option>
                     {ingredients.map((ing) => (
                       <option key={ing.id} value={ing.id}>{ing.name} ({ing.base_unit})</option>
                     ))}
-                  </select>
-                  <input type="number" required min={0} step="0.01" placeholder="Qty"
+                  </select></Field>
+                  <Field label="Quantity"><input type="number" required min={0} step="0.01" placeholder="Qty"
                     className="input !min-h-[36px] !py-1.5 font-mono text-right"
-                    value={ln.qty} onChange={(e) => updLine(i, { qty: e.target.value })}/>
-                  <input type="number" required min={0} step="0.01" placeholder="₹/unit"
+                    value={ln.qty} onChange={(e) => updLine(i, { qty: e.target.value })}/></Field>
+                  <Field label="Unit cost (rupees/base unit)"><input type="number" required min={0} step="0.01" placeholder="Per unit"
                     className="input !min-h-[36px] !py-1.5 font-mono text-right"
                     value={ln.unit_cost_rupees}
-                    onChange={(e) => updLine(i, { unit_cost_rupees: e.target.value })}/>
-                  <button type="button" onClick={() => rmLine(i)} className="text-fg-muted hover:text-accent-bad p-1">
+                    onChange={(e) => updLine(i, { unit_cost_rupees: e.target.value })}/></Field>
+                  <button type="button" aria-label={`Remove line ${i + 1}`} onClick={() => rmLine(i)} className="text-fg-muted hover:text-accent-bad p-1">
                     <Trash2 size={14}/>
                   </button>
                 </div>
                 <div className="grid grid-cols-[1fr_1fr_28px] gap-2 items-center">
-                  <input type="date" placeholder="Expiry (optional)"
+                  <Field label="Expiry (optional)"><input type="date" placeholder="Expiry (optional)"
                     className="input !min-h-[36px] !py-1.5 text-xs"
-                    value={ln.expires_at} onChange={(e) => updLine(i, { expires_at: e.target.value })}/>
-                  <input type="text" placeholder="Lot code (optional)"
+                    value={ln.expires_at} onChange={(e) => updLine(i, { expires_at: e.target.value })}/></Field>
+                  <Field label="Lot code (optional)"><input type="text" placeholder="Lot code (optional)"
                     className="input !min-h-[36px] !py-1.5 text-xs"
-                    value={ln.lot_code} onChange={(e) => updLine(i, { lot_code: e.target.value })}/>
+                    value={ln.lot_code} onChange={(e) => updLine(i, { lot_code: e.target.value })}/></Field>
                   <span/>
                 </div>
-              </div>
+              </fieldset>
             ))}
           </div>
           <button type="button" className="btn btn-ghost mt-2 !min-h-[32px] text-xs"
@@ -705,7 +727,7 @@ function GRNForm({
         {err && <ErrorRow text={err}/>}
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={busy}>
+          <button type="submit" className="btn btn-primary" disabled={busy || !referencesVerified}>
             {busy ? <Loader2 className="animate-spin" size={14}/> : <Truck size={14}/>}
             Record receipt
           </button>
@@ -877,7 +899,7 @@ function Stat({ label, value, icon, tone = 'default' }: {
 }
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <label className="block">
+    <label className="block min-w-0">
       <span className="text-xs text-fg-muted">{label}</span>
       <div className="mt-1">{children}</div>
     </label>
@@ -894,7 +916,7 @@ function TabBtn({ active, onClick, children }: {
   active: boolean; onClick: () => void; children: React.ReactNode;
 }) {
   return (
-    <button onClick={onClick}
+    <button onClick={onClick} aria-pressed={active}
       className={`shrink-0 px-4 py-2 text-sm font-medium border-b-2 -mb-px whitespace-nowrap flex items-center gap-1.5
         ${active ? 'border-accent text-accent' : 'border-transparent text-fg-muted hover:text-fg'}`}>
       {children}

@@ -263,10 +263,10 @@ class LoyaltyProgramContractTest {
 
         val summary = loyaltyProgramChangeSummary(before, after)
 
-        assertTrue(summary.any { it.contains("Gaming earn: 2 per ₹10 → 3 per ₹10") })
-        assertTrue(summary.any { it.contains("100-point value: ₹10.00 → ₹11.00") })
+        assertTrue(summary.any { it.contains("Gaming earn: 2 per 10 → 3 per 10") })
+        assertTrue(summary.any { it.contains("100-point value: 10.00 → 11.00") })
         assertTrue(summary.any { it.contains("player rank") && it.contains("threshold 200 → 250") && it.contains("bonus 50 → 75") })
-        assertTrue(summary.any { it.contains("extra_controller") && it.contains("credit ₹30.00 → ₹30.50") && it.contains("minimum rank rookie → player") && it.contains("disabled") })
+        assertTrue(summary.any { it.contains("extra_controller") && it.contains("credit 30.00 → 30.50") && it.contains("minimum rank rookie → player") && it.contains("disabled") })
     }
 
     @Test

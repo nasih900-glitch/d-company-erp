@@ -9,6 +9,10 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -23,10 +27,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -37,6 +47,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntSize
 import cloud.dcompany.erp.ui.theme.Brand
 import kotlinx.coroutines.launch
 
@@ -82,23 +93,45 @@ internal fun resolvedVoidReason(selectedId: String?, customReason: String): Stri
  * ignored by Android.
  */
 @Composable
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 fun VoidReasonInput(
     selectedId: String?,
     customReason: String,
     onPresetSelected: (String) -> Unit,
     onCustomReasonChange: (String) -> Unit,
     modifier: Modifier = Modifier,
+    parentOwnsScrolling: Boolean = false,
     compactCustomLayout: Boolean = false,
     onExitCustomMode: () -> Unit = {},
     compactCustomActions: (@Composable RowScope.() -> Unit)? = null,
+    required: Boolean = true,
+    parentViewportSize: IntSize = IntSize.Zero,
+    parentScrollOwnerIsFrame: Boolean = false,
+    onCustomOwnerSizeChanged: (IntSize) -> Unit = {},
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
     val customFocus = remember { FocusRequester() }
     val scrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
     val customSelected = selectedId == VOID_REASON_OTHER_ID
+    val customOwnerView = remember { BringIntoViewRequester() }
+    var customFocused by remember { mutableStateOf(false) }
+    var ownerSize by remember { mutableStateOf(IntSize.Zero) }
+    var ownViewportSize by remember { mutableStateOf(IntSize.Zero) }
+    val viewportSize = if (parentOwnsScrolling) parentViewportSize else ownViewportSize
+    val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
+    var initialKeyboardReady by remember(customSelected, compactCustomLayout, parentOwnsScrolling) {
+        mutableStateOf(false)
+    }
 
-    LaunchedEffect(customSelected, compactCustomLayout) {
+    LaunchedEffect(customSelected, customFocused, initialKeyboardReady, viewportSize, ownerSize, imeBottom, parentScrollOwnerIsFrame) {
+        if (customSelected && customFocused && initialKeyboardReady && viewportSize.width > 0 && viewportSize.height > 0) {
+            withFrameNanos { }
+            customOwnerView.bringIntoView()
+        }
+    }
+
+    LaunchedEffect(customSelected, compactCustomLayout, parentOwnsScrolling) {
         if (customSelected) {
             customFocus.requestFocus()
             // Some OEM IMEs ignore a show request made in the same frame that
@@ -107,13 +140,21 @@ fun VoidReasonInput(
             withFrameNanos { }
             keyboard?.show()
             withFrameNanos { }
-            scrollState.scrollTo(scrollState.maxValue)
+            if (!parentOwnsScrolling) {
+                scrollState.scrollTo(scrollState.maxValue)
+            }
+            // Relocation follows the existing focus/show/bottom-scroll sequence;
+            // a late bottom scroll must not undo full-owner visibility.
+            initialKeyboardReady = true
         }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
+    val viewportModifier = if (parentOwnsScrolling) {
+        // The containing form owns one continuous viewport. A nested
+        // zero-range ScrollBy owner prevents relocation from reaching it.
+        Modifier
+    } else {
+        Modifier
             .heightIn(
                 max = if (compactCustomLayout && customSelected) {
                     VOID_REASON_COMPACT_EDITOR_HEIGHT
@@ -121,18 +162,23 @@ fun VoidReasonInput(
                     VOID_REASON_MAX_EDITOR_HEIGHT
                 },
             )
+            .onSizeChanged { ownViewportSize = it }
             .verticalScroll(scrollState)
-            // Standard forms can consume the IME inset normally. Compact
-            // custom mode intentionally does not: its 120dp field/action body
-            // must stay deterministic even when a Dialog reports no inset,
-            // and must not scroll past its actions when an OEM does report it.
+            // Standalone forms consume the IME inset here. Compact custom
+            // mode intentionally keeps its deterministic 120dp body.
             .then(
                 if (compactCustomLayout && customSelected) {
                     Modifier
                 } else {
                     Modifier.imePadding()
                 },
-            ),
+            )
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .then(viewportModifier),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         if (!(compactCustomLayout && customSelected)) {
@@ -202,7 +248,12 @@ fun VoidReasonInput(
                 supportingText = if (compactCustomLayout) {
                     null
                 } else {
-                    { Text("Required · ${customReason.length}/$VOID_REASON_MAX_LENGTH") }
+                    {
+                        Text(
+                            "${if (required) "Required" else "Optional"} · " +
+                                "${customReason.length}/$VOID_REASON_MAX_LENGTH",
+                        )
+                    }
                 },
                 trailingIcon = if (compactCustomLayout) {
                     {
@@ -218,7 +269,7 @@ fun VoidReasonInput(
                     null
                 },
                 minLines = if (compactCustomLayout) 1 else 2,
-                maxLines = if (compactCustomLayout) 1 else Int.MAX_VALUE,
+                maxLines = if (compactCustomLayout) 1 else 2,
                 keyboardOptions = KeyboardOptions(
                     capitalization = KeyboardCapitalization.Sentences,
                     keyboardType = KeyboardType.Text,
@@ -228,10 +279,16 @@ fun VoidReasonInput(
                 modifier = Modifier
                     .fillMaxWidth()
                     .focusRequester(customFocus)
+                    .bringIntoViewRequester(customOwnerView)
+                    .onFocusChanged { customFocused = it.isFocused }
+                    .onSizeChanged {
+                        ownerSize = it
+                        onCustomOwnerSizeChanged(it)
+                    }
                     .semantics {
                         contentDescription = "Custom cancellation reason"
                         stateDescription = if (customReason.isBlank()) {
-                            "Required, empty"
+                            "${if (required) "Required" else "Optional"}, empty"
                         } else {
                             "${customReason.length} of $VOID_REASON_MAX_LENGTH characters"
                         }
@@ -248,7 +305,10 @@ fun VoidReasonInput(
                             keyboard?.show()
                             coroutineScope.launch {
                                 withFrameNanos { }
-                                scrollState.scrollTo(scrollState.maxValue)
+                                if (!parentOwnsScrolling) {
+                                    scrollState.scrollTo(scrollState.maxValue)
+                                }
+                                customOwnerView.bringIntoView()
                             }
                         },
                         modifier = Modifier
@@ -269,7 +329,10 @@ fun VoidReasonInput(
                         keyboard?.show()
                         coroutineScope.launch {
                             withFrameNanos { }
-                            scrollState.scrollTo(scrollState.maxValue)
+                            if (!parentOwnsScrolling) {
+                                scrollState.scrollTo(scrollState.maxValue)
+                            }
+                            customOwnerView.bringIntoView()
                         }
                     },
                     modifier = Modifier

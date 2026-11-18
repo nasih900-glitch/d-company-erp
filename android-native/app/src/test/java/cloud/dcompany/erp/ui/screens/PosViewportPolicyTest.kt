@@ -10,33 +10,37 @@ import org.junit.Test
 class PosViewportPolicyTest {
 
     @Test
-    fun `target tablet keeps equal readable catalogue and checkout panels`() {
+    fun `target tablet gives catalogue dominance while preserving checkout minimum`() {
         // 960dp control deck has bottom navigation, no rail; subtract 24dp POS padding.
         val workspace = posWorkspaceMetrics(maxWidth = 936.dp)
 
         assertTrue(workspace.sideBySide)
-        assertEquals(462f, requireNotNull(workspace.cartWidth).value, 0.01f)
-        assertEquals(462f, workspace.productWidth.value, 0.01f)
+        assertEquals(320f, requireNotNull(workspace.cartWidth).value, 0.01f)
+        assertEquals(604f, workspace.productWidth.value, 0.01f)
         assertEquals(
-            0.5f,
-            requireNotNull(workspace.cartWidth).value /
+            604f / 924f,
+            workspace.productWidth.value /
                 (workspace.productWidth.value + requireNotNull(workspace.cartWidth).value),
             0.01f,
         )
-        assertEquals(2, posProductColumnCount(workspace.productWidth))
+        assertEquals(3, posProductColumnCount(workspace.productWidth))
+        assertTrue(posPaymentFooterStacks(320.dp))
+        assertTrue(posPaymentFooterStacks(360.dp))
+        assertFalse(posPaymentFooterStacks(420.dp))
     }
 
     @Test
-    fun `larger workspaces preserve equal checkout width while adding product columns`() {
+    fun `larger workspaces preserve two thirds catalogue and four product columns`() {
         // 1280dp control deck has bottom navigation, no rail; subtract 24dp POS padding.
         val workspace = posWorkspaceMetrics(maxWidth = 1_256.dp)
 
         assertTrue(workspace.sideBySide)
-        assertEquals(622f, requireNotNull(workspace.cartWidth).value, 0.01f)
-        assertEquals(3, posProductColumnCount(workspace.productWidth))
+        assertEquals(414.6667f, requireNotNull(workspace.cartWidth).value, 0.01f)
+        assertEquals(4, posProductColumnCount(workspace.productWidth))
+        assertEquals(2f / 3f, workspace.productWidth.value / 1_244f, 0.01f)
 
         val desktop = posWorkspaceMetrics(maxWidth = 1_600.dp)
-        assertEquals(794f, requireNotNull(desktop.cartWidth).value, 0.01f)
+        assertEquals(529.3333f, requireNotNull(desktop.cartWidth).value, 0.01f)
         assertEquals(4, posProductColumnCount(desktop.productWidth))
     }
 
@@ -47,6 +51,9 @@ class PosViewportPolicyTest {
         assertFalse(workspace.sideBySide)
         assertNull(workspace.cartWidth)
         assertEquals(719.dp, workspace.productWidth)
+        assertTrue(posCartUsesCompactDensity(workspace.sideBySide, 800.dp))
+        assertTrue(posCartUsesCompactDensity(sideBySide = true, outerHeight = 479.dp))
+        assertFalse(posCartUsesCompactDensity(sideBySide = true, outerHeight = 480.dp))
     }
 
     @Test

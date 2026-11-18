@@ -10,6 +10,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 private val Context.shiftDataStore by preferencesDataStore(name = "dcompany_shift")
 
@@ -32,13 +34,14 @@ class ShiftCache(private val context: Context) {
 
     private val profileKey = stringPreferencesKey("me_profile_json")
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
+    private val profileMutex = Mutex()
     @Volatile private var cachedProfileJson: String? = null
     private val _profile = MutableStateFlow<MeResponse?>(null)
     /** Current signed-in profile for opener/protected-access UI policy. */
     val profile: StateFlow<MeResponse?> = _profile.asStateFlow()
 
     /** Loaded once before Room/UI construction, like tokens and terminal id. */
-    suspend fun loadProfile() {
+    suspend fun loadProfile() = profileMutex.withLock {
         val raw = context.shiftDataStore.data.first()[profileKey]
         cachedProfileJson = raw
         _profile.value = raw?.let(::decodeProfile)
@@ -58,13 +61,28 @@ class ShiftCache(private val context: Context) {
      * the user out. It only avoids blocking local work on a network round trip.
      */
     suspend fun cachedProfile(): String? = cachedProfileJson
+    internal fun profileSnapshot(): String? = cachedProfileJson
 
-    suspend fun rememberProfile(profileJson: String?) {
+    suspend fun rememberProfile(profileJson: String?) = profileMutex.withLock {
         context.shiftDataStore.edit {
             if (profileJson == null) it.remove(profileKey) else it[profileKey] = profileJson
         }
         cachedProfileJson = profileJson
         _profile.value = profileJson?.let(::decodeProfile)
+    }
+
+    /** Compare inside the serialized DataStore edit; never clear a newer login's profile. */
+    internal suspend fun forgetOriginalProfile(expected: String?, originalRemovalIsCurrent: () -> Boolean): Boolean = profileMutex.withLock {
+        var removed = false
+        context.shiftDataStore.edit { prefs ->
+            val sameOriginal = cachedProfileJson == expected && prefs[profileKey] == expected
+            val alreadyRemoved = cachedProfileJson == null && prefs[profileKey] == null
+            if ((sameOriginal || alreadyRemoved) && originalRemovalIsCurrent()) {
+                prefs.remove(profileKey); removed = true
+            }
+        }
+        if (removed) { cachedProfileJson = null; _profile.value = null }
+        removed
     }
 
     private fun decodeProfile(raw: String): MeResponse? = runCatching {

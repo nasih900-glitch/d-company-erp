@@ -14,6 +14,7 @@ def test_current_indian_fiscal_period_before_april() -> None:
 
 def test_report_net_payment_movement_deducts_refunds() -> None:
     report = object.__new__(PnLReport)
+    object.__setattr__(report, "receipt_corrections_minor", 0)
     object.__setattr__(report, "payments_received", PaymentBreakdown(cash_minor=18_000))
     object.__setattr__(report, "refunds_issued_minor", 18_000)
 

@@ -42,6 +42,19 @@ interface ReportSnapshotDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun put(entity: ReportSnapshotEntity)
 
+    @Query("DELETE FROM report_snapshots WHERE `key` = :key")
+    suspend fun delete(key: String): Int
+
+    @Query("DELETE FROM report_snapshots WHERE `key` GLOB (:prefix || '*')")
+    suspend fun deleteWithPrefix(prefix: String): Int
+
+    @Query(
+        "SELECT * FROM report_snapshots " +
+            "WHERE `key` GLOB (:prefix || '*') " +
+            "ORDER BY fetchedAtMillis DESC, `key` DESC LIMIT 1",
+    )
+    suspend fun latestWithPrefix(prefix: String): ReportSnapshotEntity?
+
     /** A posted financial fact makes every aggregate period snapshot stale. */
     @Query("DELETE FROM report_snapshots")
     suspend fun invalidateAll()

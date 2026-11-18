@@ -61,7 +61,7 @@ class InlineShiftOpeningUiTest {
                 }
             }
         }
-        compose.onNodeWithText("Open shift with ₹0.00").performScrollTo().performClick()
+        compose.onNodeWithText("Open shift with 0.00").performScrollTo().performClick()
         compose.runOnIdle { assertEquals(0L, amount) }
         // The command callback did not invent a server-confirmed shift.
         compose.onAllNodesWithText("Open shift confirmed", substring = true).assertCountEquals(0)

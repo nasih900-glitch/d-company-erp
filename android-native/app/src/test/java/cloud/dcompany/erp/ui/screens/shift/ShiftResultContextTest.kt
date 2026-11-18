@@ -44,11 +44,11 @@ class ShiftResultContextTest {
         val message = shiftCloseResultMessage(closed, open)
         assertTrue(message.contains("the previous shift is closed"))
         assertTrue(message.contains("Shift ID: server-closed-a"))
-        assertTrue(message.contains("Counted cash: ₹100.00"))
+        assertTrue(message.contains("Counted cash: 100.00"))
         assertTrue(message.contains("Opened:"))
         assertTrue(message.contains("Closed:"))
         assertTrue(message.contains("Current shift server-open-b remains open"))
-        assertFalse(message.contains("Counted cash: ₹25.00"))
+        assertFalse(message.contains("Counted cash: 25.00"))
         assertEquals(2_500L, open.openingFloatMinor)
         assertEquals(2_500L, open.expectedMinor)
     }
@@ -77,7 +77,7 @@ class ShiftResultContextTest {
         assertTrue(message.contains("Closed: time unavailable"))
         assertTrue(message.contains("Counted cash: not available"))
         assertFalse(message.contains("balanced exactly"))
-        assertFalse(message.contains("₹0.00"))
+        assertFalse(message.contains("0.00"))
     }
 
     @Test fun unloadedOrDifferentTerminalDefersReceiptWithoutAcknowledgingIt() {

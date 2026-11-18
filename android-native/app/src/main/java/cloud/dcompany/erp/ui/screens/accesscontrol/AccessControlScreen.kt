@@ -36,7 +36,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.ViewModule
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -71,8 +71,12 @@ import cloud.dcompany.erp.ui.components.OperationalStatusBadge
 import cloud.dcompany.erp.ui.components.PanelDivider
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.UiTone
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
+import cloud.dcompany.erp.ui.components.workspaceContentCanvas
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
 
 private val ROLE_COLUMN_WIDTH = 220.dp
 private val MODULE_COLUMN_WIDTH = 200.dp
@@ -92,7 +96,7 @@ fun AccessControlScreen(vm: AccessControlViewModel = viewModel()) {
     val customOverrideCount = remember(state.cells) { state.cells.count { it.override != null } }
 
     Column(
-        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+        Modifier.fillMaxSize().workspaceContentCanvas()
             .padding(horizontal = Spacing.lgPlus, vertical = Spacing.lg),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
@@ -332,7 +336,9 @@ private fun AccessGrid(
 
     Column(modifier.fillMaxSize().horizontalScroll(rememberScrollState())) {
         Row(
-            modifier = Modifier.background(MaterialTheme.colorScheme.surfaceVariant).heightIn(min = 54.dp),
+            modifier = Modifier
+                .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.UTILITY)
+                .heightIn(min = 54.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(Modifier.width(ROLE_COLUMN_WIDTH).padding(horizontal = Spacing.lg)) {
@@ -431,6 +437,7 @@ private fun AccessCellToggle(
                     contentDescription = "$roleLabel, $moduleLabel access"
                     stateDescription = when {
                         busy -> "Updating"
+                        !cell.configurable -> "Operational owner override; module switches cannot restrict this role"
                         !enabled -> "Refreshing server permissions"
                         cell.accessLevel == "full" -> "Full access"
                         cell.accessLevel == "partial" -> "Partial access"
@@ -439,7 +446,7 @@ private fun AccessCellToggle(
                 }
                 .toggleable(
                     value = cell.accessLevel != "blocked",
-                    enabled = enabled && !busy,
+                    enabled = enabled && !busy && cell.configurable,
                     role = Role.Switch,
                     onValueChange = { onToggle() },
                 ),
@@ -474,7 +481,7 @@ private fun AccessCellToggle(
         // Only shown when this cell has an explicit override — an
         // unmodified cell is just following the role's static default and
         // has nothing to reset.
-        if (cell.override != null) {
+        if (cell.override != null && cell.configurable) {
             IconButton(onClick = onReset, enabled = enabled && !busy, modifier = Modifier.size(48.dp)) {
                 Icon(
                     Icons.Filled.Refresh,
@@ -487,8 +494,5 @@ private fun AccessCellToggle(
     }
 }
 
-internal fun roleDisplayName(roleCode: String): String = when (roleCode) {
-    "co_owner" -> "Co-owner"
-    "gaming_supervisor" -> "Gaming supervisor"
-    else -> roleCode.replace('_', ' ').replaceFirstChar(Char::uppercase)
-}
+internal fun roleDisplayName(roleCode: String): String =
+    cloud.dcompany.erp.core.auth.roleDisplayLabel(roleCode, exactOwnerAccess = true)

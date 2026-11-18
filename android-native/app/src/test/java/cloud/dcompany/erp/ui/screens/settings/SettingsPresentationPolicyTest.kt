@@ -1,6 +1,7 @@
 package cloud.dcompany.erp.ui.screens.settings
 
 import cloud.dcompany.erp.core.auth.TerminalPurpose
+import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import cloud.dcompany.erp.ui.presentationPolicy
 import kotlinx.serialization.decodeFromString
@@ -249,10 +250,145 @@ class SettingsPresentationPolicyTest {
 
     @Test
     fun `unexpected settings failures do not expose implementation details`() {
-        val message = IllegalStateException("sqlite constraint internals")
-            .settingsReadable("Could not save this change.")
+        val readMessage = IllegalStateException("sqlite constraint internals")
+            .settingsFailure(
+                SettingsFailureOperation.READ,
+                "Could not refresh this setting.",
+            )
+        val writeMessage = IllegalStateException("sqlite constraint internals")
+            .settingsFailure(
+                SettingsFailureOperation.LOCAL_MUTATION,
+                "Could not save this change.",
+            )
 
-        assertEquals("Could not save this change.", message)
-        assertFalse(message.contains("sqlite", ignoreCase = true))
+        assertEquals("Could not refresh this setting.", readMessage)
+        assertEquals("Could not save this change.", writeMessage)
+        assertFalse(readMessage.contains("sqlite", ignoreCase = true))
+        assertFalse(writeMessage.contains("sqlite", ignoreCase = true))
+    }
+
+    @Test
+    fun `ambiguous reads describe unavailable refresh without mutation uncertainty`() {
+        val message = ApiException("Connection closed before a response.")
+            .settingsFailure(
+                SettingsFailureOperation.READ,
+                "Could not refresh your account.",
+            )
+
+        assertEquals(
+            "Could not refresh your account. This refresh did not change any settings.",
+            message,
+        )
+        assertFalse(message.contains("whether the change was applied", ignoreCase = true))
+        assertFalse(message.contains("save again", ignoreCase = true))
+    }
+
+    @Test
+    fun `definitive reads never inherit write permission conflict or validation guidance`() {
+        val messages = listOf(
+            ApiException("Forbidden.", status = 403) to "Forbidden.",
+            ApiException(
+                "Invoice series cannot be changed after an invoice exists.",
+                status = 409,
+            ) to "Invoice series cannot be changed after an invoice exists.",
+            ApiException("Request failed (HTTP 422).", status = 422) to
+                "Request failed (HTTP 422).",
+        ).map { (error, expected) ->
+            val actual = error.settingsFailure(
+                SettingsFailureOperation.READ,
+                "Could not refresh company settings.",
+            )
+            assertEquals(expected, actual)
+            actual
+        }
+
+        messages.forEach { message ->
+            assertFalse(message.contains("owner login", ignoreCase = true))
+            assertFalse(message.contains("save again", ignoreCase = true))
+            assertFalse(message.contains("IANA", ignoreCase = true))
+            assertFalse(message.contains("replay", ignoreCase = true))
+        }
+    }
+
+    @Test
+    fun `ambiguous keyed writes retain idempotent outcome uncertainty guidance`() {
+        val message = ApiException("Connection closed before a response.")
+            .settingsFailure(
+                SettingsFailureOperation.IDEMPOTENT_SERVER_MUTATION,
+                "Could not save this change.",
+            )
+
+        assertTrue(message.contains("not known whether the change was applied", ignoreCase = true))
+        assertTrue(message.contains("save again", ignoreCase = true))
+        assertTrue(message.contains("cannot be applied twice", ignoreCase = true))
+    }
+
+    @Test
+    fun `ambiguous unkeyed writes never promise replay or duplicate protection`() {
+        val message = ApiException("Connection closed before a response.")
+            .settingsFailure(
+                SettingsFailureOperation.UNKEYED_SERVER_MUTATION,
+                "Could not send the approval code.",
+            )
+
+        assertTrue(message.contains("outcome is not confirmed", ignoreCase = true))
+        assertTrue(message.contains("verify the result", ignoreCase = true))
+        assertFalse(message.contains("same request", ignoreCase = true))
+        assertFalse(message.contains("cannot be applied twice", ignoreCase = true))
+    }
+
+    @Test
+    fun `local mutation failures never inherit server outcome uncertainty`() {
+        val fallback = "Could not save this company change on the tablet."
+        val messages = listOf(
+            ApiException("Connection closed before a response."),
+            ApiException("Forbidden server detail.", status = 403),
+            ApiException("Invoice series conflict detail.", status = 409),
+            ApiException("Validation detail.", status = 422),
+        ).map { error ->
+            error.settingsFailure(SettingsFailureOperation.LOCAL_MUTATION, fallback)
+        }
+
+        assertEquals(listOf(fallback, fallback, fallback, fallback), messages)
+        messages.forEach { message ->
+            assertFalse(message.contains("server", ignoreCase = true))
+            assertFalse(message.contains("outcome", ignoreCase = true))
+            assertFalse(message.contains("replay", ignoreCase = true))
+        }
+    }
+
+    @Test
+    fun `write conflicts validation and permissions keep their specific guidance`() {
+        val fixedSeries = ApiException(
+            "Invoice series cannot be changed after an invoice exists.",
+            status = 409,
+        ).settingsFailure(
+            SettingsFailureOperation.IDEMPOTENT_SERVER_MUTATION,
+            "Could not save this shop.",
+        )
+        val duplicateSeries = ApiException(
+            "Invoice series is already used.",
+            status = 409,
+        ).settingsFailure(
+            SettingsFailureOperation.IDEMPOTENT_SERVER_MUTATION,
+            "Could not save this shop.",
+        )
+        val validation = ApiException(
+            "Request failed (HTTP 422).",
+            status = 422,
+        ).settingsFailure(
+            SettingsFailureOperation.IDEMPOTENT_SERVER_MUTATION,
+            "Could not save this shop.",
+        )
+        val writePermission = ApiException("Forbidden.", status = 403)
+            .settingsFailure(
+                SettingsFailureOperation.UNKEYED_SERVER_MUTATION,
+                "Could not change the password.",
+            )
+
+        assertTrue(fixedSeries.contains("keep its current invoice series", ignoreCase = true))
+        assertTrue(duplicateSeries.contains("different two-character series", ignoreCase = true))
+        assertTrue(validation.contains("IANA name", ignoreCase = true))
+        assertTrue(writePermission.contains("owner login", ignoreCase = true))
     }
 }

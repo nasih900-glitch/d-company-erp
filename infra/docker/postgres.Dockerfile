@@ -32,11 +32,10 @@ RUN set -eux; \
     echo 'ffd70d9dcf141b9f13ae293ec5a6c48cf8d04f56bddc80cf244c62398b24f2ea  /out/gosu' | sha256sum -c -; \
     go version -m /out/gosu | grep -F 'go1.26.9'
 
-FROM postgres:16.15-alpine3.24@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685 AS zlib-builder
-WORKDIR /tmp/dcompany-zlib
-RUN apk add --no-cache --virtual .zlib-build-deps build-base patch
-COPY infra/docker/zlib/ /tmp/dcompany-zlib/
-RUN sh /tmp/dcompany-zlib/build-patched-zlib.sh
+FROM postgres:16.15-alpine3.24@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685 AS zlib-probe-builder
+RUN apk add --no-cache --virtual .zlib-probe-build-deps build-base
+COPY infra/docker/caddy-zlib/runtime-probe.c /tmp/zlib-runtime-probe.c
+RUN cc -O2 -Wall -Wextra -Werror /tmp/zlib-runtime-probe.c -ldl -o /tmp/dcompany-caddy-zlib-probe
 
 # Preserve the exact PostgreSQL 16.15 base, entrypoint and data-directory
 # contract. Only patched Alpine libraries and the rebuilt gosu are overlaid.
@@ -52,34 +51,39 @@ LABEL org.opencontainers.image.title="D Company ERP PostgreSQL" \
       com.dcompany.upstream.version="16.15" \
       com.dcompany.gosu.version="1.19" \
       com.dcompany.gosu.revision="6456aaa0f3c854d199d0f037f068eb97515b7513" \
-      com.dcompany.zlib.version="1.3.2" \
-      com.dcompany.zlib.source.sha256="bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16" \
-      com.dcompany.zlib.null-guard.commit="e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca" \
-      com.dcompany.zlib.null-guard.sha256="183bc8b9dd078a41a62de5c2d905d9b0196b45bc46f100d7e4147ec228207c74" \
-      com.dcompany.zlib.printf-return.commit="bbc2ccf3d0de267576b524b875c769a724a513b0" \
-      com.dcompany.zlib.printf-return.sha256="7d00ee29be5e636d30da2890961e83e35cee0b152333ecd97a46ae2e71eb5d47" \
-      com.dcompany.zlib.patch.commit="df84af25dc1942490e1d1c899a07619152a46148" \
-      com.dcompany.zlib.patch.sha256="110ff14375733173d8aa54574473424fbd7dfe4b81f1ca34a759c6fe14b15b14" \
-      com.dcompany.zlib.followup.commit="7235b0a581227c56a79a43ff828f8ef6794194c8" \
-      com.dcompany.zlib.followup.sha256="96040ee84d0d187905283912dbd3f7b66ac2033976a2ceefe9b8cca63143d9c2"
+      com.dcompany.zlib.version="1.4-r0" \
+      com.dcompany.zlib.provenance="signed-alpine-apk" \
+      com.dcompany.zlib.apk-port.commit="bdf501c870a92a05c097857401f69c48c4810384"
 
-COPY --from=zlib-builder /out/usr/lib/libz.so.1.3.2 /usr/lib/libz.so.1.3.2
-COPY --from=zlib-builder /out/etc/dcompany/zlib-patch-evidence.env /etc/dcompany/zlib-patch-evidence.env
-COPY --from=zlib-builder /out/zlib-runtime-probe /tmp/zlib-runtime-probe
-COPY infra/docker/zlib/verify-patched-zlib.sh /tmp/verify-patched-zlib.sh
+COPY --from=zlib-probe-builder /tmp/dcompany-caddy-zlib-probe /usr/local/bin/dcompany-caddy-zlib-probe
+COPY infra/docker/caddy-zlib/verify-official-zlib.sh /usr/local/bin/verify-caddy-zlib
+
+# Retain only the authenticated exact archive; downloaded dependencies are discarded.
+RUN set -eux; \
+    mkdir -p /etc/dcompany/zlib; \
+    zlib_download_dir="$(mktemp -d)"; \
+    apk fetch --no-cache --recursive --output "$zlib_download_dir" 'zlib=1.4-r0'; \
+    apk verify --no-network "$zlib_download_dir/zlib-1.4-r0.apk"; \
+    cp "$zlib_download_dir/zlib-1.4-r0.apk" /etc/dcompany/zlib/zlib-1.4-r0.apk; \
+    chmod 0444 /etc/dcompany/zlib/zlib-1.4-r0.apk; \
+    rm -rf -- "$zlib_download_dir"
+
 
 RUN set -eux; \
     apk add --no-cache --upgrade \
+      'zlib=1.4-r0' \
       'libcrypto3=3.5.9-r0' \
       'libssl3=3.5.9-r0' \
+      'libxslt=1.1.43-r4' \
+      'krb5-libs=1.22.3-r0' \
       'libuuid=2.42.3-r1'; \
     installed_packages="$(apk info -v)"; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'libxslt-1.1.43-r4'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'krb5-libs-1.22.3-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libuuid-2.42.3-r1'; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'zlib-1.3.2-r0'; \
-    sh /tmp/verify-patched-zlib.sh; \
-    rm -f /tmp/zlib-runtime-probe /tmp/verify-patched-zlib.sh; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'zlib-1.4-r0'; \
     test "$(postgres --version)" = 'postgres (PostgreSQL) 16.15'
 
 COPY --from=gosu-builder /out/gosu /usr/local/bin/gosu
@@ -90,3 +94,8 @@ RUN set -eux; \
     test "$(readlink /usr/local/bin/su-exec)" = 'gosu'; \
     gosu nobody true; \
     su-exec nobody true
+
+RUN --mount=type=bind,source=infra/docker/install-pinned-musl-utils.sh,target=/tmp/install-pinned-musl-utils.sh,ro \
+    sh /tmp/install-pinned-musl-utils.sh 3.24
+
+RUN /usr/local/bin/verify-caddy-zlib postgres

@@ -102,7 +102,7 @@ d-company-erp/
 ## Release status
 
 The current local candidate is documented in
-[`docs/CODE30_3_PATCH_CANDIDATE.md`](docs/CODE30_3_PATCH_CANDIDATE.md). That file
+[`docs/V3_1_59_RELEASE_CANDIDATE.md`](docs/V3_1_59_RELEASE_CANDIDATE.md). That file
 separates source/test evidence from signing, hosted-update, physical-device, and
 production-deployment approval.
 
@@ -127,8 +127,16 @@ separately identified prototype, not another supported ERP app.
   links only to the live web ERP and verified artifacts from the official GitHub repository.
 
 Tagging a release that exactly matches the Android `versionName` triggers
-`.github/workflows/release.yml`. The current local candidate is the additive
-Code30.3 patch, technical version `3.1.30` with Android installation build `38`,
+`.github/workflows/release.yml`. The current local candidate is `3.1.69`,
+Android installation build `76`, Room `58` and Alembic `0105`. Its production
+installer admission is closed pending actual runtime, Redis and fleet evidence;
+release/device gates remain pending. See the
+[current candidate](docs/V3_1_69_RELEASE_CANDIDATE.md) for bounded local evidence.
+The candidate also carries separately scoped, image-bound security assessments
+and readonly PostgreSQL configuration admission checks; scanner thresholds,
+raw evidence and production-release gates remain required.
+The historical additive
+Code30.3 patch used technical version `3.1.30` with Android installation build `38`,
 Room schema `52`, and backend migration head `0082`. It preserves Code30.2
 manual finance, private receipt evidence and the optional durable
 `ERP Mirror v1` Google Sheets backup. Code30.3 adds owner-reviewed,

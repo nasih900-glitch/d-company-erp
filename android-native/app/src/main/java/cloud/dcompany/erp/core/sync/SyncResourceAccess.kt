@@ -2,6 +2,8 @@ package cloud.dcompany.erp.core.sync
 
 import cloud.dcompany.erp.core.auth.EffectivePermissions
 import cloud.dcompany.erp.core.auth.ErpPermission
+import cloud.dcompany.erp.core.auth.CacheScopeLease
+import cloud.dcompany.erp.core.auth.canVoidPosLinkedSessions
 import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.ui.WorkspaceFeature
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfile
@@ -88,3 +90,19 @@ internal class SyncResourceAccess private constructor(
         )
     }
 }
+
+/**
+ * The optional linked-POS board cohort is requested only for the exact profile
+ * that owns the captured cache lease. A late profile emission cannot widen a
+ * request made for another account, company or branch generation.
+ */
+internal fun posLinkedGamingReviewPullAllowed(
+    profile: MeResponse?,
+    lease: CacheScopeLease,
+): Boolean = profile != null &&
+    lease.scope.branchId?.isNotBlank() == true &&
+    lease.scope.terminalId?.isNotBlank() == true &&
+    profile.userId == lease.scope.userId &&
+    profile.companyId == lease.scope.companyId &&
+    profile.branchId == lease.scope.branchId &&
+    profile.canVoidPosLinkedSessions()

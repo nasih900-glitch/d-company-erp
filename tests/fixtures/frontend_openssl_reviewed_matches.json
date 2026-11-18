@@ -1,0 +1,1126 @@
+{
+  "artifacts": [
+    {
+      "cpes": [
+        {
+          "cpe": "cpe:2.3:a:libcrypto3:libcrypto3:3.5.9-r0:*:*:*:*:*:*:*",
+          "source": "syft-generated"
+        },
+        {
+          "cpe": "cpe:2.3:a:libcrypto3:libcrypto:3.5.9-r0:*:*:*:*:*:*:*",
+          "source": "syft-generated"
+        },
+        {
+          "cpe": "cpe:2.3:a:libcrypto:libcrypto3:3.5.9-r0:*:*:*:*:*:*:*",
+          "source": "syft-generated"
+        },
+        {
+          "cpe": "cpe:2.3:a:libcrypto:libcrypto:3.5.9-r0:*:*:*:*:*:*:*",
+          "source": "syft-generated"
+        }
+      ],
+      "foundBy": "apk-db-cataloger",
+      "id": "7cca763a2d34f1bd",
+      "language": "",
+      "licenses": [
+        {
+          "locations": [
+            {
+              "accessPath": "/lib/apk/db/installed",
+              "annotations": {
+                "evidence": "primary"
+              },
+              "layerID": "sha256:82d5410f1cd12cea760711a129b427c875e450af4d12825b91c08cf66b186a54",
+              "path": "/lib/apk/db/installed"
+            }
+          ],
+          "spdxExpression": "Apache-2.0",
+          "type": "declared",
+          "urls": [],
+          "value": "Apache-2.0"
+        }
+      ],
+      "locations": [
+        {
+          "accessPath": "/lib/apk/db/installed",
+          "annotations": {
+            "evidence": "primary"
+          },
+          "layerID": "sha256:82d5410f1cd12cea760711a129b427c875e450af4d12825b91c08cf66b186a54",
+          "path": "/lib/apk/db/installed"
+        }
+      ],
+      "metadata": {
+        "architecture": "x86_64",
+        "description": "Crypto library from openssl",
+        "files": [
+          {
+            "path": "/etc"
+          },
+          {
+            "path": "/etc/ssl"
+          },
+          {
+            "digest": {
+              "algorithm": "'Q1'+base64(sha1)",
+              "value": "Q1olh8TpdAi2QnTl4FK3TjdUiSwTo="
+            },
+            "path": "/etc/ssl/ct_log_list.cnf"
+          },
+          {
+            "digest": {
+              "algorithm": "'Q1'+base64(sha1)",
+              "value": "Q1olh8TpdAi2QnTl4FK3TjdUiSwTo="
+            },
+            "path": "/etc/ssl/ct_log_list.cnf.dist"
+          },
+          {
+            "digest": {
+              "algorithm": "'Q1'+base64(sha1)",
+              "value": "Q1X/gHDc6qdCBD2BcfmKvpXlq9AuU="
+            },
+            "path": "/etc/ssl/openssl.cnf"
+          },
+          {
+            "digest": {
+              "algorithm": "'Q1'+base64(sha1)",
+              "value": "Q1X/gHDc6qdCBD2BcfmKvpXlq9AuU="
+            },
+            "path": "/etc/ssl/openssl.cnf.dist"
+          },
+          {
+            "path": "/etc/ssl/certs"
+          },
+          {
+            "path": "/etc/ssl/private"
+          },
+          {
+            "path": "/usr"
+          },
+          {
+            "path": "/usr/lib"
+          },
+          {
+            "digest": {
+              "algorithm": "'Q1'+base64(sha1)",
+              "value": "Q1OnvWV5nOGhOTD8p/509HG75MnFo="
+            },
+            "ownerGid": "0",
+            "ownerUid": "0",
+            "path": "/usr/lib/libcrypto.so.3",
+            "permissions": "755"
+          },
+          {
+            "path": "/usr/lib/engines-3"
+          },
+          {
+            "digest": {
+              "algorithm": "'Q1'+base64(sha1)",
+              "value": "Q1cDJH+adWeTHZHBcuROD/SWCIMIU="
+            },
+            "ownerGid": "0",
+            "ownerUid": "0",
+            "path": "/usr/lib/engines-3/afalg.so",
+            "permissions": "755"
+          },
+          {
+            "digest": {
+              "algorithm": "'Q1'+base64(sha1)",
+              "value": "Q174D9cxxXlZFUzWICMr7MAtajD0g="
+            },
+            "ownerGid": "0",
+            "ownerUid": "0",
+            "path": "/usr/lib/engines-3/capi.so",
+            "permissions": "755"
+          },
+          {
+            "digest": {
+              "algorithm": "'Q1'+base64(sha1)",
+              "value": "Q1KLtxbPqNQSwPig6zQMh/AMJ0hXA="
+            },
+            "ownerGid": "0",
+            "ownerUid": "0",
+            "path": "/usr/lib/engines-3/loader_attic.so",
+            "permissions": "755"
+          },
+          {
+            "digest": {
+              "algorithm": "'Q1'+base64(sha1)",
+              "value": "Q1FcewCJJdrf9MU2PK9LG86Bu+N1c="
+            },
+            "ownerGid": "0",
+            "ownerUid": "0",
+            "path": "/usr/lib/engines-3/padlock.so",
+            "permissions": "755"
+          },
+          {
+            "path": "/usr/lib/ossl-modules"
+          },
+          {
+            "digest": {
+              "algorithm": "'Q1'+base64(sha1)",
+              "value": "Q16BN0oTZTqdSPmtUvH81oJkLtlek="
+            },
+            "ownerGid": "0",
+            "ownerUid": "0",
+            "path": "/usr/lib/ossl-modules/legacy.so",
+            "permissions": "755"
+          }
+        ],
+        "gitCommitOfApkPort": "29b9ec24b1b5b39aeef51fa2a044210e2ec5258e",
+        "installedSize": 5221974,
+        "maintainer": "Natanael Copa <ncopa@alpinelinux.org>",
+        "originPackage": "openssl",
+        "package": "libcrypto3",
+        "provides": [
+          "so:libcrypto.so.3=3"
+        ],
+        "pullChecksum": "Q1HA3ulzTPIvyXzdGBkTu9cQ5t+wg=",
+        "pullDependencies": [
+          "so:libc.musl-x86_64.so.1"
+        ],
+        "size": 1980198,
+        "url": "https://www.openssl.org/",
+        "version": "3.5.9-r0"
+      },
+      "metadataType": "apk-db-entry",
+      "name": "libcrypto3",
+      "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r0?arch=x86_64&distro=alpine-3.24.1&upstream=openssl",
+      "type": "apk",
+      "version": "3.5.9-r0"
+    },
+    {
+      "cpes": [
+        {
+          "cpe": "cpe:2.3:a:libssl3:libssl3:3.5.9-r0:*:*:*:*:*:*:*",
+          "source": "syft-generated"
+        },
+        {
+          "cpe": "cpe:2.3:a:libssl3:libssl:3.5.9-r0:*:*:*:*:*:*:*",
+          "source": "syft-generated"
+        },
+        {
+          "cpe": "cpe:2.3:a:libssl:libssl3:3.5.9-r0:*:*:*:*:*:*:*",
+          "source": "syft-generated"
+        },
+        {
+          "cpe": "cpe:2.3:a:libssl:libssl:3.5.9-r0:*:*:*:*:*:*:*",
+          "source": "syft-generated"
+        }
+      ],
+      "foundBy": "apk-db-cataloger",
+      "id": "5e69f5fbd6b3b30f",
+      "language": "",
+      "licenses": [
+        {
+          "locations": [
+            {
+              "accessPath": "/lib/apk/db/installed",
+              "annotations": {
+                "evidence": "primary"
+              },
+              "layerID": "sha256:82d5410f1cd12cea760711a129b427c875e450af4d12825b91c08cf66b186a54",
+              "path": "/lib/apk/db/installed"
+            }
+          ],
+          "spdxExpression": "Apache-2.0",
+          "type": "declared",
+          "urls": [],
+          "value": "Apache-2.0"
+        }
+      ],
+      "locations": [
+        {
+          "accessPath": "/lib/apk/db/installed",
+          "annotations": {
+            "evidence": "primary"
+          },
+          "layerID": "sha256:82d5410f1cd12cea760711a129b427c875e450af4d12825b91c08cf66b186a54",
+          "path": "/lib/apk/db/installed"
+        }
+      ],
+      "metadata": {
+        "architecture": "x86_64",
+        "description": "SSL shared libraries",
+        "files": [
+          {
+            "path": "/usr"
+          },
+          {
+            "path": "/usr/lib"
+          },
+          {
+            "digest": {
+              "algorithm": "'Q1'+base64(sha1)",
+              "value": "Q15U8qVP78jUw0SEWMkk3KyMm0rC0="
+            },
+            "ownerGid": "0",
+            "ownerUid": "0",
+            "path": "/usr/lib/libssl.so.3",
+            "permissions": "755"
+          }
+        ],
+        "gitCommitOfApkPort": "29b9ec24b1b5b39aeef51fa2a044210e2ec5258e",
+        "installedSize": 843640,
+        "maintainer": "Natanael Copa <ncopa@alpinelinux.org>",
+        "originPackage": "openssl",
+        "package": "libssl3",
+        "provides": [
+          "so:libssl.so.3=3"
+        ],
+        "pullChecksum": "Q1IMTJDqnSCp3ToE3q3yxsT2QjNkM=",
+        "pullDependencies": [
+          "libcrypto3=3.5.9-r0",
+          "so:libc.musl-x86_64.so.1",
+          "so:libcrypto.so.3"
+        ],
+        "size": 381860,
+        "url": "https://www.openssl.org/",
+        "version": "3.5.9-r0"
+      },
+      "metadataType": "apk-db-entry",
+      "name": "libssl3",
+      "purl": "pkg:apk/alpine/libssl3@3.5.9-r0?arch=x86_64&distro=alpine-3.24.1&upstream=openssl",
+      "type": "apk",
+      "version": "3.5.9-r0"
+    }
+  ],
+  "matches": [
+    {
+      "artifact": {
+        "cpes": [
+          "cpe:2.3:a:libcrypto3:libcrypto3:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto3:libcrypto:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto:libcrypto3:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto:libcrypto:3.5.9-r0:*:*:*:*:*:*:*"
+        ],
+        "id": "7cca763a2d34f1bd",
+        "language": "",
+        "licenses": [
+          "Apache-2.0"
+        ],
+        "locations": [
+          {
+            "accessPath": "/lib/apk/db/installed",
+            "annotations": {
+              "evidence": "primary"
+            },
+            "layerID": "sha256:82d5410f1cd12cea760711a129b427c875e450af4d12825b91c08cf66b186a54",
+            "path": "/lib/apk/db/installed"
+          }
+        ],
+        "metadata": {
+          "Arch": "x86_64",
+          "files": [
+            {
+              "path": "/etc"
+            },
+            {
+              "path": "/etc/ssl"
+            },
+            {
+              "path": "/etc/ssl/ct_log_list.cnf"
+            },
+            {
+              "path": "/etc/ssl/ct_log_list.cnf.dist"
+            },
+            {
+              "path": "/etc/ssl/openssl.cnf"
+            },
+            {
+              "path": "/etc/ssl/openssl.cnf.dist"
+            },
+            {
+              "path": "/etc/ssl/certs"
+            },
+            {
+              "path": "/etc/ssl/private"
+            },
+            {
+              "path": "/usr"
+            },
+            {
+              "path": "/usr/lib"
+            },
+            {
+              "path": "/usr/lib/libcrypto.so.3"
+            },
+            {
+              "path": "/usr/lib/engines-3"
+            },
+            {
+              "path": "/usr/lib/engines-3/afalg.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/capi.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/loader_attic.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/padlock.so"
+            },
+            {
+              "path": "/usr/lib/ossl-modules"
+            },
+            {
+              "path": "/usr/lib/ossl-modules/legacy.so"
+            }
+          ]
+        },
+        "metadataType": "ApkMetadata",
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r0?arch=x86_64&distro=alpine-3.24.1&upstream=openssl",
+        "type": "apk",
+        "upstreams": [
+          {
+            "name": "openssl"
+          }
+        ],
+        "version": "3.5.9-r0"
+      },
+      "matchDetails": [
+        {
+          "found": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*"
+            ],
+            "versionConstraint": ">= 3.5.0, < 3.5.10||>= 4.0.0, < 4.0.4||>= 4.1.0, < 4.1.1 (unknown)",
+            "vulnerabilityID": "CVE-2026-95692"
+          },
+          "matcher": "apk-matcher",
+          "searchedBy": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:3.5.9:*:*:*:*:*:*:*"
+            ],
+            "namespace": "nvd:cpe",
+            "package": {
+              "name": "openssl",
+              "version": "3.5.9-r0"
+            }
+          },
+          "type": "cpe-match"
+        }
+      ],
+      "relatedVulnerabilities": [],
+      "vulnerability": {
+        "fix": {
+          "state": "unknown",
+          "versions": []
+        },
+        "id": "CVE-2026-95692",
+        "namespace": "nvd:cpe",
+        "severity": "High"
+      }
+    },
+    {
+      "artifact": {
+        "cpes": [
+          "cpe:2.3:a:libssl3:libssl3:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl3:libssl:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl:libssl3:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl:libssl:3.5.9-r0:*:*:*:*:*:*:*"
+        ],
+        "id": "5e69f5fbd6b3b30f",
+        "language": "",
+        "licenses": [
+          "Apache-2.0"
+        ],
+        "locations": [
+          {
+            "accessPath": "/lib/apk/db/installed",
+            "annotations": {
+              "evidence": "primary"
+            },
+            "layerID": "sha256:82d5410f1cd12cea760711a129b427c875e450af4d12825b91c08cf66b186a54",
+            "path": "/lib/apk/db/installed"
+          }
+        ],
+        "metadata": {
+          "Arch": "x86_64",
+          "files": [
+            {
+              "path": "/usr"
+            },
+            {
+              "path": "/usr/lib"
+            },
+            {
+              "path": "/usr/lib/libssl.so.3"
+            }
+          ]
+        },
+        "metadataType": "ApkMetadata",
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r0?arch=x86_64&distro=alpine-3.24.1&upstream=openssl",
+        "type": "apk",
+        "upstreams": [
+          {
+            "name": "openssl"
+          }
+        ],
+        "version": "3.5.9-r0"
+      },
+      "matchDetails": [
+        {
+          "found": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*"
+            ],
+            "versionConstraint": ">= 3.5.0, < 3.5.10||>= 4.0.0, < 4.0.4||>= 4.1.0, < 4.1.1 (unknown)",
+            "vulnerabilityID": "CVE-2026-95692"
+          },
+          "matcher": "apk-matcher",
+          "searchedBy": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:3.5.9:*:*:*:*:*:*:*"
+            ],
+            "namespace": "nvd:cpe",
+            "package": {
+              "name": "openssl",
+              "version": "3.5.9-r0"
+            }
+          },
+          "type": "cpe-match"
+        }
+      ],
+      "relatedVulnerabilities": [],
+      "vulnerability": {
+        "fix": {
+          "state": "unknown",
+          "versions": []
+        },
+        "id": "CVE-2026-95692",
+        "namespace": "nvd:cpe",
+        "severity": "High"
+      }
+    },
+    {
+      "artifact": {
+        "cpes": [
+          "cpe:2.3:a:libcrypto3:libcrypto3:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto3:libcrypto:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto:libcrypto3:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto:libcrypto:3.5.9-r0:*:*:*:*:*:*:*"
+        ],
+        "id": "7cca763a2d34f1bd",
+        "language": "",
+        "licenses": [
+          "Apache-2.0"
+        ],
+        "locations": [
+          {
+            "accessPath": "/lib/apk/db/installed",
+            "annotations": {
+              "evidence": "primary"
+            },
+            "layerID": "sha256:82d5410f1cd12cea760711a129b427c875e450af4d12825b91c08cf66b186a54",
+            "path": "/lib/apk/db/installed"
+          }
+        ],
+        "metadata": {
+          "Arch": "x86_64",
+          "files": [
+            {
+              "path": "/etc"
+            },
+            {
+              "path": "/etc/ssl"
+            },
+            {
+              "path": "/etc/ssl/ct_log_list.cnf"
+            },
+            {
+              "path": "/etc/ssl/ct_log_list.cnf.dist"
+            },
+            {
+              "path": "/etc/ssl/openssl.cnf"
+            },
+            {
+              "path": "/etc/ssl/openssl.cnf.dist"
+            },
+            {
+              "path": "/etc/ssl/certs"
+            },
+            {
+              "path": "/etc/ssl/private"
+            },
+            {
+              "path": "/usr"
+            },
+            {
+              "path": "/usr/lib"
+            },
+            {
+              "path": "/usr/lib/libcrypto.so.3"
+            },
+            {
+              "path": "/usr/lib/engines-3"
+            },
+            {
+              "path": "/usr/lib/engines-3/afalg.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/capi.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/loader_attic.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/padlock.so"
+            },
+            {
+              "path": "/usr/lib/ossl-modules"
+            },
+            {
+              "path": "/usr/lib/ossl-modules/legacy.so"
+            }
+          ]
+        },
+        "metadataType": "ApkMetadata",
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r0?arch=x86_64&distro=alpine-3.24.1&upstream=openssl",
+        "type": "apk",
+        "upstreams": [
+          {
+            "name": "openssl"
+          }
+        ],
+        "version": "3.5.9-r0"
+      },
+      "matchDetails": [
+        {
+          "found": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*"
+            ],
+            "versionConstraint": ">= 1.0.2, < 1.0.2zt||>= 1.1.1, < 1.1.1zk||>= 3.0.0, < 3.0.24||>= 3.5.0, < 3.5.10||>= 4.0.0, < 4.0.4||>= 4.1.0, < 4.1.1 (unknown)",
+            "vulnerabilityID": "CVE-2026-107496"
+          },
+          "matcher": "apk-matcher",
+          "searchedBy": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:3.5.9:*:*:*:*:*:*:*"
+            ],
+            "namespace": "nvd:cpe",
+            "package": {
+              "name": "openssl",
+              "version": "3.5.9-r0"
+            }
+          },
+          "type": "cpe-match"
+        }
+      ],
+      "relatedVulnerabilities": [],
+      "vulnerability": {
+        "fix": {
+          "state": "unknown",
+          "versions": []
+        },
+        "id": "CVE-2026-107496",
+        "namespace": "nvd:cpe",
+        "severity": "High"
+      }
+    },
+    {
+      "artifact": {
+        "cpes": [
+          "cpe:2.3:a:libssl3:libssl3:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl3:libssl:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl:libssl3:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl:libssl:3.5.9-r0:*:*:*:*:*:*:*"
+        ],
+        "id": "5e69f5fbd6b3b30f",
+        "language": "",
+        "licenses": [
+          "Apache-2.0"
+        ],
+        "locations": [
+          {
+            "accessPath": "/lib/apk/db/installed",
+            "annotations": {
+              "evidence": "primary"
+            },
+            "layerID": "sha256:82d5410f1cd12cea760711a129b427c875e450af4d12825b91c08cf66b186a54",
+            "path": "/lib/apk/db/installed"
+          }
+        ],
+        "metadata": {
+          "Arch": "x86_64",
+          "files": [
+            {
+              "path": "/usr"
+            },
+            {
+              "path": "/usr/lib"
+            },
+            {
+              "path": "/usr/lib/libssl.so.3"
+            }
+          ]
+        },
+        "metadataType": "ApkMetadata",
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r0?arch=x86_64&distro=alpine-3.24.1&upstream=openssl",
+        "type": "apk",
+        "upstreams": [
+          {
+            "name": "openssl"
+          }
+        ],
+        "version": "3.5.9-r0"
+      },
+      "matchDetails": [
+        {
+          "found": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*"
+            ],
+            "versionConstraint": ">= 1.0.2, < 1.0.2zt||>= 1.1.1, < 1.1.1zk||>= 3.0.0, < 3.0.24||>= 3.5.0, < 3.5.10||>= 4.0.0, < 4.0.4||>= 4.1.0, < 4.1.1 (unknown)",
+            "vulnerabilityID": "CVE-2026-107496"
+          },
+          "matcher": "apk-matcher",
+          "searchedBy": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:3.5.9:*:*:*:*:*:*:*"
+            ],
+            "namespace": "nvd:cpe",
+            "package": {
+              "name": "openssl",
+              "version": "3.5.9-r0"
+            }
+          },
+          "type": "cpe-match"
+        }
+      ],
+      "relatedVulnerabilities": [],
+      "vulnerability": {
+        "fix": {
+          "state": "unknown",
+          "versions": []
+        },
+        "id": "CVE-2026-107496",
+        "namespace": "nvd:cpe",
+        "severity": "High"
+      }
+    },
+    {
+      "artifact": {
+        "cpes": [
+          "cpe:2.3:a:libcrypto3:libcrypto3:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto3:libcrypto:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto:libcrypto3:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto:libcrypto:3.5.9-r0:*:*:*:*:*:*:*"
+        ],
+        "id": "7cca763a2d34f1bd",
+        "language": "",
+        "licenses": [
+          "Apache-2.0"
+        ],
+        "locations": [
+          {
+            "accessPath": "/lib/apk/db/installed",
+            "annotations": {
+              "evidence": "primary"
+            },
+            "layerID": "sha256:82d5410f1cd12cea760711a129b427c875e450af4d12825b91c08cf66b186a54",
+            "path": "/lib/apk/db/installed"
+          }
+        ],
+        "metadata": {
+          "Arch": "x86_64",
+          "files": [
+            {
+              "path": "/etc"
+            },
+            {
+              "path": "/etc/ssl"
+            },
+            {
+              "path": "/etc/ssl/ct_log_list.cnf"
+            },
+            {
+              "path": "/etc/ssl/ct_log_list.cnf.dist"
+            },
+            {
+              "path": "/etc/ssl/openssl.cnf"
+            },
+            {
+              "path": "/etc/ssl/openssl.cnf.dist"
+            },
+            {
+              "path": "/etc/ssl/certs"
+            },
+            {
+              "path": "/etc/ssl/private"
+            },
+            {
+              "path": "/usr"
+            },
+            {
+              "path": "/usr/lib"
+            },
+            {
+              "path": "/usr/lib/libcrypto.so.3"
+            },
+            {
+              "path": "/usr/lib/engines-3"
+            },
+            {
+              "path": "/usr/lib/engines-3/afalg.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/capi.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/loader_attic.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/padlock.so"
+            },
+            {
+              "path": "/usr/lib/ossl-modules"
+            },
+            {
+              "path": "/usr/lib/ossl-modules/legacy.so"
+            }
+          ]
+        },
+        "metadataType": "ApkMetadata",
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r0?arch=x86_64&distro=alpine-3.24.1&upstream=openssl",
+        "type": "apk",
+        "upstreams": [
+          {
+            "name": "openssl"
+          }
+        ],
+        "version": "3.5.9-r0"
+      },
+      "matchDetails": [
+        {
+          "found": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*"
+            ],
+            "versionConstraint": ">= 3.5.0, < 3.5.10||>= 4.0.0, < 4.0.4||>= 4.1.0, < 4.1.1 (unknown)",
+            "vulnerabilityID": "CVE-2026-95691"
+          },
+          "matcher": "apk-matcher",
+          "searchedBy": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:3.5.9:*:*:*:*:*:*:*"
+            ],
+            "namespace": "nvd:cpe",
+            "package": {
+              "name": "openssl",
+              "version": "3.5.9-r0"
+            }
+          },
+          "type": "cpe-match"
+        }
+      ],
+      "relatedVulnerabilities": [],
+      "vulnerability": {
+        "fix": {
+          "state": "unknown",
+          "versions": []
+        },
+        "id": "CVE-2026-95691",
+        "namespace": "nvd:cpe",
+        "severity": "High"
+      }
+    },
+    {
+      "artifact": {
+        "cpes": [
+          "cpe:2.3:a:libssl3:libssl3:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl3:libssl:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl:libssl3:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl:libssl:3.5.9-r0:*:*:*:*:*:*:*"
+        ],
+        "id": "5e69f5fbd6b3b30f",
+        "language": "",
+        "licenses": [
+          "Apache-2.0"
+        ],
+        "locations": [
+          {
+            "accessPath": "/lib/apk/db/installed",
+            "annotations": {
+              "evidence": "primary"
+            },
+            "layerID": "sha256:82d5410f1cd12cea760711a129b427c875e450af4d12825b91c08cf66b186a54",
+            "path": "/lib/apk/db/installed"
+          }
+        ],
+        "metadata": {
+          "Arch": "x86_64",
+          "files": [
+            {
+              "path": "/usr"
+            },
+            {
+              "path": "/usr/lib"
+            },
+            {
+              "path": "/usr/lib/libssl.so.3"
+            }
+          ]
+        },
+        "metadataType": "ApkMetadata",
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r0?arch=x86_64&distro=alpine-3.24.1&upstream=openssl",
+        "type": "apk",
+        "upstreams": [
+          {
+            "name": "openssl"
+          }
+        ],
+        "version": "3.5.9-r0"
+      },
+      "matchDetails": [
+        {
+          "found": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*"
+            ],
+            "versionConstraint": ">= 3.5.0, < 3.5.10||>= 4.0.0, < 4.0.4||>= 4.1.0, < 4.1.1 (unknown)",
+            "vulnerabilityID": "CVE-2026-95691"
+          },
+          "matcher": "apk-matcher",
+          "searchedBy": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:3.5.9:*:*:*:*:*:*:*"
+            ],
+            "namespace": "nvd:cpe",
+            "package": {
+              "name": "openssl",
+              "version": "3.5.9-r0"
+            }
+          },
+          "type": "cpe-match"
+        }
+      ],
+      "relatedVulnerabilities": [],
+      "vulnerability": {
+        "fix": {
+          "state": "unknown",
+          "versions": []
+        },
+        "id": "CVE-2026-95691",
+        "namespace": "nvd:cpe",
+        "severity": "High"
+      }
+    },
+    {
+      "artifact": {
+        "cpes": [
+          "cpe:2.3:a:libcrypto3:libcrypto3:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto3:libcrypto:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto:libcrypto3:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto:libcrypto:3.5.9-r0:*:*:*:*:*:*:*"
+        ],
+        "id": "7cca763a2d34f1bd",
+        "language": "",
+        "licenses": [
+          "Apache-2.0"
+        ],
+        "locations": [
+          {
+            "accessPath": "/lib/apk/db/installed",
+            "annotations": {
+              "evidence": "primary"
+            },
+            "layerID": "sha256:82d5410f1cd12cea760711a129b427c875e450af4d12825b91c08cf66b186a54",
+            "path": "/lib/apk/db/installed"
+          }
+        ],
+        "metadata": {
+          "Arch": "x86_64",
+          "files": [
+            {
+              "path": "/etc"
+            },
+            {
+              "path": "/etc/ssl"
+            },
+            {
+              "path": "/etc/ssl/ct_log_list.cnf"
+            },
+            {
+              "path": "/etc/ssl/ct_log_list.cnf.dist"
+            },
+            {
+              "path": "/etc/ssl/openssl.cnf"
+            },
+            {
+              "path": "/etc/ssl/openssl.cnf.dist"
+            },
+            {
+              "path": "/etc/ssl/certs"
+            },
+            {
+              "path": "/etc/ssl/private"
+            },
+            {
+              "path": "/usr"
+            },
+            {
+              "path": "/usr/lib"
+            },
+            {
+              "path": "/usr/lib/libcrypto.so.3"
+            },
+            {
+              "path": "/usr/lib/engines-3"
+            },
+            {
+              "path": "/usr/lib/engines-3/afalg.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/capi.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/loader_attic.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/padlock.so"
+            },
+            {
+              "path": "/usr/lib/ossl-modules"
+            },
+            {
+              "path": "/usr/lib/ossl-modules/legacy.so"
+            }
+          ]
+        },
+        "metadataType": "ApkMetadata",
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r0?arch=x86_64&distro=alpine-3.24.1&upstream=openssl",
+        "type": "apk",
+        "upstreams": [
+          {
+            "name": "openssl"
+          }
+        ],
+        "version": "3.5.9-r0"
+      },
+      "matchDetails": [
+        {
+          "found": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*"
+            ],
+            "versionConstraint": ">= 3.5.0, < 3.5.10||>= 4.0.0, < 4.0.4||>= 4.1.0, < 4.1.1 (unknown)",
+            "vulnerabilityID": "CVE-2026-88823"
+          },
+          "matcher": "apk-matcher",
+          "searchedBy": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:3.5.9:*:*:*:*:*:*:*"
+            ],
+            "namespace": "nvd:cpe",
+            "package": {
+              "name": "openssl",
+              "version": "3.5.9-r0"
+            }
+          },
+          "type": "cpe-match"
+        }
+      ],
+      "relatedVulnerabilities": [],
+      "vulnerability": {
+        "fix": {
+          "state": "unknown",
+          "versions": []
+        },
+        "id": "CVE-2026-88823",
+        "namespace": "nvd:cpe",
+        "severity": "High"
+      }
+    },
+    {
+      "artifact": {
+        "cpes": [
+          "cpe:2.3:a:libssl3:libssl3:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl3:libssl:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl:libssl3:3.5.9-r0:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl:libssl:3.5.9-r0:*:*:*:*:*:*:*"
+        ],
+        "id": "5e69f5fbd6b3b30f",
+        "language": "",
+        "licenses": [
+          "Apache-2.0"
+        ],
+        "locations": [
+          {
+            "accessPath": "/lib/apk/db/installed",
+            "annotations": {
+              "evidence": "primary"
+            },
+            "layerID": "sha256:82d5410f1cd12cea760711a129b427c875e450af4d12825b91c08cf66b186a54",
+            "path": "/lib/apk/db/installed"
+          }
+        ],
+        "metadata": {
+          "Arch": "x86_64",
+          "files": [
+            {
+              "path": "/usr"
+            },
+            {
+              "path": "/usr/lib"
+            },
+            {
+              "path": "/usr/lib/libssl.so.3"
+            }
+          ]
+        },
+        "metadataType": "ApkMetadata",
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r0?arch=x86_64&distro=alpine-3.24.1&upstream=openssl",
+        "type": "apk",
+        "upstreams": [
+          {
+            "name": "openssl"
+          }
+        ],
+        "version": "3.5.9-r0"
+      },
+      "matchDetails": [
+        {
+          "found": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*"
+            ],
+            "versionConstraint": ">= 3.5.0, < 3.5.10||>= 4.0.0, < 4.0.4||>= 4.1.0, < 4.1.1 (unknown)",
+            "vulnerabilityID": "CVE-2026-88823"
+          },
+          "matcher": "apk-matcher",
+          "searchedBy": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:3.5.9:*:*:*:*:*:*:*"
+            ],
+            "namespace": "nvd:cpe",
+            "package": {
+              "name": "openssl",
+              "version": "3.5.9-r0"
+            }
+          },
+          "type": "cpe-match"
+        }
+      ],
+      "relatedVulnerabilities": [],
+      "vulnerability": {
+        "fix": {
+          "state": "unknown",
+          "versions": []
+        },
+        "id": "CVE-2026-88823",
+        "namespace": "nvd:cpe",
+        "severity": "High"
+      }
+    }
+  ]
+}

@@ -33,6 +33,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from runpy import run_path
 from typing import Any, BinaryIO
 from urllib.parse import urlsplit
 
@@ -122,6 +123,11 @@ class RemoteTarget:
     key: Path
     port: int
     root: str
+    ssh_sudo: bool = False
+
+    @property
+    def python_command(self) -> list[str]:
+        return ["sudo", "-n", "--", "python3"] if self.ssh_sudo else ["python3"]
 
     @property
     def ssh_base(self) -> list[str]:
@@ -186,6 +192,8 @@ def _validated_base_url(raw: str) -> str:
 
 
 def _validated_remote_target(target: RemoteTarget) -> RemoteTarget:
+    if type(target.ssh_sudo) is not bool:
+        raise AndroidReleaseStagingError("SSH sudo flag must be boolean")
     user, separator, hostname = target.host.partition("@")
     if (
         _SSH_HOST.fullmatch(target.host) is None
@@ -548,12 +556,38 @@ def _validated_runtime_root(raw: Any) -> str:
 
 def _inspect_running_release(payload: dict[str, Any]) -> dict[str, Any]:
     root = _validated_runtime_root(payload.get("remote_root", DEFAULT_REMOTE_ROOT))
+    version = payload.get("version_name")
+    revision = payload.get("source_git_sha")
+    code = payload.get("version_code")
+    if version == "3.1.65" or code == 72:
+        raise AndroidReleaseStagingError("Build 72 did not pass the release gates")
+    if version == "3.1.66" or code == 73:
+        raise AndroidReleaseStagingError("Build 73 did not pass the release gates")
+    if version == "3.1.67" or code == 74:
+        raise AndroidReleaseStagingError("Build 74 is a superseded signed candidate")
+    if version == "3.1.68" or code == 75:
+        raise AndroidReleaseStagingError("Build 75 is a superseded tagged candidate")
+    if version == "3.1.69" or code == 76:
+        if version != "3.1.69" or type(code) is not int or code != 76:
+            raise AndroidReleaseStagingError("Build 76 staging requires its exact Android version pair")
+        try:
+            verifier = Path(__file__).resolve().parents[1] / "infra/scripts/verify-build72-upgrade-runtime.py"
+            project, expected, redis, receipt_digest = run_path(str(verifier))["staging_identity"](Path(root), revision)
+            running = inspect_release_pair(
+                root, str(Path(root) / ".env"), version, revision, running=True, project_name=project,
+                services=tuple(expected), expected_images={"services": {name: {"image_id": image}
+                                                                        for name, image in expected.items()}},
+            )
+        except (KeyError, OSError, TypeError, ValueError, RuntimeParityError, subprocess.TimeoutExpired) as exc:
+            raise AndroidReleaseStagingError("Exact Build 76 deployment or retained Redis proof failed") from exc
+        return {**running, "services": {**running["services"], "redis": redis},
+                "deployment_receipt_sha256": receipt_digest, "project_name": project}
     try:
         return inspect_release_pair(
             root,
             str(Path(root) / ".env"),
-            payload.get("version_name"),
-            payload.get("source_git_sha"),
+            version,
+            revision,
             running=True,
         )
     except RuntimeParityError as exc:
@@ -669,7 +703,7 @@ def _ssh_json(
     remote_script = f"{target.root}/ops/stage_android_release.py"
     command = [
         *target.ssh_base,
-        "python3",
+        *target.python_command,
         remote_script,
         "_remote",
         action,
@@ -711,7 +745,7 @@ def _ssh_upload_apk(
     remote_script = f"{target.root}/ops/stage_android_release.py"
     command = [
         *target.ssh_base,
-        "python3",
+        *target.python_command,
         remote_script,
         "_remote",
         "upload",
@@ -758,12 +792,14 @@ def _validated_registration_receipt(
 
 
 def _register_staged_release_on_host(
-    remote_root: str, manifest: dict[str, Any]
+    remote_root: str, manifest: dict[str, Any], *, project_name: str | None = None,
 ) -> dict[str, Any]:
     root = _validated_runtime_root(remote_root)
+    project = ["-p", project_name] if project_name is not None else []
     command = [
         "docker",
         "compose",
+        *project,
         "-f",
         f"{root}/docker-compose.prod.yml",
         "--env-file",
@@ -812,6 +848,7 @@ def _finalize_staged_release(
         {
             "remote_root": target.root,
             "version_name": version_name,
+            "version_code": manifest["version_code"],
             "source_git_sha": source_git_sha,
             "initial_runtime_parity": initial_runtime,
             "manifest": manifest,
@@ -827,6 +864,15 @@ def _finalize_staged_release(
 
 
 def stage_release(args: argparse.Namespace) -> dict[str, Any]:
+    target = _validated_remote_target(
+        RemoteTarget(
+            host=args.ssh_host,
+            key=args.ssh_key.expanduser().resolve(),
+            port=args.ssh_port,
+            root=args.remote_root.rstrip("/"),
+            ssh_sudo=getattr(args, "ssh_sudo", False),
+        )
+    )
     base_url = _validated_base_url(args.base_url)
     ci = load_ci_manifest(args.manifest, base_url=base_url)
     expected_signer = _normalized_sha256(
@@ -848,14 +894,6 @@ def stage_release(args: argparse.Namespace) -> dict[str, Any]:
     manifest_bytes = canonical_registry_manifest(strict_manifest)
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
 
-    target = _validated_remote_target(
-        RemoteTarget(
-            host=args.ssh_host,
-            key=args.ssh_key.expanduser().resolve(),
-            port=args.ssh_port,
-            root=args.remote_root.rstrip("/"),
-        )
-    )
     remote_final = f"{target.root}/releases/android/{ci.apk_filename}"
 
     plan = {
@@ -868,6 +906,7 @@ def stage_release(args: argparse.Namespace) -> dict[str, Any]:
         "registry_manifest_sha256": manifest_sha256,
         "remote_final": remote_final,
         "update_url": ci.apk_download_url,
+        "ssh_sudo": target.ssh_sudo,
     }
     if not args.apply:
         return {"ok": True, "applied": False, "plan": plan}
@@ -878,6 +917,7 @@ def stage_release(args: argparse.Namespace) -> dict[str, Any]:
     runtime_payload = {
         "remote_root": target.root,
         "version_name": ci.version_name,
+        "version_code": ci.version_code,
         "source_git_sha": ci.git_sha,
     }
     # This read-only guard precedes prepare, upload, publication and registration.
@@ -1379,7 +1419,12 @@ def _remote_action(
                 raise AndroidReleaseStagingError(
                     "Running ERP images changed during staging; registration was not attempted"
                 )
-            registered = _register_staged_release_on_host(root, manifest)
+            if "deployment_receipt_sha256" in final_runtime:
+                if any(manifest.get(key) != payload.get(key) for key in ("version_code", "version_name", "source_git_sha")):
+                    raise AndroidReleaseStagingError("Build 72 registry identity differs from the accepted deployment")
+                registered = _register_staged_release_on_host(root, manifest, project_name=final_runtime["project_name"])
+            else:
+                registered = _register_staged_release_on_host(root, manifest)
         return {
             "ok": True,
             "runtime_parity": final_runtime,
@@ -1488,6 +1533,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ssh-host", default="root@dcompany.duckdns.org")
     parser.add_argument("--ssh-key", type=Path, default=Path("~/.ssh/dcompany_erp"))
     parser.add_argument("--ssh-port", type=int, default=22)
+    parser.add_argument(
+        "--ssh-sudo",
+        action="store_true",
+        help="run the fixed remote Python command through sudo -n; no fallback",
+    )
     parser.add_argument("--remote-root", default=DEFAULT_REMOTE_ROOT)
     parser.add_argument("--apkanalyzer")
     parser.add_argument("--apksigner")

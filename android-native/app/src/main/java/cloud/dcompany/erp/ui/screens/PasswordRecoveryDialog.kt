@@ -18,7 +18,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -30,6 +30,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -62,7 +63,8 @@ internal fun PasswordRecoveryDialog(
 
     AlertDialog(
         onDismissRequest = onCancel,
-        modifier = Modifier.widthIn(max = 600.dp).fillMaxWidth(0.92f).imePadding(),
+        modifier = Modifier.widthIn(max = 600.dp).fillMaxWidth(0.92f).imePadding()
+            .testTag("password-recovery-dialog"),
         properties = DialogProperties(usePlatformDefaultWidth = false),
         title = { Text("Reset password") },
         text = {

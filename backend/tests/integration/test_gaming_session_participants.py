@@ -388,7 +388,7 @@ async def test_rejoin_rounds_once_extension_deleted_customer_stop_pos_and_paymen
     cancelled = await client.post(
         f"/api/v1/gaming/sessions/{session_id}/cancel",
         json={"reason": "Must preserve participant settlement"},
-        headers=_headers(seed_owner, token),
+        headers=_headers(seed_owner, token, f"cancel:{uuid4()}"),
     )
     assert cancelled.status_code == 422
     repaired = await client.post(
@@ -438,7 +438,7 @@ async def test_rejoin_rounds_once_extension_deleted_customer_stop_pos_and_paymen
     reset_cancel = await client.post(
         f"/api/v1/gaming/sessions/{session_id}/cancel",
         json={"reason": "Revision reset must not hide participant evidence"},
-        headers=_headers(seed_owner, token),
+        headers=_headers(seed_owner, token, f"cancel:{uuid4()}"),
     )
     assert reset_cancel.status_code == 409
     assert reset_cancel.json()["error"]["code"] == "gaming_billing_repair_required"

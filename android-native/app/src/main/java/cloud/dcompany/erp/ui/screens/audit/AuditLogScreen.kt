@@ -1,6 +1,5 @@
 package cloud.dcompany.erp.ui.screens.audit
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -79,7 +78,7 @@ fun AuditLogScreen(
         if (!state.locked) while (true) { delay(30_000); vm.checkActivity() }
     }
     val busy = state.loading || state.loadingMore || state.unlocking || state.checking
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+    Column(Modifier.fillMaxSize().workspaceContentCanvas()
         .padding(Spacing.lg), verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
         if (state.locked) {
             Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).imePadding(),
@@ -233,7 +232,15 @@ internal fun AuditChoice(label:String,value:String?,options:List<Pair<String?,St
     var open by remember { mutableStateOf(false) }
     Box {
         OutlinedButton({open=true},enabled=enabled) { Text("$label · ${options.firstOrNull{it.first==value}?.second ?: "Retained account identity"}") }
-        DropdownMenu(open,{open=false}) { options.forEach { (key,text) -> DropdownMenuItem(text={Text(text)},onClick={open=false;onSelect(key)}) } }
+        LiquidDropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            role = cloud.dcompany.erp.ui.theme.WorkspaceGlassRole.CONTROL,
+        ) {
+            options.forEach { (key, text) ->
+                DropdownMenuItem(text = { Text(text) }, onClick = { open = false; onSelect(key) })
+            }
+        }
     }
 }
 

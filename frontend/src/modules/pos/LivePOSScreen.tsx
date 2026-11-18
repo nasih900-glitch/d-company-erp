@@ -1,3 +1,5 @@
+import { useInlineWorkspaceFocus } from '@/lib/use-inline-workspace-focus';
+import DailyWorkWorkspace from '@/modules/staff/DailyWorkWorkspace';
 import { taxPercentage } from './receipt-search';
 import { InlineShiftWorkspace } from '@/modules/pos/OrdersAndShiftsScreen';
 /**
@@ -29,13 +31,14 @@ import {
   loadDraftSnapshot,
   saveDraftIfUnchanged,
 } from '@/lib/draft-storage';
-import { inr } from '@/lib/inr';
+import { inr, currencyFreeLabel } from '@/lib/inr';
 import {
   POS_CART_CLEARED_FEEDBACK,
   POS_PREPARED_BILL_CANCELLED_FEEDBACK,
   queuedOrderVoidedFeedback,
 } from '@/lib/action-feedback';
 import { parseRupeesToMinor } from '@/lib/money-input';
+import { hasExactPermission } from '@/lib/effective-permissions';
 import {
   captureRewardReview,
   matchesRewardReview,
@@ -131,6 +134,7 @@ const PREPAID_ALLOWANCE_LABEL = profileMembershipMoneyLabel('allowance', 1)
   ?? 'Prepaid allowance';
 
 import LiveReceipt from './LiveReceipt';
+import RetainedMistakeCorrectionDialog from './RetainedMistakeCorrectionDialog';
 import {
   buildReceiptBusinessDetails,
   buildUpiPayLink,
@@ -285,8 +289,11 @@ export default function LivePOSScreen() {
     [location.search],
   );
   const { me, terminalId, terminalReady } = useAuth();
+  const canVoid = hasExactPermission(me, 'pos.void');
   const notifications = useNotifications();
   const canManualDiscount = canStageManualPosDiscount(me?.effective_permissions);
+  const canCorrectRetainedMistake = Boolean(me?.roles.some((role) => ['owner', 'super_owner', 'co_owner'].includes(role))
+    && ['gaming.write', 'pos.read', 'pos.write', 'pos.void'].every((permission) => me?.effective_permissions?.includes(permission)));
   const draftKey = me?.company_id && me.branch_id && me.user_id && terminalId
     ? posDraftKey(me.company_id, me.branch_id, me.user_id, terminalId)
     : null;
@@ -336,6 +343,8 @@ export default function LivePOSScreen() {
   const [receipt, setReceipt] = useState<PrintableReceipt | null>(null);
   const [receiptBusiness, setReceiptBusiness] = useState<ReceiptBusinessDetails | null>(null);
   const [inlineShift,setInlineShift]=useState(false);
+  const shiftFocus = useInlineWorkspaceFocus(inlineShift,
+    JSON.stringify([me?.company_id, me?.user_id, me?.branch_id, terminalId]));
   const [receiptSettingsError, setReceiptSettingsError] = useState<string | null>(null);
   const [checkoutRetry, setCheckoutRetry] = useState<PosCheckoutRetry | null>(null);
   const checkoutFlowInFlightRef = useRef(false);
@@ -359,6 +368,8 @@ export default function LivePOSScreen() {
   const [showHeldPicker, setShowHeldPicker] = useState(false);
   const [heldSearch, setHeldSearch] = useState('');
   const [resumingOrder, setResumingOrder] = useState<OrderDTO | null>(null);
+  const [retainedCorrectionOrder, setRetainedCorrectionOrder] = useState<OrderDTO | null>(null);
+  const retainedFinancialEvidenceLocked = resumingOrder?.gaming_void_provenance?.financial_evidence_locked === true;
   const [unresolvedResumingOrderId, setUnresolvedResumingOrderId] = useState<string | null>(null);
   const [heldAlarmMuted, setHeldAlarmMuted] = useState(false);
   const [voidingId, setVoidingId] = useState<string | null>(null);
@@ -635,6 +646,7 @@ export default function LivePOSScreen() {
     setPendingCartPointsCustomerPhone(null);
     pendingCartPointsIntentRef.current = null;
     setResumingOrder(null);
+    setRetainedCorrectionOrder(null);
     setUnresolvedResumingOrderId(null);
     setHeldOrders([]);
     setHeldError(null);
@@ -1114,7 +1126,7 @@ export default function LivePOSScreen() {
         setHeldRefreshError(null);
         if (result.length === UNBILLED_QUEUE_LIMIT) {
           setHeldError(
-            'The unbilled queue reached its 500-order safety limit. Bill or void old orders and ask a protected owner to reconcile the backlog.',
+            'The unbilled queue reached its 500-order safety limit. Bill waiting orders and ask an Owner to review the backlog.',
           );
         }
       }
@@ -1276,7 +1288,7 @@ export default function LivePOSScreen() {
       playAlarmTone();
       notifyAlarm(
         '⏰ Incoming orders waiting',
-        'One or more sent or recovered orders have been unbilled for a while. Bill or void them.',
+        'One or more sent or recovered orders have been unbilled for a while. Bill them or ask an Owner to review.',
         'dcompany-held-orders',
       );
     }, 1000);
@@ -1483,6 +1495,7 @@ export default function LivePOSScreen() {
   ]);
 
   async function voidOrder(row: OrderListItemDTO, reason: string) {
+    if (!canVoid) { setHeldError('POS void access is required. Ask an Owner to review this bill.'); return; }
     if (localWorkNeedsReconciliation) {
       setHeldError('This POS tab is read-only until its saved bill is reconciled. No queued order was voided.');
       return;
@@ -2880,6 +2893,10 @@ export default function LivePOSScreen() {
   }
 
   async function applyManualDiscount() {
+    if (retainedFinancialEvidenceLocked) {
+      setDiscountError('Gaming Void amounts are immutable. Use Cancel mistaken items only when every retained item was entered by mistake and never supplied.');
+      return;
+    }
     if (checkoutFlowInFlightRef.current) {
       setDiscountError('The bill is being prepared or paid. Wait for that result before changing its discount.');
       return;
@@ -3204,6 +3221,10 @@ export default function LivePOSScreen() {
     }
     const retry = checkoutRetry;
     if (!canAbandonCheckoutRetry(retry) || !retry) return;
+    if (!retry.resumingOrderId && !canVoid) {
+      setError('Ask an Owner to cancel this prepared direct POS bill. Its saved payment attempt remains available to resume.');
+      return;
+    }
     setAbandonConfirmVariant(hasBenefitCoveredZeroBalance(retry) ? 'benefit_covered' : 'no_payment');
   }
 
@@ -3322,6 +3343,10 @@ export default function LivePOSScreen() {
           { title: 'Held bill released' },
         );
       } else {
+        if (!canVoid) {
+          setError('Ask an Owner to cancel this prepared direct POS bill. Its saved payment attempt has been preserved.');
+          return;
+        }
         // Needs a reason before it can be voided — hand off to the reason
         // modal rather than blocking here; finishAbandonWithReason() below
         // picks up from this exact order once the staff member submits one.
@@ -3344,6 +3369,7 @@ export default function LivePOSScreen() {
   }
 
   async function finishAbandonWithReasonInternal(reason: string) {
+    if (!canVoid) { setError('POS void access is required. The prepared bill has been preserved.'); return; }
     if (checkoutMutationInFlightRef.current) {
       setError('Wait for the current bill adjustment to finish before cancelling checkout.');
       return;
@@ -3444,8 +3470,9 @@ export default function LivePOSScreen() {
         : 'queue checking';
 
   return (
-    <div className="min-h-full pb-32 xl:grid xl:grid-cols-2 xl:gap-6 xl:pb-0">
+    <div ref={shiftFocus.fallbackRef} tabIndex={-1} className="min-h-full pb-32 xl:grid xl:grid-cols-2 xl:gap-6 xl:pb-0">
       <section className="min-w-0">
+        <DailyWorkWorkspace allowNewStart={!shiftId}/>
         <header className="flex items-start justify-between mb-4 gap-4 flex-wrap">
           <div>
             <h2 className="text-2xl font-bold">POS · Live</h2>
@@ -3503,7 +3530,7 @@ export default function LivePOSScreen() {
           <section className="card mb-4" data-testid="pos-incoming-bills-inline">
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
-                <h3 className="font-bold">Incoming bills from Gaming</h3>
+                <h3 className="font-bold">Incoming bills</h3>
                 <p className="text-xs text-fg-muted">
                   {heldRefreshError
                     ? `Queue refresh failed. ${heldVerifiedAt ? `Last verified ${new Date(heldVerifiedAt).toLocaleString()}.` : 'No verified queue is available yet.'}`
@@ -3556,13 +3583,13 @@ export default function LivePOSScreen() {
                         </div>
                       </button>
                       <div className="font-mono font-bold shrink-0">{inr(order.total_minor)}</div>
-                      <button
+                      {canVoid && <button
                         className="btn btn-ghost !p-2 text-accent-bad shrink-0"
                         disabled={voidingId === order.id || localWorkNeedsReconciliation}
                         onClick={() => setVoidPromptRow(order)}
                         title="Void this queued order with a reason">
                         {voidingId === order.id ? <Loader2 className="animate-spin" size={14}/> : <Trash2 size={14}/>}
-                      </button>
+                      </button>}
                     </div>
                   );
                 })}
@@ -3626,7 +3653,8 @@ export default function LivePOSScreen() {
           </div>
         )}
 
-        {inlineShift && <InlineShiftWorkspace onClose={() => {
+        {inlineShift && <InlineShiftWorkspace focusHeadingRef={shiftFocus.headingRef} onClose={() => {
+          shiftFocus.closeToInvoker();
           setInlineShift(false);
           // Reconcile the existing accountable draft against the server shift;
           // never silently transfer a cart or rely on best-effort push delivery.
@@ -3645,7 +3673,7 @@ export default function LivePOSScreen() {
               <p className="mt-1 text-fg-muted">{shiftError}</p>
             </div>
             {shiftIssueCopy.showShiftLink && !localWorkNeedsReconciliation && (
-              <button type="button" className="btn btn-ghost shrink-0 !py-1.5 text-xs" onClick={()=>setInlineShift(true)}>Open shift here</button>
+              <button type="button" className="btn btn-ghost shrink-0 !py-1.5 text-xs" onClick={event=>{shiftFocus.openFrom(event.currentTarget);setInlineShift(true);}}>Open shift here</button>
             )}
           </div>
         )}
@@ -3802,11 +3830,11 @@ export default function LivePOSScreen() {
                   className="btn btn-ghost !justify-between !py-1.5 text-xs disabled:opacity-40"
                   disabled={checkoutAdjustmentBusy || localWorkNeedsReconciliation || paying || !r.affordable || !loyaltyProgram || loyaltyProgram.revision !== r.program_revision}
                   onClick={() => reviewReward(r)}
-                  title={r.description}
+                  title={currencyFreeLabel(r.description)}
                 >
                   <span className="text-left">
-                    <span className="block font-semibold">{r.name}</span>
-                    <span className="block text-fg-muted">{r.description}</span>
+                    <span className="block font-semibold">{currencyFreeLabel(r.name)}</span>
+                    <span className="block text-fg-muted">{currencyFreeLabel(r.description)}</span>
                   </span>
                   <span className="shrink-0 font-mono font-bold text-accent-gold">
                     {redeemingReward === r.key
@@ -3826,6 +3854,7 @@ export default function LivePOSScreen() {
             className="input !pl-9 !min-h-[42px] !py-2"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            aria-label="Search menu"
             placeholder="Search menu"
           />
         </div>
@@ -3992,7 +4021,18 @@ export default function LivePOSScreen() {
           </p>
         </div>
 
-        {canManualDiscount && <div className="mt-3 space-y-2 rounded-xl border border-bg-border px-3 py-2">
+        {retainedFinancialEvidenceLocked && (
+          <div className="my-3 rounded-xl border border-bg-border p-3 text-sm">
+            <p className="text-fg-muted">Gaming Void amounts are preserved as audit evidence; discounts cannot change this bill.</p>
+            {canCorrectRetainedMistake && resumingOrder?.gaming_void_provenance?.mistake_correction_available && !checkoutRetry && (
+              <button type="button" className="btn btn-ghost mt-2 text-accent-bad" disabled={paying || checkoutAdjustmentBusy || localWorkNeedsReconciliation || draftLockedByOtherTab}
+                onClick={() => setRetainedCorrectionOrder(resumingOrder)}>
+                Cancel mistaken items
+              </button>
+            )}
+          </div>
+        )}
+        {canManualDiscount && !retainedFinancialEvidenceLocked && <div className="mt-3 space-y-2 rounded-xl border border-bg-border px-3 py-2">
           <span className="text-xs text-fg-muted">Custom discount</span>
           <div className="flex gap-2">
             <PosMoneyInput
@@ -4000,7 +4040,7 @@ export default function LivePOSScreen() {
               min="0"
               step="1"
               inputMode="decimal"
-              placeholder="₹ off"
+              placeholder=" off"
               value={discountInput}
               onChange={(e) => setDiscountInput(e.target.value)}
               disabled={checkoutAdjustmentBusy || localWorkNeedsReconciliation || paying}
@@ -4200,7 +4240,18 @@ export default function LivePOSScreen() {
             </p>
           </div>
 
-          {canManualDiscount && <div className="mt-3 space-y-2 rounded-xl border border-border-base px-3 py-2">
+          {retainedFinancialEvidenceLocked && (
+          <div className="my-3 rounded-xl border border-bg-border p-3 text-sm">
+            <p className="text-fg-muted">Gaming Void amounts are preserved as audit evidence; discounts cannot change this bill.</p>
+            {canCorrectRetainedMistake && resumingOrder?.gaming_void_provenance?.mistake_correction_available && !checkoutRetry && (
+              <button type="button" className="btn btn-ghost mt-2 text-accent-bad" disabled={paying || checkoutAdjustmentBusy || localWorkNeedsReconciliation || draftLockedByOtherTab}
+                onClick={() => setRetainedCorrectionOrder(resumingOrder)}>
+                Cancel mistaken items
+              </button>
+            )}
+          </div>
+        )}
+        {canManualDiscount && !retainedFinancialEvidenceLocked && <div className="mt-3 space-y-2 rounded-xl border border-border-base px-3 py-2">
             <span className="text-xs text-fg-muted">Custom discount</span>
             <div className="flex gap-2">
               <PosMoneyInput
@@ -4208,7 +4259,7 @@ export default function LivePOSScreen() {
                 min="0"
                 step="1"
                 inputMode="decimal"
-                placeholder="₹ off"
+                placeholder=" off"
                 value={discountInput}
                 onChange={(e) => setDiscountInput(e.target.value)}
                 disabled={checkoutAdjustmentBusy || localWorkNeedsReconciliation || paying}
@@ -4366,7 +4417,7 @@ export default function LivePOSScreen() {
                     <div className="mt-0.5 text-xs">Bill {inr(amount)} + tip {inr(tipMinor)}</div>
                   )}
                 </div>
-                {canManualDiscount && checkoutRetry.phase === 'awaiting_payment' && !benefitCoveredZero && !localWorkNeedsReconciliation && (
+                {canManualDiscount && !retainedFinancialEvidenceLocked && checkoutRetry.phase === 'awaiting_payment' && !benefitCoveredZero && !localWorkNeedsReconciliation && (
                   <div className="space-y-2 rounded-xl border border-border-base px-3 py-2">
                     <div className="flex items-center justify-between text-xs text-fg-muted">
                       <span>Custom discount</span>
@@ -4380,7 +4431,7 @@ export default function LivePOSScreen() {
                         min="0"
                         step="1"
                         inputMode="decimal"
-                        placeholder="₹ off"
+                        placeholder=" off"
                         value={discountInput}
                         onChange={(e) => setDiscountInput(e.target.value)}
                         disabled={checkoutAdjustmentBusy || paying}
@@ -4411,7 +4462,7 @@ export default function LivePOSScreen() {
                         min="0"
                         step="1"
                         inputMode="decimal"
-                        placeholder="₹ tip"
+                        placeholder=" tip"
                         value={tipInput}
                         onChange={(e) => setTipInput(e.target.value)}
                         disabled={paying || checkoutAdjustmentBusy}
@@ -4494,7 +4545,7 @@ export default function LivePOSScreen() {
                               min="0"
                               step="0.01"
                               inputMode="decimal"
-                              placeholder="₹ amount"
+                              placeholder=" amount"
                               value={amountInput}
                               disabled={paying || checkoutAdjustmentBusy}
                               onChange={(event) => {
@@ -4568,7 +4619,7 @@ export default function LivePOSScreen() {
                                 min="0"
                                 step="0.01"
                                 inputMode="decimal"
-                                placeholder="₹ cash received"
+                                placeholder=" cash received"
                                 value={splitCashTenderedInput}
                                 disabled={paying || checkoutAdjustmentBusy}
                                 onChange={(event) => {
@@ -4707,7 +4758,7 @@ export default function LivePOSScreen() {
                         min="0"
                         step="0.01"
                         inputMode="decimal"
-                        placeholder="₹ received from customer"
+                        placeholder=" received from customer"
                         value={cashTenderedInput}
                         onChange={(e) => setCashTenderedInput(e.target.value)}
                         disabled={paying || checkoutAdjustmentBusy}
@@ -4772,12 +4823,15 @@ export default function LivePOSScreen() {
                   )
                 )}
                 {error && <p className="text-xs text-accent-bad">{error}</p>}
+                {!canVoid && !checkoutRetry.resumingOrderId && canAbandonCheckoutRetry(checkoutRetry) && (
+                  <p className="text-xs text-fg-muted">This direct bill has already been saved. An Owner must review it to discard the unpaid bill. You can resume this saved payment attempt; no payment has been cancelled or bill removed.</p>
+                )}
                 {checkoutRetry.phase === 'awaiting_payment' ? (
                   <div className="grid grid-cols-2 gap-3">
-                    <button className="btn btn-ghost disabled:opacity-40"
+                    {(canVoid || checkoutRetry.resumingOrderId) && <button className="btn btn-ghost disabled:opacity-40"
                       disabled={paying || checkoutAdjustmentBusy || localWorkNeedsReconciliation} onClick={startAbandonPreparedCheckout}>
                       {benefitCoveredZero ? 'Cancel prepared bill' : 'No payment · Cancel'}
-                    </button>
+                    </button>}
                     <button className="btn btn-primary disabled:opacity-40"
                       disabled={
                         paying
@@ -4795,7 +4849,7 @@ export default function LivePOSScreen() {
                         : 'Refresh bill lock'}
                     </button>
                   </div>
-                ) : canAbandonCheckoutRetry(checkoutRetry) ? (
+                ) : canAbandonCheckoutRetry(checkoutRetry) && (canVoid || checkoutRetry.resumingOrderId) ? (
                   // Nothing has been collected at this phase, so the cashier
                   // must always be able to walk away — a resume that the server
                   // keeps refusing would otherwise trap this terminal.
@@ -4845,7 +4899,30 @@ export default function LivePOSScreen() {
         </Modal>
       )}
 
-      {voidPromptRow && (
+      {retainedCorrectionOrder && draftKey && (
+        <RetainedMistakeCorrectionDialog key={`${draftKey}:${retainedCorrectionOrder.id}`}
+          order={retainedCorrectionOrder}
+          onClose={() => setRetainedCorrectionOrder(null)}
+          onCorrected={(orderId) => {
+            if (heldOrderScopeRef.current !== draftKey || resumingOrder?.id !== orderId) return;
+            setRetainedCorrectionOrder(null);
+            const cleared = clearPosDraft(draftKey);
+            if (!cleared) {
+              setError('The bill was cancelled on the server. Reload this POS tab to reconcile its saved copy; do not collect payment.');
+              return;
+            }
+            setCheckoutRetry(null);
+            setResumingOrder(null);
+            setUnresolvedResumingOrderId(null);
+            setCart([]);
+            clearCustomer();
+            setError(null);
+            notifications.success('Mistaken items cancelled once. No money collected or refunded; original history retained.', { title: 'Bill corrected' });
+            void loadHeldOrders(true);
+          }}
+        />
+      )}
+      {canVoid && voidPromptRow && (
         <PromptModal
           title="Void queued order"
           label={`Why are you clearing ${voidPromptRow.source_label || 'this order'}?`}
@@ -4867,7 +4944,7 @@ export default function LivePOSScreen() {
           onCancel={() => setShowCartClearConfirm(false)}
         />
       )}
-      {abandonConfirmVariant && (
+      {(canVoid || checkoutRetry?.resumingOrderId) && abandonConfirmVariant && (
         <ConfirmModal
           title="Cancel prepared bill"
           message={abandonConfirmVariant === 'benefit_covered'
@@ -4880,7 +4957,7 @@ export default function LivePOSScreen() {
           onCancel={() => setAbandonConfirmVariant(null)}
         />
       )}
-      {abandonReasonOrder && (
+      {canVoid && abandonReasonOrder && (
         <PromptModal
           title="Cancel prepared bill"
           label="Why are you cancelling this prepared direct POS bill?"
@@ -4895,8 +4972,8 @@ export default function LivePOSScreen() {
           title="Review points reward"
           message={(
             <div className="space-y-2 text-sm">
-              <p className="font-semibold">{rewardReview.reward.name}</p>
-              <p className="text-fg-muted">{rewardReview.reward.description}</p>
+              <p className="font-semibold">{currencyFreeLabel(rewardReview.reward.name)}</p>
+              <p className="text-fg-muted">{currencyFreeLabel(rewardReview.reward.description)}</p>
               <div className="rounded-lg border border-bg-border p-3 font-mono">
                 {rewardReview.reward.points_cost.toLocaleString('en-IN')} points → {inr(rewardReview.reward.value_minor)} bill credit
               </div>
@@ -4973,6 +5050,7 @@ function CustomerAttachPanel({
         )}
       </div>
       <div className="grid grid-cols-1 md:grid-cols-[180px_1fr_auto] gap-2">
+        <label className="flex min-w-0 flex-col gap-1 text-xs text-fg-muted"><span>Phone</span>
         <input
           className="input !min-h-[40px] !py-2"
           value={phone}
@@ -4987,6 +5065,8 @@ function CustomerAttachPanel({
             }
           }}
         />
+        </label>
+        <label className="flex min-w-0 flex-col gap-1 text-xs text-fg-muted"><span>Name</span>
         <input
           className="input !min-h-[40px] !py-2"
           value={name}
@@ -4994,7 +5074,8 @@ function CustomerAttachPanel({
           placeholder="Name"
           onChange={(e) => onNameChange(e.target.value)}
         />
-        <button className="btn btn-ghost !min-h-[40px] !py-2 !px-4" onClick={onLookup} disabled={disabled || busy || !phone.trim()}>
+        </label>
+        <button className="btn btn-ghost self-end !min-h-[40px] !py-2 !px-4" onClick={onLookup} disabled={disabled || busy || !phone.trim()}>
           {busy ? <Loader2 size={13} className="animate-spin"/> : <Search size={13}/>}
           Find
         </button>

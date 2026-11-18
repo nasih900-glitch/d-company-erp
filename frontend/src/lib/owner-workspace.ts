@@ -1,3 +1,5 @@
+import { advanceRootWorkspaceEpoch } from './root-workspace-epoch';
+
 /** Protected screen state lives only in this authenticated browser lifetime. */
 const workspaces = new Map<string, unknown>();
 let generation = 0;
@@ -28,6 +30,7 @@ export function rememberOwnerWorkspace<T>(
 }
 export function clearOwnerWorkspaces(): void {
   generation += 1;
+  advanceRootWorkspaceEpoch();
   workspaces.clear();
 }
 export function ownerWorkspaceGeneration(): number {

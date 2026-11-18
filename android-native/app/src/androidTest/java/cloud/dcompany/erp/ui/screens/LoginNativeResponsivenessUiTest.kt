@@ -48,7 +48,7 @@ class LoginNativeResponsivenessUiTest {
                 assertTrue("The real login must open its keyboard", keyboardVisible)
                 instrumentation.uiAutomation.injectInputEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK), true)
                 instrumentation.uiAutomation.injectInputEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK), true)
-                awaitNode { it.text?.toString() == "Welcome back." }
+                awaitNode { it.className == "android.widget.EditText" && containsDescription(it, "Email") }
             }
         }
     }

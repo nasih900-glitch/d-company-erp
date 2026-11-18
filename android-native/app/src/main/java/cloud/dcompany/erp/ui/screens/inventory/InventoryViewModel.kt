@@ -219,6 +219,7 @@ data class InventoryUiState(
 class InventoryViewModel : ViewModel() {
 
     private val appCtx = DCompanyApp.instance
+    private val operations = appCtx.handoverOperations.caller(appCtx.shiftCache.profile.value, appCtx.cacheIsolation.currentLease())
     private val db = appCtx.db
     private val api = ApiClient.create<InventoryApi>()
 
@@ -720,12 +721,13 @@ class InventoryViewModel : ViewModel() {
         }
         busy.value = true
         formError.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "The original workspace is unavailable; resolve the handover before editing." }) {
             try {
                 request()
                 dialog.value = null
                 notice.value = successMessage
                 loadRecipes(menuItemId)
+                reconciled()
                 appCtx.sync.requestSync()
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -846,7 +848,7 @@ class InventoryViewModel : ViewModel() {
         if (!requireWrite()) return
         val localId = ingredient.localWriteId ?: return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { formError.value = "Resolve the original till handover before changing Inventory. Saved work is retained." }) {
             var changed = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     val dao = db.inventoryDao()
@@ -878,7 +880,7 @@ class InventoryViewModel : ViewModel() {
         if (!requireWrite()) return
         val localId = ingredient.localWriteId ?: return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { formError.value = "Resolve the original till handover before changing Inventory. Saved work is retained." }) {
             var queued = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     queued = db.inventoryDao().retryRejectedIngredient(localId) > 0
@@ -980,7 +982,7 @@ class InventoryViewModel : ViewModel() {
         if (!requireWrite()) return
         val localId = supplier.localWriteId ?: return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { formError.value = "Resolve the original till handover before changing Inventory. Saved work is retained." }) {
             var changed = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     val dao = db.inventoryDao()
@@ -1012,7 +1014,7 @@ class InventoryViewModel : ViewModel() {
         if (!requireWrite()) return
         val localId = supplier.localWriteId ?: return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { formError.value = "Resolve the original till handover before changing Inventory. Saved work is retained." }) {
             var queued = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     queued = db.inventoryDao().retryRejectedSupplier(localId) > 0
@@ -1082,7 +1084,7 @@ class InventoryViewModel : ViewModel() {
     fun retryGrn(localId: String) {
         if (!requireWrite()) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { formError.value = "Resolve the original till handover before changing Inventory. Saved work is retained." }) {
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     db.inventoryDao().retryGrn(localId)
                 }
@@ -1142,7 +1144,7 @@ class InventoryViewModel : ViewModel() {
     fun retryAdjustment(localId: String) {
         if (!requireWrite()) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { formError.value = "Resolve the original till handover before changing Inventory. Saved work is retained." }) {
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     db.inventoryDao().retryAdjustment(localId)
                 }
@@ -1170,7 +1172,7 @@ class InventoryViewModel : ViewModel() {
         }
         busy.value = true
         formError.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "The original workspace is unavailable; resolve the handover before editing." }) {
             try {
                 var message = ""
                 if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {

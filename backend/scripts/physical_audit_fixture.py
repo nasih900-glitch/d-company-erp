@@ -69,6 +69,7 @@ from app.models.gaming import GamingPauseEvent
 from app.services.accounting.accounts import DEFAULT_CHART_OF_ACCOUNTS
 from app.services.auth.otp import normalize_account_email
 from app.services.gaming.tariff_catalog import upsert_d_company_gaming_tariff
+from app.services.pos.loyalty_program import new_legacy_loyalty_program
 
 CONFIRMATION = "I_UNDERSTAND_THIS_IS_A_DISPOSABLE_LOCAL_DATABASE"
 DATABASE_PREFIX = "dcompany_physical_audit_"
@@ -309,6 +310,7 @@ async def seed() -> None:
         )
         session.add(company)
         await session.flush()
+        session.add(new_legacy_loyalty_program(company.id))
 
         branch = Branch(
             id=uuid4(),

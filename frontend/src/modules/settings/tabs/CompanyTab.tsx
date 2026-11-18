@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { useLatestRequest } from '@/hooks/useLatestRequest';
 import { Save, Loader2, AlertCircle, Check } from 'lucide-react';
 
 import { LIVE_MODE } from '@/lib/demo';
@@ -6,18 +7,21 @@ import { settings, type CompanyDTO } from '@/lib/erp-api';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 
 export default function CompanyTab() {
+  const requests = useLatestRequest();
   const [data, setData] = useState<CompanyDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
 
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!LIVE_MODE) { setLoading(false); return; }
-    settings.getCompany().then(setData)
-      .catch((e) => setErr((e as Error).message))
-      .finally(() => setLoading(false));
-  }, []);
+    const current = requests.begin(); setLoading(true); setErr(null);
+    try { const profile = await settings.getCompany(); if (current()) setData(profile); }
+    catch (error) { if (current()) setErr((error as Error).message); }
+    finally { if (current()) setLoading(false); }
+  }, [requests]);
+  useEffect(() => { void load(); }, [load]);
 
   async function save() {
     if (!data) return;
@@ -41,6 +45,10 @@ export default function CompanyTab() {
   }
 
   if (loading) return <SkeletonCard />;
+  if (!data && LIVE_MODE) return <div className="card space-y-3">
+    <div role="alert"><ErrorRow text={err ?? 'Company profile has not been verified.'}/></div>
+    <button type="button" className="btn btn-primary" onClick={() => void load()}>Retry company settings</button>
+  </div>;
   if (!data) return (
     <div className="card text-fg-muted">
       Company settings are only available in live mode (you're in demo mode). Connect to a backend to manage company details.

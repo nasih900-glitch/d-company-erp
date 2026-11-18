@@ -1,0 +1,6 @@
+/* Scope the existing accessible modal's material to staff-time forms only. */
+.modal-panel:has(.staff-time-form) {
+  background-color: rgb(var(--color-bg-surface) / 0.72);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}

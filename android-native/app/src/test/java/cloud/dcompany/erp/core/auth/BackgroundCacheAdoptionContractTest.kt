@@ -16,11 +16,22 @@ class BackgroundCacheAdoptionContractTest {
             "    internal suspend fun adoptCachedOnlyIfInactive(",
             "    /** A server-validated scope may replace another scope",
         )
+        val publication = source.between(
+            "    private fun publishLeaseLocked(",
+            "    /**\n     * Wait for any already-entered scoped Room commit",
+        )
 
         assertTrue("The active-lease decision must run under the scope mutex", "mutex.withLock" in adoption)
         assertTrue("An existing exact lease must be returned without replacement", "CachedScopeLeaseAdoption.Ready(lease = active, adopted = false)" in adoption)
         assertTrue("An active mismatched lease must stay distinguishable from no owner", "active.scope != scope" in adoption && "CachedScopeLeaseAdoption.ActiveScopeConflict" in adoption)
-        assertTrue("Only an inactive exact marker may create a lease", "marker.current()" in adoption && "activeLease = lease" in adoption)
+        assertTrue(
+            "Only an inactive exact marker may publish a lease",
+            "marker.current()" in adoption && "publishLeaseLocked(lease)" in adoption,
+        )
+        assertTrue(
+            "Lease publication must update both write authority and the observable exact-lease signal",
+            "activeLease = lease" in publication && "_activeLease.value = lease" in publication,
+        )
         assertFalse("Background adoption must never revoke another lease", "deactivateLocked()" in adoption)
     }
 

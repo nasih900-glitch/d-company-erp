@@ -2,6 +2,7 @@
 
 from app.models.access_control import RolePermissionOverride
 from app.models.audit import AuditLog
+from app.models.grn_commands import GrnActionDecision, GrnCompletionProof, GrnRecoverySession
 from app.models.auth_challenge import AuthOtpChallenge
 from app.models.auth_refresh_session import AuthRefreshSession
 from app.models.base import Base, SoftDeleteMixin, TenantMixin, TimestampMixin
@@ -13,7 +14,12 @@ from app.models.bug_report import (
 )
 from app.models.client_diagnostic import ClientDiagnosticEvent
 from app.models.client_gaming_cleanup_reconciliation import ClientGamingCleanupReconciliation
-from app.models.client_update import AndroidRelease, ClientInstallation, ClientUpdateEvent
+from app.models.client_update import (
+    AndroidRelease,
+    AndroidUpdatePolicy,
+    ClientInstallation,
+    ClientUpdateEvent,
+)
 from app.models.customer import (
     Customer,
     CustomerDirectoryState,
@@ -46,11 +52,14 @@ from app.models.gaming import (
     GamingPackage,
     GamingParticipantSettlement,
     GamingParticipantSettlementLine,
+    GamingRetainedBillCorrection,
     GamingSession,
     GamingSessionAddon,
     GamingSessionExtension,
     GamingSessionPackageAmendment,
     GamingSessionParticipant,
+    GamingVoidAddonLine,
+    GamingVoidReceipt,
     Station,
     Tournament,
 )
@@ -122,23 +131,32 @@ from app.models.pos import (
     Refund,
     Shift,
 )
+from app.models.pos_receipt_correction import PosReceiptCorrection, PosReceiptStockRestoration
+from app.models.pos_receipt_mistake_report import PosReceiptMistakeReport
 from app.models.remote_assistance import (
     RemoteAssistanceCommand,
     RemoteAssistanceDeviceKey,
     RemoteAssistanceGrant,
     RemoteAssistanceSession,
 )
+from app.models.shift_operator import ShiftOperatorHandover
+from app.models.shift_start_work import ShiftStartWorkCancellation, ShiftStartWorkReceipt
+from app.models.staff_work import StaffWorkPolicy
 from app.models.tables import Floor, Reservation, Table
 from app.models.tenant import Branch, Company, Terminal
+from app.models.tender_correction import DailyTenderReconciliation, PaymentTenderCorrection
 from app.models.user import Attendance, PayrollEntry, Role, User, UserRole
 
-from app.models.tender_correction import DailyTenderReconciliation, PaymentTenderCorrection
-
 __all__ = [
+    "PosReceiptCorrection",
+    "PosReceiptMistakeReport",
+    "PosReceiptStockRestoration",
     "Account",
     "AndroidRelease",
+    "AndroidUpdatePolicy",
     "Asset",
     "Attendance",
+    "StaffWorkPolicy",
     "AuditLog",
     "AuthOtpChallenge",
     "AuthRefreshSession",
@@ -176,6 +194,9 @@ __all__ = [
     "GamingSessionExtension",
     "GamingSessionPackageAmendment",
     "GamingSessionParticipant",
+    "GamingVoidAddonLine",
+    "GamingVoidReceipt",
+    "GamingRetainedBillCorrection",
     "GamingParticipantSettlement",
     "GamingParticipantSettlementLine",
     "GoogleSheetsDelivery",
@@ -250,6 +271,9 @@ __all__ = [
     "RolePermissionOverride",
     "SacCode",
     "Shift",
+    "ShiftOperatorHandover",
+    "ShiftStartWorkReceipt",
+    "ShiftStartWorkCancellation",
     "SoftDeleteMixin",
     "StateCode",
     "Station",
@@ -265,3 +289,7 @@ __all__ = [
     "User",
     "UserRole",
 ]
+
+from app.models.paid_bill_action_decision import PaidBillActionDecision
+from app.models.paid_bill_amendment import PaidBillAmendmentIntent
+from app.models.paid_bill_recovery_session import PaidBillRecoverySession

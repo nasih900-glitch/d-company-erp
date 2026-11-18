@@ -90,7 +90,7 @@ def test_every_git_archive_extraction_honours_the_private_installer_umask() -> N
         assert private_umask < source.index(extraction)
 
 
-def test_candidate_archive_restores_only_the_reviewed_vex_template_mode(
+def test_candidate_archive_restores_only_reviewed_scanner_and_runtime_modes(
     tmp_path: Path,
 ) -> None:
     source = INSTALLER.read_text(encoding="utf-8")
@@ -106,11 +106,15 @@ def test_candidate_archive_restores_only_the_reviewed_vex_template_mode(
     assert 'realpath "$candidate_vex_template"' in extraction_and_mode_check
 
     template_name = "infra/security/vex/zlib-cve-2026-85091.openvex.json"
+    zlib_name = "infra/docker/caddy-zlib/verify-official-zlib.sh"
+    profile_name = "infra/docker/verify-backend-runtime-profile.py"
+    reviewed_modes = {template_name: 0o644, zlib_name: 0o755, profile_name: 0o644}
     peer = tmp_path / "peer.txt"
     peer.write_text("another reviewed input\n", encoding="utf-8")
     archive = tmp_path / "source.tar"
     with tarfile.open(archive, "w") as package:
-        package.add(ROOT / template_name, arcname=template_name)
+        for name in reviewed_modes:
+            package.add(ROOT / name, arcname=name)
         package.add(peer, arcname="infra/security/vex/peer.txt")
 
     snapshot = tmp_path / "snapshot"
@@ -127,9 +131,11 @@ def test_candidate_archive_restores_only_the_reviewed_vex_template_mode(
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
-    template = snapshot / template_name
-    assert stat.S_IMODE(template.stat().st_mode) == 0o644
-    assert template.read_bytes() == (ROOT / template_name).read_bytes()
+    for name, mode in reviewed_modes.items():
+        copied = snapshot / name
+        assert stat.S_IMODE(copied.stat().st_mode) == mode
+        assert copied.read_bytes() == (ROOT / name).read_bytes()
+    assert stat.S_IMODE(snapshot.stat().st_mode) == 0o700
     assert stat.S_IMODE((snapshot / "infra/security/vex/peer.txt").stat().st_mode) == 0o600
 
     linked = tmp_path / "linked-source.tar"
@@ -183,6 +189,29 @@ def test_candidate_archive_restores_only_the_reviewed_vex_template_mode(
     assert rejected_parent.returncode != 0
     assert "Frozen zlib VEX template is missing or linked." in rejected_parent.stderr
     assert stat.S_IMODE(external_template.stat().st_mode) == 0o600
+
+    for name in (zlib_name, profile_name):
+        linked_runtime = tmp_path / f"linked-{Path(name).name}.tar"
+        with tarfile.open(linked_runtime, "w") as package:
+            for other in reviewed_modes.keys() - {name}:
+                package.add(ROOT / other, arcname=other)
+            link = tarfile.TarInfo(name)
+            link.type = tarfile.SYMTYPE
+            link.linkname = str(external_template)
+            package.addfile(link)
+        runtime_snapshot = tmp_path / f"snapshot-{Path(name).name}"
+        runtime_snapshot.mkdir(mode=0o700)
+        rejected_runtime = subprocess.run(
+            ["bash", "-c", "set -euo pipefail\numask 077\n" + extraction_and_mode_check],
+            env={**os.environ, "CANDIDATE_SOURCE_ARCHIVE": str(linked_runtime),
+                 "CANDIDATE_BUILD_ROOT": str(runtime_snapshot)},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert rejected_runtime.returncode != 0
+        assert "Frozen runtime verifier is missing or linked." in rejected_runtime.stderr
+        assert stat.S_IMODE(external_template.stat().st_mode) == 0o600
 
 
 def test_business_quiescence_verifier_requires_exact_zero_evidence() -> None:
@@ -341,7 +370,56 @@ def test_exact_candidate_images_are_scanned_before_maintenance() -> None:
     ) >= 2
     assert "--network none --read-only --cap-drop ALL" in source
     assert source.count("--security-opt no-new-privileges") >= 2
-    assert "--vex /scan/zlib.openvex.json" in source
+    vex_paths = ("/scan/openssl-reviewed.openvex.json", "/scan/hashlib-fixed.openvex.json",
+                 "/scan/service-openssl-reviewed.openvex.json")
+    assert scanner_source.count(" --vex ") == len(vex_paths) == 3
+    assert all(scanner_source.count(f" --vex {path}") == 1 for path in vex_paths)
+    assert '--vex /scan/hashlib-fixed.openvex.json' in scanner_source
+    scan_order = (
+        '--validate-hashlib-runtime "$hashlib_runtime" "$image_ref" "$config_image_id"',
+        'grype_arguments+=(--fail-on high --output json)',
+        'run_owned_container 1200s "$grype_report" online "${grype_arguments[@]}"',
+        'if [ "$service" = backend ] && [ "$scanner_status" -eq 2 ]; then',
+        'mv "$grype_report" "$raw_grype"',
+        '--prove-fixed-hashlib "$hashlib_raw" "$image_ref"',
+        '"$config_image_id" "$hashlib_runtime" "$hashlib_vex"',
+        'src=$final_vex,dst=/scan/hashlib-fixed.openvex.json,readonly',
+        '"${grype_arguments[@]}" --vex /scan/hashlib-fixed.openvex.json',
+        'if [ "$scanner_status" -ne 0 ]; then',
+        '"--$service-fixed-sbom" "$syft_report"',
+        '"--archive-platform=$archive_platform@$config_image_id"',
+    )
+    previous_step = 0
+    for step in scan_order:
+        previous_step = scanner_source.index(step, previous_step) + len(step)
+    backend = scanner_source.split('if [ "$service" = backend ] && [ "$scanner_status" -eq 2 ]; then', 1)[1].split('  case "$service" in', 1)[0]
+    backend_order = (
+        'mv "$grype_report" "$raw_grype"', '--has-findings "$raw_grype"',
+        '--collect /scan/backend-openssl-reviewed.json', '--prove "$EVIDENCE_ROOT" "$syft_report"',
+        '--vex /scan/openssl-reviewed.openvex.json', 'if [ "$scanner_status" -ne 2 ]; then',
+        '--prove-fixed-hashlib "$hashlib_raw"', '--combine "$EVIDENCE_ROOT" "$syft_report"',
+        'src=$final_vex,dst=/scan/hashlib-fixed.openvex.json,readonly', '--vex /scan/hashlib-fixed.openvex.json',
+    )
+    offset = 0
+    for step in backend_order:
+        offset = backend.index(step, offset) + len(step)
+    services = scanner_source.split('caddy|frontend|postgres)', 1)[1].split('  esac', 1)[0]
+    service_order = (
+        'mv "$grype_report" "$raw_grype"', '--has-findings "$service"', '--prepare-runtime "$service"',
+        '--entrypoint /bin/sh "$runtime_image_id"', '--bind-runtime "$service"', '--prove "$service"',
+        'docker image inspect --format', 'src=$service_vex,dst=/scan/service-openssl-reviewed.openvex.json,readonly',
+        '--vex /scan/service-openssl-reviewed.openvex.json',
+    )
+    offset = 0
+    for step in service_order:
+        offset = services.index(step, offset) + len(step)
+    assert '${openssl_vex_argument:+"$openssl_vex_argument"}' in scanner_source
+    assert '[ "$run_status" -eq 2 ] && [ "$state" != false:2 ]' in scanner_source
+    assert '"--$service-fixed-sbom" "$syft_report"' in scanner_source
+    assert '"--runtime-proof=$runtime_proof"' in scanner_source
+    assert '--bind-runtime-proof "$service"' in scanner_source
+    assert '^(backend|frontend|caddy|postgres|redis)$' in scanner_source
+    assert scanner_source.index('--bind-runtime-proof') < scanner_source.index('  grype_arguments=(')
     assert 'python3 "$ZLIB_VEX_VERIFIER"' in source
 
 
@@ -543,6 +621,9 @@ def test_state_helper_rejects_links_and_unsafe_modes_then_creates_private_tree(
 
     state.unlink()
     state.mkdir(mode=0o755)
+    # mkdir honors the caller's umask; this fixture must actually be unsafe.
+    state.chmod(0o755)
+    assert stat.S_IMODE(state.stat().st_mode) == 0o755
     with pytest.raises(helper.ProductionInstallLockError):
         helper.ensure_private_state_directories(**arguments)
 
@@ -638,7 +719,7 @@ def test_code30_2_stale_outbox_bridge_completes_cleanup_before_caddy() -> None:
     preserve_cleaned_database = "trap handle_post_ingress_failure EXIT"
     public_caddy = (
         '"${candidate_compose[@]}" --env-file .env \\\n'
-        '  up -d --no-build --pull never caddy'
+        '    up -d --no-build --pull never caddy'
     )
 
     assert source.index(bridge_default) < source.index(quarantine_acceptance)
@@ -750,11 +831,10 @@ def test_rollback_keeps_ingress_closed_until_core_services_are_ready_and_atteste
     source = INSTALLER.read_text(encoding="utf-8")
 
     postgres_restore = (
-        '"${prior_compose[@]}" up -d --no-build --pull never \\\n'
-        '        --force-recreate postgres'
+        '"${prior_compose[@]}" up -d --no-build --pull never --force-recreate postgres'
     )
     core_restore = (
-        '"${prior_compose[@]}" up -d --no-build --pull never --force-recreate \\\n'
+        '"${prior_compose[@]}" up -d --no-build --pull never --force-recreate "${BUILD72_COMPOSE_NO_DEPS[@]}" \\\n'
         '          "${PRIOR_NON_POSTGRES_SERVICES[@]}"'
     )
     skip_caddy = '[ "$service" = caddy ] && continue'
@@ -789,8 +869,7 @@ def test_rollback_restores_prior_postgres_before_using_the_database_backup() -> 
     )
     restore_images = 'rollback_image_id=$(docker image inspect --format \'{{.Id}}\''
     start_prior_postgres = (
-        '"${prior_compose[@]}" up -d --no-build --pull never \\\n'
-        '        --force-recreate postgres'
+        '"${prior_compose[@]}" up -d --no-build --pull never --force-recreate postgres'
     )
     attest_prior_postgres = (
         'if [ "$restored_postgres_image_id" != '

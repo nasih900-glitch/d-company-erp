@@ -16,57 +16,60 @@ class GamingDurationDialHitTest {
     private val dial = IntSize(1000, 1000)
 
     @Test
-    fun twoPublishedPackagesSelectAtOppositeEndsOfTheRing() {
-        assertEquals(0, closestDurationDialStop(Offset(154f, 300f), dial, 2))
-        assertEquals(1, closestDurationDialStop(Offset(846f, 300f), dial, 2))
+    fun publishedDurationsUseClockPositionsAndNeverShareAnEndpoint() {
+        val stops = durationDialStopProgress(listOf(30, 60))
+        assertEquals(listOf(180f, 360f), stops)
+        assertEquals(90f, DURATION_DIAL_START + stops[0], 0.001f)
+        assertEquals(270f, DURATION_DIAL_START + stops[1], 0.001f)
+        assertEquals(listOf(90f, 180f), durationDialStopProgress(listOf(15, 30)))
+        assertEquals(listOf(60f, 120f), durationDialStopProgress(listOf(10, 20)))
+        assertEquals(2, durationDialStopProgress(listOf(60, 120)).distinct().size)
     }
 
     @Test
     fun tapsAwayFromTheRingCannotChangeTheSelectedPackage() {
-        assertNull(closestDurationDialStop(Offset(500f, 500f), dial, 2))
-        assertNull(closestDurationDialStop(Offset(-10f, 300f), dial, 2))
+        assertNull(durationDialAngleOnRing(Offset(500f, 500f), dial))
+        assertNull(durationDialAngleOnRing(Offset(-10f, 300f), dial))
+        assertEquals(90f, durationDialAngleOnRing(Offset(500f, 900f), dial)!!, 0.001f)
+        assertEquals(270f, durationDialAngleOnRing(Offset(500f, 100f), dial)!!, 0.001f)
     }
 
     @Test
-    fun fullRingMapsBottomAndVerticalPositionsToPublishedStops() {
-        assertEquals(1, closestDurationDialStop(Offset(500f, 900f), dial, 2))
-        assertEquals(1, closestDurationDialStop(Offset(900f, 500f), dial, 2))
-        assertEquals(0, closestDurationDialStop(Offset(100f, 500f), dial, 2))
-        assertEquals(1, closestDurationDialStop(Offset(500f, 100f), dial, 3))
-    }
-
-    @Test
-    fun circularStopDistanceIsStableAcrossZeroDegreeSeam() {
-        assertEquals(1, nearestDurationDialStop(359f, 3))
-        assertEquals(1, nearestDurationDialStop(1f, 3))
-        assertEquals(2f, circularAngleDistance(359f, 1f), 0.001f)
-        assertEquals(0f, durationDialSweep(135f), 0.001f)
-        assertEquals(360f, durationDialSweep(495f), 0.001f)
+    fun clockwiseDragFromBottomReachesHourAndReverseReturnsToThirty() {
+        val stops = durationDialStopProgress(listOf(30, 60))
+        var progress = 180f
+        for (angle in 105..270 step 15) progress = durationDialDragProgress(progress, angle - 15f, angle.toFloat())
+        assertEquals(360f, progress, 0.001f)
+        assertEquals(1, durationDialIndexAtProgress(progress, stops))
+        for (angle in 255 downTo 90 step 15) progress = durationDialDragProgress(progress, angle + 15f, angle.toFloat())
+        assertEquals(180f, progress, 0.001f)
+        assertEquals(0, durationDialIndexAtProgress(progress, stops))
     }
 
     @Test
     fun draggingThroughZeroPreservesDirectionAndClampsAtBothEnds() {
         assertEquals(226f, durationDialDragProgress(224f, 359f, 1f), 0.001f)
         assertEquals(224f, durationDialDragProgress(226f, 1f, 359f), 0.001f)
-        assertEquals(360f, durationDialDragProgress(359f, 134f, 138f), 0.001f)
-        assertEquals(0f, durationDialDragProgress(1f, 136f, 132f), 0.001f)
-        assertEquals(358f, durationDialDragProgress(360f, 135f, 133f), 0.001f)
+        assertEquals(360f, durationDialDragProgress(359f, 269f, 273f), 0.001f)
+        assertEquals(0f, durationDialDragProgress(1f, 271f, 267f), 0.001f)
+        assertEquals(358f, durationDialDragProgress(360f, 270f, 268f), 0.001f)
     }
 
     @Test
-    fun graspingSharedEndpointKeepsCurrentMinimumOrMaximum() {
-        assertEquals(0f, durationDialProgressAtAngle(135f, 0f), 0.001f)
-        assertEquals(360f, durationDialProgressAtAngle(135f, 360f), 0.001f)
-        assertEquals(360f, durationDialProgressAtAngle(134f, 360f), 0.001f)
+    fun hourHandleCannotWrapToMinimumFromSmallReleaseJitter() {
+        assertEquals(360f, durationDialProgressAtAngle(270f, 360f), 0.001f)
+        assertEquals(360f, durationDialProgressAtAngle(269f, 360f), 0.001f)
+        assertEquals(180f, durationDialProgressAtAngle(90f, 180f), 0.001f)
     }
 
     @Test
     fun packageBoundaryHasToleranceRatherThanRepeatedPriceSwitches() {
-        assertEquals(0, durationDialIndexAtProgress(183f, 2, previousIndex = 0))
-        assertEquals(1, durationDialIndexAtProgress(186f, 2, previousIndex = 0))
-        assertEquals(1, durationDialIndexAtProgress(177f, 2, previousIndex = 1))
-        assertEquals(0, durationDialIndexAtProgress(174f, 2, previousIndex = 1))
-        assertEquals(0, durationDialIndexAtProgress(360f, 1, previousIndex = 0))
+        val stops = durationDialStopProgress(listOf(30, 60))
+        assertEquals(0, durationDialIndexAtProgress(273f, stops, previousIndex = 0))
+        assertEquals(1, durationDialIndexAtProgress(276f, stops, previousIndex = 0))
+        assertEquals(1, durationDialIndexAtProgress(267f, stops, previousIndex = 1))
+        assertEquals(0, durationDialIndexAtProgress(264f, stops, previousIndex = 1))
+        assertEquals(0, durationDialIndexAtProgress(360f, listOf(180f), previousIndex = 0))
     }
 
     @Test

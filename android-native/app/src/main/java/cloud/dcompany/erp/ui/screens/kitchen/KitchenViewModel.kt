@@ -187,6 +187,7 @@ class KitchenViewModel : ViewModel() {
 
     private val api = ApiClient.create<KitchenApi>()
     private val appCtx = DCompanyApp.instance
+    private val operations = appCtx.handoverOperations.caller(appCtx.shiftCache.profile.value, appCtx.cacheIsolation.currentLease())
     private val db = appCtx.db
 
     private val includeServed = MutableStateFlow(false)
@@ -347,7 +348,7 @@ class KitchenViewModel : ViewModel() {
     fun retryRejectedAdvance(localId: String) {
         if (!requireWrite()) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { error.value = "Resolve the original till handover before changing kitchen work." }) {
             try {
                 var changed = 0
                 if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
@@ -373,7 +374,7 @@ class KitchenViewModel : ViewModel() {
      */
     fun discardRejectedAdvance(localId: String) {
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { error.value = "Resolve the original till handover before changing kitchen work." }) {
             try {
                 var changed = 0
                 if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
@@ -397,7 +398,7 @@ class KitchenViewModel : ViewModel() {
     fun acknowledgeCancellation(orderId: String, lineId: String) {
         if (!requireWrite()) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { error.value = "Resolve the original till handover before changing kitchen work." }) {
             try {
                 var inserted = false
                 if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
@@ -430,7 +431,7 @@ class KitchenViewModel : ViewModel() {
     fun retryRejectedCancellationAck(localId: String) {
         if (!requireWrite()) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { error.value = "Resolve the original till handover before changing kitchen work." }) {
             try {
                 var changed = 0
                 if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
@@ -469,7 +470,7 @@ class KitchenViewModel : ViewModel() {
 
         busyOrderId.value = order.id
         error.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busyOrderId.value = null; error.value = "Resolve the original till handover before changing kitchen work." }) {
             try {
                 if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                         db.kitchenDao().insertAdvance(

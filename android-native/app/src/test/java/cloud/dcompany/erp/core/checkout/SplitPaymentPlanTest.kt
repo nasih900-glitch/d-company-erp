@@ -32,7 +32,7 @@ class SplitPaymentPlanTest {
         val afterRestart = requireNotNull(SplitPaymentPolicy.decodeStoredMethod(persisted))
         assertEquals(plan.legs, afterRestart.legs)
         assertEquals(persisted, SplitPaymentPolicy.encode(afterRestart))
-        assertEquals("Cash ₹50 + UPI ₹70", afterRestart.displayLabel())
+        assertEquals("Cash 50 + UPI 70", afterRestart.displayLabel())
     }
 
     @Test

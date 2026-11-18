@@ -4,8 +4,13 @@ import android.content.Context
 import androidx.room.withTransaction
 import androidx.sqlite.db.SimpleSQLiteQuery
 import cloud.dcompany.erp.core.db.ErpDatabase
+import cloud.dcompany.erp.core.handover.OperationDispatchContext
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.atomic.AtomicLong
 
 data class CacheScope(
@@ -246,6 +251,10 @@ class CacheIsolationCoordinator internal constructor(
 
     @Volatile
     private var activeLease: CacheScopeLease? = null
+    private val _activeLease = MutableStateFlow<CacheScopeLease?>(null)
+
+    /** Exact, generation-bearing read authority for lease-bound screen projections. */
+    val activeLeaseFlow: StateFlow<CacheScopeLease?> = _activeLease.asStateFlow()
 
     internal constructor(context: Context, db: ErpDatabase) : this(
         RoomScopeDataPurger(db),
@@ -256,6 +265,11 @@ class CacheIsolationCoordinator internal constructor(
 
     /** Capture immediately before an authenticated read request is sent. */
     fun currentLease(): CacheScopeLease? = activeLease
+    internal fun currentGeneration(): Long = generations.get()
+
+    internal suspend fun publishIfInactiveGeneration(expected: Long, publish: () -> Boolean): Boolean = mutex.withLock {
+        if (activeLease != null || generations.get() != expected) false else publish()
+    }
 
     /**
      * Serialize the final Room write with scope transitions. A plain
@@ -264,24 +278,45 @@ class CacheIsolationCoordinator internal constructor(
     suspend fun commitIfCurrent(
         lease: CacheScopeLease,
         write: suspend () -> Unit,
-    ): Boolean = mutex.withLock {
-        if (activeLease != lease) return@withLock false
-        write()
-        true
+    ): Boolean {
+        if (currentCoroutineContext()[cloud.dcompany.erp.core.handover.OwnerSupportDeliveryContext] != null) return false
+        val operation = currentCoroutineContext()[OperationDispatchContext]
+        return mutex.withLock {
+            if (activeLease != lease || !originalOperationMayCommit(operation, lease)) return@withLock false
+            write()
+            true
+        }
     }
 
     /** Value-returning form used by guarded outbox inserts and CAS updates. */
     suspend fun <T> commitResultIfCurrent(
         lease: CacheScopeLease,
         write: suspend () -> T,
-    ): ScopedCommitResult<T> = mutex.withLock {
-        if (activeLease != lease) return@withLock ScopedCommitResult.Stale
-        ScopedCommitResult.Committed(write())
+    ): ScopedCommitResult<T> {
+        if (currentCoroutineContext()[cloud.dcompany.erp.core.handover.OwnerSupportDeliveryContext] != null) return ScopedCommitResult.Stale
+        val operation = currentCoroutineContext()[OperationDispatchContext]
+        return mutex.withLock {
+            if (activeLease != lease || !originalOperationMayCommit(operation, lease)) return@withLock ScopedCommitResult.Stale
+            ScopedCommitResult.Committed(write())
+        }
+    }
+
+    private fun originalOperationMayCommit(operation: OperationDispatchContext?, lease: CacheScopeLease): Boolean {
+        // Existing bootstrap/cache readers retain their own exact-lease contract.
+        if (operation == null) return true
+        val permit = operation.permit ?: return false
+        return operation.binding.cacheLease == lease && operation.binding.isCurrent() &&
+            permit.authority == operation.binding.authority && permit.id in permit.owner.state.value.activeOperations
     }
 
     private fun deactivateLocked() {
-        activeLease = null
+        publishLeaseLocked(null)
         generations.incrementAndGet()
+    }
+
+    private fun publishLeaseLocked(lease: CacheScopeLease?) {
+        activeLease = lease
+        _activeLease.value = lease
     }
 
     /**
@@ -331,6 +366,22 @@ class CacheIsolationCoordinator internal constructor(
         decision
     }
 
+    /** The predicate is checked again after suspended domain/DB checks, at the actual revocation commit. */
+    internal suspend fun deactivateOriginalAfterOutboxGate(
+        expectedLease: CacheScopeLease?, expectedGeneration: Long,
+        originalLoginIsCurrent: () -> Boolean,
+        commitIfOriginalLoginCurrent: (() -> Unit) -> Boolean,
+        gate: suspend () -> OutboxGateResult,
+    ): OutboxGateResult = mutex.withLock {
+        fun current() = activeLease == expectedLease && generations.get() == expectedGeneration && originalLoginIsCurrent()
+        if (!current()) return@withLock OutboxGateResult.Blocked("The original employee or workspace changed. No workspace was revoked.")
+        val decision = gate()
+        if (decision !is OutboxGateResult.Allowed) return@withLock decision
+        if (!current()) return@withLock OutboxGateResult.Blocked("The original employee or workspace changed. No workspace was revoked.")
+        if (commitIfOriginalLoginCurrent(::deactivateLocked)) OutboxGateResult.Allowed
+        else OutboxGateResult.Blocked("The original employee changed. No workspace was revoked.")
+    }
+
     suspend fun invalidate() = mutex.withLock {
         deactivateLocked()
         val cleared = try {
@@ -364,7 +415,7 @@ class CacheIsolationCoordinator internal constructor(
                 )
             }
             val lease = newLease(scope)
-            activeLease = lease
+            publishLeaseLocked(lease)
             CachedScopeLeaseActivation(CacheScopeActivation.RETAINED, lease)
         }
 
@@ -397,12 +448,25 @@ class CacheIsolationCoordinator internal constructor(
                 return@withLock CachedScopeLeaseAdoption.StoredScopeMismatch
             }
             val lease = newLease(scope)
-            activeLease = lease
+            publishLeaseLocked(lease)
             CachedScopeLeaseAdoption.Ready(lease = lease, adopted = true)
         }
 
     /** A server-validated scope may replace another scope after an atomic full-data purge. */
     suspend fun activateValidated(scope: CacheScope): CacheScopeActivation = mutex.withLock {
+        activateValidatedLocked(scope) { true }
+    }
+
+    /** This one transition may replace only the exact cache captured before incoming login. */
+    suspend fun activateValidatedForHandover(scope: CacheScope, previous: CacheScopeLease?,
+        generation: Long, originalLoginIsCurrent: () -> Boolean): CacheScopeLease = mutex.withLock {
+        check(activeLease == previous && generations.get() == generation && originalLoginIsCurrent())
+        activateValidatedLocked(scope, originalLoginIsCurrent)
+        requireNotNull(activeLease)
+    }
+
+    private suspend fun activateValidatedLocked(scope: CacheScope, stillCurrent: () -> Boolean): CacheScopeActivation {
+        check(stillCurrent())
         deactivateLocked()
         val stored = try {
             marker.current()
@@ -413,8 +477,9 @@ class CacheIsolationCoordinator internal constructor(
             )
         }
         if (stored == scope) {
-            activeLease = newLease(scope)
-            return@withLock CacheScopeActivation.RETAINED
+            check(stillCurrent())
+            publishLeaseLocked(newLease(scope))
+            return CacheScopeActivation.RETAINED
         }
 
         // Preserve a still-valid old marker when the refusal is already known.
@@ -441,6 +506,7 @@ class CacheIsolationCoordinator internal constructor(
 
         // Fail closed across process death: once a scope change begins, the old
         // marker must never be able to reopen data that is being replaced.
+        check(stillCurrent())
         val cleared = try {
             marker.clear()
         } catch (error: Exception) {
@@ -455,6 +521,7 @@ class CacheIsolationCoordinator internal constructor(
             )
         }
 
+        check(stillCurrent())
         try {
             if (!purger.purgeIfClean()) {
                 throw CacheScopeException(
@@ -470,6 +537,7 @@ class CacheIsolationCoordinator internal constructor(
                 error,
             )
         }
+        check(stillCurrent())
         val committed = try {
             marker.remember(scope)
         } catch (error: Exception) {
@@ -483,8 +551,9 @@ class CacheIsolationCoordinator internal constructor(
                 "The tablet could not securely save the active account scope. Try again or ask support.",
             )
         }
-        activeLease = newLease(scope)
-        CacheScopeActivation.PURGED
+        check(stillCurrent())
+        publishLeaseLocked(newLease(scope))
+        return CacheScopeActivation.PURGED
     }
 
     private fun newLease(scope: CacheScope): CacheScopeLease =

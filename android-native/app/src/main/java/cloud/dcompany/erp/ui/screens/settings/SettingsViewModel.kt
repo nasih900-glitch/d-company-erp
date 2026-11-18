@@ -159,7 +159,7 @@ internal fun validateLoyaltyRules(rules: LoyaltyProgramRulesDto): String? {
         return "Gaming earn points must be 0 to 1,000,000 and rupees must be 1 to 1,000,000."
     }
     if (rules.minorPerPoint !in 1..1_000_000) {
-        return "The value of 100 points must be between ₹1 and ₹10,00,000."
+        return "The value of 100 points must be between 1 and 10,00,000."
     }
     val expectedRanks = listOf("rookie", "player", "pro", "legend")
     if (rules.ranks.map { it.key } != expectedRanks) return "All four stable rank tiers are required."
@@ -217,6 +217,7 @@ internal fun settingsReadPresentation(
 class SettingsViewModel : ViewModel() {
 
     private val appCtx = DCompanyApp.instance
+    private val operations = appCtx.handoverOperations.caller(appCtx.shiftCache.profile.value, appCtx.cacheIsolation.currentLease())
     private val db = appCtx.db
     private val api = ApiClient.create<SettingsApi>()
     private val keys = IdempotencyKeys()
@@ -293,7 +294,8 @@ class SettingsViewModel : ViewModel() {
             } catch (error: Exception) {
                 if (cacheIsolation.currentLease() == lease) {
                     _state.value = _state.value.copy(
-                        loyaltyProgramError = error.settingsReadable(
+                        loyaltyProgramError = error.settingsFailure(
+                            SettingsFailureOperation.READ,
                             "Could not load the points program. Ordinary checkout remains available.",
                         ),
                     )
@@ -353,7 +355,7 @@ class SettingsViewModel : ViewModel() {
             loyaltyProgramError = null,
             loyaltyProgramNotice = null,
         )
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(loyaltyProgramSaving = false, loyaltyProgramError = "Resolve the original till handover before changing this workspace.") }) {
             try {
                 if (cacheIsolation.currentLease() != lease) return@launch
                 val saved = api.publishLoyaltyProgram(body, key)
@@ -379,12 +381,16 @@ class SettingsViewModel : ViewModel() {
                     loyaltyProgramDraft = saved.rules,
                     loyaltyProgramNotice = "Points program revision ${saved.revision} published. New rules apply only to future points actions.",
                 )
+                reconciled()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
                 if (cacheIsolation.currentLease() == lease) {
                     _state.value = _state.value.copy(
-                        loyaltyProgramError = error.settingsReadable("Could not publish the points program."),
+                        loyaltyProgramError = error.settingsFailure(
+                            SettingsFailureOperation.IDEMPOTENT_SERVER_MUTATION,
+                            "Could not publish the points program.",
+                        ),
                     )
                 }
             } finally {
@@ -413,7 +419,10 @@ class SettingsViewModel : ViewModel() {
                 throw cancelled
             } catch (error: Exception) {
                 _state.value = _state.value.copy(
-                    meError = error.settingsReadable("Could not refresh your account."),
+                    meError = error.settingsFailure(
+                        SettingsFailureOperation.READ,
+                        "Could not refresh your account.",
+                    ),
                 )
             } finally {
                 _state.value = _state.value.copy(meLoading = false)
@@ -431,15 +440,19 @@ class SettingsViewModel : ViewModel() {
             return
         }
         _state.value = _state.value.copy(accountBusy = true, accountError = null, accountNotice = null)
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(accountBusy = false, accountError = "Resolve the original till handover before changing this workspace.") }) {
             try {
                 val challenge = api.requestPasswordReset(PasswordResetRequestBody(email))
                 _state.value = _state.value.copy(challenge = challenge)
+                reconciled()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
                 _state.value = _state.value.copy(
-                    accountError = error.settingsReadable("Could not send the approval code."),
+                    accountError = error.settingsFailure(
+                        SettingsFailureOperation.UNKEYED_SERVER_MUTATION,
+                        "Could not send the approval code.",
+                    ),
                 )
             } finally {
                 _state.value = _state.value.copy(accountBusy = false)
@@ -465,7 +478,7 @@ class SettingsViewModel : ViewModel() {
             return
         }
         _state.value = _state.value.copy(accountBusy = true, accountError = null)
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(accountBusy = false, accountError = "Resolve the original till handover before changing this workspace.") }) {
             try {
                 val result = api.confirmPasswordReset(
                     PasswordResetConfirmBody(
@@ -479,11 +492,15 @@ class SettingsViewModel : ViewModel() {
                     accountNotice = result.message.ifBlank { "Password updated." },
                     passwordChanged = true,
                 )
+                reconciled()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
                 _state.value = _state.value.copy(
-                    accountError = error.settingsReadable("Could not change the password."),
+                    accountError = error.settingsFailure(
+                        SettingsFailureOperation.UNKEYED_SERVER_MUTATION,
+                        "Could not change the password.",
+                    ),
                 )
             } finally {
                 _state.value = _state.value.copy(accountBusy = false)
@@ -538,7 +555,10 @@ class SettingsViewModel : ViewModel() {
                 throw cancelled
             } catch (error: Exception) {
                 _state.value = _state.value.copy(
-                    companyError = error.settingsReadable("Could not refresh company settings."),
+                    companyError = error.settingsFailure(
+                        SettingsFailureOperation.READ,
+                        "Could not refresh company settings.",
+                    ),
                 )
             } finally {
                 _state.value = _state.value.copy(
@@ -582,7 +602,7 @@ class SettingsViewModel : ViewModel() {
         _state.value = _state.value.copy(
             companySaving = true, companyFormError = null, companyNotice = null,
         )
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(companySaving = false, companyFormError = "Resolve the original till handover before changing this workspace.") }) {
             try {
                 if (!cacheIsolation.commitIfCurrent(scopeLease) {
                         db.settingsDao().replacePendingCompanyEdit(
@@ -611,7 +631,8 @@ class SettingsViewModel : ViewModel() {
                 throw cancelled
             } catch (error: Exception) {
                 _state.value = _state.value.copy(
-                    companyFormError = error.settingsReadable(
+                    companyFormError = error.settingsFailure(
+                        SettingsFailureOperation.LOCAL_MUTATION,
                         "Could not save this company change on the tablet.",
                     ),
                 )
@@ -624,7 +645,7 @@ class SettingsViewModel : ViewModel() {
     fun retryCompanyEdit() {
         val localId = _state.value.companyPendingLocalId ?: return
         val scopeLease = cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(companyNotice = "Resolve the original till handover before changing this workspace.") }) {
             var queued = false
             if (!cacheIsolation.commitIfCurrent(scopeLease) {
                     queued = db.settingsDao().retryCompanyEdit(localId) == 1
@@ -644,7 +665,7 @@ class SettingsViewModel : ViewModel() {
     fun discardRejectedCompanyEdit() {
         val localId = _state.value.companyPendingLocalId ?: return
         val scopeLease = cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(companyNotice = "Resolve the original till handover before changing this workspace.") }) {
             try {
                 var discarded = false
                 var cached: CompanyDto? = null
@@ -672,7 +693,8 @@ class SettingsViewModel : ViewModel() {
                     throw cancelled
                 } catch (error: Exception) {
                     _state.value = _state.value.copy(
-                        companyError = error.settingsReadable(
+                        companyError = error.settingsFailure(
+                            SettingsFailureOperation.READ,
                             "The failed local change was discarded, but current company settings could not be refreshed.",
                         ),
                     )
@@ -681,7 +703,8 @@ class SettingsViewModel : ViewModel() {
                 throw cancelled
             } catch (error: Exception) {
                 _state.value = _state.value.copy(
-                    companyNotice = error.settingsReadable(
+                    companyNotice = error.settingsFailure(
+                        SettingsFailureOperation.LOCAL_MUTATION,
                         "Could not discard the failed company change from this tablet.",
                     ),
                 )
@@ -727,7 +750,10 @@ class SettingsViewModel : ViewModel() {
                 throw cancelled
             } catch (error: Exception) {
                 _state.value = _state.value.copy(
-                    branchesError = error.settingsReadable("Could not refresh the shop."),
+                    branchesError = error.settingsFailure(
+                        SettingsFailureOperation.READ,
+                        "Could not refresh the shop.",
+                    ),
                 )
             } finally {
                 _state.value = _state.value.copy(
@@ -780,7 +806,7 @@ class SettingsViewModel : ViewModel() {
                 _state.value = _state.value.copy(branchSaving = false)
                 return
             }
-            viewModelScope.launch {
+            operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(branchSaving = false, branchFormError = "Resolve the original till handover before changing this workspace.") }) {
                 try {
                     if (!cacheIsolation.commitIfCurrent(scopeLease) {
                             db.settingsDao().insertLocalBranch(
@@ -806,13 +832,15 @@ class SettingsViewModel : ViewModel() {
                         branchForm = null,
                         branchNotice = "Shop \"${form.name.trim()}\" queued — will sync when back online.",
                     )
-                    clearNoticeLater { it.copy(branchNotice = null) }
+                    reconciled()
+                clearNoticeLater { it.copy(branchNotice = null) }
                     appCtx.sync.requestSync()
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (error: Exception) {
                     _state.value = _state.value.copy(
-                        branchFormError = error.settingsReadable(
+                        branchFormError = error.settingsFailure(
+                            SettingsFailureOperation.LOCAL_MUTATION,
                             "Could not save this shop on the tablet.",
                         ),
                     )
@@ -826,7 +854,7 @@ class SettingsViewModel : ViewModel() {
         val body = form.toBody()
         val operation = "branch:${form.id}"
         val key = keys.keyFor(operation, body)
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(branchSaving = false, branchFormError = "Resolve the original till handover before changing this workspace.") }) {
             try {
                 val saved = api.updateBranch(form.id!!, body, key)
                 keys.done(operation)
@@ -840,7 +868,10 @@ class SettingsViewModel : ViewModel() {
                 throw cancelled
             } catch (error: Exception) {
                 _state.value = _state.value.copy(
-                    branchFormError = error.settingsReadable("Could not save this shop."),
+                    branchFormError = error.settingsFailure(
+                        SettingsFailureOperation.IDEMPOTENT_SERVER_MUTATION,
+                        "Could not save this shop.",
+                    ),
                 )
             } finally {
                 _state.value = _state.value.copy(branchSaving = false)
@@ -850,7 +881,7 @@ class SettingsViewModel : ViewModel() {
 
     fun retryBranch(localId: String) {
         val scopeLease = cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(branchNotice = "Resolve the original till handover before changing this workspace.") }) {
             var queued = false
             if (!cacheIsolation.commitIfCurrent(scopeLease) {
                     queued = db.settingsDao().retryBranch(localId) == 1
@@ -869,7 +900,7 @@ class SettingsViewModel : ViewModel() {
 
     fun discardRejectedBranch(localId: String) {
         val scopeLease = cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(branchNotice = "Resolve the original till handover before changing this workspace.") }) {
             try {
                 var discarded = false
                 if (!cacheIsolation.commitIfCurrent(scopeLease) {
@@ -890,7 +921,8 @@ class SettingsViewModel : ViewModel() {
                         throw cancelled
                     } catch (error: Exception) {
                         _state.value = _state.value.copy(
-                            branchesError = error.settingsReadable(
+                            branchesError = error.settingsFailure(
+                                SettingsFailureOperation.READ,
                                 "The failed local shop was discarded, but shop details could not be refreshed.",
                             ),
                         )
@@ -900,7 +932,10 @@ class SettingsViewModel : ViewModel() {
                 throw cancelled
             } catch (error: Exception) {
                 _state.value = _state.value.copy(
-                    branchNotice = error.settingsReadable("Could not discard the failed shop."),
+                    branchNotice = error.settingsFailure(
+                        SettingsFailureOperation.LOCAL_MUTATION,
+                        "Could not discard the failed shop.",
+                    ),
                 )
             }
         }
@@ -937,7 +972,10 @@ class SettingsViewModel : ViewModel() {
                 throw cancelled
             } catch (error: Exception) {
                 _state.value = _state.value.copy(
-                    terminalsError = error.settingsReadable("Could not refresh terminals."),
+                    terminalsError = error.settingsFailure(
+                        SettingsFailureOperation.READ,
+                        "Could not refresh terminals.",
+                    ),
                 )
             } finally {
                 _state.value = _state.value.copy(terminalsLoading = false)
@@ -1034,7 +1072,7 @@ class SettingsViewModel : ViewModel() {
             terminalActionError = null,
             terminalsError = null,
         )
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(terminalBusy = false, terminalEditError = "Resolve the original till handover before changing this workspace.") }) {
             try {
                 val updated = api.updateTerminal(edit.id, edit.toBody())
                 _state.value = _state.value.copy(
@@ -1057,7 +1095,8 @@ class SettingsViewModel : ViewModel() {
                         )
                     } catch (labelError: Exception) {
                         _state.value = _state.value.copy(
-                            terminalsError = labelError.settingsReadable(
+                            terminalsError = labelError.settingsFailure(
+                                SettingsFailureOperation.LOCAL_MUTATION,
                                 "The terminal was updated, but this tablet could not save the new till label. Sign in online again to refresh it.",
                             ),
                         )
@@ -1072,17 +1111,22 @@ class SettingsViewModel : ViewModel() {
                     // optimistic row and report only that the list refresh is
                     // pending; never invite a second rename as if it failed.
                     _state.value = _state.value.copy(
-                        terminalsError = refreshError.settingsReadable(
+                        terminalsError = refreshError.settingsFailure(
+                            SettingsFailureOperation.READ,
                             "The terminal was updated, but the full terminal list could not be refreshed.",
                         ),
                     )
                 }
                 clearNoticeLater { it.copy(terminalNotice = null) }
+                reconciled()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
                 _state.value = _state.value.copy(
-                    terminalEditError = error.settingsReadable("Could not update this terminal."),
+                    terminalEditError = error.settingsFailure(
+                        SettingsFailureOperation.UNKEYED_SERVER_MUTATION,
+                        "Could not update this terminal.",
+                    ),
                 )
             } finally {
                 _state.value = _state.value.copy(terminalBusy = false)
@@ -1130,7 +1174,7 @@ class SettingsViewModel : ViewModel() {
             terminalFormError = null,
             terminalActionError = null,
         )
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(terminalBusy = false, terminalActionError = "Resolve the original till handover before changing this workspace.") }) {
             try {
                 if (!cacheIsolation.commitIfCurrent(scopeLease) {
                         db.settingsDao().insertLocalTerminal(
@@ -1157,7 +1201,8 @@ class SettingsViewModel : ViewModel() {
                 throw cancelled
             } catch (error: Exception) {
                 _state.value = _state.value.copy(
-                    terminalFormError = error.settingsReadable(
+                    terminalFormError = error.settingsFailure(
+                        SettingsFailureOperation.LOCAL_MUTATION,
                         "Could not save this terminal on the tablet.",
                     ),
                 )
@@ -1169,7 +1214,7 @@ class SettingsViewModel : ViewModel() {
 
     fun retryTerminal(localId: String) {
         val scopeLease = cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(terminalNotice = "Resolve the original till handover before changing this workspace.") }) {
             var queued = false
             if (!cacheIsolation.commitIfCurrent(scopeLease) {
                     queued = db.settingsDao().retryTerminal(localId) == 1
@@ -1188,7 +1233,7 @@ class SettingsViewModel : ViewModel() {
 
     fun discardRejectedTerminal(localId: String) {
         val scopeLease = cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(terminalNotice = "Resolve the original till handover before changing this workspace.") }) {
             try {
                 var discarded = false
                 if (!cacheIsolation.commitIfCurrent(scopeLease) {
@@ -1209,7 +1254,8 @@ class SettingsViewModel : ViewModel() {
                         throw cancelled
                     } catch (error: Exception) {
                         _state.value = _state.value.copy(
-                            terminalsError = error.settingsReadable(
+                            terminalsError = error.settingsFailure(
+                                SettingsFailureOperation.READ,
                                 "The failed local terminal was discarded, but terminals could not be refreshed.",
                             ),
                         )
@@ -1219,7 +1265,10 @@ class SettingsViewModel : ViewModel() {
                 throw cancelled
             } catch (error: Exception) {
                 _state.value = _state.value.copy(
-                    terminalNotice = error.settingsReadable("Could not discard the failed terminal."),
+                    terminalNotice = error.settingsFailure(
+                        SettingsFailureOperation.LOCAL_MUTATION,
+                        "Could not discard the failed terminal.",
+                    ),
                 )
             }
         }
@@ -1235,7 +1284,7 @@ class SettingsViewModel : ViewModel() {
             terminalBusy = true,
             terminalActionError = null,
         )
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { _state.value = _state.value.copy(terminalBusy = false, terminalActionError = "Resolve the original till handover before changing this workspace.") }) {
             try {
                 api.deleteTerminal(terminal.id, key)
                 keys.done(operation)
@@ -1244,6 +1293,7 @@ class SettingsViewModel : ViewModel() {
                 )
                 loadTerminalsCache()
                 clearNoticeLater { it.copy(terminalNotice = null) }
+                reconciled()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -1251,7 +1301,10 @@ class SettingsViewModel : ViewModel() {
                 // till that shifts or orders point at, because that history is
                 // what a GST audit reads.
                 _state.value = _state.value.copy(
-                    terminalActionError = error.settingsReadable("Could not delete this terminal."),
+                    terminalActionError = error.settingsFailure(
+                        SettingsFailureOperation.IDEMPOTENT_SERVER_MUTATION,
+                        "Could not delete this terminal.",
+                    ),
                 )
             } finally {
                 _state.value = _state.value.copy(terminalBusy = false)
@@ -1359,10 +1412,35 @@ private fun LocalTerminalEntity.toPendingRow(branches: List<BranchDto>) = Pendin
  * Asia/Kolkata" on the field, not a status code. If one still gets through,
  * the note below says which values the server is capable of rejecting rather
  * than pretending the request simply failed.
+ *
+ * The operation is mandatory because a read, a local Room mutation, an
+ * unkeyed live action, and a keyed replay have different recovery guarantees.
+ * In particular, only the keyed case may promise that retrying cannot apply
+ * the operation twice.
  */
-private fun ApiException.readable(): String {
-    val server = message?.takeIf { it.isNotBlank() } ?: "The request failed."
+internal enum class SettingsFailureOperation {
+    READ,
+    LOCAL_MUTATION,
+    UNKEYED_SERVER_MUTATION,
+    IDEMPOTENT_SERVER_MUTATION,
+}
+
+private fun ApiException.readableFor(
+    operation: SettingsFailureOperation,
+    fallback: String,
+): String {
+    val server = message?.takeIf { it.isNotBlank() } ?: fallback
     return when {
+        operation == SettingsFailureOperation.LOCAL_MUTATION ->
+            fallback
+        operation == SettingsFailureOperation.READ ->
+            if (isAmbiguous) {
+                "$fallback This refresh did not change any settings."
+            } else {
+                server
+            }
+        status == 403 ->
+            "$server Company and shop settings need an owner login."
         status == 409 && server.contains("invoice series cannot be changed", ignoreCase = true) ->
             "$server Refresh this shop and keep its current invoice series."
         status == 409 && server.contains("invoice series", ignoreCase = true) ->
@@ -1371,17 +1449,21 @@ private fun ApiException.readable(): String {
             "$server The server rejected one of these values — check the required field " +
                 "formats, timezone (use an IANA name like Asia/Kolkata), company identity, " +
                 "UPI ID (name@bank), licences and opening hours (HH:MM)."
-        isAmbiguous ->
+        operation == SettingsFailureOperation.IDEMPOTENT_SERVER_MUTATION && isAmbiguous ->
             "$server It is not known whether the change was applied. Tap save again — " +
                 "the same request is replayed, so it cannot be applied twice."
-        status == 403 ->
-            "$server Company and shop settings need an owner login."
+        operation == SettingsFailureOperation.UNKEYED_SERVER_MUTATION && isAmbiguous ->
+            "$server A response was not received, so the outcome is not confirmed. " +
+                "Verify the result before trying again."
         else -> server
     }
 }
 
-internal fun Throwable.settingsReadable(fallback: String): String =
-    (this as? ApiException)?.readable()
+internal fun Throwable.settingsFailure(
+    operation: SettingsFailureOperation,
+    fallback: String,
+): String =
+    (this as? ApiException)?.readableFor(operation, fallback)
         ?: fallback
 
 /**

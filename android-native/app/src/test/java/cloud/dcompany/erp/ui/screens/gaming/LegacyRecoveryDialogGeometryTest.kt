@@ -75,7 +75,7 @@ class LegacyRecoveryDialogGeometryTest {
                 "src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt",
             ),
         )
-        val frame = source.substringAfter("private fun LegacyRecoveryDialogFrame")
+        val frame = source.substringAfter("private fun GamingVisibleWindowDialogFrame")
             .substringBefore("internal fun LegacyPackageResolutionDialog")
 
         assertTrue("Every draw must resample the current screen frame and root origin", run {

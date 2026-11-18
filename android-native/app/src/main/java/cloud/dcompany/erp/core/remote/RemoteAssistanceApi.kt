@@ -30,6 +30,14 @@ internal interface RemoteAssistanceApi {
         @Tag requestScope: RemoteRequestScopeTag,
     ): RemoteDeviceKeyStatusResponse
 
+    @GET("remote-assistance/device/grants/{grant_id}/status")
+    suspend fun grantStatus(@Path("grant_id") grantId: String,
+        @Query("installation_id") installationId: String, @Tag requestScope: RemoteRequestScopeTag): RemoteGrantStatusResponse
+
+    @GET("remote-assistance/device/sessions/{session_id}/status")
+    suspend fun sessionStatus(@Path("session_id") sessionId: String,
+        @Query("installation_id") installationId: String, @Tag requestScope: RemoteRequestScopeTag): RemoteSessionStatusResponse
+
     @POST("remote-assistance/device/heartbeat")
     suspend fun heartbeat(
         @Body body: RemoteDeviceHeartbeatRequest,
@@ -48,14 +56,14 @@ internal interface RemoteAssistanceApi {
         @Path("grant_id") grantId: String,
         @Body body: RemoteGrantDecisionRequest,
         @Tag requestScope: RemoteRequestScopeTag,
-    ): Response<Unit>
+    ): Response<RemoteGrantResponse>
 
     @POST("remote-assistance/device/grants/{grant_id}/revoke")
     suspend fun revokeGrant(
         @Path("grant_id") grantId: String,
         @Body body: RemoteGrantRevocationRequest,
         @Tag requestScope: RemoteRequestScopeTag,
-    ): Response<Unit>
+    ): Response<RemoteGrantResponse>
 
     @POST("remote-assistance/device/commands/{command_id}/result")
     suspend fun commandResult(
@@ -69,7 +77,7 @@ internal interface RemoteAssistanceApi {
         @Path("session_id") sessionId: String,
         @Body body: RemoteSessionEndRequest,
         @Tag requestScope: RemoteRequestScopeTag,
-    ): Response<Unit>
+    ): Response<RemoteSessionResponse>
 
     @Headers(
         "Content-Type: image/jpeg",
@@ -95,9 +103,9 @@ internal class RemoteAssistanceHttpException(val status: Int) :
     IOException("Remote-assistance request failed with HTTP $status")
 
 /** Retrofit Response is not success-shaped; every mutation must prove 2xx before local ack. */
-internal fun Response<Unit>.requireRemoteAssistanceSuccess() {
+internal fun <T> Response<T>.requireRemoteAssistanceSuccess() {
     if (!isSuccessful) throw RemoteAssistanceHttpException(code())
 }
 
 /** 409 remains retryable/conflicting; only exact absent/terminal proofs retire a mutation. */
-internal fun remoteMutationStatusIsTerminal(status: Int?): Boolean = status == 404 || status == 410
+internal fun remoteMutationStatusIsTerminal(status: Int?): Boolean = false // Errors never identify the retained action.

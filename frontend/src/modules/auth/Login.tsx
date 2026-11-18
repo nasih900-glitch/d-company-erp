@@ -8,6 +8,7 @@ import { auth } from '@/lib/erp-api';
 import { webLandingRouteFor } from '@/lib/product-profile';
 import DCompanyBrandMark from '@/components/brand/DCompanyBrandMark';
 import { useAuth } from './AuthContext';
+import SavedOwnerRecoveryLink from '@/components/ui/SavedOwnerRecoveryLink';
 
 type Mode = 'login' | 'reset-request' | 'reset-confirm' | 'register-request' | 'register-confirm';
 
@@ -116,6 +117,7 @@ export default function Login() {
   return (
     <div className="min-h-[100dvh] overflow-x-hidden flex items-center justify-center px-4 py-6 sm:p-6">
       <form onSubmit={submit} className="card w-full max-w-[24rem] space-y-5">
+        <SavedOwnerRecoveryLink/>
         <div className="relative space-y-3 text-center">
           {mode !== 'login' && (
             <button

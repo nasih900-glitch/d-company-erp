@@ -184,7 +184,7 @@ class InventoryLoadedWorkspaceUiTest {
         detail.performScrollToNode(batchRow)
         compose.onNode(batchRow).assertCompleteNodeInside(root, "Cached FIFO batch row")
         compose.onNode(hasText("7.25 unit") and hasAnyAncestor(batchRow)).assertIsDisplayed()
-        compose.onNode(hasText("₹1.23/unit") and hasAnyAncestor(batchRow)).assertIsDisplayed()
+        compose.onNode(hasText("1.23/unit") and hasAnyAncestor(batchRow)).assertIsDisplayed()
         compose.onNode(
             hasText("Physical Audit Shop · Received 2026-09-12 · lot DETAIL-CACHE") and
                 hasAnyAncestor(batchRow),

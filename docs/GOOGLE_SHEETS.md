@@ -12,7 +12,10 @@ configuration is verified. Code30.2 does not backfill historical ERP or
 spreadsheet rows. Keep the existing workbook tabs as their historical archive
 and reconcile them separately from the new append-only feed.
 
-The integration uses one bound Apps Script. Legacy mode owns one fixed tab named
+The integration uses one private, Owner-only standalone Apps Script, explicitly
+bound to the target workbook by its native spreadsheet ID. Workbook readers and
+editors do not gain access to this separate project or its signing properties.
+Legacy mode owns one fixed tab named
 **ERP Mirror v1**. Daily mode additionally owns a hidden, owner-protected
 **ERP Daily Collections v1** log, a configured future A:C range below the
 manual rows in **SHOP SALES REVENUE**, and one configured warning cell. It does
@@ -160,10 +163,13 @@ their totals from the mirrored transaction rows and reconcile them to the ERP.
 
 ### 1. Add the Apps Script
 
-Open the target Google Sheet, then choose **Extensions → Apps Script**. Add or
-update a file named **ERP.gs** with the exact content from
-`integrations/google-sheets/Code.gs`. Do not replace or edit the unrelated
-receipt/OCR **Code.gs** file. Save the project and deploy it as a Web app:
+Open Apps Script directly and create a **private standalone project** owned and
+editable only by the authorized workbook Owner. Verify the project audience
+separately from workbook sharing. Add **ERP.gs** with the exact content from
+`integrations/google-sheets/Code.gs`. Keep the workbook's unrelated receipt/OCR
+**Code.gs** and its project unchanged. Do not install secret-bearing receiver
+code in a public/shared workbook-bound project. Save and deploy the private
+project as a Web app:
 
 | Field | Value |
 |---|---|
@@ -171,8 +177,9 @@ receipt/OCR **Code.gs** file. Save the project and deploy it as a Web app:
 | Execute as | Me |
 | Who has access | Anyone with the link |
 
-The public URL is safe only because every event must carry a valid HMAC. Google
-will ask the sheet owner to authorize the bound script.
+The endpoint can receive signed server requests; that does not grant edit access
+to the private project. Every event must carry a valid HMAC. Google will ask the
+Owner to authorize the standalone script's spreadsheet access.
 
 Copy the `/exec` Web app URL. It should use `https://script.google.com`.
 
@@ -183,23 +190,68 @@ mirror. The ERP shows a new signing secret on initial setup, every URL change,
 or explicit rotation. Copy it immediately; ordinary status responses never
 expose it.
 
-### 3. Add the Script Property
+### 3. Add the required private Script Properties
 
 In Apps Script, open **Project Settings → Script Properties** and add:
 
 | Property | Value |
 |---|---|
+| `D_COMPANY_ERP_SPREADSHEET_ID` | Native target Google Sheets ID only, not its URL |
 | `D_COMPANY_ERP_MIRROR_HMAC_SECRET` | The signing secret returned by the ERP |
+
+The spreadsheet ID must be 20–200 ASCII letters, digits, underscores or hyphens,
+without whitespace. The receiver opens exactly that ID and checks the returned
+identity. Missing/malformed configuration or a mismatching identity refuses
+writes; it never falls back to an active spreadsheet or an event-provided ID.
+Google access/service failures retain the existing sanitized, bounded retry
+policy. The Owner must verify the ID points to the intended native workbook.
 
 Do not put the secret in `Code.gs`, a sheet cell, source control, screenshots, or
 support messages.
+
+### Existing-project migration and rollback boundary
+
+This required workbook binding is intentionally fail closed for older setups.
+Install it before activating the new receiver version. The seven-key health
+document is unchanged for dispatcher compatibility; a healthy GET is not proof
+of a usable target or successful delivery.
+
+The admitted `D_COMPANY_ERP_SPREADSHEET_ID` value is immutable for its verified
+ERP configuration generation. Editing that property in place does not change
+the backend URL/secret or generation, and an existing health/event ACK does not
+attest the workbook ID. Treat any workbook-ID change as a destination change:
+drain outstanding business work through the normal Owner lifecycle, perform a
+reviewed cutover/new generation and obtain fresh connection proofs. Independently
+attest the actual private-project property against the exact intended workbook
+before activation. Do not retarget existing pending facts by changing the
+property under an already verified connection.
+
+Before replacing a receiver, privately back up the actual current HEAD AND
+published-version source, complete file inventory/manifest, deployment ID/URL,
+execute-as/access settings and non-secret configuration. Historical backups or
+project names do not establish current binding. Preserve unrelated OCR code.
+If a signing key was held in a publicly editable script, treat it as potentially
+exposed and plan a new private receiver/key through the normal Owner lifecycle.
+Do not dump keys to logs or source, broaden project ACLs, reset queues, retarget
+old pending events, or bypass the generation-drain guard. A URL/secret transition
+is a separate guarded cutover with fresh connection proofs, not an automatic
+side effect of this source change. Rollback must use a trusted private endpoint
+and preserve all durable events rather than blindly reverting to an exposed key.
+
+Google's [bound-script guide](https://developers.google.com/apps-script/guides/bound)
+documents inherited container sharing and unavailable active-container special
+methods in web-app/API execution. The
+[SpreadsheetApp reference](https://developers.google.com/apps-script/reference/spreadsheet/spreadsheet-app)
+defines openById and nullable active-spreadsheet behavior. Explicit binding
+supports a private standalone receiver without changing the public workbook's
+chosen sharing, financial schema, health/ACK format or export-generation rules.
 
 ### 4. Test and verify
 
 For legacy mode, continue directly to the connection test below.
 
 For daily collections mode, first run the read-only Apps Script function
-`getDailyCollectionsD2Fingerprint`. Add a second Script Property named
+`getDailyCollectionsD2Fingerprint`. Add the additional Script Property named
 `D_COMPANY_ERP_DAILY_COLLECTIONS_CONFIG` with this exact JSON shape, using the
 company, branch, timezone, and date shown by the ERP settings screen and the
 D2 fingerprint printed in the Apps Script Execution log:

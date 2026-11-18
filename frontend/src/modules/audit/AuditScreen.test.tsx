@@ -247,7 +247,7 @@ describe('Retained Audit workspace', () => {
       ),
     );
     expect(host.textContent).toContain('Target account (not the actor)');
-    expect(host.textContent).toContain('₹270.00');
+    expect(host.textContent).toContain('270.00');
     const technical = [...host.querySelectorAll('details')].find((node) =>
       node.textContent?.includes('Technical details'),
     );

@@ -6,10 +6,12 @@ import AppShell from '@/components/layout/AppShell';
 import RequireAuth from '@/modules/auth/RequireAuth';
 import { useAuth } from '@/modules/auth/AuthContext';
 import { hasAuditAccess, hasSupportAccess } from '@/lib/admin-access';
-import { LIVE_MODE } from '@/lib/demo';
+import { canUseStaffTime } from '@/modules/staff/staff-time-policy';
 import { canAccessRefunds } from '@/modules/refunds/refund-policy';
 import { canViewMemberships } from '@/modules/memberships/membership-policy';
 import { internalAppRouteOr } from '@/lib/internal-navigation';
+import { canAccessBusinessRoute, hasExactPermission } from '@/lib/effective-permissions';
+import PosWorkspace from '@/modules/pos/PosWorkspace';
 import {
   canManageGamingCentreProducts,
   GAMING_CENTRE_FEATURES,
@@ -19,9 +21,8 @@ import {
 } from '@/lib/product-profile';
 
 const Login = lazy(() => import('@/modules/auth/Login'));
-const POSScreen = lazy(() => import('@/modules/pos/POSScreen'));
-const LivePOSScreen = lazy(() => import('@/modules/pos/LivePOSScreen'));
 const OrdersAndShiftsScreen = lazy(() => import('@/modules/pos/OrdersAndShiftsScreen'));
+const OperatorRecoveryScreen = lazy(() => import('@/modules/pos/OperatorRecoveryScreen'));
 const CustomersScreen = lazy(() => import('@/modules/customers/CustomersScreen'));
 const PublicMenuScreen = lazy(() => import('@/modules/public/PublicMenuScreen'));
 const KitchenScreen = lazy(() => import('@/modules/kitchen/KitchenScreen'));
@@ -37,6 +38,7 @@ const EventsScreen = lazy(() => import('@/modules/events/EventsScreen'));
 const FinanceScreen = lazy(() => import('@/modules/finance/FinanceScreen'));
 const OcrScreen = lazy(() => import('@/modules/ocr/OcrScreen'));
 const StaffScreen = lazy(() => import('@/modules/staff/StaffScreen'));
+const StaffTimeScreen = lazy(() => import('@/modules/staff/StaffTimeScreen'));
 const AnalyticsScreen = lazy(() => import('@/modules/analytics/AnalyticsScreen'));
 const ReportsScreen = lazy(() => import('@/modules/reports/ReportsScreen'));
 const SettingsScreen = lazy(() => import('@/modules/settings/SettingsScreen'));
@@ -94,20 +96,25 @@ function FeatureOnly({
   return <Navigate to={internalAppRouteOr(fallback)} replace />;
 }
 
-function ProfileOwnerOnly({ children }: { children: ReactNode }) {
+function StaffTimeOnly({ children }: { children: ReactNode }) {
+  const { me } = useAuth();
+  return canUseStaffTime(me) ? <>{children}</> : <Navigate to={internalAppRouteOr(WEB_PRODUCT_PROFILE.defaultRoute)} replace />;
+}
+
+function BusinessRouteOnly({ route, children }: { route: string; children: ReactNode }) {
   const { me, demo } = useAuth();
-  if (demo || me?.protected_access) return <>{children}</>;
-  return <Navigate to={internalAppRouteOr(WEB_PRODUCT_PROFILE.defaultRoute)} replace />;
+  if (demo || canAccessBusinessRoute(me, route)) return <>{children}</>;
+  return <Navigate to={internalAppRouteOr(me ? webLandingRouteFor(me) : '/login')} replace />;
 }
 
 function ModuleAccessOnly({ module, children }: { module: string; children: ReactNode }) {
   const { me, demo } = useAuth();
-  if (demo || me?.protected_access || me?.accessible_modules?.includes(module)) {
+  const permissions: Record<string, string> = { gaming: 'gaming.read', pos: 'pos.read', inventory: 'inventory.read', menu: 'menu.read', staff: 'staff.read', finance: 'finance.read' };
+  const permission = permissions[module];
+  if (demo || (permission ? hasExactPermission(me, permission) : me?.accessible_modules?.includes(module))) {
     return <>{children}</>;
   }
-  const fallback = me?.accessible_modules?.includes('gaming')
-    ? '/gaming'
-    : me?.accessible_modules?.includes('pos') ? '/pos' : '/workspace-unavailable';
+  const fallback = me ? webLandingRouteFor(me) : '/login';
   return <Navigate to={internalAppRouteOr(fallback)} replace />;
 }
 
@@ -194,11 +201,12 @@ export default function App() {
         <Route index element={<ProfileLanding />} />
         <Route path="/workspace-unavailable" element={<WorkspaceUnavailable />} />
         <Route path="/pos" element={
-          <FeatureOnly feature="pos"><ModuleAccessOnly module="pos"><Screen>{LIVE_MODE ? <LivePOSScreen /> : <POSScreen />}</Screen></ModuleAccessOnly></FeatureOnly>
+          <FeatureOnly feature="pos"><ModuleAccessOnly module="pos"><Screen><PosWorkspace /></Screen></ModuleAccessOnly></FeatureOnly>
         } />
         <Route path="/operations" element={
           <FeatureOnly feature="shifts"><ModuleAccessOnly module="pos"><Screen><OrdersAndShiftsScreen /></Screen></ModuleAccessOnly></FeatureOnly>
         } />
+        <Route path="/operations/operator-recovery/:shiftId" element={<Screen><OperatorRecoveryScreen /></Screen>} />
         <Route path="/tables" element={
           <FeatureOnly feature="tables"><ModuleAccessOnly module="tables"><Screen><TablesScreen /></Screen></ModuleAccessOnly></FeatureOnly>
         } />
@@ -215,13 +223,16 @@ export default function App() {
           <FeatureOnly feature="events"><Screen><EventsScreen /></Screen></FeatureOnly>
         } />
         <Route path="/finance" element={
-          <FeatureOnly feature="finance"><ProfileOwnerOnly><Screen><FinanceScreen /></Screen></ProfileOwnerOnly></FeatureOnly>
+          <FeatureOnly feature="finance"><BusinessRouteOnly route="/finance"><Screen><FinanceScreen /></Screen></BusinessRouteOnly></FeatureOnly>
         } />
         <Route path="/ocr" element={
           <FeatureOnly feature="ocr"><ModuleAccessOnly module="ocr"><Screen><OcrScreen /></Screen></ModuleAccessOnly></FeatureOnly>
         } />
+        <Route path="/staff/time" element={
+          <FeatureOnly feature="staffAdmin"><StaffTimeOnly><Screen><StaffTimeScreen /></Screen></StaffTimeOnly></FeatureOnly>
+        } />
         <Route path="/staff" element={
-          <FeatureOnly feature="staffAdmin"><ProfileOwnerOnly><Screen><StaffScreen /></Screen></ProfileOwnerOnly></FeatureOnly>
+          <FeatureOnly feature="staffAdmin"><BusinessRouteOnly route="/staff"><Screen><StaffScreen /></Screen></BusinessRouteOnly></FeatureOnly>
         } />
         <Route path="/customers" element={
           <FeatureOnly feature="customers"><ModuleAccessOnly module="pos"><Screen><CustomersScreen /></Screen></ModuleAccessOnly></FeatureOnly>
@@ -235,7 +246,7 @@ export default function App() {
           }
         />
         <Route path="/insights" element={
-          <FeatureOnly feature="advancedInsights"><ProfileOwnerOnly><Screen><InsightsScreen /></Screen></ProfileOwnerOnly></FeatureOnly>
+          <FeatureOnly feature="advancedInsights"><BusinessRouteOnly route="/insights"><Screen><InsightsScreen /></Screen></BusinessRouteOnly></FeatureOnly>
         } />
         <Route path="/audit" element={
           <FeatureOnly feature="audit"><Screen><AuditAccessOnly><AuditScreen /></AuditAccessOnly></Screen></FeatureOnly>
@@ -257,10 +268,10 @@ export default function App() {
           }
         />
         <Route path="/analytics" element={
-          <FeatureOnly feature="dashboard"><ProfileOwnerOnly><Screen><AnalyticsScreen /></Screen></ProfileOwnerOnly></FeatureOnly>
+          <FeatureOnly feature="dashboard"><BusinessRouteOnly route="/analytics"><Screen><AnalyticsScreen /></Screen></BusinessRouteOnly></FeatureOnly>
         } />
         <Route path="/reports" element={
-          <FeatureOnly feature="reports"><ProfileOwnerOnly><Screen><ReportsScreen /></Screen></ProfileOwnerOnly></FeatureOnly>
+          <FeatureOnly feature="reports"><BusinessRouteOnly route="/reports"><Screen><ReportsScreen /></Screen></BusinessRouteOnly></FeatureOnly>
         } />
         <Route
           path="/refunds"
@@ -271,7 +282,7 @@ export default function App() {
           }
         />
         <Route path="/settings" element={
-          <FeatureOnly feature="settings"><ProfileOwnerOnly><Screen><SettingsScreen /></Screen></ProfileOwnerOnly></FeatureOnly>
+          <FeatureOnly feature="settings"><Screen><SettingsScreen /></Screen></FeatureOnly>
         } />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

@@ -31,6 +31,7 @@ PERMISSIONS: dict[str, str] = {
     "pos.discount.large": "Apply a manual order discount",
     "pos.shift.open": "Open a shift",
     "pos.shift.close": "Close a shift",
+    "pos.shift.handover.recover": "Owner recovery of recorded till operator responsibility",
     # Tables
     "tables.read": "View floor plan",
     "tables.write": "Update table status, layout",
@@ -53,6 +54,7 @@ PERMISSIONS: dict[str, str] = {
     "finance.read": "View P&L, ledger, partner balances",
     "finance.write": "Record expenses, capital, payments",
     "finance.tender.correct": "Protected owner tender correction and actuals review",
+    "finance.receipt.correct": "Protected owner paid-bill and no-value receipt corrections",
     "finance.partner.write": "Modify partner / capital records",
     "finance.assets.write": "Add / depreciate assets",
     # OCR
@@ -99,6 +101,15 @@ CASHIER_ACCESS = STAFF_ACCESS | {
     "pos.shift.close",
     "gaming.read",
 }
+
+GAMING_CASHIER_ACCESS = {
+    "pos.read", "pos.write", "pos.void", "pos.shift.open", "pos.shift.close",
+    "menu.read", "gaming.read", "gaming.write", "staff.attendance.write",
+}
+
+# Daily shop operations without POS void/refund or business administration.
+# This ceiling is immutable under Access Control module allow overrides.
+STORE_STAFF_ACCESS = (GAMING_CASHIER_ACCESS - {"pos.void"}) | {"pos.discount.large"}
 
 KITCHEN_ACCESS = {
     "kitchen.read",
@@ -163,6 +174,7 @@ MANAGER_ACCESS = {
 }
 
 OWNER_ACCESS = MANAGER_ACCESS | {
+    "pos.shift.handover.recover",
     "pos.refund.reconcile",
     "finance.assets.write",
     "staff.payroll.write",
@@ -199,7 +211,9 @@ AUDITOR_ACCESS = {
 # or "enable Staff" grant role administration. Overrides may still disable and
 # re-enable the safe subset already assigned to a role.
 HIGH_TRUST_PERMISSIONS = {
+    "pos.shift.handover.recover",
     "finance.tender.correct",
+    "finance.receipt.correct",
     "pos.refund.reconcile",
     "pos.void",
     "pos.refund",
@@ -219,9 +233,12 @@ HIGH_TRUST_PERMISSIONS = {
 ROLE_DESCRIPTIONS: dict[str, str] = {
     "owner": "Business owner — operational, finance, asset, and payroll access",
     "co_owner": "Co-owner — full operational access, no audit log/Access Control",
-    "partner": "Business partner — read-only business and finance visibility",
-    "manager": "Operations manager — daily operations and staff management",
+    "partner": "Legacy business partner — configurable business and finance access; not guaranteed read-only",
+    "manager": "Legacy manager — broad operations, finance writes and staff management; no payroll by default",
     "cashier": "Cashier — POS, table orders, and shift operation",
+    "gaming_cashier": "Legacy Gaming & POS staff — sessions, sales, POS voids, shop shifts and attendance",
+    "store_staff": "Store Staff — POS sales and manual discounts, Gaming sessions, shop shifts and attendance; no POS void/refund, finance, payroll or staff administration",
+    "pos_discount": "Supplemental manual POS discount access; assigned separately by an Owner",
     "kitchen": "Kitchen team — kitchen display and ticket status only",
     "gaming_supervisor": "Gaming team — sessions, bookings, and tournaments",
     "auditor": "External auditor / CA — read-only access to finance, analytics, "
@@ -238,6 +255,9 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     "partner": set(PARTNER_ACCESS),
     "manager": set(MANAGER_ACCESS),
     "cashier": set(CASHIER_ACCESS),
+    "gaming_cashier": set(GAMING_CASHIER_ACCESS),
+    "store_staff": set(STORE_STAFF_ACCESS),
+    "pos_discount": {"pos.discount.large"},
     "kitchen": set(KITCHEN_ACCESS),
     "gaming_supervisor": set(GAMING_ACCESS),
     "auditor": set(AUDITOR_ACCESS),
@@ -247,7 +267,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
 # Coarse feature groupings for the Access Control panel — one toggle per
 # module per role, rather than one per fine-grained permission string (too
 # granular to be a sane UI). Deliberately excludes the owner-only
-# settings.manage/memberships.manage permissions and the protected-owner-only
+# settings.manage/memberships.manage/till recovery permissions and the protected-owner-only
 # admin.audit.read/admin.support/admin.system permissions. None may be widened
 # through a coarse module toggle; in particular, support, audit, and protected
 # evidence access must never become self-grantable.
@@ -314,7 +334,16 @@ def _role_allows_permission(
     allowed = default_allowed if module is None or override is None else override
     if perm in HIGH_TRUST_PERMISSIONS and not default_allowed:
         allowed = False
+    # Supplemental access cannot expand through a coarse module switch.
+    if role == "pos_discount" and perm != "pos.discount.large":
+        allowed = False
     if role == "auditor" and perm not in AUDITOR_ACCESS:
+        allowed = False
+    # A daily-operations role must not gain business-management permissions
+    # through a coarse module switch, including future additions to a module.
+    if role == "gaming_cashier" and perm not in GAMING_CASHIER_ACCESS:
+        allowed = False
+    if role == "store_staff" and perm not in STORE_STAFF_ACCESS:
         allowed = False
     return allowed
 
@@ -329,7 +358,9 @@ async def _has_permission(session, tenant: TenantContext, perm: str) -> bool:
     # support inbox, diagnostics, and consent-gated remote assistance without
     # inheriting Audit Log or release authority. Operational POS refund
     # evidence reconciliation is separately scoped too.
-    if perm in {"admin.audit.read", "admin.system", "finance.tender.correct"}:
+    if perm in {
+        "admin.audit.read", "admin.system", "finance.tender.correct", "finance.receipt.correct",
+    }:
         return tenant.audit_access
     if tenant.protected_access:
         return True
@@ -379,7 +410,9 @@ async def effective_permissions(session, tenant: TenantContext) -> list[str]:
 
     out: list[str] = []
     for perm in PERMISSIONS:
-        if perm in {"admin.audit.read", "admin.system", "finance.tender.correct"}:
+        if perm in {
+            "admin.audit.read", "admin.system", "finance.tender.correct", "finance.receipt.correct",
+        }:
             allowed = tenant.audit_access
         elif tenant.protected_access:
             allowed = True

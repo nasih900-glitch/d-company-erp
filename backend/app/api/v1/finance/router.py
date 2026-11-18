@@ -3764,8 +3764,8 @@ async def create_tip_payout(
     )
     if payload.amount_minor > outstanding_tips_minor:
         raise BusinessRuleError(
-            f"Payout of ₹{Decimal(payload.amount_minor) / 100:.2f} exceeds the "
-            f"₹{Decimal(outstanding_tips_minor) / 100:.2f} currently owed to staff "
+            f"Payout of {Decimal(payload.amount_minor) / 100:.2f} exceeds the "
+            f"{Decimal(outstanding_tips_minor) / 100:.2f} currently owed to staff "
             "in Tips Payable. Refresh Tip payouts and review previous payouts "
             "before entering a lower amount."
         )

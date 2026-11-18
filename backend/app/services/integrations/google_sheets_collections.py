@@ -43,6 +43,8 @@ class DailyCollectionSnapshot:
     legacy_refund_count: int
     unsupported_rails: tuple[UnsupportedCollectionRail, ...]
     blockers: tuple[CollectionReadinessBlocker, ...]
+    receipt_corrections_minor: int = 0
+    receipt_corrections_count: int = 0
 
     @property
     def ready(self) -> bool:
@@ -59,6 +61,8 @@ _COLLECTIONS_SQL = text(
            (snapshot->>'shift_count')::bigint AS shift_count,
            (snapshot->>'open_shift_count')::bigint AS open_shift_count,
            (snapshot->>'legacy_refund_count')::bigint AS legacy_refund_count,
+           coalesce((snapshot->>'receipt_corrections_minor')::bigint,0) AS receipt_corrections_minor,
+           coalesce((snapshot->>'receipt_corrections_count')::bigint,0) AS receipt_corrections_count,
            snapshot->'unsupported_rails' AS unsupported_rails
     FROM generate_series(CAST(:start_date AS date),CAST(:end_date AS date),INTERVAL '1 day') day(day)
     CROSS JOIN LATERAL dcompany_collection_day_snapshot(CAST(:company_id AS uuid),
@@ -159,6 +163,8 @@ async def calculate_daily_collections(
                 upi_minor=int(row["upi_minor"]),
                 total_minor=int(row["total_minor"]),
                 movement_count=int(row["movement_count"]),
+                receipt_corrections_minor=int(row.get("receipt_corrections_minor", 0)),
+                receipt_corrections_count=int(row.get("receipt_corrections_count", 0)),
                 shift_count=int(row["shift_count"]),
                 open_shift_count=int(row["open_shift_count"]),
                 legacy_refund_count=int(row["legacy_refund_count"]),

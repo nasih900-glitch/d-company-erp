@@ -3,28 +3,33 @@
  *
  * Money is stored everywhere as integer paise (1 INR = 100 paise).
  * These helpers convert to display strings using Indian numbering
- * conventions (1,00,000 instead of 100,000) and the ₹ symbol.
+ * conventions (1,00,000 instead of 100,000), without a currency symbol.
  */
 
-/** Format minor units as Indian rupee string: 1284500 → "₹12,845.00" */
+/** Format minor units as Indian rupee string: 1284500 → "12,845.00" */
 export function inr(minor: number, opts: { withSymbol?: boolean; decimals?: number } = {}): string {
-  const { withSymbol = true, decimals = 2 } = opts;
+  const { decimals = 2 } = opts;
   const value = minor / 100;
   // Indian numbering: 12,84,500.00 (commas every 2 digits after the thousand)
   const formatted = new Intl.NumberFormat('en-IN', {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   }).format(value);
-  return withSymbol ? `₹${formatted}` : formatted;
+  return formatted;
 }
 
-/** Short form: 12_84_500 → "₹12.8K" or "₹1.2L" for headers */
+/** Short form: 12_84_500 → "12.8K" or "1.2L" for headers */
 export function inrShort(minor: number): string {
   const v = minor / 100;
-  if (v >= 10_000_000) return `₹${(v / 10_000_000).toFixed(1)}Cr`;
-  if (v >= 100_000)   return `₹${(v / 100_000).toFixed(1)}L`;
-  if (v >= 1_000)     return `₹${(v / 1_000).toFixed(1)}K`;
-  return `₹${v.toFixed(0)}`;
+  if (v >= 10_000_000) return `${(v / 10_000_000).toFixed(1)}Cr`;
+  if (v >= 100_000)   return `${(v / 100_000).toFixed(1)}L`;
+  if (v >= 1_000)     return `${(v / 1_000).toFixed(1)}K`;
+  return `${v.toFixed(0)}`;
+}
+
+/** Render legacy reward text without rewriting its stored label or signed intent. */
+export function currencyFreeLabel(label: string): string {
+  return label.replace(/\u20b9/g, '');
 }
 
 /** Convert a tax-inclusive amount and rate into taxable value (rounded to nearest paise). */

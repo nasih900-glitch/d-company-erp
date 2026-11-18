@@ -29,6 +29,14 @@ from app.services.client_updates.runtime_parity import (
 )
 from scripts import register_android_release as registration
 
+
+@pytest.fixture(autouse=True)
+def inherit_policy_for_optional_offer_tests(monkeypatch):
+    from app.services.client_updates.policy import policy_snapshot
+    async def inherited(settings):
+        return policy_snapshot(settings, None)
+    monkeypatch.setattr(public_router, "resolve_android_update_policy", inherited)
+
 IDENTITY = {"version_name": "3.1.25", "source_git_sha": "ab" * 20}
 BODY = json.dumps(IDENTITY).encode()
 HEADERS = {
@@ -262,8 +270,11 @@ async def test_chunked_oversize_and_read_timeout_fail_closed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_public_offer_concurrent_callers_share_one_probe() -> None:
+async def test_public_offer_concurrent_callers_share_one_probe(monkeypatch) -> None:
     runtime_parity._reset_public_runtime_parity_state_for_tests()
+    # This test measures coalescing, not the caller deadline (covered separately).
+    # A loaded runner may delay task startup before the mock transport is entered.
+    monkeypatch.setattr(runtime_parity, "PUBLIC_RUNTIME_PARITY_CALLER_WAIT_SECONDS", 10.0)
     entered = asyncio.Event()
     release = asyncio.Event()
     calls = 0
@@ -276,22 +287,35 @@ async def test_public_offer_concurrent_callers_share_one_probe() -> None:
         return _response()
 
     transport = httpx.MockTransport(respond)
-    checks = [
-        asyncio.create_task(
-            verify_runtime_parity_for_public_offer(
-                **IDENTITY,
-                settings=_settings(),
-                transport=transport,
+    state = runtime_parity._public_runtime_parity_state()
+    checks = []
+    try:
+        for _ in range(20):
+            checks.append(
+                asyncio.create_task(
+                    verify_runtime_parity_for_public_offer(
+                        **IDENTITY,
+                        settings=_settings(),
+                        transport=transport,
+                    )
+                )
             )
-        )
-        for _ in range(20)
-    ]
-    await asyncio.wait_for(entered.wait(), timeout=1)
-    await asyncio.sleep(0)
-    release.set()
-    await asyncio.gather(*checks)
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.gather(*checks)
 
-    assert calls == 1
+        assert calls == 1
+    finally:
+        release.set()
+        owned = set(checks) | set(state.in_flight.values())
+        for task in owned:
+            if not task.done():
+                task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.gather(*owned, return_exceptions=True), timeout=5)
+        finally:
+            runtime_parity._reset_public_runtime_parity_state_for_tests()
 
 
 @pytest.mark.asyncio
@@ -979,7 +1003,12 @@ async def test_registration_failure_cannot_open_database_or_insert(monkeypatch) 
 async def test_already_active_success_reverifies_without_duplicate_audit(monkeypatch) -> None:
     release = _release("active")
     session = AsyncMock()
-    session.execute.return_value = SimpleNamespace(scalar_one_or_none=lambda: release)
+    session.execute.side_effect = [
+        SimpleNamespace(scalar_one_or_none=lambda: release),
+        None,  # advisory lock
+        SimpleNamespace(scalar_one_or_none=lambda: release),
+        SimpleNamespace(scalar_one_or_none=lambda: None),  # no configured policy
+    ]
     apk, parity, attest = AsyncMock(), AsyncMock(), AsyncMock()
     monkeypatch.setattr(release_router, "get_settings", _settings)
     monkeypatch.setattr(release_router, "verify_public_apk", apk)

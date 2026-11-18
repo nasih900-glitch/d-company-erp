@@ -200,6 +200,7 @@ data class MenuUiState(
 class MenuViewModel : ViewModel() {
 
     private val appCtx = DCompanyApp.instance
+    private val operations = appCtx.handoverOperations.caller(appCtx.shiftCache.profile.value, appCtx.cacheIsolation.currentLease())
     private val db = appCtx.db
     private val api = ApiClient.create<MenuApi>()
 
@@ -318,7 +319,7 @@ class MenuViewModel : ViewModel() {
         if (editing.value.categorySaving || !ed.valid) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         editing.update { it.copy(categorySaving = true, categorySaveError = null) }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(categorySaving = false, categorySaveError = "Resolve the original till handover before editing Menu.") } }) {
             try {
                 val dao = db.menuWriteDao()
                 val now = System.currentTimeMillis()
@@ -413,7 +414,7 @@ class MenuViewModel : ViewModel() {
         if (!requireWrite()) return
         val localId = row.localWriteId ?: return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(notice = "Resolve the original till handover before retrying Menu. Saved work is retained.") } }) {
             var queued = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     db.menuWriteDao().getLocalCategory(localId)?.let {
@@ -460,7 +461,7 @@ class MenuViewModel : ViewModel() {
         if (editing.value.itemDetailsSaving || !ed.valid) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         editing.update { it.copy(itemDetailsSaving = true, itemDetailsSaveError = null) }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(itemDetailsSaving = false, itemDetailsSaveError = "Resolve the original till handover before editing Menu.") } }) {
             try {
                 val dao = db.menuWriteDao()
                 if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
@@ -506,7 +507,7 @@ class MenuViewModel : ViewModel() {
         if (!requireWrite()) return
         val localId = row.localWriteId ?: return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(notice = "Resolve the original till handover before retrying Menu. Saved work is retained.") } }) {
             var queued = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     db.menuWriteDao().getLocalItem(localId)?.let {
@@ -561,7 +562,7 @@ class MenuViewModel : ViewModel() {
         val ed = editing.value.itemPricingEditor ?: return
         if (editing.value.itemPricingSaving || !ed.valid) return
         editing.update { it.copy(itemPricingSaving = true, itemPricingSaveError = null) }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(itemPricingSaving = false, itemPricingSaveError = "The original workspace is unavailable; resolve the handover before editing.") } }) {
             try {
                 api.updateItemPricing(
                     ed.id,
@@ -575,6 +576,7 @@ class MenuViewModel : ViewModel() {
                 editing.update {
                     it.copy(itemPricingEditor = null, itemPricingSaving = false, notice = "Price updated.")
                 }
+                reconciled()
                 appCtx.sync.requestSync()
             } catch (e: CancellationException) {
                 throw e
@@ -619,7 +621,7 @@ class MenuViewModel : ViewModel() {
         val ed = editing.value.itemCreateEditor ?: return
         if (editing.value.itemCreateSaving || !ed.valid) return
         editing.update { it.copy(itemCreateSaving = true, itemCreateSaveError = null) }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(itemCreateSaving = false, itemCreateSaveError = "The original workspace is unavailable; resolve the handover before editing.") } }) {
             try {
                 api.createItem(
                     ItemCreateBody(
@@ -638,6 +640,7 @@ class MenuViewModel : ViewModel() {
                 editing.update {
                     it.copy(itemCreateEditor = null, itemCreateSaving = false, notice = "Item created.")
                 }
+                reconciled()
                 appCtx.sync.requestSync()
             } catch (e: CancellationException) {
                 throw e

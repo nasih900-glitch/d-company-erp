@@ -52,10 +52,9 @@ import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDialog
-import androidx.compose.material3.DropdownMenu
+import cloud.dcompany.erp.ui.components.LiquidDatePickerDialog as DatePickerDialog
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -97,6 +96,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import cloud.dcompany.erp.core.auth.CustomersAccess
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.ActionBar
+import cloud.dcompany.erp.ui.components.LiquidDropdownMenu
 import cloud.dcompany.erp.ui.components.ActionIntent
 import cloud.dcompany.erp.ui.components.CompactStatCard
 import cloud.dcompany.erp.ui.components.DataListRow
@@ -111,9 +111,12 @@ import cloud.dcompany.erp.ui.components.PanelDivider
 import cloud.dcompany.erp.ui.components.SearchInput
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.UiTone
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
+import cloud.dcompany.erp.ui.theme.WorkspacePanelShape
 import cloud.dcompany.erp.ui.components.ViewOnlyNotice
 import java.time.Instant
 import java.time.LocalDate
@@ -482,7 +485,11 @@ private fun CustomerFilterAction(
             Icon(Icons.Default.FilterList, contentDescription = null, modifier = Modifier.size(18.dp))
             Text(if (filter == CustomerListFilter.All) "Filter" else filter.label)
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        LiquidDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            role = WorkspaceGlassRole.CONTROL,
+        ) {
             CustomerListFilter.entries.forEach { option ->
                 DropdownMenuItem(
                     text = { Text(option.label) },
@@ -595,16 +602,12 @@ internal fun CustomerResultsPanel(
         CustomerListFilter.SyncFailed -> state.rows.filter(Customer::isRejected)
     }
     Column(
-        modifier.clip(Radius.shapeLg).background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.38f), Radius.shapeLg),
+        modifier.clip(WorkspacePanelShape)
+            .liquidWorkspaceSurface(WorkspacePanelShape, WorkspaceGlassRole.PANEL),
     ) {
         Row(
-            Modifier.fillMaxWidth()
-                .background(
-                    Brush.horizontalGradient(
-                        listOf(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surface),
-                    ),
-                )
+            Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.CONTROL)
                 .padding(horizontal = Spacing.lg, vertical = Spacing.md),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
@@ -682,11 +685,8 @@ internal fun CustomerLeaderboardPanel(
             verticalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
             Row(
-                Modifier.fillMaxWidth().clip(Radius.shapeLg)
-                    .background(Brush.horizontalGradient(
-                        listOf(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surface),
-                    ))
-                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.38f), Radius.shapeLg)
+                Modifier.fillMaxWidth().clip(WorkspacePanelShape)
+                    .liquidWorkspaceSurface(WorkspacePanelShape, WorkspaceGlassRole.CONTROL)
                     .padding(horizontal = Spacing.lgPlus, vertical = Spacing.md),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.md),
                 verticalAlignment = Alignment.CenterVertically,
@@ -711,9 +711,8 @@ internal fun CustomerLeaderboardPanel(
                 )
             }
             Column(
-                Modifier.fillMaxWidth().clip(Radius.shapeLg)
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.96f))
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg),
+                Modifier.fillMaxWidth().clip(WorkspacePanelShape)
+                    .liquidWorkspaceSurface(WorkspacePanelShape, WorkspaceGlassRole.PANEL),
             ) {
                 Box(
                     Modifier.fillMaxWidth().height(1.dp)
@@ -800,7 +799,8 @@ internal fun CustomerLeaderboardPanel(
 @Composable
 private fun CustomerTableHeader() {
     Row(
-        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.9f))
+        Modifier.fillMaxWidth().clip(Radius.shapeSm)
+            .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.CONTROL)
             .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -830,12 +830,14 @@ private fun CustomerLeaderboardRow(
     val primaryTextColor = MaterialTheme.colorScheme.onSurface
     Row(
         Modifier.fillMaxWidth().heightIn(min = 72.dp)
+            .clip(Radius.shapeSm)
+            .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.UTILITY)
             .background(
                 when {
                     rankColor != null -> Brush.horizontalGradient(
-                        listOf(rankColor.copy(alpha = 0.17f), MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surface),
+                        listOf(rankColor.copy(alpha = LeaderboardRowTintAlpha), Color.Transparent, Color.Transparent),
                     )
-                    else -> Brush.horizontalGradient(listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surface))
+                    else -> Brush.horizontalGradient(listOf(Color.Transparent, Color.Transparent))
                 },
             )
             .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
@@ -868,7 +870,7 @@ private fun CustomerLeaderboardRow(
         ) {
             Box(
                 Modifier.size(38.dp).clip(CircleShape)
-                    .background((rankColor ?: MaterialTheme.colorScheme.primary).copy(alpha = 0.20f))
+                    .background((rankColor ?: MaterialTheme.colorScheme.primary).copy(alpha = LeaderboardIdentityTintAlpha))
                     .border(
                         1.dp,
                         (rankColor ?: MaterialTheme.colorScheme.primary).copy(alpha = if (rankColor == null) 0.22f else 0.68f),
@@ -924,6 +926,9 @@ private fun leaderboardRankColor(rank: Int?): Color? = when (rank) {
     else -> null
 }
 
+// The identity badge layers over the row tint; cap their combined contrast cost.
+internal const val LeaderboardRowTintAlpha = 0.17f
+internal const val LeaderboardIdentityTintAlpha = 0.16f
 internal val LeaderboardSilverAccent = Color(0xFFB9C7D2)
 internal val LeaderboardBronzeAccent = Color(0xFFD7A176)
 
@@ -948,7 +953,9 @@ private fun maskCustomerListPhone(phone: String): String {
 private fun CustomerRow(customer: Customer, selected: Boolean, onClick: () -> Unit) {
     DataListRow(
         modifier = Modifier
-            .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface)
+            .clip(Radius.shapeSm)
+            .liquidWorkspaceSurface(Radius.shapeSm, WorkspaceGlassRole.UTILITY)
+            .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
             .semantics { this.selected = selected },
         onClick = onClick,
         leading = {
@@ -1058,9 +1065,8 @@ private fun DetailPane(
     Column(
         modifier
             .fillMaxSize()
-            .clip(Radius.shapeLg)
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg)
+            .clip(WorkspacePanelShape)
+            .liquidWorkspaceSurface(WorkspacePanelShape, WorkspaceGlassRole.PANEL)
             .padding(Spacing.md)
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),

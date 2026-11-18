@@ -50,12 +50,11 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.AlertDialogDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
@@ -69,6 +68,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -79,6 +79,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -101,6 +102,7 @@ import cloud.dcompany.erp.core.money.normalizeRupeeInput
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Motion
 import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.theme.WorkspacePanelShape
 import cloud.dcompany.erp.ui.theme.Spacing
 
 /**
@@ -136,15 +138,14 @@ fun Panel(
         tween(Motion.fast),
         label = "panelBorder",
     )
-    val bg = if (elevated) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surface
     Column(
         modifier
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .fillMaxWidth()
             .let { if (onClick != null) it.heightIn(min = 48.dp) else it }
-            .clip(Radius.shapeLg)
-            .background(bg)
-            .border(1.dp, borderColor, Radius.shapeLg)
+            .clip(WorkspacePanelShape)
+            .liquidWorkspaceSurface(WorkspacePanelShape)
+            .let { if (pressed && onClick != null) it.border(1.dp, borderColor, WorkspacePanelShape) else it }
             .let {
                 if (onClick != null) {
                     it.clickable(
@@ -183,9 +184,9 @@ fun ShimmerBlock(modifier: Modifier = Modifier, shape: RoundedCornerShape = Radi
 }
 
 @Composable
-private fun rememberSkeletonAlpha(): Float {
+private fun rememberSkeletonAlpha(): State<Float> {
     val transition = rememberInfiniteTransition(label = "skeletonPulse")
-    val alpha by transition.animateFloat(
+    return transition.animateFloat(
         initialValue = 0.52f,
         targetValue = 0.86f,
         animationSpec = infiniteRepeatable(
@@ -194,16 +195,16 @@ private fun rememberSkeletonAlpha(): Float {
         ),
         label = "skeletonAlpha",
     )
-    return alpha
 }
 
 @Composable
 private fun SkeletonBlock(
     modifier: Modifier,
     shape: RoundedCornerShape,
-    alpha: Float,
+    alpha: State<Float>,
 ) {
-    Box(modifier.clip(shape).background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = alpha)))
+    val color = MaterialTheme.colorScheme.surfaceContainerHigh
+    Box(modifier.clip(shape).drawBehind { drawRect(color.copy(alpha = alpha.value)) })
 }
 
 @Composable
@@ -345,14 +346,15 @@ fun Field(
         },
         shape = Radius.shapeMd,
         colors = fieldColors(),
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().clip(Radius.shapeMd)
+            .liquidWorkspaceSurface(Radius.shapeMd, cloud.dcompany.erp.ui.theme.WorkspaceGlassRole.CONTROL),
     )
 }
 
 @Composable
 fun fieldColors() = TextFieldDefaults.colors(
-    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+    focusedContainerColor = if (cloud.dcompany.erp.ui.theme.LocalWorkspaceGlassScene.current != null) Color.Transparent else MaterialTheme.colorScheme.surfaceVariant,
+    unfocusedContainerColor = if (cloud.dcompany.erp.ui.theme.LocalWorkspaceGlassScene.current != null) Color.Transparent else MaterialTheme.colorScheme.surfaceVariant,
     disabledContainerColor = MaterialTheme.colorScheme.surface,
     focusedIndicatorColor = MaterialTheme.colorScheme.primary,
     unfocusedIndicatorColor = MaterialTheme.colorScheme.outline,
@@ -380,7 +382,7 @@ fun PickerField(
         Box {
             Row(
                 Modifier.fillMaxWidth().clip(Radius.shapeMd)
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .liquidWorkspaceSurface(Radius.shapeMd, cloud.dcompany.erp.ui.theme.WorkspaceGlassRole.CONTROL)
                     .border(
                         1.dp,
                         if (open) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
@@ -409,7 +411,11 @@ fun PickerField(
                     modifier = Modifier.graphicsLayer { rotationZ = rotation },
                 )
             }
-            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            LiquidDropdownMenu(
+                expanded = open,
+                onDismissRequest = { open = false },
+                role = cloud.dcompany.erp.ui.theme.WorkspaceGlassRole.CONTROL,
+            ) {
                 options.forEach { (id, text) ->
                     DropdownMenuItem(text = { Text(text) }, onClick = { open = false; onSelect(id) })
                 }
@@ -493,6 +499,7 @@ fun FormDialog(
         onDismissRequest = { if (!busy) onDismiss() },
         properties = formDialogImeAwareProperties,
     ) {
+        LiquidPopupArtworkScope {
         val view = LocalView.current
         val density = LocalDensity.current
         var visibleBounds by remember(view) { mutableStateOf<IntRect?>(null) }
@@ -548,6 +555,8 @@ fun FormDialog(
                     Surface(
                         modifier = Modifier.widthIn(max = width).fillMaxWidth(0.92f)
                             .heightIn(max = maxHeight)
+                            .clip(Radius.shapeLg)
+                            .liquidWorkspaceSurface(Radius.shapeLg, cloud.dcompany.erp.ui.theme.WorkspaceGlassRole.MODAL, allowWindowProjection = true)
                             .semantics { paneTitle = title }
                             // Prevent blank surface space from reaching the sibling backdrop.
                             .pointerInput(Unit) {
@@ -555,8 +564,8 @@ fun FormDialog(
                                     while (true) awaitPointerEvent()
                                 }
                             },
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        tonalElevation = AlertDialogDefaults.TonalElevation,
+                        color = if (cloud.dcompany.erp.ui.theme.LocalWorkspaceGlassScene.current != null) Color.Transparent else MaterialTheme.colorScheme.surfaceContainerHigh,
+                        tonalElevation = 0.dp,
                         shape = Radius.shapeLg,
                     ) {
                         Column(Modifier.padding(if (compact) Spacing.lg else Spacing.xl)) {
@@ -616,6 +625,7 @@ fun FormDialog(
                     }
                 }
             }
+        }
         }
     }
 }

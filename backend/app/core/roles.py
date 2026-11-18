@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+POS_DISCOUNT_ROLE = "pos_discount"
 PROTECTED_OWNER_ROLE = "super_owner"
 # A second, narrower owner tier: bypasses the same operational RBAC gates as
 # super_owner (protected recovery, force-stop, membership/refund overrides —
@@ -19,6 +20,30 @@ FULL_ACCESS_ROLES = {PROTECTED_OWNER_ROLE, CO_OWNER_ROLE}
 # though only the two internal tiers receive an operational bypass.  A manager
 # must never be able to mint, demote, suspend, or delete an owner account.
 OWNER_ROLE_CODES = FULL_ACCESS_ROLES | {PUBLIC_OWNER_ROLE}
+
+
+def role_name(code: str) -> str:
+    if code == POS_DISCOUNT_ROLE:
+        return "Manual POS discounts"
+    if code == "gaming_cashier":
+        return "Gaming & POS staff (legacy)"
+    if code == "store_staff":
+        return "Store Staff"
+    if code == "auditor":
+        return "Business Viewer"
+    return code.title().replace("_", " ")
+
+
+def has_owner_role(roles: Iterable[str]) -> bool:
+    """Whether the public tenant identity carries any owner role.
+
+    TenantContext publishes both internal owner tiers as ``owner``.  Accepting
+    the complete set here also keeps this helper safe for internal callers
+    that still hold the unredacted role codes.  This is deliberately separate
+    from protected/audit access: routine, accountable owner operations must
+    not require the super-owner recovery privilege.
+    """
+    return bool(OWNER_ROLE_CODES & set(roles))
 
 
 def has_protected_owner_access(roles: Iterable[str]) -> bool:

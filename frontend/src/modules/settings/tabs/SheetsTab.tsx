@@ -14,6 +14,7 @@ import {
 import APPS_SCRIPT from '../apps-script.txt?raw';
 
 const SECRET_PROPERTY = 'D_COMPANY_ERP_MIRROR_HMAC_SECRET';
+const SPREADSHEET_ID_PROPERTY = 'D_COMPANY_ERP_SPREADSHEET_ID';
 const DAILY_CONFIG_PROPERTY = 'D_COMPANY_ERP_DAILY_COLLECTIONS_CONFIG';
 type SheetsMessageTone = 'success' | 'warning' | 'error';
 
@@ -244,9 +245,10 @@ export default function SheetsTab() {
       <div className="card space-y-4">
         <h3 className="font-semibold">Connect your existing workbook</h3>
         <SetupStep n={1} title="Install the secure mirror script">
-          In your Google Sheet, open <b>Extensions → Apps Script</b>, add or update a script file
-          named <b>ERP.gs</b>, paste this script, and save it. Keep the workbook&apos;s existing
-          receipt/OCR <b>Code.gs</b> file unchanged.
+          In Apps Script, create a <b>private standalone project</b> owned and editable only by
+          the workbook Owner. Add a file named <b>ERP.gs</b>, paste this script, and save it.
+          Keep the workbook&apos;s existing receipt/OCR <b>Code.gs</b> file unchanged. Workbook
+          sharing does not grant access to this separate project.
           <div className="mt-2 flex flex-wrap gap-2">
             <button className="btn btn-ghost" onClick={() => void copy(APPS_SCRIPT, 'script')}>
               {copied === 'script' ? <Check size={14}/> : <Copy size={14}/>}
@@ -306,10 +308,17 @@ export default function SheetsTab() {
             {status?.enabled ? 'Save connection' : 'Connect'}
           </button>
         </SetupStep>
-        <SetupStep n={4} title="Add the one-time security secret">
-          In Apps Script, open <b>Project Settings → Script Properties</b>. Add property
+        <SetupStep n={4} title="Bind the workbook and add the security secret">
+          In the private project, open <b>Project Settings → Script Properties</b>. Add
+          <code className="mx-1 rounded bg-bg px-1 py-0.5">{SPREADSHEET_ID_PROPERTY}</code> with
+          the native spreadsheet ID from its Google Sheets URL, without the rest of the URL.
+          Then add property
           <code className="mx-1 rounded bg-bg px-1 py-0.5">{SECRET_PROPERTY}</code> and paste the
           secret shown after connecting.
+          The script refuses writes without a valid workbook binding. A healthy endpoint alone
+          does not verify delivery. Keep signing secrets out of workbook-bound or shared projects.
+          Keep the binding fixed for a verified connection. Changing workbooks requires an
+          Owner-reviewed cutover after queued entries drain, followed by new verification.
           {secret ? (
             <div className="mt-2 rounded-xl border border-accent-gold/40 bg-accent-gold/5 p-3">
               <p className="text-xs font-semibold text-accent-gold">Copy this now. It is shown only once.</p>

@@ -23,6 +23,49 @@ class CacheScopeTest {
     private val scopeB = CacheScope("user-b", "company", "branch-b", "terminal-b")
 
     @Test
+    fun `logout suspended domain gate rechecks exact lineage before conditional revocation`() = runBlocking {
+        val coordinator = CacheIsolationCoordinator(FakePurger(), FakeMarker(scopeA))
+        coordinator.activateValidated(scopeA)
+        val original = requireNotNull(coordinator.currentLease())
+        val generation = coordinator.currentGeneration()
+        val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        var lineageIsA = true
+        var commitCalls = 0
+        val exit = async {
+            coordinator.deactivateOriginalAfterOutboxGate(original, generation, { lineageIsA }, { commit ->
+                if (lineageIsA) { commitCalls++; commit(); true } else false
+            }) { entered.complete(Unit); release.await(); OutboxGateResult.Allowed }
+        }
+        entered.await()
+        lineageIsA = false
+        val installB = async { coordinator.activateValidated(scopeB) }
+        assertFalse(installB.isCompleted)
+        release.complete(Unit)
+        assertTrue(exit.await() is OutboxGateResult.Blocked)
+        installB.await()
+        assertEquals(0, commitCalls)
+        assertEquals(scopeB, coordinator.currentLease()?.scope)
+    }
+    @Test
+    fun `stale exit generation and atomic lineage commit refusal cannot deactivate any workspace`() = runBlocking {
+        val coordinator = CacheIsolationCoordinator(FakePurger(), FakeMarker(scopeA))
+        coordinator.activateValidated(scopeA)
+        val original = requireNotNull(coordinator.currentLease())
+        val generation = coordinator.currentGeneration()
+        var sentCommit = false
+        assertTrue(coordinator.deactivateOriginalAfterOutboxGate(original, generation, { true }, { _ -> false }) {
+            OutboxGateResult.Allowed
+        } is OutboxGateResult.Blocked)
+        assertEquals(original, coordinator.currentLease())
+        coordinator.activateValidated(scopeB)
+        assertTrue(coordinator.deactivateOriginalAfterOutboxGate(original, generation, { true }, { commit -> sentCommit = true; commit(); true }) {
+            error("Stale exit must not enter domain gate")
+        } is OutboxGateResult.Blocked)
+        assertFalse(sentCommit)
+        assertEquals(scopeB, coordinator.currentLease()?.scope)
+    }
+
+    @Test
     fun `A to B invalidates marker then atomically purges all scoped data before publishing B`() = runBlocking {
         val events = mutableListOf<String>()
         val marker = FakeMarker(scopeA, events)
@@ -47,6 +90,44 @@ class CacheScopeTest {
         assertEquals(CacheScopeActivation.RETAINED, coordinator.activateValidated(scopeA))
         assertTrue(events.isEmpty())
         assertTrue(coordinator.isReady())
+    }
+
+    @Test
+    fun `lease signal publishes exact generations and null revocation`() = runBlocking {
+        val coordinator = CacheIsolationCoordinator(FakePurger(), FakeMarker(scopeA))
+        assertNull(coordinator.activeLeaseFlow.value)
+
+        coordinator.activateValidated(scopeA)
+        val first = requireNotNull(coordinator.activeLeaseFlow.value)
+        assertEquals(coordinator.currentLease(), first)
+
+        coordinator.deactivate()
+        assertNull(coordinator.activeLeaseFlow.value)
+        coordinator.activateValidated(scopeA)
+        val second = requireNotNull(coordinator.activeLeaseFlow.value)
+        assertEquals(scopeA, second.scope)
+        assertTrue(second.generation > first.generation)
+    }
+
+    @Test
+    fun `lease signal follows cached adoption and never retains authority after a refused transition`() = runBlocking {
+        val cached = CacheIsolationCoordinator(FakePurger(), FakeMarker(scopeA))
+        val adoption = requireNotNull(
+            cached.adoptCachedOnlyIfInactive(scopeA) as? CachedScopeLeaseAdoption.Ready,
+        )
+        assertTrue(adoption.adopted)
+        assertEquals(adoption.lease, cached.activeLeaseFlow.value)
+
+        val refusing = CacheIsolationCoordinator(
+            FakePurger(unresolvedAtPreflight = true),
+            FakeMarker(scopeA),
+        )
+        refusing.activateValidated(scopeA)
+        assertThrows(CacheScopeException::class.java) {
+            runBlocking { refusing.activateValidated(scopeB) }
+        }
+        assertNull(refusing.currentLease())
+        assertNull(refusing.activeLeaseFlow.value)
     }
 
     @Test

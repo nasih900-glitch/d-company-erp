@@ -5,12 +5,21 @@ import cloud.dcompany.erp.core.diagnostics.ApiFailureObservation
 import cloud.dcompany.erp.core.diagnostics.DiagnosticConnectivity
 import cloud.dcompany.erp.core.diagnostics.DiagnosticsRuntime
 import cloud.dcompany.erp.core.auth.PricingLock
+import cloud.dcompany.erp.core.auth.SessionRefreshLease
 import cloud.dcompany.erp.core.auth.TerminalStore
 import cloud.dcompany.erp.core.auth.TokenStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import cloud.dcompany.erp.core.handover.OperationDispatchGate
+import cloud.dcompany.erp.core.handover.OperationDispatchInterceptor
+import cloud.dcompany.erp.core.handover.OperationDispatchContext
+import cloud.dcompany.erp.core.handover.OperationTaggedCallFactory
+import cloud.dcompany.erp.core.handover.OriginalOperationBinding
+import cloud.dcompany.erp.core.handover.BootstrapDispatchLease
+import cloud.dcompany.erp.core.handover.UnconfiguredOperationDispatchGate
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -20,10 +29,19 @@ import retrofit2.Retrofit
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 internal const val TERMINAL_ID_HEADER = "X-Terminal-Id"
 internal const val CLIENT_COMPATIBILITY_POLICY_REVISION_HEADER =
     "X-Client-Compatibility-Policy-Revision"
+
+internal fun isExactManualLoopbackOrigin(debug: Boolean, rawUrl: String): Boolean {
+    if (!debug) return false
+    val url = rawUrl.toHttpUrlOrNull() ?: return false
+    return url.scheme == "http" && url.host == "127.0.0.1" && url.port == 8041 &&
+        url.encodedPath == "/api/v1/" && url.username.isEmpty() && url.password.isEmpty() &&
+        url.query == null && url.fragment == null
+}
 
 /** A 426 body may be unavailable; preserve the monotonic header authority. */
 internal fun resolvedCompatibilityPolicyRevision(
@@ -186,11 +204,73 @@ object ApiClient {
      * ErpApi — that keeps unrelated features from colliding in the same file.
      */
     private lateinit var retrofit: Retrofit
+    @Volatile private var operationGate: OperationDispatchGate = UnconfiguredOperationDispatchGate
+    private var captureOriginalRead: () -> OriginalOperationBinding? = { null }
+    private fun tagged(client: okhttp3.Call.Factory, binding: OriginalOperationBinding? = OperationDispatchContext.captured()?.binding ?: captureOriginalRead()): okhttp3.Call.Factory =
+        OperationTaggedCallFactory(client, binding) { if (::authenticatedSession.isInitialized) authenticatedSession.tokenStore.refreshLease() else null }
 
     /** `val api = ApiClient.create<GamingApi>()` */
     inline fun <reified T> create(): T = createApi(T::class.java)
 
-    fun <T> createApi(service: Class<T>): T = retrofit.create(service)
+    fun <T> createApi(service: Class<T>): T = retrofit.newBuilder().callFactory(tagged(retrofit.callFactory())).build().create(service)
+
+    internal fun anonymousPasswordRecoveryApi(): AnonymousPasswordRecoveryApi {
+        val client = baseClientBuilder().retryOnConnectionFailure(false)
+            .followRedirects(false).followSslRedirects(false)
+            .addInterceptor(ClientIdentityInterceptor()).build()
+        val calls = cloud.dcompany.erp.core.handover.AnonymousPasswordRecoveryCallFactory(client)
+        return retrofit.newBuilder().callFactory(calls).build().create(AnonymousPasswordRecoveryApi::class.java)
+    }
+
+    internal fun isExactDebugLoopback(): Boolean =
+        isExactManualLoopbackOrigin(BuildConfig.DEBUG, BuildConfig.API_BASE_URL)
+
+    /**
+     * A one-operation client for the explicitly reviewed local QA backend.
+     * It never refreshes credentials or publishes reachability/diagnostic state.
+     */
+    internal fun <T> createManualDirectApi(service: Class<T>): T {
+        check(isExactDebugLoopback()) { "Manual backend admission is unavailable for this build." }
+        val accessToken = authenticatedSession.tokenStore.refreshLease()?.accessToken
+            ?: error("The current authenticated session is unavailable.")
+        val client = baseClientBuilder()
+            .retryOnConnectionFailure(false)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .addInterceptor(ClientIdentityInterceptor())
+            .addInterceptor(TerminalInterceptor())
+            .addInterceptor { chain ->
+                chain.proceed(
+                    chain.request().newBuilder()
+                        .removeHeader("Authorization")
+                        .header("Authorization", "Bearer $accessToken")
+                        .build(),
+                )
+            }
+            .addInterceptor(ManualErrorInterceptor(json))
+            .build()
+        return Retrofit.Builder()
+            .baseUrl(BuildConfig.API_BASE_URL)
+            .callFactory(tagged(client))
+            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+            .build()
+            .create(service)
+    }
+
+    internal inline fun <reified T> startWorkReviewApi(
+        permit: cloud.dcompany.erp.core.handover.HandoverCoordinator.StartWorkReviewPermit,
+        accessToken: String? = null, terminalId: String? = null, noinline beforeDispatch: () -> Unit = {},
+    ): T = startWorkReviewApi(T::class.java, permit, accessToken, terminalId, beforeDispatch)
+
+    internal fun <T> startWorkReviewApi(service: Class<T>,
+        permit: cloud.dcompany.erp.core.handover.HandoverCoordinator.StartWorkReviewPermit,
+        accessToken: String?, terminalId: String?, beforeDispatch: () -> Unit): T {
+        val client = ephemeralAuthorityClient(if (permit.mode == "actor_status") accessToken else null,
+            if (permit.mode == "actor_status") terminalId else null, beforeDispatch, singleAttempt = true)
+        return Retrofit.Builder().baseUrl(BuildConfig.API_BASE_URL)
+            .callFactory(cloud.dcompany.erp.core.handover.StartWorkReviewCallFactory(client, permit))
+            .addConverterFactory(cloud.dcompany.erp.ui.screens.shift.work.StartWorkJson.asConverterFactory("application/json".toMediaType())).build().create(service)
+    }
 
     /** A bounded, unauthenticated DB/Redis readiness proof for recovery only. */
     internal suspend fun probeBackendReadiness(): Boolean = withContext(Dispatchers.IO) {
@@ -212,6 +292,19 @@ object ApiClient {
         }
     }
 
+    /** Exact-loopback proof which deliberately does not alter global reachability. */
+    internal suspend fun probeManualDirectReadiness(): Boolean = withContext(Dispatchers.IO) {
+        if (!isExactDebugLoopback()) return@withContext false
+        val url = BuildConfig.API_BASE_URL.toHttpUrl().resolve("/readyz")
+            ?: return@withContext false
+        val request = Request.Builder().url(url).get().header("Cache-Control", "no-cache").build()
+        try {
+            readinessClient.newCall(request).execute().use { it.isSuccessful }
+        } catch (_: IOException) {
+            false
+        }
+    }
+
     /**
      * Creates an isolated, non-refreshing client for one transient authority
      * check. It never reads or writes [TokenStore], [activeTerminalHeaders], or
@@ -221,28 +314,71 @@ object ApiClient {
     internal inline fun <reified T> createEphemeralAuthorityApi(
         accessToken: String? = null,
         terminalId: String? = null,
-    ): T = createEphemeralAuthorityApi(T::class.java, accessToken, terminalId)
+        noinline beforeDispatch: () -> Unit = {},
+        singleAttempt: Boolean = false,
+    ): T = createEphemeralAuthorityApi(T::class.java, accessToken, terminalId, beforeDispatch, singleAttempt)
 
     internal fun <T> createEphemeralAuthorityApi(
         service: Class<T>,
         accessToken: String? = null,
         terminalId: String? = null,
+        beforeDispatch: () -> Unit = {},
+        singleAttempt: Boolean = false,
     ): T {
-        val client = baseClientBuilder()
-            .addInterceptor(ClientIdentityInterceptor())
-            .addInterceptor { chain ->
-                chain.proceed(
-                    chain.request().withEphemeralAuthority(accessToken, terminalId),
-                )
-            }
-            .addInterceptor(ErrorInterceptor(json))
-            .build()
         return Retrofit.Builder()
             .baseUrl(BuildConfig.API_BASE_URL)
-            .client(client)
+            .callFactory(tagged(ephemeralAuthorityClient(accessToken, terminalId, beforeDispatch, singleAttempt)))
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
             .create(service)
+    }
+
+    internal fun ephemeralAuthorityClient(
+        accessToken: String? = null,
+        terminalId: String? = null,
+        beforeDispatch: () -> Unit = {},
+        singleAttempt: Boolean = false,
+        operationGate: OperationDispatchGate = this.operationGate,
+    ): OkHttpClient {
+        val builder = baseClientBuilder(operationGate)
+            .retryOnConnectionFailure(!singleAttempt)
+            .followRedirects(!singleAttempt)
+            .followSslRedirects(!singleAttempt)
+            .addInterceptor(ClientIdentityInterceptor())
+            .addInterceptor(GuardedEphemeralAuthorityInterceptor(accessToken, terminalId, beforeDispatch))
+            .addInterceptor(ErrorInterceptor(json))
+        if (singleAttempt) {
+            // A request tag is per call; one captured API may perform multiple explicit reads/writes.
+            builder.addInterceptor { chain ->
+                chain.proceed(chain.request().newBuilder()
+                    .tag(EphemeralWireAttempt::class.java, EphemeralWireAttempt()).build())
+            }
+            builder.addNetworkInterceptor { chain ->
+                val attempt = chain.request().tag(EphemeralWireAttempt::class.java)
+                    ?: throw IOException("The one-attempt request fence is unavailable.")
+                // retryOnConnectionFailure(false) alone does not disable 503/421 follow-ups.
+                if (!attempt.started.compareAndSet(false, true)) {
+                    throw IOException("An automatic request replay was refused. Keep the original request for explicit review.")
+                }
+                beforeDispatch() // After connect, immediately before transport can write headers.
+                chain.proceed(chain.request())
+            }
+        }
+        return builder.build()
+    }
+
+    private class EphemeralWireAttempt(val started: AtomicBoolean = AtomicBoolean(false))
+
+    /** The caller's authority is checked immediately before handing immutable headers to transport. */
+    internal class GuardedEphemeralAuthorityInterceptor(
+        private val bearer: String?,
+        private val terminal: String?,
+        private val beforeDispatch: () -> Unit,
+    ) : Interceptor {
+        override fun intercept(chain: Interceptor.Chain): Response {
+            beforeDispatch()
+            return chain.proceed(chain.request().withEphemeralAuthority(bearer, terminal))
+        }
     }
 
     private val activeTerminalHeaders = ActiveTerminalHeaderContext()
@@ -254,7 +390,10 @@ object ApiClient {
     @Volatile
     var onUpdateRequired: ((ClientUpdateNotice) -> Unit)? = null
 
-    fun init(tokenStore: TokenStore, @Suppress("UNUSED_PARAMETER") terminalStore: TerminalStore) {
+    internal fun init(tokenStore: TokenStore, @Suppress("UNUSED_PARAMETER") terminalStore: TerminalStore,
+        operationGate: OperationDispatchGate, captureOriginalRead: () -> OriginalOperationBinding?) {
+        this.operationGate = operationGate
+        this.captureOriginalRead = captureOriginalRead
         backendReachability.reset()
         // A value in TerminalStore is a login-resolution candidate, never
         // proof that this process currently owns that terminal.
@@ -271,7 +410,7 @@ object ApiClient {
             .build()
         val sessionRefreshApi = Retrofit.Builder()
             .baseUrl(BuildConfig.API_BASE_URL)
-            .client(refreshClient)
+            .callFactory(tagged(refreshClient, binding = null))
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
             .create(ErpApi::class.java)
@@ -309,7 +448,7 @@ object ApiClient {
             .client(client)
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
-        api = retrofit.create(ErpApi::class.java)
+        api = retrofit.newBuilder().callFactory(tagged(client, binding = null)).build().create(ErpApi::class.java)
     }
 
     internal fun activateTerminalScope(terminalId: String?) {
@@ -330,19 +469,10 @@ object ApiClient {
         service: Class<T>,
         proofInterceptor: Interceptor,
     ): T {
-        val client = remoteAuthenticatedClientBuilder()
-            // Enrollment proof lives in the JSON body, so an opaque transport
-            // retry would reuse its nonce. The coordinator owns retries and
-            // rebuilds every proof; exact device endpoints never follow a
-            // redirect to a different request target.
-            .retryOnConnectionFailure(false)
-            .followRedirects(false)
-            .followSslRedirects(false)
-            .addNetworkInterceptor(proofInterceptor)
-            .build()
+        val client = remoteProofClientBuilder(proofInterceptor, operationGate, remoteAuthenticationInterceptors()).build()
         return Retrofit.Builder()
             .baseUrl(BuildConfig.API_BASE_URL)
-            .client(client)
+            .callFactory(tagged(client, binding = null))
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
             .create(service)
@@ -368,31 +498,41 @@ object ApiClient {
     }
 
     /** Remote support never receives the short-lived authority to mutate prices. */
-    private fun remoteAuthenticatedClientBuilder(): OkHttpClient.Builder {
+    private fun remoteAuthenticationInterceptors(): List<Interceptor> {
         val session = authenticatedSession
-        return baseClientBuilder()
-            .addInterceptor(ClientIdentityInterceptor())
-            .addInterceptor(TerminalInterceptor())
-            .addInterceptor(
-                PricingTokenInterceptor(allowPricingAuthority = false) {
-                    PricingLock.currentToken(session.tokenStore.currentPricingSession())
-                },
-            )
-            .addInterceptor(ErrorInterceptor(json))
-            .addInterceptor(
-                AuthInterceptor(
-                    tokenStore = session.tokenStore,
-                    refreshCoordinator = session.refreshCoordinator,
-                ),
-            )
+        return listOf(
+            ClientIdentityInterceptor(),
+            TerminalInterceptor(),
+            PricingTokenInterceptor(allowPricingAuthority = false) { PricingLock.currentToken(session.tokenStore.currentPricingSession()) },
+            ErrorInterceptor(json),
+            AuthInterceptor(tokenStore = session.tokenStore, refreshCoordinator = session.refreshCoordinator),
+        )
     }
+
+    /** Shared production composition: one physical boundary AFTER the fresh proof signer. */
+    internal fun remoteProofClientBuilder(proof: Interceptor, gate: OperationDispatchGate,
+        authentication: List<Interceptor>): OkHttpClient.Builder = baseClientBuilder(gate, physicalDispatch = false)
+        .apply { authentication.forEach { addInterceptor(it) } }
+        .retryOnConnectionFailure(false)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .addNetworkInterceptor(proof)
+        .addNetworkInterceptor(OperationDispatchInterceptor(gate, physicalAttempt = true))
 
     private class AuthenticatedSession(
         val tokenStore: TokenStore,
         val refreshCoordinator: SessionRefreshCoordinator,
     )
 
-    private fun baseClientBuilder(): OkHttpClient.Builder = OkHttpClient.Builder()
+    /** WebSocket rejection shares the HTTP flight and its conditional session installation. */
+    internal suspend fun refreshRejectedSession(lease: SessionRefreshLease): String? =
+        withContext(Dispatchers.IO) {
+            authenticatedSession.refreshCoordinator.refresh(lease)
+        }
+
+    private fun baseClientBuilder(gate: OperationDispatchGate = operationGate, physicalDispatch: Boolean = true): OkHttpClient.Builder = OkHttpClient.Builder()
+        .addInterceptor(OperationDispatchInterceptor(gate))
+        .apply { if (physicalDispatch) addNetworkInterceptor(OperationDispatchInterceptor(gate, physicalAttempt = true)) }
         // Cafe wifi is congested, not dead. These are deliberately generous:
         // a slow reply that eventually succeeds beats a fast failure that
         // sends a cashier back to the login screen with a customer waiting.
@@ -404,6 +544,12 @@ object ApiClient {
     /** Attach a till to operational calls, never to identity/bootstrap calls. */
     private class TerminalInterceptor : Interceptor {
         override fun intercept(chain: Interceptor.Chain): Response {
+            val original = chain.request().tag(OperationDispatchContext::class.java)?.binding
+            if (original != null) {
+                val builder = chain.request().newBuilder().removeHeader("X-Terminal-Id")
+                original.authority.scope.terminalId?.let { builder.header("X-Terminal-Id", it) }
+                return chain.proceed(builder.build())
+            }
             return chain.proceed(activeTerminalHeaders.apply(chain.request()))
         }
     }
@@ -419,7 +565,12 @@ object ApiClient {
 
         override fun intercept(chain: Interceptor.Chain): Response {
             val original = chain.request()
-            val lease = tokenStore.refreshLease()
+            val binding = original.tag(OperationDispatchContext::class.java)?.binding
+            val boot = original.tag(BootstrapDispatchLease::class.java)
+            val captured = binding?.loginLease ?: boot?.lease
+            val lease = if (captured != null) tokenStore.refreshLeaseFor(captured)
+                ?: throw IOException("The original sign-in changed before dispatch.")
+                else if (boot != null) null else tokenStore.refreshLease()
             val response = chain.proceed(signed(original, lease?.accessToken))
 
             val isAuthRoute = original.url.encodedPath.let {
@@ -592,6 +743,37 @@ object ApiClient {
                 ),
             )
             throw classified
+        }
+    }
+
+    /** Parse server envelopes without feeding a manual local operation into global runtime state. */
+    private class ManualErrorInterceptor(private val json: Json) : Interceptor {
+        override fun intercept(chain: Interceptor.Chain): Response {
+            val response = try {
+                chain.proceed(chain.request())
+            } catch (failure: IOException) {
+                throw ApiException(
+                    "The local test backend did not answer.",
+                    status = null,
+                    code = "network_error",
+                ).also { it.initCause(failure) }
+            }
+            if (response.isSuccessful) return response
+            val body = response.body?.string().orEmpty()
+            val status = response.code
+            response.close()
+            val envelope = runCatching {
+                json.decodeFromString(ApiErrorEnvelope.serializer(), body)
+            }.getOrNull()
+            throw ApiException(
+                message = envelope?.error?.message
+                    ?: fastApiValidationMessage(json, body)
+                    ?: "Request failed (HTTP $status).",
+                status = status,
+                code = envelope?.error?.code,
+                diagnosticConflictEventId = envelope?.error?.details?.clientEventId,
+                retryable = envelope?.error?.details?.retryable,
+            )
         }
     }
 }

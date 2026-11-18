@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import BackgroundTasks
@@ -85,10 +85,17 @@ class _Session:
         self.results = list(results)
         self.entities = {} if entities is None else entities
         self.statements = []
+        self.collection_fences = []
         self.added = []
         self.deleted = []
 
-    async def execute(self, statement):
+    async def execute(self, statement, parameters=None):
+        if str(statement) == "SELECT dcompany_collection_lock(:company)":
+            assert isinstance(parameters, dict) and set(parameters) == {"company"}
+            assert isinstance(parameters["company"], UUID)
+            self.collection_fences.append(parameters["company"])
+            return _Result()
+        assert parameters is None
         self.statements.append(statement)
         if not self.results:
             raise AssertionError(f"unexpected database statement: {statement}")
@@ -779,6 +786,7 @@ async def test_shared_finalizer_consumes_allowance_and_runs_sale_side_effects(
         "deduct",
         "loyalty",
     ]
+    assert session.collection_fences == [company_id]
 
 
 def test_zero_total_finalization_uses_pos_permission_not_shift_opener_identity() -> None:

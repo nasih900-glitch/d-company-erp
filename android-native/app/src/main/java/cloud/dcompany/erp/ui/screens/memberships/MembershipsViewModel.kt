@@ -200,6 +200,7 @@ internal fun membershipRefundStageMessage(status: String): String = when (status
 class MembershipsViewModel : ViewModel() {
 
     private val appCtx = DCompanyApp.instance
+    private val operations = appCtx.handoverOperations.caller(appCtx.shiftCache.profile.value, appCtx.cacheIsolation.currentLease())
     private val db = appCtx.db
     private val api = ApiClient.create<MembershipsApi>()
 
@@ -387,7 +388,7 @@ class MembershipsViewModel : ViewModel() {
     // -------------------------------------------------------------- loading
 
     fun loadTiers() {
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing memberships." }) {
             try {
                 appCtx.sync.refresh("memberships")
             } catch (e: CancellationException) {
@@ -400,7 +401,7 @@ class MembershipsViewModel : ViewModel() {
 
     fun refreshSelectedCustomer() {
         val id = selectedCustomerId.value ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing memberships." }) {
             pulling.value = true
             try {
                 appCtx.sync.pullMembershipFor(id)
@@ -490,7 +491,7 @@ class MembershipsViewModel : ViewModel() {
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         busy.value = true
         formError.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing memberships." }) {
             membershipMoneyOfflineMessage(
                 appCtx.connectivity.online.value,
                 MembershipMoneyOperation.PREPARE,
@@ -632,7 +633,7 @@ class MembershipsViewModel : ViewModel() {
 
     fun retrySubscription(localId: String) {
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing memberships." }) {
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     db.membershipPaymentDao().retryAction(localId)
                 }
@@ -649,7 +650,7 @@ class MembershipsViewModel : ViewModel() {
         if (busy.value) return
         busy.value = true
         formError.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing memberships." }) {
             try {
                 membershipMoneyOfflineMessage(
                     appCtx.connectivity.online.value,
@@ -727,7 +728,7 @@ class MembershipsViewModel : ViewModel() {
         }
         busy.value = true
         formError.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing memberships." }) {
             try {
                 val allowed = if (task.paidVia == "cash") {
                     setOf(MembershipPaymentTaskStatus.CASH_COLLECTION_IN_PROGRESS)
@@ -819,7 +820,7 @@ class MembershipsViewModel : ViewModel() {
         }
         busy.value = true
         formError.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing memberships." }) {
             try {
                 membershipMoneyOfflineMessage(
                     appCtx.connectivity.online.value,
@@ -870,7 +871,7 @@ class MembershipsViewModel : ViewModel() {
 
     fun retryPaymentAction(actionId: String) {
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing memberships." }) {
             val action = db.membershipPaymentDao().actionById(actionId)
             if (
                 action != null &&
@@ -890,7 +891,7 @@ class MembershipsViewModel : ViewModel() {
 
     fun discardRejectedPreparation(actionId: String) {
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing memberships." }) {
             var discarded = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     discarded =
@@ -1021,7 +1022,7 @@ class MembershipsViewModel : ViewModel() {
         if (busy.value) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         busy.value = true
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing memberships." }) {
             var inserted = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     if (db.membershipDao().pendingCancellationForSubscription(subscriptionId) == null) {
@@ -1051,7 +1052,7 @@ class MembershipsViewModel : ViewModel() {
 
     fun retryCancellation(localId: String) {
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing memberships." }) {
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     db.membershipDao().retryCancellation(localId)
                 }
@@ -1079,7 +1080,7 @@ class MembershipsViewModel : ViewModel() {
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         busy.value = true
         formError.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing memberships." }) {
             membershipMoneyOfflineMessage(
                 appCtx.connectivity.online.value,
                 MembershipMoneyOperation.REFUND,
@@ -1185,7 +1186,7 @@ class MembershipsViewModel : ViewModel() {
         if (busy.value) return
         busy.value = true
         formError.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing memberships." }) {
             try {
                 membershipMoneyOfflineMessage(
                     appCtx.connectivity.online.value,
@@ -1256,7 +1257,7 @@ class MembershipsViewModel : ViewModel() {
         }
         busy.value = true
         formError.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing memberships." }) {
             try {
                 val expectedStatus = if (task.method == "cash") {
                     MembershipRefundTaskStatus.CASH_HANDOFF_IN_PROGRESS
@@ -1356,7 +1357,7 @@ class MembershipsViewModel : ViewModel() {
         }
         busy.value = true
         formError.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing memberships." }) {
             try {
                 membershipMoneyOfflineMessage(
                     appCtx.connectivity.online.value,
@@ -1430,7 +1431,7 @@ class MembershipsViewModel : ViewModel() {
             busy.value = false
             return
         }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing memberships." }) {
             try {
                 membershipMoneyOfflineMessage(
                     appCtx.connectivity.online.value,
@@ -1533,7 +1534,7 @@ class MembershipsViewModel : ViewModel() {
 
     fun retryRefundAction(actionId: String) {
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing memberships." }) {
             val action = db.membershipRefundMoneyDao().actionById(actionId)
             if (
                 action != null &&
@@ -1670,7 +1671,7 @@ class MembershipsViewModel : ViewModel() {
 
     fun retryRefund(localId: String) {
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing memberships." }) {
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     db.membershipDao().retryRefund(localId)
                 }
@@ -1683,7 +1684,7 @@ class MembershipsViewModel : ViewModel() {
         if (busy.value) return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         busy.value = true
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing memberships." }) {
             var changed = 0
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     changed = db.membershipDao().confirmCashRefundHandover(
@@ -1713,7 +1714,7 @@ class MembershipsViewModel : ViewModel() {
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         busy.value = true
         formError.value = null
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; formError.value = "Resolve the original till handover before changing memberships." }) {
             var changed = 0
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     changed = db.membershipDao().requestRefundWithdrawal(

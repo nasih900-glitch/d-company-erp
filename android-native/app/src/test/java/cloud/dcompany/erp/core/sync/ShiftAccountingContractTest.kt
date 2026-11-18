@@ -12,6 +12,30 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class ShiftAccountingContractTest {
+    @Test fun `effective correction totals replace display once while drawer close remains original`() {
+        val original = ShiftDetail("shift", "branch", "terminal", "closed", "2026-11-07T08:00:00Z",
+            closedAt = "2026-11-07T20:00:00Z", expectedMinor = 50000, countedMinor = 50000, varianceMinor = 0,
+            grossCollectionsMinor = 18000, upiCollectionsMinor = 18000, netCollectionsMinor = 18000,
+            receiptCorrectionsMinor = 8000, effectiveNetCollectionsMinor = 10000, effectiveUpiCollectionsMinor = 10000)
+        val wire = ApiClient.json.decodeFromString<ShiftDetail>(ApiClient.json.encodeToString(ShiftDetail.serializer(), original))
+        val cached = wire.toShiftHistoryCache("terminal", 10, 20, 30)
+        val row = ShiftHistoryMergePolicy.merge(listOf(cached), emptyList()).single()
+        assertEquals(10000L, row.netCollectionsMinor); assertEquals(10000L, row.upiCollectionsMinor)
+        assertEquals(18000L, row.grossCollectionsMinor)
+        assertEquals(50000L, row.expectedMinor); assertEquals(50000L, row.countedMinor); assertEquals(0L, row.varianceMinor)
+        assertEquals(20L, row.closedAtMillis)
+        val open = wire.copy(status = "open").toServerOpenShiftCache("terminal", 10, 30)
+        assertEquals(10000L, open.netCollectionsMinor); assertEquals(10000L, open.upiCollectionsMinor)
+        assertEquals(50000L, open.expectedMinor)
+        val absent = original.copy(receiptCorrectionsMinor = null, effectiveNetCollectionsMinor = null, effectiveUpiCollectionsMinor = null)
+            .toShiftHistoryCache("terminal", 10, 20, 30)
+        assertEquals(18000L, absent.netCollectionsMinor); assertEquals(18000L, absent.upiCollectionsMinor)
+        val incomplete = original.copy(effectiveNetCollectionsMinor = null, effectiveUpiCollectionsMinor = null)
+            .toShiftHistoryCache("terminal", 10, 20, 30)
+        assertNull(incomplete.netCollectionsMinor); assertNull(incomplete.upiCollectionsMinor)
+        assertEquals(50000L, incomplete.countedMinor)
+    }
+
 
     @Test
     fun `close response identifies a different authorised closer without rewriting opener`() {

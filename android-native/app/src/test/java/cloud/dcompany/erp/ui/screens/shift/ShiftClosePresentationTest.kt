@@ -153,7 +153,7 @@ class ShiftClosePresentationTest {
             presentation.savedCountMessage(
                 valid = "Saved %s",
                 missing = "missing",
-            ).startsWith("Saved ₹0.00"),
+            ).startsWith("Saved 0.00"),
         )
     }
 

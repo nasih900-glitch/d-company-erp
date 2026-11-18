@@ -1,4 +1,7 @@
 import axios, { AxiosError, type AxiosRequestConfig } from 'axios';
+import { configuredApiBase } from './configured-api-base';
+import { advanceRootWorkspaceEpoch, registerOrdinaryWorkspace } from './root-workspace-epoch';
+import { paidAccessIdentity } from './paid-bill-contract';
 import { readStoredTerminalId } from './operational-context';
 import { recordFailedSupportAction } from './support-context';
 import { apiFailureMessage } from './api-error-message';
@@ -9,20 +12,7 @@ import { apiFailureMessage } from './api-error-message';
  *   2. window.__ERP_API_URL__ at runtime   — set by mobile shells before page load
  *   3. /api/v1                             — dev proxy (Vite) and same-origin web
  */
-const RUNTIME_URL =
-  (typeof window !== 'undefined' &&
-    (window as unknown as { __ERP_API_URL__?: string }).__ERP_API_URL__) ||
-  undefined;
-
-function normalizedApiUrl(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed || undefined;
-}
-
-const BASE_URL =
-  normalizedApiUrl(import.meta.env.VITE_API_URL) ??
-  normalizedApiUrl(RUNTIME_URL) ??
-  '/api/v1';
+const BASE_URL = configuredApiBase();
 
 const API_TIMEOUT_MS = 20_000;
 const COOKIE_SESSION_HEADER = 'X-Session-Transport';
@@ -78,6 +68,7 @@ let activeSessionRenewal: ActiveSessionRenewal | null = null;
 
 function advanceSessionGeneration(): void {
   sessionGeneration += 1;
+  advanceRootWorkspaceEpoch();
   const previousRenewal = activeSessionRenewal;
   activeSessionRenewal = null;
   // In cookie mode this also asks the browser to stop accepting a late
@@ -229,6 +220,11 @@ export const api = axios.create({
   // silent-wrong-data bug that's hard to notice.
   paramsSerializer: { indexes: null },
 });
+
+registerOrdinaryWorkspace(() => ({
+  lineage: JSON.stringify([readSessionGeneration(), paidAccessIdentity(readAccessToken())]),
+  endpoint: String(api.defaults.baseURL ?? BASE_URL),
+}));
 
 export { BASE_URL };
 

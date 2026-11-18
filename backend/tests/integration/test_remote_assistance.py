@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import UUID, uuid1, uuid4
@@ -1333,11 +1334,13 @@ async def test_active_consent_session_and_command_end_on_tablet_user_handoff(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+@pytest.mark.parametrize("request_start_delay", [0.0, 3.0])
 async def test_slow_frame_upload_releases_database_lock_and_revoke_prevents_store(
     client,
     session,
     seed_owner,
     monkeypatch,
+    request_start_delay: float,
 ) -> None:
     installation = await _installation(session, seed_owner)
     grant, support = await _active_support_session(session, seed_owner, installation)
@@ -1379,11 +1382,18 @@ async def test_slow_frame_upload_releases_database_lock_and_revoke_prevents_stor
     monkeypatch.setattr(remote_router, "authenticate_device_request", authenticate)
     monkeypatch.setattr(remote_router, "_require_exact_active_device_key", allow_exact_key)
     monkeypatch.setattr(remote_router, "_read_bounded_body", slow_body)
-    monkeypatch.setattr(remote_router.to_thread, "run_sync", decode_off_loop)
+    # The router imports AnyIO's shared module. Replacing its run_sync attribute
+    # would also change Starlette/FastAPI internals in this process.
+    from anyio import to_thread as shared_to_thread
+    original_run_sync = shared_to_thread.run_sync
+    monkeypatch.setattr(remote_router, "to_thread", SimpleNamespace(run_sync=decode_off_loop))
+    assert shared_to_thread.run_sync is original_run_sync
     monkeypatch.setattr(remote_router, "store_latest_frame", forbidden_store)
 
-    upload_task = asyncio.create_task(
-        client.put(
+    async def upload_request():
+        if request_start_delay:
+            await asyncio.sleep(request_start_delay)
+        return await client.put(
             f"/api/v1/remote-assistance/device/sessions/{support.id}/frame",
             headers={
                 **device_headers,
@@ -1397,33 +1407,59 @@ async def test_slow_frame_upload_releases_database_lock_and_revoke_prevents_stor
             },
             content=b"bounded-jpeg-body",
         )
-    )
-    await asyncio.wait_for(body_read_started.wait(), timeout=2)
+
+    upload_task = asyncio.create_task(upload_request(), name="slow-frame-upload-proof")
+    body_waiter = asyncio.create_task(body_read_started.wait())
     try:
-        revoked = await asyncio.wait_for(
-            client.post(
-                f"/api/v1/remote-assistance/grants/{grant.id}/revoke",
-                headers=admin_headers,
-                json={"revoke_id": str(uuid4())},
-            ),
-            timeout=2,
+        # Authentication and connection setup precede the security proof. The
+        # delayed-start case ensures they do not consume its unchanged 2s budget.
+        done, _ = await asyncio.wait(
+            {body_waiter, upload_task}, timeout=10, return_when=asyncio.FIRST_COMPLETED,
         )
-        assert revoked.status_code == 200, revoked.text
+        if upload_task in done:
+            response = upload_task.result()
+            pytest.fail(f"Upload returned HTTP {response.status_code} before body readiness")
+        assert body_waiter in done, "Upload startup readiness exceeded 10s"
+        assert body_waiter.result() and not release_body.is_set() and not upload_task.done()
+        try:
+            revoked = await asyncio.wait_for(
+                client.post(
+                    f"/api/v1/remote-assistance/grants/{grant.id}/revoke",
+                    headers=admin_headers,
+                    json={"revoke_id": str(uuid4())},
+                ),
+                timeout=2,
+            )
+            assert revoked.status_code == 200, revoked.text
+        finally:
+            release_body.set()
+        upload = await asyncio.wait_for(upload_task, timeout=2)
+        assert upload.status_code == 410, upload.text
+        assert upload.json()["error"]["code"] == "remote_action_gone"
+        assert store_calls == []
     finally:
+        # Also clean up when the initial admission barrier fails.
         release_body.set()
-    upload = await asyncio.wait_for(upload_task, timeout=2)
-    assert upload.status_code == 410, upload.text
-    assert upload.json()["error"]["code"] == "remote_action_gone"
-    assert store_calls == []
+        if not upload_task.done():
+            upload_task.cancel()
+        if not body_waiter.done():
+            body_waiter.cancel()
+        completed, _ = await asyncio.wait({upload_task}, timeout=2)
+        assert upload_task in completed, "Upload task did not finish bounded cleanup"
+        await asyncio.gather(upload_task, body_waiter, return_exceptions=True)
+        assert shared_to_thread.run_sync is original_run_sync
+
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+@pytest.mark.parametrize("request_start_delay", [0.0, 3.0])
 async def test_frame_read_waits_for_revoke_commit_and_discloses_nothing(
     client,
     session,
     seed_owner,
     monkeypatch,
+    request_start_delay: float,
 ) -> None:
     installation = await _installation(session, seed_owner)
     grant, support = await _active_support_session(session, seed_owner, installation)
@@ -1452,29 +1488,105 @@ async def test_frame_read_waits_for_revoke_commit_and_discloses_nothing(
     )
     monkeypatch.setattr(remote_router, "get_latest_frame", forbidden_read)
 
+    # Observe the actual PostgreSQL wait rather than assuming a scheduled reader
+    # reached the device lock after a fixed sleep.
+    original_lock_device = remote_router._lock_device
+    request_pids: dict[str, int] = {}
+    request_label: ContextVar[str] = ContextVar("support_read_revoke_proof", default="")
+    frame_entered_lock = asyncio.Event()
+
+    async def observed_lock_device(db, company_id, device_id) -> None:
+        label = request_label.get()
+        if label in {"support-revoke-proof", "support-frame-proof"}:
+            pid = await db.scalar(text("SELECT pg_backend_pid()"))
+            assert isinstance(pid, int)
+            assert request_pids.setdefault(label, pid) == pid
+            if label == "support-frame-proof":
+                frame_entered_lock.set()
+        await original_lock_device(db, company_id, device_id)
+
+    monkeypatch.setattr(remote_router, "_lock_device", observed_lock_device)
+
+    async def await_barrier(event: asyncio.Event, operation: asyncio.Task, label: str) -> None:
+        # Readiness includes auth/connection setup, not the lock-contention proof.
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        waiter = asyncio.create_task(event.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {waiter, operation}, timeout=10, return_when=asyncio.FIRST_COMPLETED,
+            )
+            if operation in done:
+                response = operation.result()  # Surface an early request exception.
+                pytest.fail(f"{label} returned HTTP {response.status_code} before its barrier")
+            if waiter not in done:
+                states = (await session.execute(text(
+                    "SELECT pid, state, wait_event_type, wait_event FROM pg_stat_activity "
+                    "WHERE pid = ANY(CAST(:pids AS integer[])) ORDER BY pid"
+                ), {"pids": list(request_pids.values())})).all()
+                pytest.fail(
+                    f"{label} startup readiness exceeded 10s "
+                    f"(elapsed={loop.time() - started:.3f}s); database waits={states!r}"
+                )
+            assert waiter.result()
+        finally:
+            if not waiter.done():
+                waiter.cancel()
+            await asyncio.gather(waiter, return_exceptions=True)
+
+    async def labelled_request(label: str, request):
+        token = request_label.set(label)
+        try:
+            if label == "support-revoke-proof" and request_start_delay:
+                await asyncio.sleep(request_start_delay)
+            return await request()
+        finally:
+            request_label.reset(token)
+
     revoke_task = asyncio.create_task(
-        client.post(
+        labelled_request("support-revoke-proof", lambda: client.post(
             f"/api/v1/remote-assistance/grants/{grant.id}/revoke",
             headers=admin_headers,
             json={"revoke_id": str(uuid4())},
-        )
+        )),
+        name="support-revoke-proof",
     )
-    await asyncio.wait_for(revoke_terminalized.wait(), timeout=2)
-    frame_task = asyncio.create_task(
-        client.get(
-            f"/api/v1/remote-assistance/sessions/{support.id}/frame",
-            headers=admin_headers,
+    frame_task = None
+    try:
+        await await_barrier(revoke_terminalized, revoke_task, "revoke")
+        frame_task = asyncio.create_task(
+            labelled_request("support-frame-proof", lambda: client.get(
+                f"/api/v1/remote-assistance/sessions/{support.id}/frame",
+                headers=admin_headers,
+            )),
+            name="support-frame-proof",
         )
-    )
-    await asyncio.sleep(0.05)
-    assert not frame_task.done()
-    allow_revoke_commit.set()
+        await await_barrier(frame_entered_lock, frame_task, "frame reader")
+        async with asyncio.timeout(2):
+            while True:
+                assert not frame_task.done(), "frame reader completed before revoke committed"
+                blockers = await session.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"),
+                    {"pid": request_pids["support-frame-proof"]},
+                )
+                if request_pids["support-revoke-proof"] in (blockers or []):
+                    break
+                await asyncio.sleep(0.01)
+        assert relay_reads == []
+        allow_revoke_commit.set()
 
-    revoked = await asyncio.wait_for(revoke_task, timeout=2)
-    assert revoked.status_code == 200, revoked.text
-    frame = await asyncio.wait_for(frame_task, timeout=2)
-    assert frame.status_code == 404, frame.text
-    assert relay_reads == []
+        revoked = await asyncio.wait_for(revoke_task, timeout=2)
+        assert revoked.status_code == 200, revoked.text
+        frame = await asyncio.wait_for(frame_task, timeout=2)
+        assert frame.status_code == 404, frame.text
+        assert relay_reads == []
+    finally:
+        allow_revoke_commit.set()
+        tasks = [revoke_task, *([frame_task] if frame_task is not None else [])]
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 @pytest.mark.integration

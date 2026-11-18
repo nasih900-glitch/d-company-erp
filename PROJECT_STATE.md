@@ -1,6 +1,51 @@
 # D Company ERP — current project state
 
-## Current quality candidate (updated 2026-10-11)
+## Build 76 candidate
+
+Version 3.1.69 targets Android build 76, Room 58 and Alembic 0105. See the
+[current candidate](docs/V3_1_69_RELEASE_CANDIDATE.md) for the tablet motion and
+focus corrections, retained product scope and remaining release checks.
+Physical probes used an isolated release-like package with the prior QA
+identity. They do not establish newly signed Build 76 or live Redmi acceptance.
+
+The signed Build 74 / v3.1.67 source and assets remain immutable history.
+Production deployment and update offer are separate, still guarded steps.
+
+The security follow-up adds four separately bounded image execution-path
+assessments and a readonly PostgreSQL configuration/catalogue admission check.
+Scanner thresholds and original reports remain intact; final exact-source CI,
+signing and production admission remain distinct requirements. The
+[candidate document](docs/V3_1_69_RELEASE_CANDIDATE.md) links the scoped contracts.
+
+The immutable v3.1.68 tag remains historical evidence. Build 76 corrects three
+scanner test contracts exposed by the complete root preflight; it retains the
+same tablet implementation and scanner policies. A reviewed tag may start the
+protected exact-source release workflow while branch CI is in progress. All
+full release gates must pass before signing; signed upgrade preservation and
+production, idle-shop and tablet admission remain required before offering.
+
+## Earlier checkpoints
+
+## Current local candidate (updated 2026-10-30)
+
+The owner approved the corrected local emulator workflows and appearance.
+The coordinated candidate is **v3.1.47 / Android build 55**, documented in
+[`docs/V3_1_47_RELEASE_CANDIDATE.md`](docs/V3_1_47_RELEASE_CANDIDATE.md).
+Room is `58` and Alembic head is `0093`. The transition adds the protected update-policy
+and immutable Gaming Void/served-addon evidence while preserving legacy financial
+history and tablet queues. Android follows the approved transparent liquid-glass
+workspace, one shared selectable 4K workspace background and the original Web logo.
+Login/Splash retain their approved 1672 × 941 artwork. Gaming Void permits a blank
+reason below 30 minutes, requires one at or above 30 minutes and retains served add-ons
+as payable evidence; POS-linked void operations remain Owner-only.
+The deployment controller's global
+Optional/Required control is in the existing Devices & Updates workspace.
+Final release identity/CI, guarded compatibility, signing, signed upgrade and
+download checks, deployment and update offer remain separate gates. This local
+checkpoint is not a live-server or physical-tablet status claim. Read current
+source and release evidence before acting; do not reuse older freeze receipts.
+
+## Historical quality candidate (updated 2026-10-11)
 
 ### Latest completion checkpoint
 
