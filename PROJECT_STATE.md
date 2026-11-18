@@ -1,9 +1,9 @@
 # D Company ERP — current project state
 
-## Build 73 candidate
+## Build 74 candidate
 
-Version 3.1.66 targets Android build 73, Room 58 and Alembic 0105. See the
-[current candidate](docs/V3_1_66_RELEASE_CANDIDATE.md) for product scope and
+Version 3.1.67 targets Android build 74, Room 58 and Alembic 0105. See the
+[current candidate](docs/V3_1_67_RELEASE_CANDIDATE.md) for product scope and
 release checks.
 
 ## Earlier checkpoints

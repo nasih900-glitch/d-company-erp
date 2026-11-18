@@ -112,7 +112,7 @@ def verify_after(before, pre_fleet, after, post_fleet):
 
 def image_override(attestation, retained):
     images = attestation["services"]
-    REQUIRE(attestation["version_name"] == "3.1.66" and set(images) == PREVIOUS["IMAGE_SERVICES"],
+    REQUIRE(attestation["version_name"] == "3.1.67" and set(images) == PREVIOUS["IMAGE_SERVICES"],
             "unexpected candidate version or service inventory")
     services = {service: {"image": row["image_id"]} for service, row in images.items()}
     services["redis"]["image"] = retained["redis"]["image_id"]

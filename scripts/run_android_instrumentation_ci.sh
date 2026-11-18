@@ -40,6 +40,7 @@ user_rotation_initial=''
 tablet_viewport_configured=0
 owned_emulator_pid=''
 owned_emulator_log=''
+frame_acceptance='physical'
 
 mkdir -p "${diagnostics_dir}"
 cd "${android_root}"
@@ -309,6 +310,20 @@ configure_tablet_viewport() {
   [[ "${effective_size}" == '2560x1600' ]] &&
   [[ "${effective_density}" == '320' ]] &&
   [[ "$(adb -s "${device_serial}" shell settings get system user_rotation | tr -d '\r')" == '0' ]]
+}
+
+configure_frame_acceptance() {
+  [[ "${D_COMPANY_HOSTED_COLD_BOOT:-0}" == '1' ]] || return 0
+  [[ "${GITHUB_ACTIONS:-}" == 'true' && "${RUNNER_OS:-}" == 'Linux' &&
+     "${device_serial}" == 'emulator-5554' && -n "${owned_emulator_pid}" ]] || return 1
+  kill -0 "${owned_emulator_pid}" || return 1
+  grep -Fxq 'cold_boot_verified=true' "${diagnostics_dir}/emulator-cold-boot.txt" || return 1
+  grep -Eq 'emuglConfig_init: vulkan_mode_selected:swiftshader gles_mode_selected:swangle[[:space:]]*$' "${owned_emulator_log}" || return 1
+  grep -Eq 'Graphics Adapter Android Emulator OpenGL ES Translator \(ANGLE \([^[:cntrl:]]*SwiftShader Device[^[:cntrl:]]*\)\)[[:space:]]*$' "${owned_emulator_log}" || return 1
+  local qemu
+  qemu="$(timeout 5s adb -s "${device_serial}" shell getprop ro.kernel.qemu | tr -d '\r')" || return 1
+  [[ "${qemu}" == '1' ]] || return 1
+  frame_acceptance='hosted-software-telemetry'
 }
 
 reassert_tablet_viewport() {
@@ -594,6 +609,14 @@ run_connected_instrumentation_lane() {
   local lane_status=0
   local outputs_cleared=0
   local gradle_attempted=0
+  local lane_args=()
+
+  if [[ "${lane_name}" == 'physical-frame-stress' ]]; then
+    lane_args=(
+      "-Pandroid.testInstrumentationRunnerArguments.erpFrameAcceptance=${frame_acceptance}"
+      '-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true'
+    )
+  fi
 
   mkdir -p "${lane_dir}" || return 1
   sample_host_health "${lane_dir}" before || true
@@ -607,7 +630,7 @@ run_connected_instrumentation_lane() {
       lane_status=1
     else
       gradle_attempted=1
-      if ! run_gradle_ci "${gradle_runner_args[@]}" "$@" :app:connectedDebugAndroidTest \
+      if ! run_gradle_ci "${gradle_runner_args[@]}" "${lane_args[@]}" "$@" :app:connectedDebugAndroidTest \
         2>&1 | tee "${lane_dir}/gradle.log"; then
         lane_status=1
       fi
@@ -622,11 +645,44 @@ run_connected_instrumentation_lane() {
     if ! preserve_instrumentation_lane "${lane_dir}"; then
       lane_status=1
     fi
+    if [[ "${lane_name}" == 'physical-frame-stress' ]]; then
+      if ! preserve_frame_evidence "${lane_dir}"; then lane_status=1; fi
+      if ! adb -s "${device_serial}" uninstall "${test_package}" >/dev/null; then lane_status=1; fi
+      if ! adb -s "${device_serial}" uninstall "${app_package}" >/dev/null; then lane_status=1; fi
+    fi
   fi
   if (( lane_status != 0 )); then
     summarize_failed_instrumentation_lane "${lane_dir}" || true
   fi
   return "${lane_status}"
+}
+
+preserve_frame_evidence() {
+  local lane_dir=$1
+  local evidence_dir="${lane_dir}/frame-evidence"
+  local filename
+  local result=0
+  mkdir -p "${evidence_dir}" || return 1
+  for filename in \
+    frame-metrics.txt frame-metrics-component-gaming-timer-1hz.txt \
+    frame-metrics-component-connectivity-only-3s.txt \
+    01-gaming-online.png 02-gaming-server-issue.png 03-gaming-after-connectivity-stress.png \
+    component-gaming-timer-1hz-before.png component-gaming-timer-1hz-after.png \
+    component-connectivity-only-3s-before.png component-connectivity-only-3s-after.png; do
+    if ! timeout 15s adb -s "${device_serial}" pull \
+      "/sdcard/Android/data/${app_package}/files/testlab/${filename}" "${evidence_dir}/${filename}"; then
+      result=1
+    fi
+  done
+  if [[ "${frame_acceptance}" == 'hosted-software-telemetry' ]]; then
+    grep -E 'Android emulator version|Graphics Adapter |gles_mode_selected|Feature .Vulkan.' \
+      "${owned_emulator_log}" > "${evidence_dir}/host-renderer.txt" || result=1
+  fi
+  if ! python3 "${shard_verifier}" frame-evidence --evidence-dir "${evidence_dir}" \
+    --frame-acceptance "${frame_acceptance}" --provenance "${provenance_dir}/provenance.json"; then
+    result=1
+  fi
+  return "${result}"
 }
 
 
@@ -770,6 +826,11 @@ if [[ "${status}" -eq 0 && "${D_COMPANY_HOSTED_COLD_BOOT:-0}" == '1' ]]; then
   fi
 fi
 
+if [[ "${status}" -eq 0 ]] && ! configure_frame_acceptance; then
+  echo "Could not verify the hosted software renderer for frame telemetry." >&2
+  status=1
+fi
+
 if [[ "${status}" -eq 0 ]]; then
   if ! run_connected_instrumentation_lane \
     'gaming-board' \
@@ -816,6 +877,8 @@ if [[ "${status}" -eq 0 ]]; then
     --stress-class "${stress_class}" \
     --gaming-board-class "${gaming_board_class}" \
     --persistence-class "${persistence_class}" \
+    --frame-acceptance "${frame_acceptance}" \
+    --provenance "${provenance_dir}/provenance.json" \
     --expected-skip "${expected_notification_skip}" \
     --expected-skip "${expected_exact_alarm_skip}" \
     --summary "${shard_evidence_root}/summary.txt"; then

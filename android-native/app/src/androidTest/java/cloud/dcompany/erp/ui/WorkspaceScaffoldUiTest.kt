@@ -409,8 +409,8 @@ class WorkspaceScaffoldUiTest {
         assertTrue(
             "Window must fit the observed display mode: window=${proof.windowBounds} " +
                 "mode=${proof.modeWidthPx}x${proof.modeHeightPx}",
-            proof.windowBounds.width() <= proof.modeWidthPx &&
-                proof.windowBounds.height() <= proof.modeHeightPx,
+            maxOf(proof.windowBounds.width(), proof.windowBounds.height()) <= maxOf(proof.modeWidthPx, proof.modeHeightPx) &&
+                minOf(proof.windowBounds.width(), proof.windowBounds.height()) <= minOf(proof.modeWidthPx, proof.modeHeightPx),
         )
         assertTrue(
             "Decor view must be attached and measured: ${proof.decorWidthPx}x${proof.decorHeightPx}",

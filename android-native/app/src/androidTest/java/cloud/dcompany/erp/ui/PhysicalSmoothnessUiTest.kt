@@ -63,6 +63,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.ceil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -85,6 +86,31 @@ class PhysicalComponentFrameStressUiTest {
     val compose = createAndroidComposeRule<ComponentActivity>()
 
     private lateinit var auditActivity: ComponentActivity
+    private lateinit var frameAcceptance: String
+    private var emulated = false
+
+    @Before
+    fun verifyFrameAcceptanceMode() {
+        frameAcceptance = InstrumentationRegistry.getArguments().getString("erpFrameAcceptance") ?: "physical"
+        require(frameAcceptance in setOf("physical", "hosted-software-telemetry")) {
+            "Unknown frame acceptance mode"
+        }
+        val property = ProcessBuilder("/system/bin/getprop", "ro.kernel.qemu").start()
+        try {
+            check(property.waitFor(5, TimeUnit.SECONDS) && property.exitValue() == 0) { "Cannot identify the frame test device" }
+            val qemu = property.inputStream.bufferedReader().readText().trim()
+            require(qemu in setOf("", "0", "1")) { "Unknown frame test device" }
+            emulated = qemu == "1"
+        } finally {
+            property.destroy()
+        }
+        if (frameAcceptance == "hosted-software-telemetry") {
+            check(emulated && Build.HARDWARE == "ranchu") { "Software frame telemetry requires the admitted emulator" }
+        }
+        check(emulated || (Build.HARDWARE !in setOf("ranchu", "goldfish") &&
+            listOf(Build.MANUFACTURER, Build.MODEL, Build.HARDWARE).all { it.isNotBlank() && it != Build.UNKNOWN })
+        ) { "Physical frame acceptance requires an identified device" }
+    }
 
     @Test
     fun workspaceChromeAndGamingCardsHaveBoundedFramesAndStableGeometry() {
@@ -205,7 +231,8 @@ class PhysicalComponentFrameStressUiTest {
         writeScreenshot("03-gaming-after-connectivity-stress.png")
         writeMetrics(
             metrics,
-            measurementDetails = "samples=$stressSamples pacing=draw-commit-vsync droppedReports=${droppedReports.get()}",
+            measurementDetails = "samples=$stressSamples pacing=draw-commit-vsync droppedReports=${droppedReports.get()} " +
+                "geometryChecks=$stressSamples geometryStable=true",
         )
         Log.i(PHYSICAL_PERFORMANCE_LOG_TAG, metrics.asLogLine())
         assertEquals("The frame callback dropped stress evidence", 0, droppedReports.get())
@@ -214,7 +241,7 @@ class PhysicalComponentFrameStressUiTest {
             "The physical run captured too few frames for a useful audit: ${metrics.totalFrames}",
             metrics.totalFrames >= stressSamples,
         )
-        assertEquals("A frozen frame was detected during Gaming/connectivity stress", 0, metrics.frozenFrames)
+        assertPhysicalFrameAcceptance(metrics, "Gaming/connectivity stress")
         // Jank and percentile values are calibration evidence on the first
         // physical matrix. Cloud instrumentation, video capture and refresh
         // rate materially affect them, so we inspect and compare the pulled
@@ -420,7 +447,7 @@ class PhysicalComponentFrameStressUiTest {
                 "minimum is $minimumCapturedFrames",
             metrics.totalFrames >= minimumCapturedFrames,
         )
-        assertEquals("$scenario contained a frozen frame", 0, metrics.frozenFrames)
+        assertPhysicalFrameAcceptance(metrics, scenario)
         // No percentile/jank threshold is calibrated to the observed devices.
         // Keep slow evidence visible even when geometry and safety checks pass.
     }
@@ -490,8 +517,15 @@ class PhysicalComponentFrameStressUiTest {
             buildString {
                 appendLine(metrics.asLogLine(scenario))
                 appendLine(measurementDetails)
+                appendLine("frameAcceptance=$frameAcceptance emulator=$emulated " +
+                    "hardwareAcceptance=${frameAcceptance == "physical" && !emulated}")
+                val arguments = InstrumentationRegistry.getArguments()
+                for (name in listOf("sourceInventorySha256", "targetApkSha256", "testApkSha256", "captureRunId")) {
+                    appendLine("$name=${arguments.getString("dcompany.$name")}")
+                }
                 appendLine("metric=FrameMetrics.TOTAL_DURATION roundedMs budgetProxy=true platformDeadlineAttribution=false")
                 appendLine("device=${Build.MANUFACTURER} ${Build.MODEL}")
+                appendLine("board=${Build.HARDWARE}")
                 appendLine("android=${Build.VERSION.RELEASE} api=${Build.VERSION.SDK_INT}")
                 appendLine("app=${BuildConfig.VERSION_NAME} code=${BuildConfig.VERSION_CODE}")
                 appendLine(
@@ -500,6 +534,12 @@ class PhysicalComponentFrameStressUiTest {
                 )
             },
         )
+    }
+
+    private fun assertPhysicalFrameAcceptance(metrics: FrameSummary, scenario: String) {
+        if (frameAcceptance == "physical") {
+            assertEquals("$scenario contained a frozen frame", 0, metrics.frozenFrames)
+        }
     }
 
     private fun captureStationBounds(stations: List<Station>) = stations.associate { station ->

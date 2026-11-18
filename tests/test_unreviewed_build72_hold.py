@@ -66,13 +66,13 @@ def _run(tmp_path: Path, script_version: str, repo_version: str, *, template: st
     ), trace
 
 
-@pytest.mark.parametrize(("script_version", "repo_version"), [("3.1.66", "3.1.64"), ("3.1.64", "3.1.66")])
+@pytest.mark.parametrize(("script_version", "repo_version"), [("3.1.67", "3.1.64"), ("3.1.64", "3.1.67")])
 def test_either_executing_or_repository_successor_source_closes_admission(tmp_path, script_version, repo_version):
     result, trace = _run(tmp_path, script_version, repo_version)
     assert result.returncode == 1
     assert "Build72 production admission is closed" in result.stderr
     assert "preflight passed" not in result.stdout
-    if script_version == "3.1.66":
+    if script_version == "3.1.67":
         assert not trace.exists()
         assert "Redis ACTIVE_REDIS_REPAIR.json / CONFIG_RECREATION_HOLD.json" in result.stderr
     else:
@@ -100,7 +100,7 @@ def test_disagreeing_historical_source_identities_are_refused(tmp_path):
 def test_explicit_build72_route_requires_existing_environment_and_no_other_upgrade_flags(
     tmp_path, existing, maintenance, legacy, allowed,
 ):
-    result, _ = _run(tmp_path, "3.1.66", "3.1.66", existing_env=existing, environment={
+    result, _ = _run(tmp_path, "3.1.67", "3.1.67", existing_env=existing, environment={
         "BUILD72_UPGRADE_EVIDENCE": "/private/reviewed.json",
         "MAINTENANCE_CONFIRMED": maintenance, "LEGACY_CODE16_REVISION": legacy,
     })
@@ -109,7 +109,7 @@ def test_explicit_build72_route_requires_existing_environment_and_no_other_upgra
         assert "Build72 production admission is closed" in result.stderr
 
 
-@pytest.mark.parametrize("template", ["", "APP_VERSION=3.1.66\nAPP_VERSION=3.1.64\n", "APP_VERSION=3.1.66 # override\n"])
+@pytest.mark.parametrize("template", ["", "APP_VERSION=3.1.67\nAPP_VERSION=3.1.64\n", "APP_VERSION=3.1.67 # override\n"])
 def test_missing_or_ambiguous_source_identity_is_not_a_fresh_install_bypass(tmp_path, template):
     result, trace = _run(tmp_path, "unused", "3.1.64", template=template)
     assert result.returncode == 1

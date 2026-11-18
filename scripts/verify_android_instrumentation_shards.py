@@ -12,11 +12,112 @@ import re
 import sys
 import xml.etree.ElementTree as ET
 
+if __package__:
+    from .analyze_code26_physical_evidence import _validate_png
+else:
+    from analyze_code26_physical_evidence import _validate_png
+
 
 PERSISTENCE_STAGES = (
     ("persistence-stage-a", "stageAImportBothSlotsAndPersist"),
     ("persistence-stage-b", "stageBVerifyBothSlotsAfterProcessRestart"),
 )
+
+FRAME_SCENARIOS = {
+    "frame-metrics.txt": ("component-gaming-connectivity", 200, None),
+    "frame-metrics-component-gaming-timer-1hz.txt": ("component-gaming-timer-1hz", 60, 1000),
+    "frame-metrics-component-connectivity-only-3s.txt": ("component-connectivity-only-3s", 30, 3000),
+}
+FRAME_SCREENSHOTS = (
+    "01-gaming-online.png", "02-gaming-server-issue.png", "03-gaming-after-connectivity-stress.png",
+    "component-gaming-timer-1hz-before.png", "component-gaming-timer-1hz-after.png",
+    "component-connectivity-only-3s-before.png", "component-connectivity-only-3s-after.png",
+)
+
+
+def _frame_file(directory: Path, name: str, maximum: int) -> bytes:
+    path = directory / name
+    if directory.is_symlink() or path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= maximum:
+        raise ValueError(f"Missing, linked or oversized frame evidence: {name}")
+    return path.read_bytes()
+
+
+def _frame_png_dimensions(directory: Path, filename: str) -> tuple[int, int]:
+    _frame_file(directory, filename, 32 * 1024 * 1024)
+    valid, reason, dimensions = _validate_png(directory / filename)
+    if not valid or dimensions is None:
+        raise ValueError(f"Invalid frame screenshot {filename}: {reason}")
+    return dimensions
+
+
+def verify_frame_evidence(directory: Path, mode: str, provenance_path: Path) -> str:
+    if mode not in ("physical", "hosted-software-telemetry"):
+        raise ValueError("Unknown frame acceptance mode")
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    pins = {
+        "sourceInventorySha256": provenance["source_inventory_sha256"],
+        "targetApkSha256": provenance["target_apk"]["sha256"],
+        "testApkSha256": provenance["test_apk"]["sha256"],
+        "captureRunId": provenance["capture_run_id"],
+    }
+    if any(re.fullmatch(r"[0-9a-f]{32}" if name == "captureRunId" else r"[0-9a-f]{64}", value) is None
+           for name, value in pins.items()):
+        raise ValueError("Invalid frame evidence provenance")
+    display = None
+    frozen = 0
+    emulated = None
+    for filename, (scenario, samples, cadence) in FRAME_SCENARIOS.items():
+        text = _frame_file(directory, filename, 16384).decode("utf-8")
+        rows = re.findall(r"(?:^|\s)([A-Za-z][A-Za-z0-9]*)=([^\s]+)", text)
+        fields = dict(rows)
+        if len(rows) != len(fields):
+            raise ValueError(f"Ambiguous frame evidence fields: {filename}")
+        device_emulated = fields.get("emulator")
+        if device_emulated not in ("true", "false") or (emulated is not None and device_emulated != emulated):
+            raise ValueError("Frame evidence device identities differ")
+        emulated = device_emulated
+        hardware_acceptance = mode == "physical" and emulated == "false"
+        if fields.get("scenario") != scenario or fields.get("frameAcceptance") != mode or \
+                fields.get("hardwareAcceptance") != str(hardware_acceptance).lower() or \
+                (mode == "hosted-software-telemetry" and emulated != "true"):
+            raise ValueError(f"Frame scenario or acceptance mismatch: {filename}")
+        if any(fields.get(name) != value for name, value in pins.items()):
+            raise ValueError(f"Frame evidence provenance mismatch: {filename}")
+        if fields.get("samples") != str(samples) or fields.get("geometryChecks") != str(samples) or \
+                fields.get("geometryStable") != "true":
+            raise ValueError(f"Incomplete frame updates or geometry: {filename}")
+        total, raw_frozen = int(fields["total"]), int(fields["frozen"])
+        minimum = samples if cadence is None else math.ceil(samples * .95)
+        if total < minimum or not 0 <= raw_frozen <= total or (mode == "physical" and raw_frozen != 0):
+            raise ValueError(f"Frame completeness or physical acceptance failed: {filename}")
+        if cadence is None:
+            if fields.get("droppedReports") != "0" or fields.get("pacing") != "draw-commit-vsync":
+                raise ValueError("Stress frame callbacks were dropped or unpaced")
+        elif fields.get("cadenceMillis") != str(cadence) or fields.get("geometryMismatches") != "0" or \
+                int(fields.get("measuredWallMillis", "0")) < samples * cadence:
+            raise ValueError(f"Frame cadence or geometry mismatch: {filename}")
+        size = fields.get("display", "")
+        if not re.fullmatch(r"[1-9][0-9]{2,3}x[1-9][0-9]{2,3}", size) or (display is not None and size != display):
+            raise ValueError("Frame evidence display sizes differ")
+        display = size
+        frozen += raw_frozen
+    if mode == "hosted-software-telemetry":
+        renderer = _frame_file(directory, "host-renderer.txt", 16384).decode("utf-8")
+        required = (
+            r"Android emulator version 37\.2\.13\.0 \(build_id 16740729\)",
+            r"emuglConfig_init: vulkan_mode_selected:swiftshader gles_mode_selected:swangle[ \t]*$",
+            r"Graphics Adapter Android Emulator OpenGL ES Translator \(ANGLE \([^\r\n]*SwiftShader Device[^\r\n]*\)\)[ \t]*$",
+            r"Feature 'Vulkan' \([0-9]+\) is overridden to 'disabled'",
+        )
+        if any(re.search(pattern, renderer, re.MULTILINE) is None for pattern in required):
+            raise ValueError("Hosted frame renderer attestation is missing")
+    width, height = map(int, display.split("x"))
+    sizes = {name: _frame_png_dimensions(directory, name) for name in FRAME_SCREENSHOTS}
+    if width <= height or any(w != width or not 0 < h <= height for w, h in sizes.values()):
+        raise ValueError("Frame screenshots differ from the measured landscape viewport")
+    dimensions = "".join(f"frame_png={name}:{w}x{h}\n" for name, (w, h) in sizes.items())
+    return (f"frame_acceptance={mode}\nhardwareAcceptance={str(hardware_acceptance).lower()}\n"
+            f"raw_frozen_frames={frozen}\nframe_screenshots={len(FRAME_SCREENSHOTS)}\n" + dimensions)
 
 
 def parse_single_test_log(path: Path, expected: str) -> str:
@@ -667,7 +768,9 @@ def verify(args: argparse.Namespace) -> str:
 
     if problems:
         raise ValueError("\n".join(problems))
-    return summary
+    frame_summary = verify_frame_evidence(stress_lane / "frame-evidence", args.frame_acceptance, args.provenance)
+    args.summary.write_text(summary + frame_summary, encoding="utf-8")
+    return summary + frame_summary
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -681,6 +784,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     single.add_argument("--expected-test", required=True)
     diagnostics = subparsers.add_parser("failure-diagnostics")
     diagnostics.add_argument("--lane", type=Path, required=True)
+    frame_parser = subparsers.add_parser("frame-evidence")
+    frame_parser.add_argument("--evidence-dir", type=Path, required=True)
+    frame_parser.add_argument("--frame-acceptance", choices=("physical", "hosted-software-telemetry"), default="physical")
+    frame_parser.add_argument("--provenance", type=Path, required=True)
     verify_parser = subparsers.add_parser("verify")
     verify_parser.add_argument("--expected-tests", type=Path, required=True)
     verify_parser.add_argument("--evidence-root", type=Path, required=True)
@@ -690,6 +797,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     verify_parser.add_argument("--persistence-class", required=True)
     verify_parser.add_argument("--expected-skip", action="append", default=[])
     verify_parser.add_argument("--summary", type=Path, required=True)
+    verify_parser.add_argument("--frame-acceptance", choices=("physical", "hosted-software-telemetry"), default="physical")
+    verify_parser.add_argument("--provenance", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.command == "verify" and args.functional_shards < 1:
         parser.error("--functional-shards must be positive")
@@ -708,9 +817,11 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.write(failure_diagnostics(args.lane))
         elif args.command == "single":
             print(parse_single_test_log(args.log, args.expected_test))
+        elif args.command == "frame-evidence":
+            sys.stdout.write(verify_frame_evidence(args.evidence_dir, args.frame_acceptance, args.provenance))
         else:
             sys.stdout.write(verify(args))
-    except (ET.ParseError, OSError, ValueError) as error:
+    except (ET.ParseError, OSError, ValueError, KeyError, TypeError) as error:
         print(f"Android instrumentation shard verification failed: {error}", file=sys.stderr)
         return 1
     return 0

@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import struct
 import tempfile
 import unittest
+import zlib
 from xml.sax.saxutils import escape
 
 from scripts.verify_android_instrumentation_shards import background_lifecycle_projection, capture_failure_projection, entry_back_failure_projection, failure_diagnostics, rail_failure_projection
+from scripts.verify_android_instrumentation_shards import FRAME_SCENARIOS, FRAME_SCREENSHOTS, verify_frame_evidence
 from pathlib import Path
 
 
@@ -47,6 +50,130 @@ def single_test_log(class_name: str, test_name: str) -> str:
     ))
 
 
+def frame_evidence_fixture(root: Path, mode: str = "physical", frozen: int = 0) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    provenance = root / "provenance.json"
+    pins = {"sourceInventorySha256": "a" * 64, "targetApkSha256": "b" * 64,
+            "testApkSha256": "c" * 64, "captureRunId": "d" * 32}
+    provenance.write_text(json.dumps({"source_inventory_sha256": pins["sourceInventorySha256"],
+        "target_apk": {"sha256": pins["targetApkSha256"]},
+        "test_apk": {"sha256": pins["testApkSha256"]}, "capture_run_id": pins["captureRunId"]}))
+    for filename, (scenario, samples, cadence) in FRAME_SCENARIOS.items():
+        (root / filename).write_text(
+            f"scenario={scenario} total={samples} frozen={frozen}\n"
+            f"samples={samples} geometryChecks={samples} geometryStable=true "
+            + ("pacing=draw-commit-vsync droppedReports=0" if cadence is None else
+               f"cadenceMillis={cadence} geometryMismatches=0 measuredWallMillis={samples * cadence}")
+            + f"\nframeAcceptance={mode} emulator={str(mode != 'physical').lower()} hardwareAcceptance={str(mode == 'physical').lower()}\n"
+            + "".join(f"{name}={value}\n" for name, value in pins.items())
+            + "display=1280x800 densityDpi=160 orientation=2\n")
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 1280, 744, 8, 6, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(bytes(744 * (1 + 1280 * 4)))) + chunk(b"IEND", b""))
+    for name in FRAME_SCREENSHOTS:
+        (root / name).write_bytes(png)
+    (root / "host-renderer.txt").write_text(
+        "Android emulator version 37.2.13.0 (build_id 16740729)\n"
+        "emuglConfig_init: vulkan_mode_selected:swiftshader gles_mode_selected:swangle\n"
+        "Graphics Adapter Android Emulator OpenGL ES Translator (ANGLE (Google, SwiftShader Device))\n"
+        "Feature 'Vulkan' (21) is overridden to 'disabled'\n")
+    return provenance
+
+
+class FrameAcceptanceEvidenceTest(unittest.TestCase):
+    def test_physical_is_strict_and_software_telemetry_keeps_raw_freezes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            provenance = frame_evidence_fixture(root)
+            self.assertIn("hardwareAcceptance=true", verify_frame_evidence(root, "physical", provenance))
+            (root / "frame-metrics.txt").write_text((root / "frame-metrics.txt").read_text().replace("frozen=0", "frozen=1"))
+            with self.assertRaises(ValueError):
+                verify_frame_evidence(root, "physical", provenance)
+            provenance = frame_evidence_fixture(root, "hosted-software-telemetry", frozen=1)
+            summary = verify_frame_evidence(root, "hosted-software-telemetry", provenance)
+            self.assertIn("hardwareAcceptance=false", summary)
+            self.assertIn("raw_frozen_frames=3", summary)
+            self.assertIn("frame_screenshots=7", summary)
+            with self.assertRaises(ValueError):
+                verify_frame_evidence(root, "unknown", provenance)
+            provenance = frame_evidence_fixture(root)
+            for name in FRAME_SCENARIOS:
+                report = root / name
+                report.write_text(report.read_text().replace("emulator=false", "emulator=true")
+                                  .replace("hardwareAcceptance=true", "hardwareAcceptance=false"))
+            self.assertIn("hardwareAcceptance=false", verify_frame_evidence(root, "physical", provenance))
+
+    def test_telemetry_retains_provenance_geometry_sampling_and_png_gates(self):
+        mutations = (
+            ("frame-metrics.txt", "samples=200", "samples=199"),
+            ("frame-metrics.txt", "droppedReports=0", "droppedReports=1"),
+            ("frame-metrics.txt", "total=200", "total=1"),
+            ("frame-metrics.txt", "geometryStable=true", "geometryStable=false"),
+            ("frame-metrics.txt", "hardwareAcceptance=false", "hardwareAcceptance=true"),
+            ("frame-metrics.txt", "emulator=true", "emulator=false"),
+            ("frame-metrics.txt", "captureRunId=" + "d" * 32, "captureRunId=" + "e" * 32),
+            ("frame-metrics.txt", "frameAcceptance=hosted-software-telemetry", "frameAcceptance=physical"),
+            ("frame-metrics-component-gaming-timer-1hz.txt", "measuredWallMillis=60000", "measuredWallMillis=10"),
+            ("host-renderer.txt", "gles_mode_selected:swangle", "gles_mode_selected:host"),
+        )
+        for name, old, new in mutations:
+            with self.subTest(case=new), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                provenance = frame_evidence_fixture(root, "hosted-software-telemetry")
+                path = root / name
+                path.write_text(path.read_text().replace(old, new))
+                with self.assertRaises(ValueError):
+                    verify_frame_evidence(root, "hosted-software-telemetry", provenance)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            provenance = frame_evidence_fixture(root)
+            image = root / FRAME_SCREENSHOTS[0]
+            original = image.read_bytes()
+            bad_crc = bytearray(original)
+            bad_crc[29] ^= 1
+            for malformed in (original[:20], original[:33], bytes(bad_crc), original[:-12], original + b"trailing"):
+                with self.subTest(png_length=len(malformed)):
+                    image.write_bytes(malformed)
+                    with self.assertRaises(ValueError):
+                        verify_frame_evidence(root, "physical", provenance)
+            image.write_bytes(original)
+            self.assertIn(f"frame_png={FRAME_SCREENSHOTS[0]}:1280x744", verify_frame_evidence(root, "physical", provenance))
+
+    def test_only_the_attested_hosted_emulator_can_select_telemetry(self):
+        source = RUNNER.read_text()
+        guard = source.split("configure_frame_acceptance() {", 1)[1].split("\n}\n", 1)[0]
+        for hosted, github, runner, qemu, boot_record, admitted in (
+            ("0", "", "", "0", "", True),
+            ("1", "true", "Linux", "1", "cold_boot_verified=true\n", True),
+            ("1", "", "Linux", "1", "cold_boot_verified=true\n", False),
+            ("1", "true", "Darwin", "1", "cold_boot_verified=true\n", False),
+            ("1", "true", "Linux", "0", "cold_boot_verified=true\n", False),
+            ("1", "true", "Linux", "1", "", False),
+        ):
+            with self.subTest(hosted=hosted, github=github, runner=runner, qemu=qemu, boot_record=boot_record), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                provenance = frame_evidence_fixture(root)
+                (root / "emulator-cold-boot.txt").write_text(boot_record)
+                command = ("set -euo pipefail\nframe_acceptance=physical\n"
+                    "device_serial=emulator-5554\nowned_emulator_pid=1\n"
+                    "kill() { return 0; }\ntimeout() { shift; \"$@\"; }\n"
+                    "adb() { printf '%s\\n' \"$FAKE_QEMU\"; }\n"
+                    "configure_frame_acceptance() {" + guard + "\n}\n"
+                    "configure_frame_acceptance\nprintf '%s\\n' \"$frame_acceptance\"\n")
+                result = subprocess.run(["bash", "-c", command], capture_output=True, text=True,
+                    env={**os.environ, "D_COMPANY_HOSTED_COLD_BOOT": hosted, "GITHUB_ACTIONS": github,
+                        "RUNNER_OS": runner, "FAKE_QEMU": qemu, "diagnostics_dir": directory,
+                        "owned_emulator_log": str(root / "host-renderer.txt")})
+                self.assertEqual(admitted, result.returncode == 0, result.stderr)
+                if admitted:
+                    self.assertEqual("hosted-software-telemetry" if hosted == "1" else "physical", result.stdout.strip())
+        kotlin = (ROOT / "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/PhysicalSmoothnessUiTest.kt").read_text()
+        self.assertIn('getString("erpFrameAcceptance") ?: "physical"', kotlin)
+        self.assertIn('emulated = qemu == "1"', kotlin)
+        self.assertEqual(2, kotlin.count("assertPhysicalFrameAcceptance(metrics,"))
+
+
 class AndroidInstrumentationShardsTest(unittest.TestCase):
     def test_runner_isolates_gaming_board_and_stress_and_resets_each_lane(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")
@@ -59,8 +186,9 @@ class AndroidInstrumentationShardsTest(unittest.TestCase):
         self.assertIn("android.testInstrumentationRunnerArguments.class=${gaming_board_class}", source)
         self.assertIn("'physical-frame-stress'", source)
         self.assertIn("android.testInstrumentationRunnerArguments.class=${stress_class}", source)
-        self.assertLess(source.index("'gaming-board'"), source.index("functional-shard-${shard_index}"))
-        self.assertLess(source.index("functional-shard-${shard_index}"), source.index("'physical-frame-stress'"))
+        lanes = source.split("# Discover the exact runner inventory once", 1)[1]
+        self.assertLess(lanes.index("'gaming-board'"), lanes.index("functional-shard-${shard_index}"))
+        self.assertLess(lanes.index("functional-shard-${shard_index}"), lanes.index("'physical-frame-stress'"))
         self.assertIn("KEYCODE_WAKEUP", source)
         self.assertIn("KEYCODE_HOME", source)
         self.assertIn("wait-for-broadcast-idle", source)
@@ -146,6 +274,7 @@ class AndroidInstrumentationShardsTest(unittest.TestCase):
             (stress_results / "TEST.xml").write_text(
                 junit_xml([(stress_class, "frame", False)]), encoding="utf-8"
             )
+            provenance = frame_evidence_fixture(stress_results.parent / "frame-evidence")
             summary = root / "summary.txt"
             command = [
                 "python3", str(VERIFIER), "verify",
@@ -157,6 +286,7 @@ class AndroidInstrumentationShardsTest(unittest.TestCase):
                 "--persistence-class", persistence_class,
                 "--expected-skip", "example.FunctionalTest#case3",
                 "--summary", str(summary),
+                "--provenance", str(provenance),
             ]
 
             result = subprocess.run(command, text=True, capture_output=True, check=False)
@@ -164,6 +294,7 @@ class AndroidInstrumentationShardsTest(unittest.TestCase):
             self.assertIn("executed=8", summary.read_text(encoding="utf-8"))
             self.assertIn("gaming_board=1", summary.read_text(encoding="utf-8"))
             self.assertIn("persistence=2", summary.read_text(encoding="utf-8"))
+            self.assertIn("hardwareAcceptance=true", summary.read_text(encoding="utf-8"))
             stage_b = evidence / "persistence-stage-b" / "instrumentation.log"
             original_stage_b = stage_b.read_text()
             for malformed in (

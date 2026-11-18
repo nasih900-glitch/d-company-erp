@@ -17,8 +17,12 @@ import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsNodeInteraction
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.captureToImage as captureComposeImage
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.platform.graphics.HardwareRendererCompat
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
 
 internal const val COMPOSE_PIXEL_COPY_EXCEPTION =
@@ -34,7 +38,26 @@ internal fun RuntimeException.isPixelCopyTimeout(): Boolean {
     return status == PixelCopy.ERROR_TIMEOUT
 }
 
+internal fun ComposeTimeoutException.isWindowRedrawTimeout(): Boolean {
+    if (message != "Condition still not satisfied after 2000 ms") return false
+    return stackTrace.take(3) == listOf(
+        StackTraceElement(
+            "androidx.compose.ui.test.android.WindowCapture_androidKt",
+            "waitUntil", "WindowCapture.android.kt", 181,
+        ),
+        StackTraceElement(
+            "androidx.compose.ui.test.android.WindowCapture_androidKt",
+            "forceRedraw", "WindowCapture.android.kt", 124,
+        ),
+        StackTraceElement(
+            "androidx.compose.ui.test.android.WindowCapture_androidKt\$captureRegionToImage\$1\$1",
+            "invoke", "WindowCapture.android.kt", 51,
+        ),
+    )
+}
+
 private fun Throwable.isPixelCopyCaptureTimeout(): Boolean = when (this) {
+    is ComposeTimeoutException -> isWindowRedrawTimeout()
     is RuntimeException -> isPixelCopyTimeout()
     // Compose 1.7.5 reports a missing callback as a separate plain assertion.
     is AssertionError -> javaClass == AssertionError::class.java && message == "Failed waiting for PixelCopy!" &&
@@ -53,9 +76,11 @@ internal fun SemanticsNodeInteraction.captureToImage(): ImageBitmap = try {
     captureActivityWindowAfterPixelCopyTimeout(failure)
 } catch (failure: AssertionError) {
     captureActivityWindowAfterPixelCopyTimeout(failure)
+} catch (failure: ComposeTimeoutException) {
+    captureActivityWindowAfterPixelCopyTimeout(failure)
 }
 
-/** Capture the same Activity-owned region through SurfaceFlinger after HWUI readback times out. */
+/** Capture the same Activity-owned region after a verified HWUI capture timeout. */
 internal fun SemanticsNodeInteraction.captureActivityWindowAfterPixelCopyTimeout(
     failure: Throwable,
 ): ImageBitmap {
@@ -67,6 +92,7 @@ internal fun SemanticsNodeInteraction.captureActivityWindowAfterPixelCopyTimeout
     var source: ActivityCaptureRegion? = null
     instrumentation.runOnMainSync { source = node.activityCaptureRegion() }
     val (window, bounds, windowBounds) = source ?: throw failure
+    if (failure is ComposeTimeoutException) window.awaitFreshCaptureFrame()
     val screenshot = checkNotNull(instrumentation.uiAutomation.takeScreenshot(window)) {
         "SurfaceFlinger did not capture the activity window after the PixelCopy timeout."
     }
@@ -93,6 +119,38 @@ internal fun SemanticsNodeInteraction.captureActivityWindowAfterPixelCopyTimeout
         }
     } finally {
         screenshot.recycle()
+    }
+}
+
+@RequiresApi(Build.VERSION_CODES.Q)
+private fun Window.awaitFreshCaptureFrame() {
+    val instrumentation = InstrumentationRegistry.getInstrumentation()
+    val decor = decorView
+    val committed = CountDownLatch(1)
+    val callback = Runnable { committed.countDown() }
+    val drawingWasEnabled = HardwareRendererCompat.isDrawingEnabled()
+    try {
+        HardwareRendererCompat.setDrawingEnabled(true)
+        instrumentation.runOnMainSync {
+            check(decor.isAttachedToWindow && decor.isHardwareAccelerated) {
+                "Fresh capture requires an attached hardware-rendered activity window."
+            }
+            decor.viewTreeObserver.registerFrameCommitCallback(callback)
+            decor.invalidate()
+        }
+        check(committed.await(5, TimeUnit.SECONDS)) {
+            "No fresh activity frame committed after the Compose capture timeout."
+        }
+    } finally {
+        try {
+            instrumentation.runOnMainSync {
+                if (decor.viewTreeObserver.isAlive) {
+                    decor.viewTreeObserver.unregisterFrameCommitCallback(callback)
+                }
+            }
+        } finally {
+            HardwareRendererCompat.setDrawingEnabled(drawingWasEnabled)
+        }
     }
 }
 
