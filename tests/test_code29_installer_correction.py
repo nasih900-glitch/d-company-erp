@@ -905,8 +905,8 @@ def test_live_coordinated_identity_is_version_name_3_1_47_with_build_55() -> Non
             _assert_exact_text(path, _current(path), _identity_expected(path))
 
     build = _current("android-native/app/build.gradle.kts")
-    assert build.count("versionCode = 75") == 1
-    assert build.count('versionName = "3.1.68"') == 1
+    assert build.count("versionCode = 76") == 1
+    assert build.count('versionName = "3.1.69"') == 1
 
     historical_build44 = _historical_bytes(
         CODE30_4_BUILD44_BASE, "android-native/app/build.gradle.kts"
@@ -942,7 +942,7 @@ def test_live_coordinated_identity_is_version_name_3_1_47_with_build_55() -> Non
             REVIEWED_CODE30_2_SHA256[".env.production.example"],
         ),
     )
-    assert "APP_VERSION=3.1.68" in actual_env
+    assert "APP_VERSION=3.1.69" in actual_env
     assert "ANDROID_MIN_SUPPORTED_VERSION_CODE=8" in actual_env
     assert "ANDROID_LATEST_VERSION_CODE=8" in actual_env
     assert "CLIENT_COMPATIBILITY_POLICY_REVISION=1" in actual_env
