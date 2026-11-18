@@ -42,6 +42,7 @@ from app.services.reports import (
     parse_fiscal_year_start,
 )
 from app.services.reports.overview_csv import serialize_overview_csv
+from app.services.pos.receipt_correction_projection import period_corrections
 from app.services.reports.overview import (
     POS_LOCAL_HOUR_PROFILE_BASIS,
     ReportsOverviewService,
@@ -112,6 +113,12 @@ class TenderReclassificationRead(BaseModel):
 
 
 class ReportDTO(BaseModel):
+    effective_gross_revenue_minor: int = 0
+    effective_upi_received_minor: int = 0
+    receipt_corrections_minor: int = 0
+    receipt_corrections_count: int = 0
+    original_orders_count: int = 0
+    corrected_cohort_orders_count: int = 0
     accounting_basis: Literal["operational_receipt"] = "operational_receipt"
     branch_id: UUID | None
     period: Literal["daily", "monthly", "quarterly", "yearly", "custom"]
@@ -153,6 +160,8 @@ class ReportDTO(BaseModel):
 
 
 class OverviewRevenueBySourceDTO(BaseModel):
+    receipt_corrections_minor: int = 0
+    effective_total_minor: int = 0
     basis: Literal["operational_receipt_source_aggregate"] = (
         "operational_receipt_source_aggregate"
     )
@@ -226,6 +235,9 @@ OverviewLocalHourDTO = Annotated[
 
 
 class ReportsOverviewDTO(BaseModel):
+    effective_gross_revenue_minor: int = 0
+    receipt_corrections_minor: int = 0
+    effective_upi_received_minor: int = 0
     schema_version: Literal["reports.overview.v1"] = "reports.overview.v1"
     branch_id: UUID
     period_start: date
@@ -322,6 +334,12 @@ class TaxComplianceDTO(BaseModel):
 
 def _to_dto(r: PnLReport) -> ReportDTO:
     return ReportDTO(
+        effective_gross_revenue_minor=r.effective_gross_revenue_minor,
+        effective_upi_received_minor=r.effective_upi_received_minor,
+        receipt_corrections_minor=r.receipt_corrections_minor,
+        receipt_corrections_count=r.receipt_corrections_count,
+        original_orders_count=r.original_orders_count,
+        corrected_cohort_orders_count=r.corrected_cohort_orders_count,
         accounting_basis="operational_receipt",
         branch_id=r.branch_id,
         period=r.period,
@@ -489,6 +507,8 @@ async def _load_overview_dto(
         )
     )
     revenue_sources = OverviewRevenueBySourceDTO(
+        receipt_corrections_minor=report.receipt_corrections_minor,
+        effective_total_minor=report.effective_gross_revenue_minor,
         food_minor=revenue.food_minor,
         gaming_minor=revenue.gaming_minor,
         hookah_minor=revenue.hookah_minor,
@@ -525,6 +545,9 @@ async def _load_overview_dto(
             ],
         )
     overview = ReportsOverviewDTO(
+        effective_gross_revenue_minor=report.effective_gross_revenue_minor,
+        receipt_corrections_minor=report.receipt_corrections_minor,
+        effective_upi_received_minor=report.effective_upi_received_minor,
         branch_id=branch_id,
         period_start=period_start,
         period_end=period_end,
@@ -1163,6 +1186,31 @@ def _add_tax_bucket(
     slot["cess"] += cess
 
 
+async def _no_value_tax_adjustments(session, *, company_id, branch_id, start_at, end_at):
+    """Zero-tax correction slice only; no credit note or portal filing is implied."""
+    corrections = await period_corrections(
+        session, company_id=company_id, branch_id=branch_id, start_at=start_at, end_at=end_at,
+        include_source=True,
+    )
+    normal: dict[float, int] = {}
+    eco: dict[float, int] = {}
+    review_rows = []
+    for correction in corrections:
+        via = correction.source_snapshot["order"].get("delivery_via")
+        by_rate = eco if via not in (None, "inhouse") else normal
+        for line in correction.source_snapshot["lines"]:
+            # Match the issued line rate bucket, including GST-off documents
+            # that retain a configured rate while every charged tax is zero.
+            rate = float(Decimal(str(line.get("tax_rate") or 0)))
+            by_rate[rate] = by_rate.get(rate, 0) + int(line["taxable_value_minor"])
+        review_rows.append([
+            "No-value correction — accountant review; no payout or portal filing",
+            correction.invoice_no, correction.accounting_at.isoformat(),
+            f"{-Decimal(correction.amount_minor) / Decimal(100):.2f}", "0.00",
+        ])
+    return normal, eco, review_rows
+
+
 def _allocated_component(component: int, cumulative: int, total: int) -> int:
     """Allocate a refund component cumulatively without final rounding drift."""
     if component <= 0 or cumulative <= 0 or total <= 0:
@@ -1380,6 +1428,15 @@ async def gstr1_csv(
     for rate, vals in eco_refund_adjustments.items():
         eco_by_rate[rate] = eco_by_rate.get(rate, 0) - vals["taxable"]
 
+    no_value_normal, no_value_eco, correction_review_rows = await _no_value_tax_adjustments(
+        session, company_id=tenant.company_id, branch_id=selected_branch_id,
+        start_at=start_dt, end_at=end_dt,
+    )
+    for rate, amount in no_value_normal.items():
+        _add_tax_bucket(by_rate, rate=rate, taxable=-amount, cgst=0, sgst=0, igst=0)
+    for rate, amount in no_value_eco.items():
+        eco_by_rate[rate] = eco_by_rate.get(rate, 0) - amount
+
     out: list[list] = [
         ["GSTR-1 B2C-Small Summary — accountant review"],
         ["Company", company.name if company else "D Company"],
@@ -1420,6 +1477,9 @@ async def gstr1_csv(
                 f"{value / 100:.2f}",
                 "0.00",
             ])
+    if correction_review_rows:
+        out.extend([[], ["Receipt corrections — original invoices retained; accountant review"]])
+        out.extend(correction_review_rows)
     return _csv_response(out, filename=f"GSTR1-{yyyy_mm}.csv")
 
 
@@ -1506,6 +1566,12 @@ async def gstr3b_csv(
     eco_supply_minor -= sum(
         values["taxable"] for values in eco_refund_adjustments.values()
     )
+    no_value_normal, no_value_eco, correction_review_rows = await _no_value_tax_adjustments(
+        session, company_id=tenant.company_id, branch_id=selected_branch_id,
+        start_at=start_dt, end_at=end_dt,
+    )
+    normal_taxable_minor -= sum(no_value_normal.values())
+    eco_supply_minor -= sum(no_value_eco.values())
     rows: list[list] = [
         ["GSTR-3B Summary — accountant review"],
         ["Company", company.name if company else "D Company"],
@@ -1533,4 +1599,7 @@ async def gstr3b_csv(
         ["Net GST payable",
          f"{rep.tax_collected.total_minor / 100:.2f}"],
     ]
+    if correction_review_rows:
+        rows.extend([[], ["Receipt corrections — original invoices retained; accountant review"]])
+        rows.extend(correction_review_rows)
     return _csv_response(rows, filename=f"GSTR3B-{yyyy_mm}.csv")

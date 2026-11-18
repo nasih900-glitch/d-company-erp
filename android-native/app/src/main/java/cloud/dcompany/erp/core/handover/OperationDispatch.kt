@@ -93,8 +93,18 @@ internal fun interface OperationDispatchGate {
 /** There is deliberately no permissive production default while Application is still restoring. */
 internal object UnconfiguredOperationDispatchGate : OperationDispatchGate {
     override fun authorize(request: Request) {
+        request.tag(StartWorkReviewRequest::class.java)?.let { tagged ->
+            if (!tagged.matches(request)) throw IOException("The exact start-work recovery request changed.")
+            runBlocking { tagged.permit.owner.requireStartWorkReview(tagged.permit) }; return
+        }
         if (!isPermittedBootstrap(request) || request.tag(OperationDispatchContext::class.java) != null ||
             request.tag(OwnerSupportDeliveryContext::class.java) != null) throw IOException("Operational authority has not been restored.")
+    }
+    override fun beforeAttempt(request: Request) {
+        authorize(request)
+        request.tag(StartWorkReviewRequest::class.java)?.let { tagged ->
+            runBlocking { tagged.permit.owner.beforeStartWorkReviewWire(tagged.permit) }
+        }
     }
 }
 
@@ -103,6 +113,11 @@ internal class CoordinatorOperationDispatchGate(
     private val startup: () -> HandoverStartupStatus,
 ) : OperationDispatchGate {
     override fun authorize(request: Request) {
+        request.tag(StartWorkReviewRequest::class.java)?.let { tagged ->
+            if (request.tag(OperationDispatchContext::class.java) != null || request.tag(OwnerSupportDeliveryContext::class.java) != null) throw IOException("Recovery cannot inherit another operation.")
+            if (!tagged.matches(request)) throw IOException("The exact start-work recovery request changed.")
+            runBlocking { tagged.permit.owner.requireStartWorkReview(tagged.permit) }; return
+        }
         if (request.tag(OwnerSupportDeliveryContext::class.java) != null) throw IOException("Use the exact owner-support delivery client.")
         val original = request.tag(OperationDispatchContext::class.java)
         val purpose = original?.permit?.purpose
@@ -183,6 +198,9 @@ internal class CoordinatorOperationDispatchGate(
     }
     override fun beforeAttempt(request: Request) {
         authorize(request)
+        request.tag(StartWorkReviewRequest::class.java)?.let { tagged ->
+            runBlocking { tagged.permit.owner.beforeStartWorkReviewWire(tagged.permit) }; return
+        }
         val observed = request.tag(OperationDispatchContext::class.java)
         val handover = observed?.permit?.takeIf { it.purpose.isHandoverWire }
         if (handover != null) {
@@ -206,7 +224,14 @@ internal class CoordinatorOperationDispatchGate(
             try { runBlocking { coordinator.beforeKnownStatusRead(observed.permit, observed.binding.authority) } }
             catch (failure: Exception) { throw IOException("The exact status observation already finished or changed.", failure) }
         }
-        if (!isPermittedBootstrap(request) && request.method !in setOf("GET", "HEAD")) {
+        // A receipt report is an audit observation. Its exact dispatch still needs an
+        // active operation, but an uncertain report cannot leave till work unresolved.
+        if (isReceiptMistakeReportRequest(request)) {
+            val context = requireNotNull(request.tag(OperationDispatchContext::class.java))
+            try {
+                runBlocking { coordinator.requireContinuation(requireNotNull(context.permit), context.binding.authority) }
+            } catch (failure: Exception) { throw IOException("The original report cannot dispatch.", failure) }
+        } else if (!isPermittedBootstrap(request) && request.method !in setOf("GET", "HEAD")) {
             val context = requireNotNull(request.tag(OperationDispatchContext::class.java))
             try {
                 runBlocking { coordinator.beforeMutationDispatch(requireNotNull(context.permit), context.binding.authority) }
@@ -215,6 +240,16 @@ internal class CoordinatorOperationDispatchGate(
         }
     }
 }
+
+private val receiptMistakeReportPath = Regex("/api/v1/pos/receipts/([0-9a-f-]{36})/mistake-reports")
+
+internal fun isReceiptMistakeReportRequest(request: Request): Boolean =
+    request.method == "POST" && request.url.query == null && request.headers("Idempotency-Key").singleOrNull()?.let { key ->
+        runCatching { handoverUuid(key) }.isSuccess
+    } == true &&
+        receiptMistakeReportPath.matchEntire(request.url.encodedPath)?.groupValues?.get(1)?.let { orderId ->
+            runCatching { handoverUuid(orderId) }.isSuccess
+        } == true
 
 private val handoverWirePath = Regex("/api/v1/pos/shifts/[^/]+/(operator-handovers|operator-handover-receipt)/?")
 

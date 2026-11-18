@@ -24,7 +24,6 @@ describe('staff-time authority and facts', () => {
   });
   it('makes attendance reachable without exposing the existing owner administration route', () => {
     const groups = visibleProfileNavigationGroups({
-      isOwner: false,
       hasAuditAccess: false,
       hasSystemAccess: false,
       hasMembershipAccess: false,

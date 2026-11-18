@@ -77,6 +77,7 @@ data class Terminal(
     val purpose: String = TerminalPurpose.HYBRID,
     /** Positive protocol support, never inferred from the app or terminal name. */
     @SerialName("offline_shift_capture_supported") val offlineShiftCaptureSupported: Boolean = false,
+    @SerialName("online_start_work_supported") val onlineStartWorkSupported: Boolean = false,
 )
 
 @Serializable
@@ -196,6 +197,43 @@ data class PublishDirectCheckoutClaimRequest(
 )
 
 @Serializable
+data class GamingVoidProvenance(
+    @SerialName("original_receipt_id") val originalReceiptId: String,
+    @SerialName("gaming_session_id") val gamingSessionId: String,
+    @SerialName("financial_evidence_locked") val financialEvidenceLocked: Boolean = true,
+    @SerialName("mistake_correction_available") val mistakeCorrectionAvailable: Boolean = false,
+)
+
+@Serializable
+data class RetainedMistakeReview(
+    @SerialName("order_id") val orderId: String,
+    @SerialName("original_receipt_id") val originalReceiptId: String,
+    @SerialName("gaming_session_id") val gamingSessionId: String,
+    @SerialName("expected_checkout_version") val expectedCheckoutVersion: Long,
+    @SerialName("review_hash") val reviewHash: String,
+    @SerialName("total_minor") val totalMinor: Long,
+    @SerialName("item_count") val itemCount: Int,
+)
+
+@Serializable
+data class RetainedMistakeCorrectionRequest(
+    @SerialName("original_receipt_id") val originalReceiptId: String,
+    @SerialName("expected_checkout_version") val expectedCheckoutVersion: Long,
+    @SerialName("review_hash") val reviewHash: String,
+    @SerialName("all_items_mistaken_not_supplied") val allItemsMistakenNotSupplied: Boolean,
+    val reason: String,
+)
+
+@Serializable
+data class RetainedMistakeCorrectionResult(
+    @SerialName("correction_id") val correctionId: String,
+    @SerialName("order_id") val orderId: String,
+    @SerialName("original_receipt_id") val originalReceiptId: String,
+    @SerialName("gaming_session_id") val gamingSessionId: String,
+    @SerialName("order_status") val orderStatus: String,
+)
+
+@Serializable
 data class VoidOrderRequest(val reason: String)
 
 @Serializable
@@ -211,6 +249,7 @@ data class CheckoutClaimResult(
     @SerialName("claimant_user_id") val claimantUserId: String,
     @SerialName("terminal_id") val terminalId: String,
     val reused: Boolean = false,
+    @SerialName("server_time") val serverTime: String? = null,
 )
 
 /**
@@ -277,6 +316,7 @@ data class Order(
     @SerialName("pending_refund_minor") val pendingRefundMinor: Long = 0,
     @SerialName("payment_methods") val paymentMethods: List<String> = emptyList(),
     val lines: List<OrderLine> = emptyList(),
+    @SerialName("gaming_void_provenance") val gamingVoidProvenance: GamingVoidProvenance? = null,
     @SerialName("checkout_version") val checkoutVersion: Long = 1,
     @SerialName("customer_name") val customerName: String? = null,
     @SerialName("customer_phone") val customerPhone: String? = null,

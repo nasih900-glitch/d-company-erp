@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import re
 import subprocess
 import sys
@@ -537,7 +539,295 @@ def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> No
         + rf"'\tdep\tgithub.com/klauspost/compress\tv1.20.2\t{COMPRESS_SHA256}'"
         + ')"\n',
     )
-    assert CADDY_DOCKERFILE.read_text(encoding="utf-8") == expected + "\n" + MUSL_UTILS_INSTALL + "3.23\n"
+    expected += "\n" + MUSL_UTILS_INSTALL + "3.23\n"
+    assert _file_at('b9b19bd2462e0f417922849a455e12116e8207e2', CADDY_DOCKERFILE) == expected
+    # Caddy alone replaces its custom overlay with the authenticated official1.4 package.
+    # The complete inherited reconstruction above and all unrelated pins stay exact.
+    for before, after in (
+        ('      -o /out/verify-caddy-system-ca /tmp/dcompany-verify-system-ca/main.go\n\nFROM caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648 AS zlib-builder\nWORKDIR /tmp/dcompany-zlib\nRUN apk add --no-cache --virtual .zlib-build-deps build-base patch\nCOPY infra/docker/zlib/ /tmp/dcompany-zlib/\nRUN sh /tmp/dcompany-zlib/build-patched-zlib.sh\n\n# Retain the exact upstream 2.11.4 runtime contract and replace only the Go\n',
+         '      -o /out/verify-caddy-system-ca /tmp/dcompany-verify-system-ca/main.go\n\nFROM caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648 AS caddy-zlib-probe-builder\nRUN apk add --no-cache --virtual .zlib-probe-build-deps build-base\nCOPY infra/docker/caddy-zlib/runtime-probe.c /tmp/caddy-zlib-runtime-probe.c\nRUN cc -O2 -Wall -Wextra -Werror /tmp/caddy-zlib-runtime-probe.c -ldl -o /tmp/caddy-zlib-runtime-probe\n\n# Retain the exact upstream 2.11.4 runtime contract and replace only the Go\n'),
+        ('      org.opencontainers.image.source="https://github.com/caddyserver/caddy" \\\n      com.dcompany.upstream.version="v2.11.4" \\\n      com.dcompany.zlib.version="1.3.2" \\\n      com.dcompany.zlib.source.sha256="bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16" \\\n      com.dcompany.zlib.null-guard.commit="e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca" \\\n      com.dcompany.zlib.null-guard.sha256="183bc8b9dd078a41a62de5c2d905d9b0196b45bc46f100d7e4147ec228207c74" \\\n      com.dcompany.zlib.printf-return.commit="bbc2ccf3d0de267576b524b875c769a724a513b0" \\\n      com.dcompany.zlib.printf-return.sha256="7d00ee29be5e636d30da2890961e83e35cee0b152333ecd97a46ae2e71eb5d47" \\\n      com.dcompany.zlib.patch.commit="df84af25dc1942490e1d1c899a07619152a46148" \\\n      com.dcompany.zlib.patch.sha256="110ff14375733173d8aa54574473424fbd7dfe4b81f1ca34a759c6fe14b15b14" \\\n      com.dcompany.zlib.followup.commit="7235b0a581227c56a79a43ff828f8ef6794194c8" \\\n      com.dcompany.zlib.followup.sha256="96040ee84d0d187905283912dbd3f7b66ac2033976a2ceefe9b8cca63143d9c2"\n\nCOPY --from=caddy-builder /out/verify-caddy-system-ca /tmp/verify-caddy-system-ca\n\nRUN set -eux; \\\n    apk add --no-cache --upgrade \\\n      \'ca-certificates=20261020-r0\' \\\n',
+         '      org.opencontainers.image.source="https://github.com/caddyserver/caddy" \\\n      com.dcompany.upstream.version="v2.11.4" \\\n      com.dcompany.zlib.version="1.4-r0" \\\n      com.dcompany.zlib.provenance="signed-alpine-3.23-apk" \\\n      com.dcompany.zlib.apk-port.commit="0436c6d655a04cbfd7987202a970f5aa7870a901"\n\nCOPY --from=caddy-builder /out/verify-caddy-system-ca /tmp/verify-caddy-system-ca\n\nRUN set -eux; \\\n    mkdir -p /etc/dcompany/caddy-zlib; \\\n    apk fetch --no-cache --output /etc/dcompany/caddy-zlib \'zlib=1.4-r0\'; \\\n    apk verify --no-network /etc/dcompany/caddy-zlib/zlib-1.4-r0.apk; \\\n    apk add --no-cache --upgrade \\\n      \'ca-certificates=20261020-r0\' \\\n'),
+        ("      'libssl3=3.5.9-r0' \\\n      'brotli-libs=1.2.1-r0' \\\n      'zlib=1.3.2-r1'; \\\n    update-ca-certificates --fresh; \\\n    /tmp/verify-caddy-system-ca; \\\n",
+         "      'libssl3=3.5.9-r0' \\\n      'brotli-libs=1.2.1-r0' \\\n      'zlib=1.4-r0'; \\\n    update-ca-certificates --fresh; \\\n    /tmp/verify-caddy-system-ca; \\\n"),
+        ('    printf \'%s\\n\' "$installed_packages" | grep -Fx \'libssl3-3.5.9-r0\'; \\\n    printf \'%s\\n\' "$installed_packages" | grep -Fx \'brotli-libs-1.2.1-r0\'; \\\n    printf \'%s\\n\' "$installed_packages" | grep -Fx \'zlib-1.3.2-r1\'\n\nCOPY --from=zlib-builder /out/usr/lib/libz.so.1.3.2 /usr/lib/libz.so.1.3.2\nCOPY --from=zlib-builder /out/etc/dcompany/zlib-patch-evidence.env /etc/dcompany/zlib-patch-evidence.env\nCOPY --from=zlib-builder /out/zlib-runtime-probe /tmp/zlib-runtime-probe\nCOPY infra/docker/zlib/verify-patched-zlib.sh /tmp/verify-patched-zlib.sh\n\nRUN set -eux; \\\n    sh /tmp/verify-patched-zlib.sh; \\\n    rm -f /tmp/zlib-runtime-probe /tmp/verify-patched-zlib.sh\n\nCOPY --from=caddy-builder /out/caddy /usr/bin/caddy\n',
+         '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'libssl3-3.5.9-r0\'; \\\n    printf \'%s\\n\' "$installed_packages" | grep -Fx \'brotli-libs-1.2.1-r0\'; \\\n    printf \'%s\\n\' "$installed_packages" | grep -Fx \'zlib-1.4-r0\'\n\nCOPY --from=caddy-zlib-probe-builder /tmp/caddy-zlib-runtime-probe /usr/local/bin/dcompany-caddy-zlib-probe\nCOPY infra/docker/caddy-zlib/verify-official-zlib.sh /usr/local/bin/verify-caddy-zlib\n\nCOPY --from=caddy-builder /out/caddy /usr/bin/caddy\n'),
+        ('RUN --mount=type=bind,source=infra/docker/install-pinned-musl-utils.sh,target=/tmp/install-pinned-musl-utils.sh,ro \\\n    sh /tmp/install-pinned-musl-utils.sh 3.23\n',
+         'RUN --mount=type=bind,source=infra/docker/install-pinned-musl-utils.sh,target=/tmp/install-pinned-musl-utils.sh,ro \\\n    sh /tmp/install-pinned-musl-utils.sh 3.23\n\nRUN /usr/local/bin/verify-caddy-zlib\n'),
+    ):
+        expected = _replace_once(expected, before, after)
+    expected = _replace_once(
+        expected,
+        "    apk verify --no-network /etc/dcompany/caddy-zlib/zlib-1.4-r0.apk; \\\n",
+        "    apk verify --no-network /etc/dcompany/caddy-zlib/zlib-1.4-r0.apk; \\\n"
+        "    chmod 0444 /etc/dcompany/caddy-zlib/zlib-1.4-r0.apk; \\\n",
+    )
+    expected = _replace_once(
+        expected,
+        "    apk fetch --no-cache --output /etc/dcompany/caddy-zlib 'zlib=1.4-r0'; \\\n"
+        "    apk verify --no-network /etc/dcompany/caddy-zlib/zlib-1.4-r0.apk; \\\n",
+        '    zlib_download_dir="$(mktemp -d)"; \\\n'
+        '    apk fetch --no-cache --recursive --output "$zlib_download_dir" \'zlib=1.4-r0\'; \\\n'
+        '    apk verify --no-network "$zlib_download_dir/zlib-1.4-r0.apk"; \\\n'
+        '    cp "$zlib_download_dir/zlib-1.4-r0.apk" /etc/dcompany/caddy-zlib/zlib-1.4-r0.apk; \\\n',
+    )
+    expected = _replace_once(
+        expected,
+        "    chmod 0444 /etc/dcompany/caddy-zlib/zlib-1.4-r0.apk; \\\n",
+        "    chmod 0444 /etc/dcompany/caddy-zlib/zlib-1.4-r0.apk; \\\n"
+        '    rm -rf -- "$zlib_download_dir"; \\\n',
+    )
+    assert CADDY_DOCKERFILE.read_text(encoding="utf-8") == expected
+
+
+@pytest.mark.parametrize("service", ("backend", "frontend", "caddy", "postgres"))
+@pytest.mark.parametrize("mode", ("success", "fetch-failure", "signature-failure"))
+def test_caddy_fetch_retains_only_verified_exact_archive(tmp_path: Path, mode: str, service: str) -> None:
+    source = (ROOT / "infra/docker" / f"{service}.Dockerfile").read_text()
+    start = source.index('    zlib_download_dir="$(mktemp -d)";')
+    end = source.index('    rm -rf -- "$zlib_download_dir"', start)
+    block = source[start:end] + '    rm -rf -- "$zlib_download_dir"\n'
+    retained = tmp_path / "retained"
+    retained.mkdir()
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    apk = fake_bin / "apk"
+    apk.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, pathlib, stat, sys\n"
+        "args = sys.argv[1:]\n"
+        "retained = pathlib.Path(os.environ['RETAINED']) / 'zlib-1.4-r0.apk'\n"
+        "if args[0] == 'fetch':\n"
+        "    assert args[:4] == ['fetch', '--no-cache', '--recursive', '--output']\n"
+        "    assert len(args) == 6 and args[5] == 'zlib=1.4-r0'\n"
+        "    directory = pathlib.Path(args[4])\n"
+        "    assert stat.S_IMODE(directory.stat().st_mode) == 0o700\n"
+        "    with open(os.environ['EVENT_LOG'], 'a') as log: log.write(json.dumps(args) + '\\n')\n"
+        "    if os.environ['MODE'] == 'fetch-failure': raise SystemExit(17)\n"
+        "    (directory / 'zlib-1.4-r0.apk').write_bytes(b'exact-fixture-archive')\n"
+        "    (directory / 'musl-dependency.apk').write_bytes(b'discarded-dependency')\n"
+        "elif args[0] == 'verify':\n"
+        "    assert args[:2] == ['verify', '--no-network'] and len(args) == 3\n"
+        "    assert pathlib.Path(args[2]).name == 'zlib-1.4-r0.apk'\n"
+        "    assert pathlib.Path(args[2]).read_bytes() == b'exact-fixture-archive'\n"
+        "    assert not retained.exists(), 'archive promoted before authentication'\n"
+        "    with open(os.environ['EVENT_LOG'], 'a') as log: log.write(json.dumps(args) + '\\n')\n"
+        "    if os.environ['MODE'] == 'signature-failure': raise SystemExit(23)\n"
+        "else: raise AssertionError('unexpected APK command')\n",
+        encoding="utf-8",
+    )
+    apk.chmod(0o755)
+    event_log = tmp_path / "events.jsonl"
+    environment = {**os.environ, "PATH": str(fake_bin) + os.pathsep + os.environ["PATH"],
+                   "MODE": mode, "EVENT_LOG": str(event_log), "RETAINED": str(retained),
+                   "TMPDIR": str(downloads)}
+    result = subprocess.run(
+        ["sh", "-c", "set -eu\n" + block.replace('/etc/dcompany/caddy-zlib', str(retained)).replace('/etc/dcompany/zlib', str(retained))],
+        env=environment, text=True, capture_output=True,
+    )
+    events = [json.loads(line) for line in event_log.read_text().splitlines()]
+    if mode == "success":
+        assert result.returncode == 0, result.stderr
+        assert [event[0] for event in events] == ["fetch", "verify"]
+        assert [path.name for path in retained.iterdir()] == ["zlib-1.4-r0.apk"]
+        archive = retained / "zlib-1.4-r0.apk"
+        assert archive.read_bytes() == b"exact-fixture-archive"
+        assert archive.stat().st_mode & 0o777 == 0o444
+        assert list(downloads.iterdir()) == []
+    else:
+        assert result.returncode == (17 if mode == "fetch-failure" else 23), result.stderr
+        assert list(retained.iterdir()) == []
+        assert [event[0] for event in events] == (["fetch"] if mode == "fetch-failure" else ["fetch", "verify"])
+
+
+REDIS_NATIVE_CACHE_ACQUISITION = r'''    zlib_download_dir="$(mktemp -d)"; \
+    trap 'rm -rf -- "$zlib_download_dir"' EXIT; \
+    mkdir "$zlib_download_dir/cache"; \
+    apk --cache-dir "$zlib_download_dir/cache" update; \
+    apk --cache-dir "$zlib_download_dir/cache" cache download 'zlib=1.4-r0'; \
+    zlib_archive=; \
+    zlib_archive_count=0; \
+    for cached_apk in "$zlib_download_dir/cache"/zlib*; do \
+      if [ ! -e "$cached_apk" ] && [ ! -L "$cached_apk" ]; then continue; fi; \
+      test -f "$cached_apk"; \
+      test ! -L "$cached_apk"; \
+      case "${cached_apk##*/}" in \
+        zlib-1.4-r0.[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].apk) ;; \
+        *) echo 'Invalid cached zlib archive.' >&2; exit 1 ;; \
+      esac; \
+      zlib_archive_count=$((zlib_archive_count + 1)); \
+      zlib_archive=$cached_apk; \
+    done; \
+    if [ "$zlib_archive_count" -ne 1 ]; then \
+      apk --no-network --cache-dir "$zlib_download_dir/cache" policy zlib 2>&1 | head -n 30 >&2 || true; \
+      exit 1; \
+    fi; \
+    apk verify --no-network "$zlib_archive"; \
+    cp "$zlib_archive" /etc/dcompany/zlib/zlib-1.4-r0.apk; \
+    chmod 0444 /etc/dcompany/zlib/zlib-1.4-r0.apk; \
+    rm -rf -- "$zlib_download_dir"; \
+    trap - EXIT'''
+
+
+@pytest.mark.parametrize("mode", (
+    "success", "update-failure", "download-failure", "no-archive", "no-archive-policy-error", "duplicate", "wrong-version",
+    "short-hash", "uppercase-hash", "bad-hash", "wrong-extension", "symlink", "dangling-symlink",
+    "directory", "signature-failure", "valid-and-wrong-version", "valid-and-malformed", "valid-and-symlink",
+    "newline-name",
+))
+def test_redis_native_cache_requires_one_exact_authenticated_archive(tmp_path: Path, mode: str) -> None:
+    source = REDIS_DOCKERFILE.read_text()
+    start = source.index('    zlib_download_dir="$(mktemp -d)";')
+    end = source.index('    trap - EXIT', start) + len('    trap - EXIT')
+    block = source[start:end]
+    for forbidden in ('--no-cache', '--latest', '--upgrade', '--add-dependencies', 'apk fetch', 'wget', 'curl'):
+        assert forbidden not in block
+    retained, downloads, fake_bin = (tmp_path / name for name in ('retained', 'downloads', 'bin'))
+    for directory in (retained, downloads, fake_bin): directory.mkdir()
+    event_log = tmp_path / 'events.jsonl'
+    apk = fake_bin / 'apk'
+    apk.write_text(
+        '#!/usr/bin/env python3\n'
+        'import json, os, pathlib, stat, sys\n'
+        'args = sys.argv[1:]\n'
+        'with open(os.environ["EVENT_LOG"], "a") as log: log.write(json.dumps(args) + "\\n")\n'
+        'mode = os.environ["MODE"]\n'
+        'if args[:1] == ["--cache-dir"]:\n'
+        '    cache = pathlib.Path(args[1])\n'
+        '    assert cache.is_dir() and stat.S_IMODE(cache.parent.stat().st_mode) == 0o700\n'
+        '    if args[2:] == ["update"]:\n'
+        '        assert list(cache.iterdir()) == []\n'
+        '        if mode == "update-failure": raise SystemExit(17)\n'
+        '        (cache / "APKINDEX.fixture.tar.gz").write_bytes(b"index fixture")\n'
+        '    else:\n'
+        '        assert args[2:] == ["cache", "download", "zlib=1.4-r0"]\n'
+        '        assert (cache / "APKINDEX.fixture.tar.gz").exists()\n'
+        '        if mode == "download-failure": raise SystemExit(19)\n'
+        '        if mode in ("no-archive", "no-archive-policy-error"): raise SystemExit(0)\n'
+        '        (cache / "musl-dependency.12345678.apk").write_bytes(b"discarded dependency")\n'
+        '        names = {\n'
+        '            "wrong-version": ["zlib-1.3.2-r0.c0ffee12.apk"],\n'
+        '            "short-hash": ["zlib-1.4-r0.1234567.apk"],\n'
+        '            "uppercase-hash": ["zlib-1.4-r0.C0FFEE12.apk"],\n'
+        '            "bad-hash": ["zlib-1.4-r0.zzzzzzzz.apk"],\n'
+        '            "wrong-extension": ["zlib-1.4-r0.c0ffee12.apk.extra"],\n'
+        '            "duplicate": ["zlib-1.4-r0.c0ffee12.apk", "zlib-1.4-r0.01234567.apk"],\n'
+        '            "valid-and-wrong-version": ["zlib-1.4-r0.c0ffee12.apk", "zlib-1.3.2-r0.12345678.apk"],\n'
+        '            "valid-and-malformed": ["zlib-1.4-r0.c0ffee12.apk", "zlib-1.4-r0.bad.apk"],\n'
+        '            "newline-name": ["zlib-junk\\nzlib-1.4-r0.c0ffee12.apk"],\n'
+        '        }.get(mode, ["zlib-1.4-r0.c0ffee12.apk"])\n'
+        '        for name in names:\n'
+        '            path = cache / name\n'
+        '            if mode == "directory": path.mkdir()\n'
+        '            elif mode == "dangling-symlink": path.symlink_to(cache / "absent")\n'
+        '            elif mode == "symlink":\n'
+        '                target = cache / "linked-payload"; target.write_bytes(b"exact-fixture-archive"); path.symlink_to(target)\n'
+        '            else: path.write_bytes(b"exact-fixture-archive")\n'
+        '        if mode == "valid-and-symlink": (cache / "zlib-1.4-r0.abcdef12.apk").symlink_to(cache / names[0])\n'
+        'elif args[:2] == ["verify", "--no-network"]:\n'
+        '    assert len(args) == 3\n'
+        '    path = pathlib.Path(args[2])\n'
+        '    assert path.name == "zlib-1.4-r0.c0ffee12.apk" and not path.is_symlink()\n'
+        '    assert path.read_bytes() == b"exact-fixture-archive"\n'
+        '    assert not (pathlib.Path(os.environ["RETAINED"]) / "zlib-1.4-r0.apk").exists()\n'
+        '    if mode == "signature-failure": raise SystemExit(23)\n'
+        'elif args[:1] == ["--no-network"]:\n'
+        '    assert len(args) == 5 and args[1] == "--cache-dir" and args[3:] == ["policy", "zlib"]\n'
+        '    assert pathlib.Path(args[2]).is_dir()\n'
+        '    if mode == "no-archive-policy-error":\n'
+        '        print("PUBLIC_POLICY_ERROR"); raise SystemExit(41)\n'
+        '    for index in range(100): print("PUBLIC_POLICY_VERSION_" + str(index))\n'
+        'else: raise AssertionError("unexpected APK command")\n'
+    )
+    apk.chmod(0o755)
+    result = subprocess.run(['sh', '-c', 'set -eu\n' + block.replace('/etc/dcompany/zlib', str(retained))],
+                            env={**os.environ, 'PATH': str(fake_bin) + os.pathsep + os.environ['PATH'],
+                                 'MODE': mode, 'EVENT_LOG': str(event_log), 'RETAINED': str(retained),
+                                 'TMPDIR': str(downloads)}, text=True, capture_output=True)
+    events = [json.loads(line) for line in event_log.read_text().splitlines()]
+    assert events[0][0] == '--cache-dir' and events[0][2:] == ['update']
+    if mode != 'update-failure':
+        assert events[1][:2] == events[0][:2]
+        assert events[1][2:] == ['cache', 'download', 'zlib=1.4-r0']
+    assert list(downloads.iterdir()) == [], 'private cache must be removed on success and failure'
+    if mode == 'success':
+        assert result.returncode == 0, result.stderr
+        assert len(events) == 3 and events[2][:2] == ['verify', '--no-network']
+        assert [path.name for path in retained.iterdir()] == ['zlib-1.4-r0.apk']
+        archive = retained / 'zlib-1.4-r0.apk'
+        assert archive.read_bytes() == b'exact-fixture-archive'
+        assert archive.stat().st_mode & 0o777 == 0o444
+    else:
+        assert result.returncode == {'update-failure': 17, 'download-failure': 19, 'signature-failure': 23}.get(mode, 1), result.stderr
+        assert list(retained.iterdir()) == []
+        count_failure = mode in ('no-archive', 'no-archive-policy-error', 'duplicate')
+        assert len(events) == (1 if mode == 'update-failure' else 3 if mode == 'signature-failure' or count_failure else 2)
+        if count_failure:
+            assert events[-1][0] == '--no-network' and events[-1][3:] == ['policy', 'zlib']
+            if mode == 'no-archive-policy-error': assert result.stderr == 'PUBLIC_POLICY_ERROR\n'
+            else: assert result.stderr.count('PUBLIC_POLICY_VERSION_') == 30
+
+
+def _official_zlib_expected(expected: str, service: str) -> str:
+    s = expected
+    pattern=r'(FROM [^\n]+) AS zlib-builder\nWORKDIR /tmp/dcompany-zlib\nRUN apk add --no-cache --virtual .zlib-build-deps build-base patch\nCOPY infra/docker/zlib/ /tmp/dcompany-zlib/\nRUN sh /tmp/dcompany-zlib/build-patched-zlib.sh'
+    s,n=re.subn(pattern,r'\1 AS zlib-probe-builder\nRUN apk add --no-cache --virtual .zlib-probe-build-deps build-base\nCOPY infra/docker/caddy-zlib/runtime-probe.c /tmp/zlib-runtime-probe.c\nRUN cc -O2 -Wall -Wextra -Werror /tmp/zlib-runtime-probe.c -ldl -o /tmp/dcompany-caddy-zlib-probe',s);assert n==1,service
+    port='d3332621d44c2c4cf52e52217b16674db190212c' if service=='redis' else 'bdf501c870a92a05c097857401f69c48c4810384'
+    a=s.index('      com.dcompany.zlib.version=');b=s.index('\n',s.index('com.dcompany.zlib.followup.sha256=',a))
+    s=s[:a]+f'''      com.dcompany.zlib.version="1.4-r0" \\
+      com.dcompany.zlib.provenance="signed-alpine-apk" \\
+      com.dcompany.zlib.apk-port.commit="{port}"'''+s[b:]
+    a=s.index('COPY --from=zlib-builder');b=s.index('\n',s.index('COPY infra/docker/zlib/verify-patched-zlib.sh',a))
+    s=s[:a]+'''COPY --from=zlib-probe-builder /tmp/dcompany-caddy-zlib-probe /usr/local/bin/dcompany-caddy-zlib-probe
+COPY infra/docker/caddy-zlib/verify-official-zlib.sh /usr/local/bin/verify-caddy-zlib
+
+# Retain only the authenticated exact archive; downloaded dependencies are discarded.
+RUN set -eux; \\
+    mkdir -p /etc/dcompany/zlib; \\
+    zlib_download_dir="$(mktemp -d)"; \\
+    apk fetch --no-cache --recursive --output "$zlib_download_dir" 'zlib=1.4-r0'; \\
+    apk verify --no-network "$zlib_download_dir/zlib-1.4-r0.apk"; \\
+    cp "$zlib_download_dir/zlib-1.4-r0.apk" /etc/dcompany/zlib/zlib-1.4-r0.apk; \\
+    chmod 0444 /etc/dcompany/zlib/zlib-1.4-r0.apk; \\
+    rm -rf -- "$zlib_download_dir"
+'''+s[b:]
+    # Upgrade only the runtime package transaction; preserve all existing pins.
+    runtime=s.index('# --- runtime ---') if '# --- runtime ---' in s else s.index('ARG APP_VERSION')
+    a=s.index('apk add --no-cache --upgrade',runtime)
+    s=s[:a]+s[a:].replace('apk add --no-cache --upgrade \\\n', "apk add --no-cache --upgrade \\\n      'zlib=1.4-r0' \\\n",1)
+    # Redis's package transaction precedes the retained-archive block; still exact1.4.
+    s=s.replace("'zlib-1.3.2-r0'", "'zlib-1.4-r0'").replace("'zlib-1.3.2-r1'", "'zlib-1.4-r0'")
+    s=s.replace('    && sh /tmp/verify-patched-zlib.sh \\\n','').replace('    sh /tmp/verify-patched-zlib.sh; \\\n','')
+    s=s.replace('    && rm -f /tmp/zlib-runtime-probe /tmp/verify-patched-zlib.sh \\\n','')
+    s=s.replace('    rm -f /tmp/zlib-runtime-probe /tmp/verify-patched-zlib.sh; \\\n','')
+    s=s.replace('    rm -f /tmp/zlib-runtime-probe /tmp/verify-patched-zlib.sh\n','')
+    if service=='frontend':s=s.replace("    apk info -v | grep -Fx 'zlib-1.4-r0'; \\\n", "    apk info -v | grep -Fx 'zlib-1.4-r0'\n")
+    if service=='redis':s=s.replace("    redis-server --version | grep -F 'v=7.4.11'; \\\n", "    redis-server --version | grep -F 'v=7.4.11'\n")
+    marker='USER erp' if service=='backend' else None
+    proof=f'RUN /usr/local/bin/verify-caddy-zlib {service}\n'
+    if marker:s=s.replace(marker,proof+marker,1)
+    else:s=s.rstrip()+'\n\n'+proof
+    s=s.replace('# Build the independently verified zlib correction in a discarded stage.','# Build only the runtime verifier in a discarded stage; use the signed official zlib package.')
+    s=s.replace('# Install packages before overlaying the independently verified zlib runtime\n# so package transactions cannot replace the reviewed shared object.','# Authenticate the exact official zlib package and prove the final mapped runtime.')
+    if service == "redis":
+        a = s.index('RUN apk add --no-cache --upgrade')
+        b = s.index('\n\n', a)
+        transaction = s[a:b]
+        s = s[:a] + s[b:]
+        pos = s.index('    rm -rf -- "$zlib_download_dir"') + len('    rm -rf -- "$zlib_download_dir"')
+        s = s[:pos] + '\n\n' + transaction + s[pos:]
+    s = s.replace("# Preserve Redis 7.4.11 and upgrade only its OpenSSL security packages.",
+                  "# Preserve Redis 7.4.11 and upgrade its OpenSSL and zlib security packages.")
+    if service == "redis":
+        s = _replace_once(s, r'''    zlib_download_dir="$(mktemp -d)"; \
+    apk fetch --no-cache --recursive --output "$zlib_download_dir" 'zlib=1.4-r0'; \
+    apk verify --no-network "$zlib_download_dir/zlib-1.4-r0.apk"; \
+    cp "$zlib_download_dir/zlib-1.4-r0.apk" /etc/dcompany/zlib/zlib-1.4-r0.apk; \
+    chmod 0444 /etc/dcompany/zlib/zlib-1.4-r0.apk; \
+    rm -rf -- "$zlib_download_dir"''', REDIS_NATIVE_CACHE_ACQUISITION)
+    return s
 
 
 def test_postgres_runtime_changes_only_reviewed_security_corrections() -> None:
@@ -566,7 +856,18 @@ def test_postgres_runtime_changes_only_reviewed_security_corrections() -> None:
         "    gosu --version | grep -F '1.19 (go1.26.8 on linux/'; \\\n",
         "    gosu --version | grep -F '1.19 (go1.26.9 on linux/'; \\\n",
     )
-    assert POSTGRES_DOCKERFILE.read_text(encoding="utf-8") == expected + "\n" + MUSL_UTILS_INSTALL + "3.24\n"
+    historical = expected + "\n" + MUSL_UTILS_INSTALL + "3.24\n"
+    assert _file_at("b9b19bd2462e0f417922849a455e12116e8207e2", POSTGRES_DOCKERFILE) == historical
+    expected = _official_zlib_expected(historical, "postgres")
+    for name, version in (("libxslt", "1.1.43-r4"), ("krb5-libs", "1.22.3-r0")):
+        pin = "      'libuuid=2.42.3-r1'; \\\n"
+        check = '    printf \'%s\\n\' "$installed_packages" | grep -Fx \'libuuid-2.42.3-r1\'; \\\n'
+        expected = _replace_once(expected, pin, f"      '{name}={version}' \\\n" + pin)
+        expected = _replace_once(
+            expected, check,
+            f'    printf \'%s\\n\' "$installed_packages" | grep -Fx \'{name}-{version}\'; \\\n' + check,
+        )
+    assert POSTGRES_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
 def test_postgres_compatibility_gate_binds_the_current_gosu_binary() -> None:
@@ -676,6 +977,28 @@ def test_backend_image_changes_only_reviewed_openssl_runtime_controls() -> None:
         "COPY backend/ .\n"
         "COPY infra/docker/verify-backend-runtime-profile.py /usr/local/bin/verify-backend-runtime-profile.py\n",
     )
+    historical = expected
+    assert _file_at("b9b19bd2462e0f417922849a455e12116e8207e2", BACKEND_DOCKERFILE) == historical
+    expected = _official_zlib_expected(historical, "backend")
+    builder_anchor = "# --- Python dependency builder ---\n"
+    expected = _replace_once(expected, builder_anchor,
+        "# Backport the upstream CVE-2026-119170 fix to the official CPython ABI.\n"
+        "FROM python:3.14.10-alpine3.24@sha256:eb2c62658b8d51bff0acc408504b76521d02030de56a8a3c1e830083e89b89d2 AS hashlib-backport\n"
+        "RUN apk add --no-cache 'gcc=15.2.0-r5' 'musl-dev=1.2.6-r3' 'binutils=2.45.1-r1' \\\n"
+        "      'openssl-dev=3.5.9-r0' 'patch=2.8.1-r0'\n"
+        "WORKDIR /tmp/cpython\n"
+        "COPY infra/docker/cpython/cpython-7d9da920.patch .\n"
+        "COPY infra/docker/cpython/build-hashlib-backport.py .\n"
+        "COPY infra/docker/cpython/verify-hashlib-fips.py ./verify_hashlib_fips.py\n"
+        "RUN python -B /tmp/cpython/build-hashlib-backport.py\n\n" + builder_anchor,
+    )
+    entrypoint = "COPY infra/docker/backend-entrypoint.sh /entrypoint.sh\n"
+    expected = _replace_once(expected, entrypoint,
+        "COPY --from=hashlib-backport /out/_hashlib*.so /usr/local/lib/python3.14/lib-dynload/\n"
+        "COPY --from=hashlib-backport /out/cpython-hashlib-build.json /etc/dcompany/cpython-hashlib-build.json\n"
+        "COPY --chmod=0644 infra/docker/cpython/verify-hashlib-fips.py /usr/local/bin/verify-hashlib-fips.py\n" + entrypoint,
+    )
+    expected = _replace_once(expected, "USER erp\n", "USER erp\nRUN python -I -B /usr/local/bin/verify-hashlib-fips.py\n")
     assert BACKEND_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
@@ -799,6 +1122,15 @@ def test_frontend_image_changes_only_reviewed_security_controls() -> None:
         "COPY infra/nginx/frontend.conf",
         MUSL_UTILS_INSTALL + "3.24\nCOPY infra/nginx/frontend.conf",
     )
+    historical = expected
+    assert _file_at("b9b19bd2462e0f417922849a455e12116e8207e2", FRONTEND_DOCKERFILE) == historical
+    expected = _replace_once(
+        _official_zlib_expected(historical, "frontend"),
+        "RUN npm ci --no-audit --no-fund\n",
+        "COPY frontend/vendor/picomatch-v2 ./vendor/picomatch-v2\n"
+        "COPY frontend/vendor/picomatch-v4 ./vendor/picomatch-v4\n"
+        "RUN npm ci --no-audit --no-fund\n",
+    )
     assert FRONTEND_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
@@ -825,7 +1157,9 @@ def test_redis_changes_only_reviewed_openssl_packages_before_zlib_overlay() -> N
         expected = _replace_once(
             expected, f"'{package}-3.3.7-r1'", f"'{package}-3.3.7-r2'"
         )
-    assert REDIS_DOCKERFILE.read_text(encoding="utf-8") == expected + "\n" + MUSL_UTILS_INSTALL + "3.21\n"
+    historical = expected + "\n" + MUSL_UTILS_INSTALL + "3.21\n"
+    assert _file_at("b9b19bd2462e0f417922849a455e12116e8207e2", REDIS_DOCKERFILE) == historical
+    assert REDIS_DOCKERFILE.read_text(encoding="utf-8") == _official_zlib_expected(historical, "redis")
 
 
 def test_caddy_binary_hash_is_coordinated_across_ci_and_release() -> None:
@@ -859,10 +1193,58 @@ def test_caddy_binary_hash_is_coordinated_across_ci_and_release() -> None:
         build69 = _replace_once(build67, BUILD67_BINARY_SHA256, BUILD69_BINARY_SHA256)
         assert _file_at(BUILD69_RELEASE_BASE, workflow) == build69
         expected = _replace_once(build69, BUILD69_BINARY_SHA256, CURRENT_BINARY_SHA256)
-        assert workflow.read_text(encoding="utf-8") == _replace_once(
+        expected = _replace_once(
             expected, "caddy version | grep -F v2.11.4-dcompany.2;",
             "caddy version | grep -F v2.11.4-dcompany.3;",
         )
+        backend_test_step = (
+            "      - name: Tests\n"
+            if workflow == CI_WORKFLOW
+            else "      - name: Run complete backend suite\n        working-directory: backend\n"
+        )
+        backend_test_env = backend_test_step + "        env:\n"
+        expected = _replace_once(expected, backend_test_env, backend_test_env + "          ENV: test\n")
+        instrumentation_step = "      - name: Run Android instrumentation tests\n"
+        assembly_anchor = (
+            "      # Room migration tests need a real Android SQLite/Room runtime. Keeping\n"
+            if workflow == CI_WORKFLOW
+            else instrumentation_step
+        )
+        assembly = (
+            "      - name: Assemble Android instrumentation APKs before emulator startup\n"
+            "        run: bash scripts/run_android_instrumentation_ci.sh --assemble-only\n"
+        )
+        expected = _replace_once(expected, assembly_anchor, assembly + assembly_anchor)
+        emulator_action = instrumentation_step + (
+            "        uses: reactivecircus/android-emulator-runner@"
+            "a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0\n"
+        )
+        expected = _replace_once(
+            expected, emulator_action,
+            emulator_action + "        env:\n          D_COMPANY_HOSTED_COLD_BOOT: '1'\n",
+        )
+        if workflow == CI_WORKFLOW:
+            expected = _replace_once(
+                expected,
+                "          # Pin the reviewed emulator 37.1.11 build used by the bounded host comparison.\n",
+                "          # Pin the official 37.2.13 stable build after the 37.1.11 native crash.\n",
+            )
+        expected = _replace_once(expected, "          emulator-build: 15917651\n", "          emulator-build: 16740729\n")
+        renderer_comment = (
+            "          # Request swiftshader directly with Vulkan disabled. These flags do\n"
+            "          # not prove the selected mode; retained runtime diagnostics must.\n"
+            if workflow == CI_WORKFLOW
+            else "          # Match CI's direct swiftshader request with Vulkan disabled. The\n"
+            "          # retained runtime diagnostics must prove the actually selected mode.\n"
+        )
+        expected = _replace_once(
+            expected,
+            renderer_comment + "          emulator-options: -no-window -gpu swiftshader -feature -Vulkan -no-snapshot -noaudio -no-boot-anim\n",
+            "          # Use ANGLE over SwiftShader while keeping guest Vulkan disabled.\n"
+            "          # The test process verifies the renderer from its startup log.\n"
+            "          emulator-options: -no-window -gpu swangle -feature -Vulkan -no-snapshot -noaudio -no-boot-anim\n",
+        )
+        assert workflow.read_text(encoding="utf-8") == expected
 
     assert "go 1.26.9" in GO_MOD.read_text(encoding="utf-8")
     assert "github.com/caddyserver/caddy/v2 v2.11.4" in GO_MOD.read_text(

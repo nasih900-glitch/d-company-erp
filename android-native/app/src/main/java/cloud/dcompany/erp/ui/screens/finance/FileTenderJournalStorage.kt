@@ -6,6 +6,7 @@ import java.io.IOException
 import kotlinx.serialization.decodeFromString
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
+import java.nio.charset.CharacterCodingException
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.NoSuchFileException
@@ -40,6 +41,23 @@ internal class FileTenderJournalStorage(
         // A complete interrupted preparation retains its identity too. A partial
         // preparation is passed to the strict decoder and never overwritten.
         return stored ?: preparing
+    }
+
+    /** The caller dispatches only from the canonical file, after the atomic move and sync. */
+    fun readRetained(key: String, isComplete: (String) -> Boolean): String? {
+        val parent = checkedDirectory(create = false) ?: return null
+        val base = path(parent, key)
+        readRegular(base)?.let { return it }
+        val temporary = temporary(base)
+        val preparing = try {
+            readRegular(temporary) ?: return null
+        } catch (_: CharacterCodingException) {
+            null
+        }
+        if (preparing != null && isComplete(preparing)) return preparing
+        Files.delete(temporary)
+        syncDirectory(parent)
+        return null
     }
 
     override fun inspectSavedWork(): TenderJournalReadiness {
@@ -81,6 +99,20 @@ internal class FileTenderJournalStorage(
         moveAtomically(temporary, base)
         syncDirectory(parent)
         return true
+    }
+
+    /** Finish an interrupted preparation without rewriting the only retained copy. */
+    fun syncRetained(key: String) {
+        val parent = requireNotNull(checkedDirectory(create = false))
+        val base = path(parent, key)
+        if (readRegular(base) == null) {
+            val temporary = temporary(base)
+            checkNotNull(readRegular(temporary))
+            syncDirectory(requireNotNull(parent.parent))
+            FileChannel.open(temporary, WRITE, NOFOLLOW_LINKS).use { it.force(true) }
+            moveAtomically(temporary, base)
+        }
+        syncDirectory(parent)
     }
 
     override fun remove(key: String): Boolean {

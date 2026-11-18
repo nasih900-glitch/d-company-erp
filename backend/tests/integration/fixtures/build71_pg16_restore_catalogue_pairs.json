@@ -1,0 +1,414 @@
+[
+  [
+    "column|menu_modifiers|10|company_id|uuid|NO||||||||||||||||pg_catalog|uuid|NO||||||NO|NEVER||YES",
+    "column|menu_modifiers|8|company_id|uuid|NO||||||||||||||||pg_catalog|uuid|NO||||||NO|NEVER||YES"
+  ],
+  [
+    "column|menu_modifiers|8|created_at|timestamp with time zone|NO|now()||||||6|||||||||pg_catalog|timestamptz|NO||||||NO|NEVER||YES",
+    "column|menu_modifiers|6|created_at|timestamp with time zone|NO|now()||||||6|||||||||pg_catalog|timestamptz|NO||||||NO|NEVER||YES"
+  ],
+  [
+    "column|menu_modifiers|13|is_active|boolean|NO|true|||||||||||||||pg_catalog|bool|NO||||||NO|NEVER||YES",
+    "column|menu_modifiers|11|is_active|boolean|NO|true|||||||||||||||pg_catalog|bool|NO||||||NO|NEVER||YES"
+  ],
+  [
+    "column|menu_modifiers|6|max_quantity|integer|NO|1|||32|2|0||||||||||pg_catalog|int4|NO||||||NO|NEVER||YES",
+    "column|menu_modifiers|5|max_quantity|integer|NO|1|||32|2|0||||||||||pg_catalog|int4|NO||||||NO|NEVER||YES"
+  ],
+  [
+    "column|menu_modifiers|11|modifier_group_id|uuid|NO||||||||||||||||pg_catalog|uuid|NO||||||NO|NEVER||YES",
+    "column|menu_modifiers|9|modifier_group_id|uuid|NO||||||||||||||||pg_catalog|uuid|NO||||||NO|NEVER||YES"
+  ],
+  [
+    "column|menu_modifiers|12|sort_order|integer|NO|0|||32|2|0||||||||||pg_catalog|int4|NO||||||NO|NEVER||YES",
+    "column|menu_modifiers|10|sort_order|integer|NO|0|||32|2|0||||||||||pg_catalog|int4|NO||||||NO|NEVER||YES"
+  ],
+  [
+    "column|menu_modifiers|9|updated_at|timestamp with time zone|NO|now()||||||6|||||||||pg_catalog|timestamptz|NO||||||NO|NEVER||YES",
+    "column|menu_modifiers|7|updated_at|timestamp with time zone|NO|now()||||||6|||||||||pg_catalog|timestamptz|NO||||||NO|NEVER||YES"
+  ],
+  [
+    "constraint|android_releases|ck_android_releases_status|CHECK (status::text = ANY (ARRAY['staged'::character varying, 'active'::character varying, 'withdrawn'::character varying]::text[]))",
+    "constraint|android_releases|ck_android_releases_status|CHECK (status::text = ANY (ARRAY['staged'::character varying::text, 'active'::character varying::text, 'withdrawn'::character varying::text]))"
+  ],
+  [
+    "constraint|auth_refresh_sessions|ck_auth_refresh_sessions_revocation_reason|CHECK (revocation_reason IS NULL OR (revocation_reason::text = ANY (ARRAY['logout'::character varying, 'reuse_detected'::character varying]::text[])))",
+    "constraint|auth_refresh_sessions|ck_auth_refresh_sessions_revocation_reason|CHECK (revocation_reason IS NULL OR (revocation_reason::text = ANY (ARRAY['logout'::character varying::text, 'reuse_detected'::character varying::text])))"
+  ],
+  [
+    "constraint|bug_report_attachments|ck_bug_report_attachments_content_type|CHECK (content_type::text = ANY (ARRAY['image/png'::character varying, 'image/jpeg'::character varying, 'image/webp'::character varying]::text[]))",
+    "constraint|bug_report_attachments|ck_bug_report_attachments_content_type|CHECK (content_type::text = ANY (ARRAY['image/png'::character varying::text, 'image/jpeg'::character varying::text, 'image/webp'::character varying::text]))"
+  ],
+  [
+    "constraint|bug_reports|ck_bug_reports_category|CHECK (category::text = ANY (ARRAY['crash'::character varying, 'incorrect_data'::character varying, 'payment'::character varying, 'sync'::character varying, 'permission'::character varying, 'performance'::character varying, 'usability'::character varying, 'other'::character varying]::text[]))",
+    "constraint|bug_reports|ck_bug_reports_category|CHECK (category::text = ANY (ARRAY['crash'::character varying::text, 'incorrect_data'::character varying::text, 'payment'::character varying::text, 'sync'::character varying::text, 'permission'::character varying::text, 'performance'::character varying::text, 'usability'::character varying::text, 'other'::character varying::text]))"
+  ],
+  [
+    "constraint|bug_reports|ck_bug_reports_connectivity|CHECK (connectivity::text = ANY (ARRAY['online'::character varying, 'offline'::character varying, 'unknown'::character varying]::text[]))",
+    "constraint|bug_reports|ck_bug_reports_connectivity|CHECK (connectivity::text = ANY (ARRAY['online'::character varying::text, 'offline'::character varying::text, 'unknown'::character varying::text]))"
+  ],
+  [
+    "constraint|bug_reports|ck_bug_reports_severity|CHECK (severity::text = ANY (ARRAY['low'::character varying, 'medium'::character varying, 'high'::character varying, 'critical'::character varying]::text[]))",
+    "constraint|bug_reports|ck_bug_reports_severity|CHECK (severity::text = ANY (ARRAY['low'::character varying::text, 'medium'::character varying::text, 'high'::character varying::text, 'critical'::character varying::text]))"
+  ],
+  [
+    "constraint|bug_reports|ck_bug_reports_status|CHECK (status::text = ANY (ARRAY['open'::character varying, 'acknowledged'::character varying, 'in_progress'::character varying, 'resolved'::character varying, 'closed'::character varying, 'rejected'::character varying]::text[]))",
+    "constraint|bug_reports|ck_bug_reports_status|CHECK (status::text = ANY (ARRAY['open'::character varying::text, 'acknowledged'::character varying::text, 'in_progress'::character varying::text, 'resolved'::character varying::text, 'closed'::character varying::text, 'rejected'::character varying::text]))"
+  ],
+  [
+    "constraint|capital_entries|ck_capital_entry_settlement_account|CHECK (settlement_account::text = ANY (ARRAY['cash'::character varying, 'bank'::character varying, 'upi'::character varying, 'historical_funds'::character varying]::text[]))",
+    "constraint|capital_entries|ck_capital_entry_settlement_account|CHECK (settlement_account::text = ANY (ARRAY['cash'::character varying::text, 'bank'::character varying::text, 'upi'::character varying::text, 'historical_funds'::character varying::text]))"
+  ],
+  [
+    "constraint|client_diagnostic_events|ck_client_diagnostic_events_component|CHECK (component::text = ANY (ARRAY['app'::character varying, 'auth'::character varying, 'gaming'::character varying, 'pos'::character varying, 'finance'::character varying, 'sync'::character varying, 'network'::character varying, 'updates'::character varying, 'storage'::character varying]::text[]))",
+    "constraint|client_diagnostic_events|ck_client_diagnostic_events_component|CHECK (component::text = ANY (ARRAY['app'::character varying::text, 'auth'::character varying::text, 'gaming'::character varying::text, 'pos'::character varying::text, 'finance'::character varying::text, 'sync'::character varying::text, 'network'::character varying::text, 'updates'::character varying::text, 'storage'::character varying::text]))"
+  ],
+  [
+    "constraint|client_diagnostic_events|ck_client_diagnostic_events_connectivity|CHECK (connectivity::text = ANY (ARRAY['online'::character varying, 'offline'::character varying, 'unknown'::character varying]::text[]))",
+    "constraint|client_diagnostic_events|ck_client_diagnostic_events_connectivity|CHECK (connectivity::text = ANY (ARRAY['online'::character varying::text, 'offline'::character varying::text, 'unknown'::character varying::text]))"
+  ],
+  [
+    "constraint|client_diagnostic_events|ck_client_diagnostic_events_duration_bucket|CHECK (duration_bucket IS NULL OR (duration_bucket::text = ANY (ARRAY['under_5s'::character varying, '5_to_30s'::character varying, '30s_to_2m'::character varying, '2_to_10m'::character varying, 'over_10m'::character varying]::text[])))",
+    "constraint|client_diagnostic_events|ck_client_diagnostic_events_duration_bucket|CHECK (duration_bucket IS NULL OR (duration_bucket::text = ANY (ARRAY['under_5s'::character varying::text, '5_to_30s'::character varying::text, '30s_to_2m'::character varying::text, '2_to_10m'::character varying::text, 'over_10m'::character varying::text])))"
+  ],
+  [
+    "constraint|client_diagnostic_events|ck_client_diagnostic_events_severity|CHECK (severity::text = ANY (ARRAY['warning'::character varying, 'error'::character varying, 'critical'::character varying]::text[]))",
+    "constraint|client_diagnostic_events|ck_client_diagnostic_events_severity|CHECK (severity::text = ANY (ARRAY['warning'::character varying::text, 'error'::character varying::text, 'critical'::character varying::text]))"
+  ],
+  [
+    "constraint|client_diagnostic_events|ck_client_diagnostic_events_type|CHECK (event_type::text = ANY (ARRAY['crash'::character varying, 'anr'::character varying, 'api_failure'::character varying, 'sync_stall'::character varying]::text[]))",
+    "constraint|client_diagnostic_events|ck_client_diagnostic_events_type|CHECK (event_type::text = ANY (ARRAY['crash'::character varying::text, 'anr'::character varying::text, 'api_failure'::character varying::text, 'sync_stall'::character varying::text]))"
+  ],
+  [
+    "constraint|client_gaming_cleanup_reconciliation|ck_client_gaming_cleanup_reported_state|CHECK (reported_local_state::text = ANY (ARRAY['stop_pending'::character varying, 'stop_rejected'::character varying, 'ended_unbilled'::character varying, 'send_pending'::character varying, 'send_rejected'::character varying]::text[]))",
+    "constraint|client_gaming_cleanup_reconciliation|ck_client_gaming_cleanup_reported_state|CHECK (reported_local_state::text = ANY (ARRAY['stop_pending'::character varying::text, 'stop_rejected'::character varying::text, 'ended_unbilled'::character varying::text, 'send_pending'::character varying::text, 'send_rejected'::character varying::text]))"
+  ],
+  [
+    "constraint|client_gaming_cleanup_reconciliation|ck_client_gaming_cleanup_status|CHECK (status::text = ANY (ARRAY['reported'::character varying, 'approved'::character varying, 'applied'::character varying, 'superseded'::character varying]::text[]))",
+    "constraint|client_gaming_cleanup_reconciliation|ck_client_gaming_cleanup_status|CHECK (status::text = ANY (ARRAY['reported'::character varying::text, 'approved'::character varying::text, 'applied'::character varying::text, 'superseded'::character varying::text]))"
+  ],
+  [
+    "constraint|client_installations|ck_client_installations_distribution_channel|CHECK (distribution_channel::text = ANY (ARRAY['direct'::character varying, 'play'::character varying, 'managed'::character varying]::text[]))",
+    "constraint|client_installations|ck_client_installations_distribution_channel|CHECK (distribution_channel::text = ANY (ARRAY['direct'::character varying::text, 'play'::character varying::text, 'managed'::character varying::text]))"
+  ],
+  [
+    "constraint|client_installations|ck_client_installations_error_code|CHECK (update_error_code IS NULL OR (update_error_code::text = ANY (ARRAY['network_error'::character varying, 'http_error'::character varying, 'insufficient_storage'::character varying, 'invalid_metadata'::character varying, 'size_mismatch'::character varying, 'checksum_mismatch'::character varying, 'archive_unreadable'::character varying, 'package_mismatch'::character varying, 'version_mismatch'::character varying, 'signer_mismatch'::character varying, 'installer_permission_denied'::character varying, 'installer_unavailable'::character varying, 'installer_not_completed'::character varying, 'unknown'::character varying]::text[])))",
+    "constraint|client_installations|ck_client_installations_error_code|CHECK (update_error_code IS NULL OR (update_error_code::text = ANY (ARRAY['network_error'::character varying::text, 'http_error'::character varying::text, 'insufficient_storage'::character varying::text, 'invalid_metadata'::character varying::text, 'size_mismatch'::character varying::text, 'checksum_mismatch'::character varying::text, 'archive_unreadable'::character varying::text, 'package_mismatch'::character varying::text, 'version_mismatch'::character varying::text, 'signer_mismatch'::character varying::text, 'installer_permission_denied'::character varying::text, 'installer_unavailable'::character varying::text, 'installer_not_completed'::character varying::text, 'unknown'::character varying::text])))"
+  ],
+  [
+    "constraint|client_installations|ck_client_installations_remote_capability|CHECK (remote_support_capability IS NULL OR (remote_support_capability::text = ANY (ARRAY['available'::character varying, 'permission_required'::character varying, 'unsupported'::character varying]::text[])))",
+    "constraint|client_installations|ck_client_installations_remote_capability|CHECK (remote_support_capability IS NULL OR (remote_support_capability::text = ANY (ARRAY['available'::character varying::text, 'permission_required'::character varying::text, 'unsupported'::character varying::text])))"
+  ],
+  [
+    "constraint|client_installations|ck_client_installations_update_state|CHECK (update_state::text = ANY (ARRAY['idle'::character varying, 'update_available'::character varying, 'downloading'::character varying, 'verifying'::character varying, 'verified'::character varying, 'installer_opened'::character varying, 'failed'::character varying]::text[]))",
+    "constraint|client_installations|ck_client_installations_update_state|CHECK (update_state::text = ANY (ARRAY['idle'::character varying::text, 'update_available'::character varying::text, 'downloading'::character varying::text, 'verifying'::character varying::text, 'verified'::character varying::text, 'installer_opened'::character varying::text, 'failed'::character varying::text]))"
+  ],
+  [
+    "constraint|client_update_events|ck_client_update_events_error_code|CHECK (error_code IS NULL OR (error_code::text = ANY (ARRAY['network_error'::character varying, 'http_error'::character varying, 'insufficient_storage'::character varying, 'invalid_metadata'::character varying, 'size_mismatch'::character varying, 'checksum_mismatch'::character varying, 'archive_unreadable'::character varying, 'package_mismatch'::character varying, 'version_mismatch'::character varying, 'signer_mismatch'::character varying, 'installer_permission_denied'::character varying, 'installer_unavailable'::character varying, 'installer_not_completed'::character varying, 'unknown'::character varying]::text[])))",
+    "constraint|client_update_events|ck_client_update_events_error_code|CHECK (error_code IS NULL OR (error_code::text = ANY (ARRAY['network_error'::character varying::text, 'http_error'::character varying::text, 'insufficient_storage'::character varying::text, 'invalid_metadata'::character varying::text, 'size_mismatch'::character varying::text, 'checksum_mismatch'::character varying::text, 'archive_unreadable'::character varying::text, 'package_mismatch'::character varying::text, 'version_mismatch'::character varying::text, 'signer_mismatch'::character varying::text, 'installer_permission_denied'::character varying::text, 'installer_unavailable'::character varying::text, 'installer_not_completed'::character varying::text, 'unknown'::character varying::text])))"
+  ],
+  [
+    "constraint|client_update_events|ck_client_update_events_type|CHECK (event_type::text = ANY (ARRAY['update_offered'::character varying, 'download_started'::character varying, 'download_verified'::character varying, 'installer_opened'::character varying, 'upgrade_confirmed'::character varying, 'update_cancelled'::character varying, 'update_failed'::character varying]::text[]))",
+    "constraint|client_update_events|ck_client_update_events_type|CHECK (event_type::text = ANY (ARRAY['update_offered'::character varying::text, 'download_started'::character varying::text, 'download_verified'::character varying::text, 'installer_opened'::character varying::text, 'upgrade_confirmed'::character varying::text, 'update_cancelled'::character varying::text, 'update_failed'::character varying::text]))"
+  ],
+  [
+    "constraint|customer_spend_reconciliations|ck_customer_spend_reconciliation_source_state|CHECK (source_reconciliation_state::text = ANY (ARRAY['unreconciled'::character varying, 'legacy_unknown'::character varying]::text[]))",
+    "constraint|customer_spend_reconciliations|ck_customer_spend_reconciliation_source_state|CHECK (source_reconciliation_state::text = ANY (ARRAY['unreconciled'::character varying::text, 'legacy_unknown'::character varying::text]))"
+  ],
+  [
+    "constraint|expense_receipt_reviews|ck_expense_receipt_reviews_note|CHECK ((status::text = ANY (ARRAY['rejected'::character varying, 'not_required'::character varying]::text[])) AND review_note IS NOT NULL AND length(TRIM(BOTH FROM review_note)) >= 3 OR (status::text = ANY (ARRAY['pending'::character varying, 'verified'::character varying]::text[])))",
+    "constraint|expense_receipt_reviews|ck_expense_receipt_reviews_note|CHECK ((status::text = ANY (ARRAY['rejected'::character varying::text, 'not_required'::character varying::text])) AND review_note IS NOT NULL AND length(TRIM(BOTH FROM review_note)) >= 3 OR (status::text = ANY (ARRAY['pending'::character varying::text, 'verified'::character varying::text])))"
+  ],
+  [
+    "constraint|expense_receipt_reviews|ck_expense_receipt_reviews_status|CHECK (status::text = ANY (ARRAY['pending'::character varying, 'verified'::character varying, 'not_required'::character varying, 'rejected'::character varying]::text[]))",
+    "constraint|expense_receipt_reviews|ck_expense_receipt_reviews_status|CHECK (status::text = ANY (ARRAY['pending'::character varying::text, 'verified'::character varying::text, 'not_required'::character varying::text, 'rejected'::character varying::text]))"
+  ],
+  [
+    "constraint|expense_receipts|ck_expense_receipts_content_type|CHECK (content_type::text = ANY (ARRAY['image/jpeg'::character varying, 'image/png'::character varying, 'image/webp'::character varying, 'application/pdf'::character varying]::text[]))",
+    "constraint|expense_receipts|ck_expense_receipts_content_type|CHECK (content_type::text = ANY (ARRAY['image/jpeg'::character varying::text, 'image/png'::character varying::text, 'image/webp'::character varying::text, 'application/pdf'::character varying::text]))"
+  ],
+  [
+    "constraint|expense_receipts|ck_expense_receipts_source|CHECK (source::text = ANY (ARRAY['camera'::character varying, 'gallery'::character varying, 'file'::character varying]::text[]))",
+    "constraint|expense_receipts|ck_expense_receipts_source|CHECK (source::text = ANY (ARRAY['camera'::character varying::text, 'gallery'::character varying::text, 'file'::character varying::text]))"
+  ],
+  [
+    "constraint|expenses|ck_expense_payment_method|CHECK (paid_via::text = ANY (ARRAY['cash'::character varying, 'card'::character varying, 'bank'::character varying, 'upi'::character varying]::text[]))",
+    "constraint|expenses|ck_expense_payment_method|CHECK (paid_via::text = ANY (ARRAY['cash'::character varying::text, 'card'::character varying::text, 'bank'::character varying::text, 'upi'::character varying::text]))"
+  ],
+  [
+    "constraint|finance_source_corrections|ck_finance_source_correction_type|CHECK (source_type::text = ANY (ARRAY['expense'::character varying, 'manual_collection'::character varying, 'tip_payout'::character varying, 'supplier_payment'::character varying]::text[]))",
+    "constraint|finance_source_corrections|ck_finance_source_correction_type|CHECK (source_type::text = ANY (ARRAY['expense'::character varying::text, 'manual_collection'::character varying::text, 'tip_payout'::character varying::text, 'supplier_payment'::character varying::text]))"
+  ],
+  [
+    "constraint|gaming_bookings|no_overlapping_bookings|EXCLUDE USING gist (station_id WITH =, tstzrange(starts_at, ends_at, '[)'::text) WITH &&) WHERE (status::text = ANY (ARRAY['held'::character varying, 'consumed'::character varying]::text[]))",
+    "constraint|gaming_bookings|no_overlapping_bookings|EXCLUDE USING gist (station_id WITH =, tstzrange(starts_at, ends_at, '[)'::text) WITH &&) WHERE (status::text = ANY (ARRAY['held'::character varying::text, 'consumed'::character varying::text]))"
+  ],
+  [
+    "constraint|gaming_packages|ck_gaming_package_kind|CHECK (kind::text = ANY (ARRAY['base'::character varying, 'extension'::character varying]::text[]))",
+    "constraint|gaming_packages|ck_gaming_package_kind|CHECK (kind::text = ANY (ARRAY['base'::character varying::text, 'extension'::character varying::text]))"
+  ],
+  [
+    "constraint|gaming_packages|ck_gaming_packages_pricing_tier|CHECK (pricing_tier::text = ANY (ARRAY['standard'::character varying, 'premium'::character varying]::text[]))",
+    "constraint|gaming_packages|ck_gaming_packages_pricing_tier|CHECK (pricing_tier::text = ANY (ARRAY['standard'::character varying::text, 'premium'::character varying::text]))"
+  ],
+  [
+    "constraint|gaming_pause_events|ck_gaming_pause_event_payload|CHECK ((action::text = ANY (ARRAY['pause'::character varying, 'resume'::character varying]::text[])) AND length(TRIM(BOTH FROM reason)) >= 3 AND length(TRIM(BOTH FROM reason)) <= 500 AND pause_version > 0)",
+    "constraint|gaming_pause_events|ck_gaming_pause_event_payload|CHECK ((action::text = ANY (ARRAY['pause'::character varying::text, 'resume'::character varying::text])) AND length(TRIM(BOTH FROM reason)) >= 3 AND length(TRIM(BOTH FROM reason)) <= 500 AND pause_version > 0)"
+  ],
+  [
+    "constraint|gaming_session_addons|ck_gaming_session_addon_reporting_snapshot|CHECK (length(TRIM(BOTH FROM menu_item_name_snapshot)) >= 1 AND (menu_item_type_snapshot::text = ANY (ARRAY['food'::character varying, 'drink'::character varying, 'dessert'::character varying]::text[])))",
+    "constraint|gaming_session_addons|ck_gaming_session_addon_reporting_snapshot|CHECK (length(TRIM(BOTH FROM menu_item_name_snapshot)) >= 1 AND (menu_item_type_snapshot::text = ANY (ARRAY['food'::character varying::text, 'drink'::character varying::text, 'dessert'::character varying::text])))"
+  ],
+  [
+    "constraint|gaming_session_package_amendments|ck_gaming_package_amendment_state|CHECK (play_elapsed_ms >= 0 AND play_elapsed_ms < 1800000 AND (timing_source::text = ANY (ARRAY['server'::character varying, 'offline_capture'::character varying]::text[])) AND pause_version >= 0 AND participant_revision = 0 AND billing_revision_before = 0 AND billing_revision = 1)",
+    "constraint|gaming_session_package_amendments|ck_gaming_package_amendment_state|CHECK (play_elapsed_ms >= 0 AND play_elapsed_ms < 1800000 AND (timing_source::text = ANY (ARRAY['server'::character varying::text, 'offline_capture'::character varying::text])) AND pause_version >= 0 AND participant_revision = 0 AND billing_revision_before = 0 AND billing_revision = 1)"
+  ],
+  [
+    "constraint|gaming_session_participants|ck_gaming_session_participant_timing_source|CHECK ((join_timing_source::text = ANY (ARRAY['server'::character varying, 'offline_capture'::character varying]::text[])) AND (leave_timing_source IS NULL OR (leave_timing_source::text = ANY (ARRAY['server'::character varying, 'offline_capture'::character varying]::text[]))))",
+    "constraint|gaming_session_participants|ck_gaming_session_participant_timing_source|CHECK ((join_timing_source::text = ANY (ARRAY['server'::character varying::text, 'offline_capture'::character varying::text])) AND (leave_timing_source IS NULL OR (leave_timing_source::text = ANY (ARRAY['server'::character varying::text, 'offline_capture'::character varying::text]))))"
+  ],
+  [
+    "constraint|gaming_sessions|ck_gaming_session_billing_mode|CHECK (billing_mode::text = ANY (ARRAY['hourly'::character varying, 'package'::character varying, 'legacy_ambiguous'::character varying]::text[]))",
+    "constraint|gaming_sessions|ck_gaming_session_billing_mode|CHECK (billing_mode::text = ANY (ARRAY['hourly'::character varying::text, 'package'::character varying::text, 'legacy_ambiguous'::character varying::text]))"
+  ],
+  [
+    "constraint|gaming_sessions|ck_gaming_sessions_billing_amendment_projection|CHECK (billing_revision = 0 AND effective_package_id IS NULL AND effective_package_price_minor_snapshot IS NULL AND effective_package_duration_minutes_snapshot IS NULL AND effective_package_variant_snapshot IS NULL AND effective_package_station_type_snapshot IS NULL AND effective_package_pricing_tier_snapshot IS NULL OR billing_revision = 1 AND effective_package_price_minor_snapshot >= 0 AND effective_package_duration_minutes_snapshot = 30 AND (effective_package_variant_snapshot::text = ANY (ARRAY['single'::character varying, 'dual'::character varying]::text[])) AND effective_package_station_type_snapshot::text = 'ps5'::text AND effective_package_pricing_tier_snapshot::text = 'standard'::text)",
+    "constraint|gaming_sessions|ck_gaming_sessions_billing_amendment_projection|CHECK (billing_revision = 0 AND effective_package_id IS NULL AND effective_package_price_minor_snapshot IS NULL AND effective_package_duration_minutes_snapshot IS NULL AND effective_package_variant_snapshot IS NULL AND effective_package_station_type_snapshot IS NULL AND effective_package_pricing_tier_snapshot IS NULL OR billing_revision = 1 AND effective_package_price_minor_snapshot >= 0 AND effective_package_duration_minutes_snapshot = 30 AND (effective_package_variant_snapshot::text = ANY (ARRAY['single'::character varying::text, 'dual'::character varying::text])) AND effective_package_station_type_snapshot::text = 'ps5'::text AND effective_package_pricing_tier_snapshot::text = 'standard'::text)"
+  ],
+  [
+    "constraint|gaming_sessions|ck_gaming_sessions_package_pricing_tier_snapshot|CHECK (package_pricing_tier_snapshot IS NULL OR (package_pricing_tier_snapshot::text = ANY (ARRAY['standard'::character varying, 'premium'::character varying]::text[])))",
+    "constraint|gaming_sessions|ck_gaming_sessions_package_pricing_tier_snapshot|CHECK (package_pricing_tier_snapshot IS NULL OR (package_pricing_tier_snapshot::text = ANY (ARRAY['standard'::character varying::text, 'premium'::character varying::text])))"
+  ],
+  [
+    "constraint|google_sheets_deliveries|ck_google_sheets_deliveries_status|CHECK (status::text = ANY (ARRAY['pending'::character varying, 'leased'::character varying, 'delivered'::character varying, 'quarantined'::character varying]::text[]))",
+    "constraint|google_sheets_deliveries|ck_google_sheets_deliveries_status|CHECK (status::text = ANY (ARRAY['pending'::character varying::text, 'leased'::character varying::text, 'delivered'::character varying::text, 'quarantined'::character varying::text]))"
+  ],
+  [
+    "constraint|journal_lines|ck_journal_side|CHECK (side::text = ANY (ARRAY['dr'::character varying, 'cr'::character varying]::text[]))",
+    "constraint|journal_lines|ck_journal_side|CHECK (side::text = ANY (ARRAY['dr'::character varying::text, 'cr'::character varying::text]))"
+  ],
+  [
+    "constraint|manual_collections|ck_manual_collection_method|CHECK (method::text = ANY (ARRAY['cash'::character varying, 'upi'::character varying, 'card'::character varying, 'bank'::character varying]::text[]))",
+    "constraint|manual_collections|ck_manual_collection_method|CHECK (method::text = ANY (ARRAY['cash'::character varying::text, 'upi'::character varying::text, 'card'::character varying::text, 'bank'::character varying::text]))"
+  ],
+  [
+    "constraint|manual_collections|ck_manual_collection_source_kind|CHECK (source_kind::text = ANY (ARRAY['manual_daily'::character varying, 'legacy_daily'::character varying]::text[]))",
+    "constraint|manual_collections|ck_manual_collection_source_kind|CHECK (source_kind::text = ANY (ARRAY['manual_daily'::character varying::text, 'legacy_daily'::character varying::text]))"
+  ],
+  [
+    "constraint|membership_benefit_reservations|ck_membership_benefit_type|CHECK (benefit_type::text = ANY (ARRAY['gaming_minutes'::character varying, 'hookah_count'::character varying]::text[]))",
+    "constraint|membership_benefit_reservations|ck_membership_benefit_type|CHECK (benefit_type::text = ANY (ARRAY['gaming_minutes'::character varying::text, 'hookah_count'::character varying::text]))"
+  ],
+  [
+    "constraint|membership_evidence_reconciliations|ck_membership_evidence_reconciliation_kind|CHECK (evidence_kind::text = ANY (ARRAY['provider_reference'::character varying, 'captured_time'::character varying]::text[]))",
+    "constraint|membership_evidence_reconciliations|ck_membership_evidence_reconciliation_kind|CHECK (evidence_kind::text = ANY (ARRAY['provider_reference'::character varying::text, 'captured_time'::character varying::text]))"
+  ],
+  [
+    "constraint|membership_payment_attempt_resolutions|ck_membership_attempt_resolution_method|CHECK (paid_via::text = ANY (ARRAY['cash'::character varying, 'card'::character varying, 'upi'::character varying, 'razorpay'::character varying]::text[]))",
+    "constraint|membership_payment_attempt_resolutions|ck_membership_attempt_resolution_method|CHECK (paid_via::text = ANY (ARRAY['cash'::character varying::text, 'card'::character varying::text, 'upi'::character varying::text, 'razorpay'::character varying::text]))"
+  ],
+  [
+    "constraint|membership_payment_completions|ck_membership_payment_completion_method|CHECK (method::text = ANY (ARRAY['cash'::character varying, 'card'::character varying, 'upi'::character varying, 'razorpay'::character varying]::text[]))",
+    "constraint|membership_payment_completions|ck_membership_payment_completion_method|CHECK (method::text = ANY (ARRAY['cash'::character varying::text, 'card'::character varying::text, 'upi'::character varying::text, 'razorpay'::character varying::text]))"
+  ],
+  [
+    "constraint|membership_payment_provider_actions|ck_membership_payment_provider_action_method|CHECK (method::text = ANY (ARRAY['card'::character varying, 'upi'::character varying, 'razorpay'::character varying]::text[]))",
+    "constraint|membership_payment_provider_actions|ck_membership_payment_provider_action_method|CHECK (method::text = ANY (ARRAY['card'::character varying::text, 'upi'::character varying::text, 'razorpay'::character varying::text]))"
+  ],
+  [
+    "constraint|membership_payment_request_resolutions|ck_membership_payment_request_resolution_evidence|CHECK (paid_via::text = 'cash'::text AND (resolution::text = ANY (ARRAY['payment_not_collected'::character varying, 'cash_not_collected'::character varying, 'cash_returned'::character varying]::text[])) AND external_reference IS NULL OR paid_via::text <> 'cash'::text AND (resolution::text = ANY (ARRAY['payment_not_collected'::character varying, 'provider_not_completed'::character varying]::text[])) AND external_reference IS NULL OR paid_via::text <> 'cash'::text AND resolution::text = 'provider_reversed'::text AND char_length(TRIM(BOTH FROM external_reference)) >= 1)",
+    "constraint|membership_payment_request_resolutions|ck_membership_payment_request_resolution_evidence|CHECK (paid_via::text = 'cash'::text AND (resolution::text = ANY (ARRAY['payment_not_collected'::character varying::text, 'cash_not_collected'::character varying::text, 'cash_returned'::character varying::text])) AND external_reference IS NULL OR paid_via::text <> 'cash'::text AND (resolution::text = ANY (ARRAY['payment_not_collected'::character varying::text, 'provider_not_completed'::character varying::text])) AND external_reference IS NULL OR paid_via::text <> 'cash'::text AND resolution::text = 'provider_reversed'::text AND char_length(TRIM(BOTH FROM external_reference)) >= 1)"
+  ],
+  [
+    "constraint|membership_payment_requests|ck_membership_payment_request_method|CHECK (method::text = ANY (ARRAY['cash'::character varying, 'card'::character varying, 'upi'::character varying, 'razorpay'::character varying]::text[]))",
+    "constraint|membership_payment_requests|ck_membership_payment_request_method|CHECK (method::text = ANY (ARRAY['cash'::character varying::text, 'card'::character varying::text, 'upi'::character varying::text, 'razorpay'::character varying::text]))"
+  ],
+  [
+    "constraint|membership_payment_workflow_guards|ck_membership_payment_guard_action|CHECK (action_kind IS NULL AND action_id IS NULL OR (action_kind::text = ANY (ARRAY['cash_collection'::character varying, 'provider_payment'::character varying]::text[])) AND action_id IS NOT NULL)",
+    "constraint|membership_payment_workflow_guards|ck_membership_payment_guard_action|CHECK (action_kind IS NULL AND action_id IS NULL OR (action_kind::text = ANY (ARRAY['cash_collection'::character varying::text, 'provider_payment'::character varying::text])) AND action_id IS NOT NULL)"
+  ],
+  [
+    "constraint|membership_payment_workflow_guards|ck_membership_payment_guard_outcome|CHECK (outcome_kind IS NULL AND outcome_id IS NULL OR (outcome_kind::text = ANY (ARRAY['settled'::character varying, 'withdrawn'::character varying]::text[])) AND outcome_id IS NOT NULL)",
+    "constraint|membership_payment_workflow_guards|ck_membership_payment_guard_outcome|CHECK (outcome_kind IS NULL AND outcome_id IS NULL OR (outcome_kind::text = ANY (ARRAY['settled'::character varying::text, 'withdrawn'::character varying::text])) AND outcome_id IS NOT NULL)"
+  ],
+  [
+    "constraint|membership_payments|ck_membership_payment_method|CHECK (method::text = ANY (ARRAY['cash'::character varying, 'card'::character varying, 'upi'::character varying, 'razorpay'::character varying]::text[]))",
+    "constraint|membership_payments|ck_membership_payment_method|CHECK (method::text = ANY (ARRAY['cash'::character varying::text, 'card'::character varying::text, 'upi'::character varying::text, 'razorpay'::character varying::text]))"
+  ],
+  [
+    "constraint|membership_refund_attempt_recoveries|ck_membership_refund_attempt_recovery_method|CHECK (paid_via::text = ANY (ARRAY['cash'::character varying, 'card'::character varying, 'upi'::character varying, 'razorpay'::character varying]::text[]))",
+    "constraint|membership_refund_attempt_recoveries|ck_membership_refund_attempt_recovery_method|CHECK (paid_via::text = ANY (ARRAY['cash'::character varying::text, 'card'::character varying::text, 'upi'::character varying::text, 'razorpay'::character varying::text]))"
+  ],
+  [
+    "constraint|membership_refund_attempt_resolutions|ck_membership_refund_attempt_method|CHECK (paid_via::text = ANY (ARRAY['cash'::character varying, 'card'::character varying, 'upi'::character varying, 'razorpay'::character varying]::text[]))",
+    "constraint|membership_refund_attempt_resolutions|ck_membership_refund_attempt_method|CHECK (paid_via::text = ANY (ARRAY['cash'::character varying::text, 'card'::character varying::text, 'upi'::character varying::text, 'razorpay'::character varying::text]))"
+  ],
+  [
+    "constraint|membership_refund_attempt_resolutions|ck_membership_refund_attempt_outcome|CHECK (outcome::text = ANY (ARRAY['no_payout'::character varying, 'cash_not_handed_over'::character varying, 'cash_handed_over'::character varying, 'provider_reversed'::character varying, 'provider_completed'::character varying]::text[]))",
+    "constraint|membership_refund_attempt_resolutions|ck_membership_refund_attempt_outcome|CHECK (outcome::text = ANY (ARRAY['no_payout'::character varying::text, 'cash_not_handed_over'::character varying::text, 'cash_handed_over'::character varying::text, 'provider_reversed'::character varying::text, 'provider_completed'::character varying::text]))"
+  ],
+  [
+    "constraint|membership_refund_completions|ck_membership_refund_completion_method|CHECK (method::text = ANY (ARRAY['cash'::character varying, 'card'::character varying, 'upi'::character varying, 'razorpay'::character varying]::text[]))",
+    "constraint|membership_refund_completions|ck_membership_refund_completion_method|CHECK (method::text = ANY (ARRAY['cash'::character varying::text, 'card'::character varying::text, 'upi'::character varying::text, 'razorpay'::character varying::text]))"
+  ],
+  [
+    "constraint|membership_refund_provider_actions|ck_membership_refund_provider_action_method|CHECK (method::text = ANY (ARRAY['card'::character varying, 'upi'::character varying, 'razorpay'::character varying]::text[]))",
+    "constraint|membership_refund_provider_actions|ck_membership_refund_provider_action_method|CHECK (method::text = ANY (ARRAY['card'::character varying::text, 'upi'::character varying::text, 'razorpay'::character varying::text]))"
+  ],
+  [
+    "constraint|membership_refund_resolutions|ck_membership_refund_resolution_type|CHECK (paid_via::text = 'cash'::text AND (resolution::text = ANY (ARRAY['cash_not_handed_over'::character varying, 'cash_returned'::character varying]::text[])) AND external_reference IS NULL OR paid_via::text <> 'cash'::text AND resolution::text = 'provider_not_completed'::text AND external_reference IS NULL OR paid_via::text <> 'cash'::text AND resolution::text = 'provider_reversed'::text AND char_length(TRIM(BOTH FROM external_reference)) >= 1)",
+    "constraint|membership_refund_resolutions|ck_membership_refund_resolution_type|CHECK (paid_via::text = 'cash'::text AND (resolution::text = ANY (ARRAY['cash_not_handed_over'::character varying::text, 'cash_returned'::character varying::text])) AND external_reference IS NULL OR paid_via::text <> 'cash'::text AND resolution::text = 'provider_not_completed'::text AND external_reference IS NULL OR paid_via::text <> 'cash'::text AND resolution::text = 'provider_reversed'::text AND char_length(TRIM(BOTH FROM external_reference)) >= 1)"
+  ],
+  [
+    "constraint|membership_refund_settlements|ck_membership_refund_settlement_method|CHECK (method::text = ANY (ARRAY['cash'::character varying, 'card'::character varying, 'upi'::character varying, 'razorpay'::character varying]::text[]))",
+    "constraint|membership_refund_settlements|ck_membership_refund_settlement_method|CHECK (method::text = ANY (ARRAY['cash'::character varying::text, 'card'::character varying::text, 'upi'::character varying::text, 'razorpay'::character varying::text]))"
+  ],
+  [
+    "constraint|membership_refund_workflow_guards|ck_membership_refund_guard_action|CHECK (action_kind IS NULL AND action_id IS NULL OR (action_kind::text = ANY (ARRAY['cash_handoff'::character varying, 'provider_refund'::character varying, 'legacy_recovery'::character varying]::text[])) AND action_id IS NOT NULL)",
+    "constraint|membership_refund_workflow_guards|ck_membership_refund_guard_action|CHECK (action_kind IS NULL AND action_id IS NULL OR (action_kind::text = ANY (ARRAY['cash_handoff'::character varying::text, 'provider_refund'::character varying::text, 'legacy_recovery'::character varying::text])) AND action_id IS NOT NULL)"
+  ],
+  [
+    "constraint|membership_refund_workflow_guards|ck_membership_refund_guard_outcome|CHECK (outcome_kind IS NULL AND outcome_id IS NULL OR (outcome_kind::text = ANY (ARRAY['settled'::character varying, 'withdrawn'::character varying]::text[])) AND outcome_id IS NOT NULL)",
+    "constraint|membership_refund_workflow_guards|ck_membership_refund_guard_outcome|CHECK (outcome_kind IS NULL AND outcome_id IS NULL OR (outcome_kind::text = ANY (ARRAY['settled'::character varying::text, 'withdrawn'::character varying::text])) AND outcome_id IS NOT NULL)"
+  ],
+  [
+    "constraint|membership_refunds|ck_membership_refund_method|CHECK (method::text = ANY (ARRAY['cash'::character varying, 'card'::character varying, 'upi'::character varying, 'razorpay'::character varying]::text[]))",
+    "constraint|membership_refunds|ck_membership_refund_method|CHECK (method::text = ANY (ARRAY['cash'::character varying::text, 'card'::character varying::text, 'upi'::character varying::text, 'razorpay'::character varying::text]))"
+  ],
+  [
+    "constraint|order_loyalty_settlements|ck_order_loyalty_settlement_provenance|CHECK (provenance::text = ANY (ARRAY['exact'::character varying, 'legacy_redemption_only'::character varying]::text[]))",
+    "constraint|order_loyalty_settlements|ck_order_loyalty_settlement_provenance|CHECK (provenance::text = ANY (ARRAY['exact'::character varying::text, 'legacy_redemption_only'::character varying::text]))"
+  ],
+  [
+    "constraint|payments|ck_payment_supported_method|CHECK (method::text = ANY (ARRAY['cash'::character varying, 'card'::character varying, 'upi'::character varying, 'qr'::character varying, 'wallet'::character varying]::text[]))",
+    "constraint|payments|ck_payment_supported_method|CHECK (method::text = ANY (ARRAY['cash'::character varying::text, 'card'::character varying::text, 'upi'::character varying::text, 'qr'::character varying::text, 'wallet'::character varying::text]))"
+  ],
+  [
+    "constraint|pos_refund_evidence_reconciliations|ck_pos_refund_evidence_reconciliation_kind|CHECK (evidence_kind::text = ANY (ARRAY['provider_reference'::character varying, 'captured_time'::character varying]::text[]))",
+    "constraint|pos_refund_evidence_reconciliations|ck_pos_refund_evidence_reconciliation_kind|CHECK (evidence_kind::text = ANY (ARRAY['provider_reference'::character varying::text, 'captured_time'::character varying::text]))"
+  ],
+  [
+    "constraint|pos_refund_provider_settlements|ck_pos_refund_provider_method|CHECK (settlement_method::text = ANY (ARRAY['card'::character varying, 'upi'::character varying, 'qr'::character varying, 'wallet'::character varying]::text[]))",
+    "constraint|pos_refund_provider_settlements|ck_pos_refund_provider_method|CHECK (settlement_method::text = ANY (ARRAY['card'::character varying::text, 'upi'::character varying::text, 'qr'::character varying::text, 'wallet'::character varying::text]))"
+  ],
+  [
+    "constraint|pos_refund_requests|ck_pos_refund_request_method|CHECK (settlement_method::text = ANY (ARRAY['cash'::character varying, 'card'::character varying, 'upi'::character varying, 'qr'::character varying, 'wallet'::character varying]::text[]))",
+    "constraint|pos_refund_requests|ck_pos_refund_request_method|CHECK (settlement_method::text = ANY (ARRAY['cash'::character varying::text, 'card'::character varying::text, 'upi'::character varying::text, 'qr'::character varying::text, 'wallet'::character varying::text]))"
+  ],
+  [
+    "constraint|pos_refund_requests|ck_pos_refund_request_mode|CHECK (mode::text = ANY (ARRAY['cash'::character varying, 'original'::character varying]::text[]))",
+    "constraint|pos_refund_requests|ck_pos_refund_request_mode|CHECK (mode::text = ANY (ARRAY['cash'::character varying::text, 'original'::character varying::text]))"
+  ],
+  [
+    "constraint|pos_refund_withdrawals|ck_pos_refund_withdrawal_resolution|CHECK (resolution::text = ANY (ARRAY['cash_not_handed_over'::character varying, 'cash_handoff_abandoned'::character varying, 'provider_not_started'::character varying, 'provider_payout_abandoned'::character varying]::text[]))",
+    "constraint|pos_refund_withdrawals|ck_pos_refund_withdrawal_resolution|CHECK (resolution::text = ANY (ARRAY['cash_not_handed_over'::character varying::text, 'cash_handoff_abandoned'::character varying::text, 'provider_not_started'::character varying::text, 'provider_payout_abandoned'::character varying::text]))"
+  ],
+  [
+    "constraint|pos_refund_withdrawals|ck_pos_refund_withdrawal_verification|CHECK (resolution::text = 'provider_payout_abandoned'::text AND verification_reference IS NOT NULL AND char_length(TRIM(BOTH FROM verification_reference)) >= 3 AND verification_status IS NOT NULL AND (verification_status::text = ANY (ARRAY['no_matching_transaction'::character varying, 'provider_declined'::character varying, 'provider_reversed'::character varying]::text[])) AND verified_at IS NOT NULL OR resolution::text <> 'provider_payout_abandoned'::text AND verification_reference IS NULL AND verification_status IS NULL AND verified_at IS NULL)",
+    "constraint|pos_refund_withdrawals|ck_pos_refund_withdrawal_verification|CHECK (resolution::text = 'provider_payout_abandoned'::text AND verification_reference IS NOT NULL AND char_length(TRIM(BOTH FROM verification_reference)) >= 3 AND verification_status IS NOT NULL AND (verification_status::text = ANY (ARRAY['no_matching_transaction'::character varying::text, 'provider_declined'::character varying::text, 'provider_reversed'::character varying::text])) AND verified_at IS NOT NULL OR resolution::text <> 'provider_payout_abandoned'::text AND verification_reference IS NULL AND verification_status IS NULL AND verified_at IS NULL)"
+  ],
+  [
+    "constraint|pos_refund_workflow_guards|ck_pos_refund_guard_action|CHECK (action_state::text = ANY (ARRAY['accepted'::character varying, 'cash_started'::character varying, 'cash_completed'::character varying, 'provider_started'::character varying, 'provider_completed'::character varying]::text[]))",
+    "constraint|pos_refund_workflow_guards|ck_pos_refund_guard_action|CHECK (action_state::text = ANY (ARRAY['accepted'::character varying::text, 'cash_started'::character varying::text, 'cash_completed'::character varying::text, 'provider_started'::character varying::text, 'provider_completed'::character varying::text]))"
+  ],
+  [
+    "constraint|pos_refund_workflow_guards|ck_pos_refund_guard_action_method|CHECK (action_state::text = 'accepted'::text OR (action_state::text = ANY (ARRAY['cash_started'::character varying, 'cash_completed'::character varying]::text[])) AND settlement_method::text = 'cash'::text OR (action_state::text = ANY (ARRAY['provider_started'::character varying, 'provider_completed'::character varying]::text[])) AND settlement_method::text <> 'cash'::text)",
+    "constraint|pos_refund_workflow_guards|ck_pos_refund_guard_action_method|CHECK (action_state::text = 'accepted'::text OR (action_state::text = ANY (ARRAY['cash_started'::character varying::text, 'cash_completed'::character varying::text])) AND settlement_method::text = 'cash'::text OR (action_state::text = ANY (ARRAY['provider_started'::character varying::text, 'provider_completed'::character varying::text])) AND settlement_method::text <> 'cash'::text)"
+  ],
+  [
+    "constraint|pos_refund_workflow_guards|ck_pos_refund_guard_method|CHECK (settlement_method::text = ANY (ARRAY['cash'::character varying, 'card'::character varying, 'upi'::character varying, 'qr'::character varying, 'wallet'::character varying]::text[]))",
+    "constraint|pos_refund_workflow_guards|ck_pos_refund_guard_method|CHECK (settlement_method::text = ANY (ARRAY['cash'::character varying::text, 'card'::character varying::text, 'upi'::character varying::text, 'qr'::character varying::text, 'wallet'::character varying::text]))"
+  ],
+  [
+    "constraint|pos_refund_workflow_guards|ck_pos_refund_guard_terminal|CHECK (terminal_state IS NULL OR (terminal_state::text = ANY (ARRAY['settled'::character varying, 'withdrawn'::character varying]::text[])))",
+    "constraint|pos_refund_workflow_guards|ck_pos_refund_guard_terminal|CHECK (terminal_state IS NULL OR (terminal_state::text = ANY (ARRAY['settled'::character varying::text, 'withdrawn'::character varying::text])))"
+  ],
+  [
+    "constraint|refunds|ck_refund_loyalty_reconciliation_state|CHECK (request_id IS NULL OR loyalty_reconciliation_state IS NOT NULL AND (loyalty_reconciliation_state::text = ANY (ARRAY['not_applicable'::character varying, 'applied'::character varying, 'legacy_redemption_restored'::character varying, 'legacy_unknown'::character varying]::text[]))) NOT VALID",
+    "constraint|refunds|ck_refund_loyalty_reconciliation_state|CHECK (request_id IS NULL OR loyalty_reconciliation_state IS NOT NULL AND (loyalty_reconciliation_state::text = ANY (ARRAY['not_applicable'::character varying::text, 'applied'::character varying::text, 'legacy_redemption_restored'::character varying::text, 'legacy_unknown'::character varying::text]))) NOT VALID"
+  ],
+  [
+    "constraint|remote_assistance_commands|ck_remote_assistance_commands_rejection_reason|CHECK (rejection_reason_code IS NULL OR (rejection_reason_code::text = ANY (ARRAY['unsupported_command'::character varying, 'module_unavailable'::character varying, 'permission_denied'::character varying, 'not_in_foreground'::character varying, 'session_inactive'::character varying, 'execution_failed'::character varying, 'session_ended'::character varying]::text[])))",
+    "constraint|remote_assistance_commands|ck_remote_assistance_commands_rejection_reason|CHECK (rejection_reason_code IS NULL OR (rejection_reason_code::text = ANY (ARRAY['unsupported_command'::character varying::text, 'module_unavailable'::character varying::text, 'permission_denied'::character varying::text, 'not_in_foreground'::character varying::text, 'session_inactive'::character varying::text, 'execution_failed'::character varying::text, 'session_ended'::character varying::text])))"
+  ],
+  [
+    "constraint|remote_assistance_commands|ck_remote_assistance_commands_status|CHECK (status::text = ANY (ARRAY['pending'::character varying, 'acknowledged'::character varying, 'rejected'::character varying]::text[]))",
+    "constraint|remote_assistance_commands|ck_remote_assistance_commands_status|CHECK (status::text = ANY (ARRAY['pending'::character varying::text, 'acknowledged'::character varying::text, 'rejected'::character varying::text]))"
+  ],
+  [
+    "constraint|remote_assistance_commands|ck_remote_assistance_commands_type|CHECK (command_type::text = ANY (ARRAY['navigate'::character varying, 'refresh'::character varying, 'collect_diagnostics'::character varying]::text[]))",
+    "constraint|remote_assistance_commands|ck_remote_assistance_commands_type|CHECK (command_type::text = ANY (ARRAY['navigate'::character varying::text, 'refresh'::character varying::text, 'collect_diagnostics'::character varying::text]))"
+  ],
+  [
+    "constraint|remote_assistance_device_keys|ck_remote_assistance_device_keys_approval_evidence|CHECK ((status::text = ANY (ARRAY['pending'::character varying, 'expired'::character varying]::text[])) AND approved_at IS NULL AND approved_by_user_id IS NULL AND approval_id IS NULL OR (status::text = ANY (ARRAY['active'::character varying, 'revoked'::character varying]::text[])) AND approved_at IS NOT NULL AND approved_by_user_id IS NOT NULL AND approval_id IS NOT NULL OR status::text = 'revoked'::text AND approved_at IS NULL AND approved_by_user_id IS NULL AND approval_id IS NULL)",
+    "constraint|remote_assistance_device_keys|ck_remote_assistance_device_keys_approval_evidence|CHECK ((status::text = ANY (ARRAY['pending'::character varying::text, 'expired'::character varying::text])) AND approved_at IS NULL AND approved_by_user_id IS NULL AND approval_id IS NULL OR (status::text = ANY (ARRAY['active'::character varying::text, 'revoked'::character varying::text])) AND approved_at IS NOT NULL AND approved_by_user_id IS NOT NULL AND approval_id IS NOT NULL OR status::text = 'revoked'::text AND approved_at IS NULL AND approved_by_user_id IS NULL AND approval_id IS NULL)"
+  ],
+  [
+    "constraint|remote_assistance_device_keys|ck_remote_assistance_device_keys_status|CHECK (status::text = ANY (ARRAY['pending'::character varying, 'active'::character varying, 'revoked'::character varying, 'expired'::character varying]::text[]))",
+    "constraint|remote_assistance_device_keys|ck_remote_assistance_device_keys_status|CHECK (status::text = ANY (ARRAY['pending'::character varying::text, 'active'::character varying::text, 'revoked'::character varying::text, 'expired'::character varying::text]))"
+  ],
+  [
+    "constraint|remote_assistance_grants|ck_remote_assistance_grants_kind|CHECK (kind::text = ANY (ARRAY['one_time'::character varying, 'anytime'::character varying]::text[]))",
+    "constraint|remote_assistance_grants|ck_remote_assistance_grants_kind|CHECK (kind::text = ANY (ARRAY['one_time'::character varying::text, 'anytime'::character varying::text]))"
+  ],
+  [
+    "constraint|remote_assistance_grants|ck_remote_assistance_grants_response_evidence|CHECK (status::text = 'requested'::text AND responded_at IS NULL AND responded_by_user_id IS NULL AND decision_id IS NULL OR (status::text = ANY (ARRAY['active'::character varying, 'declined'::character varying, 'consumed'::character varying]::text[])) AND responded_at IS NOT NULL AND responded_by_user_id IS NOT NULL AND decision_id IS NOT NULL OR (status::text = ANY (ARRAY['revoked'::character varying, 'expired'::character varying]::text[])) AND (responded_at IS NULL AND responded_by_user_id IS NULL AND decision_id IS NULL OR responded_at IS NOT NULL AND responded_by_user_id IS NOT NULL AND decision_id IS NOT NULL))",
+    "constraint|remote_assistance_grants|ck_remote_assistance_grants_response_evidence|CHECK (status::text = 'requested'::text AND responded_at IS NULL AND responded_by_user_id IS NULL AND decision_id IS NULL OR (status::text = ANY (ARRAY['active'::character varying::text, 'declined'::character varying::text, 'consumed'::character varying::text])) AND responded_at IS NOT NULL AND responded_by_user_id IS NOT NULL AND decision_id IS NOT NULL OR (status::text = ANY (ARRAY['revoked'::character varying::text, 'expired'::character varying::text])) AND (responded_at IS NULL AND responded_by_user_id IS NULL AND decision_id IS NULL OR responded_at IS NOT NULL AND responded_by_user_id IS NOT NULL AND decision_id IS NOT NULL))"
+  ],
+  [
+    "constraint|remote_assistance_grants|ck_remote_assistance_grants_status|CHECK (status::text = ANY (ARRAY['requested'::character varying, 'active'::character varying, 'declined'::character varying, 'revoked'::character varying, 'expired'::character varying, 'consumed'::character varying]::text[]))",
+    "constraint|remote_assistance_grants|ck_remote_assistance_grants_status|CHECK (status::text = ANY (ARRAY['requested'::character varying::text, 'active'::character varying::text, 'declined'::character varying::text, 'revoked'::character varying::text, 'expired'::character varying::text, 'consumed'::character varying::text]))"
+  ],
+  [
+    "constraint|remote_assistance_sessions|ck_remote_assistance_sessions_end_reason|CHECK (end_reason IS NULL OR (end_reason::text = ANY (ARRAY['owner_ended'::character varying, 'user_ended'::character varying, 'permission_revoked'::character varying, 'capture_stopped'::character varying, 'app_backgrounded'::character varying, 'grant_revoked'::character varying, 'grant_declined'::character varying]::text[])))",
+    "constraint|remote_assistance_sessions|ck_remote_assistance_sessions_end_reason|CHECK (end_reason IS NULL OR (end_reason::text = ANY (ARRAY['owner_ended'::character varying::text, 'user_ended'::character varying::text, 'permission_revoked'::character varying::text, 'capture_stopped'::character varying::text, 'app_backgrounded'::character varying::text, 'grant_revoked'::character varying::text, 'grant_declined'::character varying::text])))"
+  ],
+  [
+    "constraint|remote_assistance_sessions|ck_remote_assistance_sessions_start_evidence|CHECK (status::text = 'requested'::text AND started_at IS NULL AND expires_at IS NULL AND started_by_user_id IS NULL AND start_id IS NULL OR status::text = 'active'::text AND started_at IS NOT NULL AND expires_at IS NOT NULL AND started_by_user_id IS NOT NULL AND start_id IS NOT NULL AND expires_at > started_at OR (status::text = ANY (ARRAY['ended'::character varying, 'expired'::character varying]::text[])) AND (started_at IS NULL AND expires_at IS NULL AND started_by_user_id IS NULL AND start_id IS NULL OR started_at IS NOT NULL AND expires_at IS NOT NULL AND started_by_user_id IS NOT NULL AND start_id IS NOT NULL AND expires_at > started_at))",
+    "constraint|remote_assistance_sessions|ck_remote_assistance_sessions_start_evidence|CHECK (status::text = 'requested'::text AND started_at IS NULL AND expires_at IS NULL AND started_by_user_id IS NULL AND start_id IS NULL OR status::text = 'active'::text AND started_at IS NOT NULL AND expires_at IS NOT NULL AND started_by_user_id IS NOT NULL AND start_id IS NOT NULL AND expires_at > started_at OR (status::text = ANY (ARRAY['ended'::character varying::text, 'expired'::character varying::text])) AND (started_at IS NULL AND expires_at IS NULL AND started_by_user_id IS NULL AND start_id IS NULL OR started_at IS NOT NULL AND expires_at IS NOT NULL AND started_by_user_id IS NOT NULL AND start_id IS NOT NULL AND expires_at > started_at))"
+  ],
+  [
+    "constraint|remote_assistance_sessions|ck_remote_assistance_sessions_status|CHECK (status::text = ANY (ARRAY['requested'::character varying, 'active'::character varying, 'ended'::character varying, 'expired'::character varying]::text[]))",
+    "constraint|remote_assistance_sessions|ck_remote_assistance_sessions_status|CHECK (status::text = ANY (ARRAY['requested'::character varying::text, 'active'::character varying::text, 'ended'::character varying::text, 'expired'::character varying::text]))"
+  ],
+  [
+    "constraint|shifts|ck_shift_opening_client_identity|CHECK (opening_protocol_revision IS NULL AND opening_client_platform IS NULL OR opening_protocol_revision = 1 AND (opening_client_platform::text = ANY (ARRAY['web'::character varying, 'android'::character varying, 'ios'::character varying]::text[])) AND (opening_client_platform::text <> 'android'::text OR opening_action_id::text ~~ 'shift-open:%'::text))",
+    "constraint|shifts|ck_shift_opening_client_identity|CHECK (opening_protocol_revision IS NULL AND opening_client_platform IS NULL OR opening_protocol_revision = 1 AND (opening_client_platform::text = ANY (ARRAY['web'::character varying::text, 'android'::character varying::text, 'ios'::character varying::text])) AND (opening_client_platform::text <> 'android'::text OR opening_action_id::text ~~ 'shift-open:%'::text))"
+  ],
+  [
+    "constraint|supplier_payments|ck_supplier_payment_method|CHECK (method::text = ANY (ARRAY['cash'::character varying, 'bank'::character varying]::text[]))",
+    "constraint|supplier_payments|ck_supplier_payment_method|CHECK (method::text = ANY (ARRAY['cash'::character varying::text, 'bank'::character varying::text]))"
+  ],
+  [
+    "constraint|terminals|ck_terminals_purpose|CHECK (purpose::text = ANY (ARRAY['hybrid'::character varying, 'cafe_pos'::character varying, 'gaming'::character varying]::text[]))",
+    "constraint|terminals|ck_terminals_purpose|CHECK (purpose::text = ANY (ARRAY['hybrid'::character varying::text, 'cafe_pos'::character varying::text, 'gaming'::character varying::text]))"
+  ],
+  [
+    "constraint|tip_payouts|ck_tip_payout_method|CHECK (method::text = ANY (ARRAY['cash'::character varying, 'upi'::character varying, 'card'::character varying, 'bank'::character varying]::text[]))",
+    "constraint|tip_payouts|ck_tip_payout_method|CHECK (method::text = ANY (ARRAY['cash'::character varying::text, 'upi'::character varying::text, 'card'::character varying::text, 'bank'::character varying::text]))"
+  ],
+  [
+    "index|gaming_bookings|no_overlapping_bookings|CREATE INDEX no_overlapping_bookings ON public.gaming_bookings USING gist (station_id, tstzrange(starts_at, ends_at, '[)'::text)) WHERE ((status)::text = ANY ((ARRAY['held'::character varying, 'consumed'::character varying])::text[]))",
+    "index|gaming_bookings|no_overlapping_bookings|CREATE INDEX no_overlapping_bookings ON public.gaming_bookings USING gist (station_id, tstzrange(starts_at, ends_at, '[)'::text)) WHERE ((status)::text = ANY (ARRAY[('held'::character varying)::text, ('consumed'::character varying)::text]))"
+  ],
+  [
+    "index|google_sheets_deliveries|ix_google_sheets_deliveries_due|CREATE INDEX ix_google_sheets_deliveries_due ON public.google_sheets_deliveries USING btree (status, available_at, lease_expires_at) WHERE ((status)::text = ANY ((ARRAY['pending'::character varying, 'leased'::character varying])::text[]))",
+    "index|google_sheets_deliveries|ix_google_sheets_deliveries_due|CREATE INDEX ix_google_sheets_deliveries_due ON public.google_sheets_deliveries USING btree (status, available_at, lease_expires_at) WHERE ((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('leased'::character varying)::text]))"
+  ],
+  [
+    "index|journal_entries|uq_journal_entries_purchase_source|CREATE UNIQUE INDEX uq_journal_entries_purchase_source ON public.journal_entries USING btree (company_id, ref_type, ref_id) WHERE ((ref_type)::text = ANY ((ARRAY['grn_receipt'::character varying, 'supplier_payment'::character varying])::text[]))",
+    "index|journal_entries|uq_journal_entries_purchase_source|CREATE UNIQUE INDEX uq_journal_entries_purchase_source ON public.journal_entries USING btree (company_id, ref_type, ref_id) WHERE ((ref_type)::text = ANY (ARRAY[('grn_receipt'::character varying)::text, ('supplier_payment'::character varying)::text]))"
+  ],
+  [
+    "index|orders|uq_orders_active_table_bill|CREATE UNIQUE INDEX uq_orders_active_table_bill ON public.orders USING btree (company_id, branch_id, table_id) WHERE ((table_id IS NOT NULL) AND ((status)::text = ANY ((ARRAY['open'::character varying, 'held'::character varying])::text[])))",
+    "index|orders|uq_orders_active_table_bill|CREATE UNIQUE INDEX uq_orders_active_table_bill ON public.orders USING btree (company_id, branch_id, table_id) WHERE ((table_id IS NOT NULL) AND ((status)::text = ANY (ARRAY[('open'::character varying)::text, ('held'::character varying)::text])))"
+  ],
+  [
+    "index|remote_assistance_grants|uq_remote_assistance_grants_device_open|CREATE UNIQUE INDEX uq_remote_assistance_grants_device_open ON public.remote_assistance_grants USING btree (company_id, client_installation_id) WHERE ((status)::text = ANY ((ARRAY['requested'::character varying, 'active'::character varying])::text[]))",
+    "index|remote_assistance_grants|uq_remote_assistance_grants_device_open|CREATE UNIQUE INDEX uq_remote_assistance_grants_device_open ON public.remote_assistance_grants USING btree (company_id, client_installation_id) WHERE ((status)::text = ANY (ARRAY[('requested'::character varying)::text, ('active'::character varying)::text]))"
+  ],
+  [
+    "index|remote_assistance_sessions|uq_remote_assistance_sessions_device_open|CREATE UNIQUE INDEX uq_remote_assistance_sessions_device_open ON public.remote_assistance_sessions USING btree (company_id, client_installation_id) WHERE ((status)::text = ANY ((ARRAY['requested'::character varying, 'active'::character varying])::text[]))",
+    "index|remote_assistance_sessions|uq_remote_assistance_sessions_device_open|CREATE UNIQUE INDEX uq_remote_assistance_sessions_device_open ON public.remote_assistance_sessions USING btree (company_id, client_installation_id) WHERE ((status)::text = ANY (ARRAY[('requested'::character varying)::text, ('active'::character varying)::text]))"
+  ]
+]

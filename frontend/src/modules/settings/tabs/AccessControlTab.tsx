@@ -5,11 +5,12 @@
  * this company until cleared.
  */
 import { useEffect, useState } from 'react';
-import { AlertCircle, Check, Loader2, RotateCcw, X } from 'lucide-react';
+import { AlertCircle, Check, Loader2, Minus, RotateCcw, X } from 'lucide-react';
 
 import { accessControl, type AccessControlDTO } from '@/lib/erp-api';
-import { roleLabel } from '@/lib/roles';
+import { managedRoleLabel } from '@/lib/roles';
 import { SkeletonCard } from '@/components/ui/Skeleton';
+import { accessCellLevel, accessCellSummary, accessLevelLabel, isAccessCellConfigurable } from './access-control-policy';
 
 const MODULE_LABEL: Record<string, string> = {
   pos: 'POS',
@@ -74,7 +75,8 @@ export default function AccessControlTab() {
         <p className="text-xs text-fg-muted mb-3">
           Click a cell to allow or block that role's access to a feature. The reset icon clears
           an explicit override and goes back to the role's default. This only affects roles other
-          than the protected owner, who always has full access.
+          than the protected owner, who always has full access. Partial means some actions are
+          unavailable. Enabling a module does not remove protected permission ceilings.
         </p>
         {error && (
           <div className="mb-3 p-2.5 rounded-lg bg-accent-bad/10 border border-accent-bad/40 text-accent-bad text-sm flex items-center gap-2">
@@ -96,37 +98,49 @@ export default function AccessControlTab() {
             <tbody>
               {roleCodes.map((role) => (
                 <tr key={role} className="border-b border-bg-border/60 last:border-0">
-                  <td className="p-2 font-medium" title={data.roles[role]}>{roleLabel(role)}</td>
+                  <td className="p-2 font-medium" title={data.roles[role]}>{managedRoleLabel(role)}</td>
                   {data.modules.map((module) => {
                     const cell = cellByKey.get(cellKey(role, module));
                     if (!cell) return <td key={module}/>;
                     const key = cellKey(role, module);
+                    const level = accessCellLevel(cell);
+                    const configurable = isAccessCellConfigurable(cell);
                     return (
                       <td key={module} className="p-2 text-center">
                         <div className="inline-flex items-center gap-1">
                           <button
-                            disabled={busyKey === key}
+                            disabled={busyKey !== null || !configurable}
                             onClick={() => setCell(role, module, !cell.allowed)}
-                            className={`w-7 h-7 rounded-lg flex items-center justify-center border transition
-                              ${cell.allowed
+                            className={`min-w-[64px] h-8 px-1 rounded-lg flex items-center justify-center gap-1 border transition
+                              ${level === 'partial'
+                                ? 'bg-accent-gold/10 border-accent-gold/40 text-accent-gold'
+                                : level === 'full'
                                 ? 'bg-accent-good/15 border-accent-good/40 text-accent-good'
                                 : 'bg-accent-bad/10 border-accent-bad/30 text-accent-bad'}`}
-                            title={cell.allowed ? 'Allowed — click to block' : 'Blocked — click to allow'}
+                            aria-label={`${managedRoleLabel(role)}, ${MODULE_LABEL[module] ?? module}: ${accessLevelLabel(level)}. ${configurable ? `Click to ${cell.allowed ? 'block' : 'enable within permission ceilings'}.` : 'Module switches cannot restrict this role.'}`}
+                            title={accessCellSummary(cell)}
                           >
                             {busyKey === key
                               ? <Loader2 className="animate-spin" size={13}/>
-                              : cell.allowed ? <Check size={13}/> : <X size={13}/>}
+                              : level === 'partial' ? <Minus size={13}/>
+                                : level === 'full' ? <Check size={13}/> : <X size={13}/>}
+                            <span className="text-[10px]">{accessLevelLabel(level)}</span>
                           </button>
-                          {cell.override !== null && (
+                          {cell.override !== null && configurable && (
                             <button
                               className="text-fg-muted hover:text-accent p-0.5"
-                              title={`Explicit override — reset to default (${cell.default_allowed ? 'allowed' : 'blocked'})`}
+                              title={`Explicit override — reset to default (${accessLevelLabel(cell.default_access_level ?? (cell.default_allowed ? 'partial' : 'blocked'))})`}
+                              disabled={busyKey !== null}
                               onClick={() => setCell(role, module, null)}
                             >
                               <RotateCcw size={11}/>
                             </button>
                           )}
                         </div>
+                        <details className="mt-1 text-[10px] text-fg-muted text-left">
+                          <summary className="cursor-pointer text-center">Actions</summary>
+                          <p className="mt-1 whitespace-pre-line min-w-[180px]">{accessCellSummary(cell)}</p>
+                        </details>
                       </td>
                     );
                   })}

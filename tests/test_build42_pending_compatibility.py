@@ -119,10 +119,15 @@ def test_original_archived_predecessor_and_candidate_match_production_policy(hel
     raw_candidate_archive = subprocess.check_output([
         "git", "archive", BUILD44_REVISION, "--", *helper.PROTECTED_SCOPES,
     ], cwd=ROOT)
+    raw_current_archive = subprocess.check_output([
+        "git", "archive", "HEAD", "--", *helper.PROTECTED_SCOPES,
+    ], cwd=ROOT)
     prior = tmp_path.resolve() / "prior"
     candidate = tmp_path.resolve() / "candidate"
+    tracked_current = tmp_path.resolve() / "tracked-current"
     manifest = []
-    for raw, root in ((raw_archive, prior), (raw_candidate_archive, candidate)):
+    for raw, root in ((raw_archive, prior), (raw_candidate_archive, candidate),
+                      (raw_current_archive, tracked_current)):
         with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
             for member in archive.getmembers():
                 if member.isdir():
@@ -140,7 +145,7 @@ def test_original_archived_predecessor_and_candidate_match_production_policy(hel
     assert hashlib.sha256(expected_manifest.encode()).hexdigest() == helper.PRIOR_BACKEND_MANIFEST_SHA256
     helper._verify_sources(prior, candidate)
     with pytest.raises(helper.CompatibilityError, match="candidate source"):
-        helper._verify_sources(prior, ROOT)
+        helper._verify_sources(prior, tracked_current)
 
 
 def _identity(helper):

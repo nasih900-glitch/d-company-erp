@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StrictBool, field_validator
 from sqlalchemy import delete, select
 
 from app.core.db import SessionDep
@@ -20,6 +20,8 @@ from app.core.permissions import ROLE_DESCRIPTIONS, requires, requires_any
 from app.core.roles import (
     CO_OWNER_ROLE,
     OWNER_ROLE_CODES,
+    POS_DISCOUNT_ROLE,
+    has_owner_role,
     PROTECTED_OWNER_ROLE,
     PUBLIC_OWNER_ROLE,
     public_roles,
@@ -47,6 +49,7 @@ class UserUpdate(BaseModel):
     phone: str | None = Field(default=None, max_length=20)
     status: str | None = Field(default=None, pattern="^(active|suspended)$")
     role_code: str | None = None
+    manual_discount_allowed: StrictBool | None = None
 
     @field_validator("phone", mode="before")
     @classmethod
@@ -76,6 +79,7 @@ class UserRead(BaseModel):
     # ``co_owner`` with cross-shift operational authority.
     managed_roles: list[str] | None = None
     last_login_at: datetime | None
+    manual_discount_allowed: bool = False
 
 
 class ClockInRequest(BaseModel):
@@ -110,7 +114,7 @@ async def _raw_roles_for_user(
             )
         )
     ).scalars().all()
-    return list(rows)
+    return sorted(rows, key=lambda code: (code == POS_DISCOUNT_ROLE, code))
 
 
 async def _user_read(
@@ -128,10 +132,13 @@ async def _user_read(
         roles=public_roles(raw_roles),
         managed_roles=raw_roles if tenant.audit_access else None,
         last_login_at=user.last_login_at,
+        manual_discount_allowed=POS_DISCOUNT_ROLE in raw_roles or "store_staff" in raw_roles,
     )
 
 
 async def _set_role(session, tenant: TenantContext, user_id: UUID, role_code: str) -> None:
+    if role_code == POS_DISCOUNT_ROLE:
+        raise BusinessRuleError("manual discounts must be assigned with the separate Owner control")
     if role_code == PROTECTED_OWNER_ROLE:
         raise BusinessRuleError("protected owner access cannot be assigned from Staff")
     if role_code in {CO_OWNER_ROLE, PUBLIC_OWNER_ROLE} and not tenant.audit_access:
@@ -180,7 +187,8 @@ async def _set_role(session, tenant: TenantContext, user_id: UUID, role_code: st
         after={"after_roles": [role_code], "target_user_id": str(user_id),
                "branch_id": str(preserved_branch_id) if preserved_branch_id else None},
     )
-    # Remove existing role assignments — one role per user in this simple model.
+    # Changing the job role also revokes any supplemental discount grant.
+    # The audit before/after role sets preserve that revocation explicitly.
     await session.execute(delete(UserRole).where(UserRole.user_id == user_id))
     session.add(
         UserRole(
@@ -191,6 +199,55 @@ async def _set_role(session, tenant: TenantContext, user_id: UUID, role_code: st
             granted_by=tenant.user_id,
         )
     )
+
+
+async def _set_manual_discount_access(
+    session, tenant: TenantContext, user: User, allowed: bool,
+) -> None:
+    """Called only while update_user holds the target User row lock."""
+    if not (has_owner_role(tenant.roles) or tenant.audit_access):
+        raise ForbiddenError("Only an Owner can change manual discount access.")
+    if user.company_id != tenant.company_id or user.deleted_at:
+        raise NotFoundError("user not found")
+    user_id = user.id
+    if user_id == tenant.user_id:
+        raise BusinessRuleError("you cannot change your own discount access")
+    from app.services.auth.credentials import validated_role_assignment
+
+    role_codes, branch_id = await validated_role_assignment(session, user)
+    if len(role_codes) != len(set(role_codes)):
+        raise BusinessRuleError("reconcile duplicate role assignments before changing discount access")
+    roles = set(role_codes)
+    if "gaming_cashier" not in roles or roles - {"gaming_cashier", POS_DISCOUNT_ROLE}:
+        raise BusinessRuleError("the manual discount control is for Gaming & POS staff")
+    if (POS_DISCOUNT_ROLE in roles) == allowed:
+        return
+    role = (await session.execute(select(Role).where(
+        Role.company_id == tenant.company_id, Role.code == POS_DISCOUNT_ROLE,
+    ))).scalar_one_or_none()
+    if role is None:
+        raise BusinessRuleError("manual discount access is not configured for this company")
+    if allowed:
+        session.add(UserRole(
+            id=uuid4(), user_id=user_id, role_id=role.id, branch_id=branch_id,
+            granted_by=tenant.user_id,
+        ))
+    else:
+        await session.execute(delete(UserRole).where(
+            UserRole.user_id == user_id, UserRole.role_id == role.id,
+        ))
+    from app.services.audit.events import record_operation
+
+    record_operation(
+        session, company_id=tenant.company_id, actor_user_id=tenant.user_id,
+        action="staff_access_changed", entity_type="StaffAccess", entity_id=user_id,
+        target_user_id=user_id,
+        before={"manual_discount_allowed": not allowed, "before_roles": sorted(roles)},
+        after={"manual_discount_allowed": allowed,
+               "after_roles": sorted(roles | {POS_DISCOUNT_ROLE} if allowed else roles - {POS_DISCOUNT_ROLE}),
+               "branch_id": str(branch_id) if branch_id else None},
+    )
+    # UserRole's database trigger revokes old sessions on a real change.
 
 
 # ---------------------------------------------------------------- routes
@@ -241,6 +298,14 @@ async def update_user(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("staff.write")),
 ) -> UserRead:
+    discount_change_requested = "manual_discount_allowed" in payload.model_fields_set
+    if discount_change_requested:
+        if not (has_owner_role(tenant.roles) or tenant.audit_access):
+            raise ForbiddenError("Only an Owner can change manual discount access.")
+        if payload.manual_discount_allowed is None:
+            raise BusinessRuleError("manual_discount_allowed must be true or false")
+    if payload.role_code == POS_DISCOUNT_ROLE:
+        raise BusinessRuleError("manual discounts must be assigned with the separate Owner control")
     # Role replacement is a delete-all + insert operation. Serialize every
     # staff mutation on the durable User row so two managers cannot both read
     # the old role, race their replacements, and leave the account with two
@@ -290,10 +355,23 @@ async def update_user(
     if payload.status is not None and payload.status != u.status:
         u.status = payload.status
         u.auth_version += 1
-    if payload.role_code is not None and payload.role_code not in current_roles:
+    # A selected secondary role is a real replacement, not a no-op: retaining
+    # a manager assignment beside auditor would silently preserve write access.
+    # An unchanged legacy Gaming role keeps its separately managed supplement.
+    unchanged_roles = {payload.role_code}
+    if payload.role_code == "gaming_cashier" and POS_DISCOUNT_ROLE in current_roles:
+        unchanged_roles.add(POS_DISCOUNT_ROLE)
+    if payload.role_code is not None and set(current_roles) != unchanged_roles:
         await _set_role(session, tenant, u.id, payload.role_code)
+        # Supplemental validation must see the replacement assignment.
+        if discount_change_requested:
+            await session.flush()
         # 0047's user_roles trigger invalidates any already-issued tokens for
         # every writer, including direct SQL. Do not increment here as well.
+    if discount_change_requested:
+        await _set_manual_discount_access(
+            session, tenant, u, payload.manual_discount_allowed,
+        )
     await session.flush()
     return await _user_read(session, tenant, u)
 
@@ -353,7 +431,7 @@ async def list_roles(
     session: SessionDep,
     tenant: TenantContext = Depends(requires("staff.read")),
 ) -> list[dict]:
-    hidden_roles = {PROTECTED_OWNER_ROLE}
+    hidden_roles = {PROTECTED_OWNER_ROLE, POS_DISCOUNT_ROLE}
     if not tenant.audit_access:
         hidden_roles.update({CO_OWNER_ROLE, PUBLIC_OWNER_ROLE})
     rows = (

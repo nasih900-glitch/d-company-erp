@@ -1,3 +1,4 @@
+import { withoutPaidBillWork } from '@/lib/paid-bill-admission';
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api, readSessionGeneration } from '@/lib/api';
@@ -99,8 +100,8 @@ function OperatorRecoveryPanel({ scope: initialScope, generation }: { scope: Ope
             ...operatorRecoveryRequest(scope, generation, controller.signal),
             params: { action_key: currentAction.idempotencyKey },
           })
-        : await api.post<OperatorReceipt>(`${path}/operator-handovers/recover`, currentAction.payload,
-            operatorRecoveryRequest(scope, generation, controller.signal, currentAction.idempotencyKey));
+        : await withoutPaidBillWork(() => api.post<OperatorReceipt>(`${path}/operator-handovers/recover`, currentAction.payload,
+            operatorRecoveryRequest(scope, generation, controller.signal, currentAction.idempotencyKey)));
       verifyOperatorRecoveryReceipt(response.data, scope, currentAction.payload);
       const { data } = await api.get<OperatorRecoveryState>(`${path}/operator-state`,
         operatorRecoveryRequest(scope, generation, controller.signal));

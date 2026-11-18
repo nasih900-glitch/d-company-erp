@@ -23,6 +23,8 @@ class DockerContextSafetyTest(unittest.TestCase):
             "COPY frontend/braces-compat ./braces-compat",
             "COPY frontend/vendor/dcompany-braces-depth-guard "
             "./vendor/dcompany-braces-depth-guard",
+            "COPY frontend/vendor/picomatch-v2 ./vendor/picomatch-v2",
+            "COPY frontend/vendor/picomatch-v4 ./vendor/picomatch-v4",
         ):
             with self.subTest(local_source=local_source):
                 self.assertIn(local_source, dockerfile)
@@ -206,27 +208,23 @@ class DockerContextSafetyTest(unittest.TestCase):
         self.assertEqual(5, action.count("severity-cutoff: high"))
         self.assertEqual(5, action.count("fail-build: true"))
         self.assertEqual(5, action.count("only-fixed: false"))
-        self.assertEqual(3, action.count("vex: ${{ runner.temp }}/container-security/"))
+        self.assertEqual(0, action.count("vex: ${{ runner.temp }}/container-security/"))
         for component in ("backend", "frontend", "caddy", "postgres", "redis"):
             with self.subTest(component=component):
                 self.assertIn(f"{component}_image_id={{{{.Id}}}}", action)
                 self.assertIn(f"{component}.spdx.json", action)
                 self.assertIn(f"image: ${{{{ inputs.{component}-image }}}}", action)
                 self.assertIn(f"{component}-grype.json", action)
-        for component in ("frontend", "postgres", "redis"):
-            self.assertIn(
-                f"vex: ${{{{ runner.temp }}}}/container-security/"
-                f"{component}-zlib.openvex.json",
-                action,
-            )
-        self.assertNotIn("caddy-zlib.openvex.json", action)
-        self.assertNotIn("backend-zlib.openvex.json", action)
-        self.assertIn('--backend-fixed-sbom "$evidence_dir/backend.syft.json"', action)
+        for component in ("backend", "frontend", "caddy", "postgres", "redis"):
+            self.assertNotIn(f"{component}-zlib.openvex.json", action)
+            self.assertEqual(2, action.count(f"{component}-zlib-runtime.raw.json {component}-zlib-runtime.json"))
         self.assertIn(
             'python3 "$verifier" \\\n'
-            '              --caddy-fixed-sbom "$evidence_dir/caddy.syft.json" \\\n'
-            '              "$image" "${config_ids[0]}" \\\n'
-            '              "caddy=$evidence_dir/caddy-grype.json" >> "$validation"',
+            '            "--$service-fixed-sbom" "$evidence_dir/$service.syft.json" \\\n'
+            '            "$image" "${config_ids[0]}" \\\n'
+            '            "$service=$evidence_dir/$service-grype.json" \\\n'
+            '            "--runtime-proof=$evidence_dir/$service-zlib-runtime.json" \\\n'
+            '            "--archive-platform=${archive_platforms[0]}@${config_ids[0]}" "${hashlib_vex[@]}" >> "$validation"',
             action,
         )
         self.assertNotIn("sbom: ${{ runner.temp }}/container-security", action)

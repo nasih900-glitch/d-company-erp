@@ -9,7 +9,7 @@ const auth = vi.hoisted(() => ({
     name: 'Worker',
     roles: ['gaming_cashier'],
     protected_access: false,
-    effective_permissions: ['staff.attendance.write'],
+    effective_permissions: ['staff.attendance.write', 'gaming.read'],
     accessible_modules: ['gaming']
   }
 }));
@@ -50,7 +50,7 @@ beforeEach(() => {
     name: 'Worker',
     roles: ['gaming_cashier'],
     protected_access: false,
-    effective_permissions: ['staff.attendance.write'],
+    effective_permissions: ['staff.attendance.write', 'gaming.read'],
     accessible_modules: ['gaming']
   };
   host = document.createElement('div');
@@ -76,7 +76,7 @@ it('retains the protected-owner gate on the original administration route', asyn
   expect(host.textContent).toContain('Gaming landing');
 });
 it('rejects the new route when effective attendance/pay permission is absent', async () => {
-  auth.me.effective_permissions = [];
+  auth.me.effective_permissions = ['gaming.read'];
   await render('/staff/time');
   expect(host.textContent).not.toContain('Working-time screen');
   expect(host.textContent).toContain('Gaming landing');

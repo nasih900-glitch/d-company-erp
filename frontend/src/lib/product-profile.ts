@@ -1,3 +1,5 @@
+import { canAccessBusinessRoute, hasExactPermission, type PermissionIdentity } from './effective-permissions';
+
 /**
  * The web product is currently shipped as a focused Gaming Centre ERP.
  *
@@ -171,23 +173,21 @@ export const WEB_PRODUCT_PROFILE = Object.freeze({
   operationalCatalogPolicy: GAMING_CENTRE_OPERATIONAL_CATALOG_POLICY,
 });
 
-export interface WebLandingProfile {
+export interface WebLandingProfile extends PermissionIdentity {
   protected_access: boolean;
   accessible_modules: readonly string[];
 }
 
-/**
- * The web is the owner control plane while the Android tablet is the daily
- * station console. Protected owners therefore open on the live money and
- * operations dashboard; ordinary staff open on Gaming. This is presentation
- * only—both clients still use the same backend records and permissions.
- */
+/** Choose the first useful route supported by the same exact navigation policy. */
 export function webLandingRouteFor(profile: WebLandingProfile): string {
-  if (profile.protected_access && GAMING_CENTRE_FEATURES.dashboard) return '/analytics';
-  if (GAMING_CENTRE_FEATURES.gaming && profile.accessible_modules.includes('gaming')) {
+  if (canAccessBusinessRoute(profile, '/analytics') && GAMING_CENTRE_FEATURES.dashboard) return '/analytics';
+  if (GAMING_CENTRE_FEATURES.gaming && hasExactPermission(profile, 'gaming.read')) {
     return '/gaming';
   }
-  if (GAMING_CENTRE_FEATURES.pos && profile.accessible_modules.includes('pos')) return '/pos';
+  if (GAMING_CENTRE_FEATURES.pos && hasExactPermission(profile, 'pos.read')) return '/pos';
+  for (const route of ['/finance', '/reports', '/staff']) {
+    if (canAccessBusinessRoute(profile, route)) return route;
+  }
   return '/workspace-unavailable';
 }
 
@@ -349,7 +349,6 @@ export interface ProfileNavigationGroup {
 }
 
 export interface ProfileAccessContext {
-  isOwner: boolean;
   hasAuditAccess: boolean;
   hasSystemAccess: boolean;
   hasMembershipAccess: boolean;
@@ -357,6 +356,7 @@ export interface ProfileAccessContext {
   hasProductManagementAccess: boolean;
   hasStaffTimeAccess?: boolean;
   accessibleModules?: readonly string[] | null;
+  identity?: PermissionIdentity | null;
 }
 
 interface ProductManagementIdentity {
@@ -401,13 +401,13 @@ export const PROFILE_NAVIGATION_GROUPS: readonly ProfileNavigationGroup[] = [
     ],
   },
   {
-    title: 'Owner',
+    title: 'Business',
     items: [
       { id: 'dashboard', label: 'Dashboard', icon: 'dashboard', feature: 'dashboard', to: '/analytics', module: 'insights_reports', audience: 'owner' },
       { id: 'finance', label: 'Finance', icon: 'finance', feature: 'finance', to: '/finance', module: 'finance', audience: 'owner' },
       { id: 'reports', label: 'Reports', icon: 'reports', feature: 'reports', to: '/reports', module: 'insights_reports', audience: 'owner' },
       { id: 'staff', label: 'Staff', icon: 'staff', feature: 'staffAdmin', to: '/staff', module: 'staff', audience: 'owner' },
-      { id: 'settings', label: 'Settings', icon: 'settings', feature: 'settings', to: '/settings', audience: 'owner' },
+      { id: 'settings', label: 'Settings', icon: 'settings', feature: 'settings', to: '/settings' },
       { id: 'products', label: 'Products', icon: 'menu', feature: 'menuManagement', to: '/menu', module: 'menu', audience: 'productManagement' },
     ],
   },
@@ -481,7 +481,7 @@ export function isProfileRouteEnabled(
 function hasAudienceAccess(item: ProfileNavigationItem, access: ProfileAccessContext): boolean {
   switch (item.audience ?? 'staff') {
     case 'staff': return true;
-    case 'owner': return access.isOwner;
+    case 'owner': return canAccessBusinessRoute(access.identity, item.to ?? '');
     case 'audit': return access.hasAuditAccess;
     case 'system': return access.hasSystemAccess;
     case 'membership': return access.hasMembershipAccess;
@@ -499,11 +499,20 @@ export function isProfileNavigationItemVisible(
   if (!features[item.feature] || !hasAudienceAccess(item, access)) return false;
   if (
     item.module
-    && !access.isOwner
+    && item.audience !== 'owner'
+    && access.identity?.effective_permissions == null
     && access.accessibleModules
     && !access.accessibleModules.includes(item.module)
   ) {
     return false;
+  }
+  if (item.module && access.identity) {
+    const readPermission: Record<string, string> = {
+      gaming: 'gaming.read', pos: 'pos.read', inventory: 'inventory.read', menu: 'menu.read',
+      tables: 'tables.read', kitchen: 'kitchen.read', ocr: 'ocr.upload',
+    };
+    const permission = readPermission[item.module];
+    if (permission && !hasExactPermission(access.identity, permission)) return false;
   }
   return true;
 }

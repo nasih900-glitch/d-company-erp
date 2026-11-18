@@ -20,9 +20,11 @@ fun canManageSystemSettings(profile: MeResponse): Boolean =
 internal enum class WorkspaceHomeMode { EXECUTIVE, STAFF }
 
 private fun hasManagementWorkspace(profile: MeResponse): Boolean =
-    profile.protectedAccess || profile.auditAccess || profile.roles.any { role ->
-        val normalized = role.trim().lowercase().replace('-', '_').replace(' ', '_')
-        normalized.contains("manager") || normalized.contains("owner")
+    profile.roles.any { it in setOf("owner", "co_owner", "super_owner", "manager") }
+
+private fun hasBusinessWorkspace(profile: MeResponse): Boolean =
+    profile.roles.any {
+        it in setOf("owner", "co_owner", "super_owner", "manager", "partner", "auditor")
     }
 
 internal fun workspaceHomeMode(
@@ -35,10 +37,10 @@ internal fun workspaceHomeMode(
         (featureProfile.requiresManagement(home) && !hasManagementWorkspace(profile))
     ) return null
 
-    val executiveAudience = !featureProfile.requiresOwner(home) || profile.protectedAccess || profile.auditAccess
+    val executiveAudience = hasBusinessWorkspace(profile)
     return when {
-        executiveAudience && permissions.has(ErpPermission.AnalyticsRead) -> WorkspaceHomeMode.EXECUTIVE
-        "gaming_cashier" in profile.roles && permissions.hasAny(ErpPermission.GamingRead, ErpPermission.PosRead) ->
+        executiveAudience && permissions.has(ErpPermission.AnalyticsRead) && permissions.has(ErpPermission.FinanceRead) -> WorkspaceHomeMode.EXECUTIVE
+        profile.roles.any { it == "gaming_cashier" || it == "store_staff" } && permissions.hasAny(ErpPermission.GamingRead, ErpPermission.PosRead) ->
             WorkspaceHomeMode.STAFF
         else -> null
     }
@@ -54,7 +56,7 @@ fun allowedDestinations(
     featureProfile: WorkspaceFeatureProfile = WorkspaceFeatureProfiles.Active,
 ): List<Destination> {
     val permissions = EffectivePermissions.from(profile)
-    val ownerWorkspace = profile.protectedAccess || profile.auditAccess
+    val ownerWorkspace = hasBusinessWorkspace(profile)
     val managementWorkspace = hasManagementWorkspace(profile)
     val homeMode = workspaceHomeMode(profile, featureProfile, permissions)
     val allowed = featureProfile.navigationOrder.filter { destination ->
@@ -62,10 +64,14 @@ fun allowedDestinations(
         // Attendance opens only the separate self-time pane, never identity administration.
         val ownTime = destination == Destination.Staff &&
             (permissions.has(ErpPermission.StaffAttendanceWrite) || staffTimeAccess(profile).canManage)
+        val directory = destination == Destination.Staff && profile.effectivePermissions != null &&
+            permissions.has(ErpPermission.StaffRead)
+        val accountSettings = destination == Destination.Settings
         val staffHome = destination == Destination.Dashboard && homeMode == WorkspaceHomeMode.STAFF
-        val audienceAllowed = (!featureProfile.requiresOwner(destination) || ownerWorkspace || ownTime || staffHome) &&
+        val audienceAllowed = (!featureProfile.requiresOwner(destination) || ownerWorkspace || ownTime || directory || accountSettings || staffHome) &&
             (!featureProfile.requiresManagement(destination) || managementWorkspace)
         if (!audienceAllowed) return@filter false
+        if (destination in setOf(Destination.Finance, Destination.Reports, Destination.Analytics) && !ownerWorkspace) return@filter false
         when (destination) {
             Destination.Dashboard -> homeMode != null
             Destination.Pos -> permissions.has(ErpPermission.PosRead)
@@ -82,12 +88,8 @@ fun allowedDestinations(
             )
             Destination.Customers -> permissions.has(ErpPermission.PosRead)
             Destination.Menu -> permissions.has(ErpPermission.MenuRead)
-            Destination.Staff -> permissions.hasAny(
-                ErpPermission.StaffRead,
-                ErpPermission.StaffWrite,
-                ErpPermission.StaffAttendanceWrite,
-                ErpPermission.StaffPayrollWrite,
-            )
+            Destination.Staff -> permissions.hasAny(ErpPermission.StaffRead, ErpPermission.StaffAttendanceWrite) ||
+                staffTimeAccess(profile).canManage
             Destination.Inventory -> permissions.has(ErpPermission.InventoryRead)
             Destination.Reports -> permissions.reportsAccess().canReadAny
             Destination.Analytics -> permissions.has(ErpPermission.AnalyticsRead)

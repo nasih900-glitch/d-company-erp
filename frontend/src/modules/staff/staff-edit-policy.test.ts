@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildStaffAccessPatch,
+  buildStaffDiscountPatch,
   canChangeStaffAccess,
   editableStaffRoleOptions,
+  staffRoleOptionGroups,
 } from './staff-edit-policy';
 
 const BASE = {
@@ -120,7 +122,65 @@ describe('editableStaffRoleOptions', () => {
   });
 
   it('allows owner tiers to the protected owner but never offers super_owner', () => {
-    expect(editableStaffRoleOptions(fallback, true).map((role) => role.code))
+    expect(editableStaffRoleOptions(fallback, true, true).map((role) => role.code))
       .toEqual(['co_owner', 'owner', 'manager', 'cashier', 'gaming_cashier']);
+  });
+});
+
+describe('manual discount grants', () => {
+  const base = { originalAllowed: false, selectedAllowed: true, canManage: true, selectedRoleCode: 'gaming_cashier' };
+  it('sends only a changed Owner-controlled grant', () => {
+    expect(buildStaffDiscountPatch(base)).toEqual({ manual_discount_allowed: true });
+    expect(buildStaffDiscountPatch({ ...base, originalAllowed: true, selectedAllowed: false }))
+      .toEqual({ manual_discount_allowed: false });
+  });
+  it('omits unchanged grants so ordinary profile edits do not revoke sessions', () => {
+    expect(buildStaffDiscountPatch({ ...base, originalAllowed: true })).toEqual({});
+  });
+  it('never sends a grant for managers or a different primary role', () => {
+    expect(buildStaffDiscountPatch({ ...base, canManage: false })).toEqual({});
+    expect(buildStaffDiscountPatch({ ...base, selectedRoleCode: 'manager' })).toEqual({});
+  });
+  it('never offers a supplemental grant as a primary job role', () => {
+    expect(editableStaffRoleOptions([{ code: 'gaming_cashier' }, { code: 'pos_discount' }], true))
+      .toEqual([{ code: 'gaming_cashier' }]);
+  });
+  it('reapplies a selected supplement only for an authorized Owner when explicit replacement removes the old grant', () => {
+    const input = { originalAllowed: true, selectedAllowed: true, canManage: true, selectedRoleCode: 'gaming_cashier', primaryRoleWillBeReplaced: true };
+    expect(buildStaffDiscountPatch(input)).toEqual({ manual_discount_allowed: true });
+    expect(buildStaffDiscountPatch({ ...input, canManage: false })).toEqual({});
+    expect(buildStaffDiscountPatch({ ...input, primaryRoleWillBeReplaced: false })).toEqual({});
+  });
+});
+
+describe('everyday roles and exact owner metadata', () => {
+  it('uses three everyday role codes and keeps all legacy choices available', () => {
+    const roles = ['partner', 'co_owner', 'staff', 'auditor', 'gaming_cashier', 'store_staff', 'manager', 'owner', 'cashier']
+      .map((code) => ({ code }));
+    const groups = staffRoleOptionGroups(editableStaffRoleOptions(roles, true, true));
+    expect(groups.everyday.map((role) => role.code)).toEqual(['owner', 'store_staff', 'auditor']);
+    expect(groups.advanced.map((role) => role.code)).toEqual(['partner', 'co_owner', 'staff', 'gaming_cashier', 'manager', 'cashier']);
+  });
+
+  it('does not invent an exact owner tier from protected caller authority alone', () => {
+    expect(editableStaffRoleOptions([{ code: 'owner' }, { code: 'co_owner' }], true))
+      .toEqual([{ code: 'owner' }]);
+  });
+
+  it('preserves hidden exact roles even if a stale editor tries to change the displayed owner title', () => {
+    expect(buildStaffAccessPatch({ ...BASE, roleChangesLocked: true, selectedRoleCode: 'manager', roleSelectionChanged: true }))
+      .toEqual({});
+    expect(buildStaffAccessPatch({ ...BASE, originalRoleCode: 'co_owner', selectedRoleCode: 'co_owner' }))
+      .toEqual({});
+  });
+
+  it('round-trips an existing legacy choice without a permission write', () => {
+    expect(buildStaffAccessPatch({ ...BASE, originalRoleCode: 'partner', selectedRoleCode: 'partner', roleSelectionChanged: true }))
+      .toEqual({});
+  });
+  it('only normalizes an existing multi-role union after explicit role intent', () => {
+    const input = { ...BASE, originalRoleCode: 'auditor', selectedRoleCode: 'auditor', hasMultiplePrimaryRoles: true };
+    expect(buildStaffAccessPatch(input)).toEqual({});
+    expect(buildStaffAccessPatch({ ...input, roleSelectionChanged: true })).toEqual({ role_code: 'auditor' });
   });
 });

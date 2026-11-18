@@ -77,18 +77,19 @@ async def test_backfill_is_idempotent_and_preserves_existing_role_names_and_assi
     assert len(added) == 2
     assert len(commits) == 1
     for company in companies:
-        assert rows[company]["gaming_cashier"].name == "Gaming & POS staff"
+        assert rows[company]["gaming_cashier"].name == "Gaming & POS staff (legacy)"
         for code, role in existing[company].items():
             assert rows[company][code] is role
             assert role.name == "Existing " + code
 
 
 def test_role_label_is_generic_and_existing_role_labels_are_unchanged():
-    assert role_name("gaming_cashier") == "Gaming & POS staff"
+    assert role_name("gaming_cashier") == "Gaming & POS staff (legacy)"
     assert [code for code, _ in DEFAULT_ROLES].count("gaming_cashier") == 1
     for code, _ in DEFAULT_ROLES:
         if code != "gaming_cashier":
-            assert role_name(code) == code.title().replace("_", " ")
+            expected_labels = {"store_staff": "Store Staff", "pos_discount": "Manual POS discounts", "auditor": "Business Viewer"}
+            assert role_name(code) == expected_labels.get(code, code.title().replace("_", " "))
     assert not _role_allows_permission(
         role="gaming_cashier", perm="gaming.future.manage", module="gaming", override=True,
     )

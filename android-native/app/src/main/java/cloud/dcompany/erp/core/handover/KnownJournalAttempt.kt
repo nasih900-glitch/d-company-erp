@@ -1,7 +1,7 @@
 package cloud.dcompany.erp.core.handover
 
 /** Only existing durable, nonsecret journal intents may opt into exact attempt settlement. */
-internal enum class KnownJournalDomain { STAFF_TIME, SHARED_ATTENDANCE, FINANCE, SYNC_ROW, REMOTE_RECEIPT }
+internal enum class KnownJournalDomain { START_WORK, STAFF_TIME, SHARED_ATTENDANCE, FINANCE, SYNC_ROW, REMOTE_RECEIPT }
 
 /** No wire credentials, device proof nonce, or credential-derived fingerprint belongs here. */
 internal data class KnownJournalAttempt(

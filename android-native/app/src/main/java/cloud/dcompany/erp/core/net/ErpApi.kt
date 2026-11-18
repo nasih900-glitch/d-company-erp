@@ -80,6 +80,16 @@ interface ErpApi {
     @GET("pos/receipts/{order_id}/investigation")
     suspend fun investigateReceipt(@Path("order_id") orderId: String): ReceiptInvestigation
 
+    @POST("pos/receipts/{order_id}/mistake-reports")
+    suspend fun reportReceiptMistake(
+        @Path("order_id") orderId: String,
+        @Header("Idempotency-Key") idempotencyKey: String,
+        @Body body: ReceiptMistakeRequest,
+    ): ReceiptMistakeAcknowledgement
+
+    @GET("pos/receipt-mistake-reports")
+    suspend fun receiptMistakeReports(@Query("before") before: String? = null): ReceiptMistakeReportPage
+
     /** Retrofit repeats `status` once per list entry — matches the backend's `list[str]` param. */
     @GET("pos/orders")
     suspend fun orders(
@@ -140,6 +150,20 @@ interface ErpApi {
         @Header("X-Checkout-Client-Instance") checkoutClientInstance: String,
         @HeaderMap provenance: Map<String, String> = emptyMap(),
     ): CheckoutClaimResult
+
+    @GET("pos/orders/{id}/retained-mistake-review")
+    suspend fun reviewRetainedMistake(
+        @Path("id") id: String,
+        @Header("X-Checkout-Claim") checkoutClaimToken: String,
+    ): RetainedMistakeReview
+
+    @POST("pos/orders/{id}/retained-mistake-correction")
+    suspend fun correctRetainedMistake(
+        @Path("id") id: String,
+        @Body body: RetainedMistakeCorrectionRequest,
+        @Header("X-Checkout-Claim") checkoutClaimToken: String,
+        @Header("Idempotency-Key") idempotencyKey: String,
+    ): RetainedMistakeCorrectionResult
 
     @HTTP(method = "DELETE", path = "pos/orders/{id}", hasBody = true)
     suspend fun voidOrder(

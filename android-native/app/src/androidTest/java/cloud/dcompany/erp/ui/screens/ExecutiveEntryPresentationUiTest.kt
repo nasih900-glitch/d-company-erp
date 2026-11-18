@@ -1,9 +1,13 @@
 package cloud.dcompany.erp.ui.screens
 
+import cloud.dcompany.erp.ui.RailWaitClock
+import cloud.dcompany.erp.ui.captureToImage
+import cloud.dcompany.erp.ui.waitForFiniteEntryAcknowledgement
 import android.app.ActivityOptions
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.Build
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,7 +35,6 @@ import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.assertWidthIsAtLeast
-import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyDescendant
@@ -61,6 +64,7 @@ import cloud.dcompany.erp.BuildConfig
 import cloud.dcompany.erp.AuthenticatedWorkspaceHandoff
 import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.ui.AuthState
+import cloud.dcompany.erp.ui.captureWithFailureObservation
 import cloud.dcompany.erp.ui.theme.AppearancePreference
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import cloud.dcompany.erp.ui.theme.WorkspaceBackgroundUiState
@@ -69,6 +73,7 @@ import cloud.dcompany.erp.ui.theme.workspaceGlassRoleStyle
 import java.io.File
 import java.security.MessageDigest
 import java.util.Locale
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -198,7 +203,7 @@ class ExecutiveEntryPresentationUiTest {
             .assertIsEnabled()
             .assertHeightIsAtLeast(48.dp)
             .performClick()
-        compose.waitUntil(timeoutMillis = 5_000) { acknowledgements == listOf(41L) }
+        waitForFiniteEntryAcknowledgement { acknowledgements == listOf(41L) }
         compose.onNodeWithTag("workspace-after-fresh-login").assertIsDisplayed()
         assertEquals(listOf(41L), acknowledgements)
     }
@@ -248,7 +253,7 @@ class ExecutiveEntryPresentationUiTest {
         swipeOwner.performTouchInput {
             swipe(center, Offset(center.x, center.y - 360f), durationMillis = 350)
         }
-        compose.waitUntil(timeoutMillis = 5_000) { acknowledgements == listOf(72L) }
+        waitForFiniteEntryAcknowledgement { acknowledgements == listOf(72L) }
         assertEquals(listOf(72L), acknowledgements)
     }
 
@@ -292,7 +297,7 @@ class ExecutiveEntryPresentationUiTest {
 
         currentNonce = 99L
         compose.onNodeWithTag("fresh-login-continue").performClick()
-        compose.waitUntil(timeoutMillis = 5_000) { attempts == listOf(99L, 99L, 99L) }
+        waitForFiniteEntryAcknowledgement { attempts == listOf(99L, 99L, 99L) }
     }
 
     @Test
@@ -403,22 +408,39 @@ class ExecutiveEntryPresentationUiTest {
 
     @Test
     fun freshLoginBackUsesTheSameBoundedCosmeticContinuation() {
-        val acknowledgements = mutableListOf<Long>()
+        val acknowledgements = CopyOnWriteArrayList<Long>()
+        val observation = runCatching { EntryBackFailureObservation() }.getOrNull()
         render(widthDp = 1_280, heightDp = 800) {
             FreshLoginSuccessScreen(
                 nonce = 94L,
                 employeeName = "Back Employee",
                 backgroundState = WorkspaceBackgroundUiState(),
                 onContinue = {
+                    runCatching { observation?.callbackEntered() }
+                    assertEquals("Continuation must run on main", Looper.getMainLooper(), Looper.myLooper())
                     acknowledgements.add(it)
                     true
                 },
             )
         }
 
-        compose.activity.onBackPressedDispatcher.onBackPressed()
-        compose.waitUntil(timeoutMillis = 5_000) { acknowledgements == listOf(94L) }
-        assertEquals(listOf(94L), acknowledgements)
+        val activity = compose.activity
+        captureWithFailureObservation(
+            capture = {
+                compose.runOnIdle {
+                    assertEquals("Back dispatch must run on main", Looper.getMainLooper(), Looper.myLooper())
+                    runCatching { observation?.beforeDispatch(activity, compose.mainClock) }
+                    activity.onBackPressedDispatcher.onBackPressed()
+                    runCatching { observation?.afterDispatch(activity) }
+                }
+                waitForFiniteEntryAcknowledgement {
+                    runCatching { observation?.poll(compose.mainClock) }
+                    acknowledgements == listOf(94L)
+                }
+                assertEquals(listOf(94L), acknowledgements)
+            },
+            observe = { observation?.attach(it, acknowledgements) },
+        )
     }
 
     @Test
@@ -1534,6 +1556,22 @@ class ExecutiveEntryPresentationUiTest {
         } finally {
             bitmap.recycle()
         }
+    }
+
+    private fun waitForFiniteEntryAcknowledgement(predicate: () -> Boolean) {
+        waitForFiniteEntryAcknowledgement(
+            clock = object : RailWaitClock {
+                override var autoAdvance: Boolean
+                    get() = compose.mainClock.autoAdvance
+                    set(value) { compose.mainClock.autoAdvance = value }
+                override val currentTime: Long get() = compose.mainClock.currentTime
+                override fun advanceExact(milliseconds: Long) {
+                    compose.mainClock.advanceTimeBy(milliseconds, ignoreFrameDuration = true)
+                }
+            },
+            timeout = { throw androidx.compose.ui.test.ComposeTimeoutException("Condition still not satisfied after 5000 ms") },
+            predicate = predicate,
+        )
     }
 
     private fun mainEntryRoot() = compose.onNode(

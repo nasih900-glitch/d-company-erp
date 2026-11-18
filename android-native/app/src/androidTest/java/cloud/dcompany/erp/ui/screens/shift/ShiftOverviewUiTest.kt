@@ -31,7 +31,6 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotDisplayed
-import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.performSemanticsAction
@@ -56,6 +55,7 @@ import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceFeatureProfiles
 import cloud.dcompany.erp.ui.WorkspaceScaffold
+import cloud.dcompany.erp.ui.captureToImage
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
 import cloud.dcompany.erp.ui.presentationPolicy
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
@@ -112,7 +112,7 @@ class ShiftOverviewUiTest {
         compose.setContent { ShiftFixture(width = 872, height = 400, onReview = {}) }
         val readiness = compose.onNodeWithText("Close review").assertIsDisplayed().getUnclippedBoundsInRoot()
         val review = compose.onNodeWithText("Review & close shift").assertIsDisplayed().getUnclippedBoundsInRoot()
-        val collections = compose.onNodeWithText("Net collections").getUnclippedBoundsInRoot()
+        val collections = compose.onNodeWithText("Effective net collections · last synced").getUnclippedBoundsInRoot()
         assertTrue(readiness.top < review.top)
         assertTrue("The next action precedes financial detail", review.bottom <= collections.top)
     }

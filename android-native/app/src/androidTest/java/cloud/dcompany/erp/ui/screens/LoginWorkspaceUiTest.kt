@@ -16,17 +16,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.AnnotatedString
 import androidx.test.espresso.Espresso.closeSoftKeyboard
-import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
-import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
@@ -46,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import cloud.dcompany.erp.ui.captureToImage
 import cloud.dcompany.erp.ui.theme.AppearancePreference
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import cloud.dcompany.erp.ui.theme.LocalWorkspaceGlassScene
@@ -109,16 +107,12 @@ class LoginWorkspaceUiTest {
         compose.runOnIdle { assertEquals(AppearancePreference.Night, appearance.value) }
         compose.onNodeWithTag("login-email").assertTextEquals("synthetic@example.test")
         compose.onNodeWithContentDescription("Show password").performClick()
-        compose.onNodeWithTag("login-password").assert(
-            SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("temporary-secret")),
-        )
+        assertPasswordText("temporary-secret")
         closeSoftKeyboard()
         compose.onNodeWithTag("login-submit").performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
         compose.runOnIdle { assertEquals("temporary-secret", submittedPassword) }
         compose.onNodeWithTag("login-recover").performClick()
-        compose.onNodeWithTag("login-password").assert(
-            SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")),
-        )
+        assertPasswordText("")
         compose.onNodeWithContentDescription("Show password").assertIsDisplayed()
         compose.runOnIdle { assertEquals("synthetic@example.test", recoveredEmail) }
     }
@@ -136,9 +130,7 @@ class LoginWorkspaceUiTest {
         compose.onNodeWithContentDescription("Show password").performClick()
         restoration.emulateSavedInstanceStateRestore()
         compose.onNodeWithTag("login-email").assertTextEquals("synthetic@example.test")
-        compose.onNodeWithTag("login-password").assert(
-            SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")),
-        )
+        assertPasswordText("")
         compose.onNodeWithContentDescription("Show password").assertIsDisplayed()
         compose.onNodeWithTag("login-submit").assertIsNotEnabled()
     }
@@ -228,6 +220,14 @@ class LoginWorkspaceUiTest {
         compose.onNodeWithTag("login-submit").performTouchInput { click() }
         compose.runOnIdle {
             assertEquals(List(2) { "synthetic@example.test" to "local-test-password" }, submitted)
+        }
+    }
+
+    private fun assertPasswordText(expected: String) {
+        // The field owns its editable text. A merged read can traverse icon semantics off-main.
+        val field = compose.onNodeWithTag("login-password", useUnmergedTree = true).fetchSemanticsNode()
+        compose.runOnIdle {
+            assertEquals(AnnotatedString(expected), field.config[SemanticsProperties.EditableText])
         }
     }
 

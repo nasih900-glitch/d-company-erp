@@ -97,7 +97,7 @@ class DirectOrderPublishContractTest {
 
         val zeroTotal = viewModel.between(
             "fun confirmDirectZero()",
-            "fun voidOrder(orderId: String, reason: String)",
+            "fun voidOrder(orderId: String, reason: String, allItemsMistakenNotSupplied: Boolean = false)",
         )
         assertOrdered(
             zeroTotal,
@@ -133,7 +133,7 @@ class DirectOrderPublishContractTest {
         assertTrue(heldZeroTotal.contains("The detailed receipt is still syncing."))
 
         val void = viewModel.between(
-            "fun voidOrder(orderId: String, reason: String)",
+            "fun voidOrder(orderId: String, reason: String, allItemsMistakenNotSupplied: Boolean = false)",
             "fun captureSale(",
         )
         assertOrdered(

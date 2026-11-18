@@ -383,7 +383,7 @@ def test_composite_gates_every_scanner_on_verified_connection_and_hardened_scan(
         "if: ${{ !cancelled() && steps.hardened-scan.outcome == 'success' }}"
     )
     assert action.count(connection_guard) == 7
-    assert action.count(hardened_guard) == 6
+    assert action.count(hardened_guard) == 7
 
     services = {
         "backend": "backend",
@@ -407,11 +407,11 @@ def test_composite_gates_every_scanner_on_verified_connection_and_hardened_scan(
             f"vex: ${{{{ runner.temp }}}}/container-security/"
             f"{input_name}-zlib.openvex.json"
         )
-        if input_name in {"backend", "caddy"}:
-            assert vex_input not in scan
-            assert "vex:" not in scan
-        else:
-            assert vex_input in scan
+        assert vex_input not in scan
+        vex_lines = [line.strip() for line in scan.splitlines() if line.lstrip().startswith("vex:")]
+        assert vex_lines == (
+            ["vex: ${{ steps.backend-hashlib-vex.outputs.path }}"] if input_name == "backend" else []
+        )
 
     hardened_scan = action.split(
         "    - name: Exercise hardened archive scanner on all candidate images", 1
@@ -419,20 +419,39 @@ def test_composite_gates_every_scanner_on_verified_connection_and_hardened_scan(
     assert hardened_scan.count(connection_guard) == 1
     assert "id: hardened-scan" in hardened_scan
 
+    verified_fix = action.split(
+        "    - name: Select the independently verified backend fix statement", 1
+    )[1].split("    - name: Scan backend image", 1)[0]
+    assert verified_fix.count(hardened_guard) == 1
+    assert "id: backend-hashlib-vex" in verified_fix
+    evidence_checks = (
+        'sha256sum -c -',
+        'validate_evidence_hash runtime_proof "$evidence_dir/backend-hashlib-runtime.json"',
+        'validate_evidence_hash raw_grype "$evidence_dir/backend-grype-unfiltered.json"',
+        'validate_evidence_hash vex "$vex"',
+        '>> "$GITHUB_OUTPUT"',
+    )
+    checks = [verified_fix.index(check) for check in evidence_checks]
+    assert checks == sorted(checks)
+
     zlib_validation = action.split(
         "    - name: Validate exact zlib evidence", 1
     )[1].split("    - name: Retain container security evidence", 1)[0]
     assert zlib_validation.count(hardened_guard) == 1
     assert "services=(backend frontend caddy postgres redis)" in zlib_validation
-    assert action.count("vex: ${{ runner.temp }}/container-security/") == 3
-    assert "caddy-zlib.openvex.json" not in action
-    assert '"$evidence_dir/$service-zlib.openvex.json"' in zlib_validation
+    assert action.count("vex: ${{ runner.temp }}/container-security/") == 0
+    assert "-zlib.openvex.json" not in action
     assert '"$service=$evidence_dir/$service-grype.json"' in zlib_validation
+    assert '"${#archive_platforms[@]}" -ne 1' in zlib_validation
+    assert '"${archive_platforms[0]}" != linux/amd64' in zlib_validation
+    assert '[ "$service" = backend ] && [ -n "$VERIFIED_HASHLIB_VEX" ]' in zlib_validation
     assert (
         'python3 "$verifier" \\\n'
-        '              --caddy-fixed-sbom "$evidence_dir/caddy.syft.json" \\\n'
-        '              "$image" "${config_ids[0]}" \\\n'
-        '              "caddy=$evidence_dir/caddy-grype.json" >> "$validation"'
+        '            "--$service-fixed-sbom" "$evidence_dir/$service.syft.json" \\\n'
+        '            "$image" "${config_ids[0]}" \\\n'
+        '            "$service=$evidence_dir/$service-grype.json" \\\n'
+        '            "--runtime-proof=$evidence_dir/$service-zlib-runtime.json" \\\n'
+        '            "--archive-platform=${archive_platforms[0]}@${config_ids[0]}" "${hashlib_vex[@]}" >> "$validation"'
         in zlib_validation
     )
     assert "sudo -E" not in action

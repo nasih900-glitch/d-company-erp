@@ -290,8 +290,8 @@ class HomeReadModelService:
             timezone=timezone_name,
             snapshot_at=snapshot_at,
             revenue=_comparison(
-                current_report.gross_revenue_minor,
-                previous_report.gross_revenue_minor,
+                current_report.effective_gross_revenue_minor,
+                previous_report.effective_gross_revenue_minor,
             ),
             orders=_comparison(current_report.orders_count, previous_report.orders_count),
             customer_count=customer_count,

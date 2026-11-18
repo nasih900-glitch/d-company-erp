@@ -149,20 +149,14 @@ class WorkspaceRouteAuthorityTest {
 
     @Test
     fun `proposal cannot advance local acknowledgement without exact owner acceptance`() {
-        val policy = ExecutiveRailScrubPolicy(
-            boundaryHysteresisPx = 4f,
-            edgeZonePx = 30f,
-            maximumEdgeStepPx = 8f,
-        )
-        var state = claimExecutiveRailScrub(
+        val state = claimExecutiveRailScrub(
             beginExecutiveRailPress(
                 origin = Destination.Dashboard,
                 authoritySnapshot = authority.snapshot(),
                 modelKey = allowed,
             ),
         )
-        state = updateExecutiveRailScrubTarget(state, Destination.Gaming, 1_000L, policy).state
-        val proposal = updateExecutiveRailScrubTarget(state, Destination.Gaming, 1_190L, policy)
+        val proposal = updateExecutiveRailScrubTarget(state, Destination.Gaming, enteredByPointer = true)
 
         assertEquals(Destination.Gaming, proposal.navigateTo)
         assertEquals(WorkspaceRouteSnapshot(Destination.Dashboard, 0L), proposal.state.lastAcknowledged)
@@ -171,7 +165,6 @@ class WorkspaceRouteAuthorityTest {
                 state = proposal.state,
                 proposedTarget = Destination.Gaming,
                 accepted = WorkspaceRouteSnapshot(Destination.Gaming, 2L),
-                nowMillis = 1_190L,
             ),
         )
         assertTrue(authority.snapshot().revision == 0L)

@@ -1292,5 +1292,41 @@ class AndroidReleaseStagingTest(unittest.TestCase):
         self.assertIn("FULL_APK_CHECK", workflow)
 
 
+    def test_build74_staging_requires_exact_receipt_and_retains_older_redis_identity(self):
+        payload = {"version_code": 74, "version_name": "3.1.67", "source_git_sha": "1" * 40}
+        images = {name: "sha256:" + "2" * 64 for name in ("postgres", "backend", "frontend", "caddy")}
+        redis = {"version_name": "3.1.64", "image_id": "sha256:" + "3" * 64, "retained": True}
+        digest = "4" * 64
+        running = {"version_name": "3.1.67", "source_git_sha": "1" * 40,
+                   "services": {name: {"image_id": image} for name, image in images.items()}}
+        with (
+            patch.object(staging, "run_path", return_value={"staging_identity": lambda *args: ("erp", images, redis, digest)}),
+            patch.object(staging, "inspect_release_pair", return_value=running) as inspect,
+        ):
+            result = staging._inspect_running_release(payload)
+            self.assertEqual(result["services"]["redis"], redis)
+            self.assertEqual(result["deployment_receipt_sha256"], digest)
+            self.assertEqual(inspect.call_args.kwargs["project_name"], "erp")
+            self.assertEqual(set(inspect.call_args.kwargs["services"]), set(images))
+            self.assertEqual(inspect.call_args.kwargs["expected_images"], {"services": running["services"]})
+
+        with patch.object(staging, "inspect_release_pair") as inspect:
+            for denied in ({**payload, "version_code": 71}, {**payload, "version_name": "3.1.64"}):
+                with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "exact Android version pair"):
+                    staging._inspect_running_release(denied)
+            with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "Build 72 did not pass"):
+                staging._inspect_running_release({**payload, "version_name": "3.1.65", "version_code": 72})
+            with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "Build 73 did not pass"):
+                staging._inspect_running_release({**payload, "version_name": "3.1.66", "version_code": 73})
+            inspect.assert_not_called()
+        with (
+            patch.object(staging, "run_path", side_effect=OSError("receipt missing")),
+            patch.object(staging, "inspect_release_pair") as inspect,
+        ):
+            with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "retained Redis proof failed"):
+                staging._inspect_running_release(payload)
+            inspect.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

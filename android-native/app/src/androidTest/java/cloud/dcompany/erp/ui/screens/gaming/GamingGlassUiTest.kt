@@ -43,11 +43,11 @@ import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.assertWidthIsAtLeast
-import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
@@ -80,6 +80,7 @@ import cloud.dcompany.erp.core.auth.GamingAccess
 import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceScaffold
+import cloud.dcompany.erp.ui.captureToImage
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.components.SectionCardSurfaceMode
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
@@ -239,6 +240,39 @@ class GamingGlassUiTest {
             )
         }
         assertEquals("Settings must be launched only by the deliberate Precise alarms tap", 1, registry.launchCount)
+    }
+
+    @Test
+    fun tabletStartKeepsFirstStationBelowStickyHeaderAndActionInView() {
+        // Enough rows to prevent the list end from masking a bad scroll offset.
+        val additionalStations = (3..12).map { index ->
+            Station("ps5-$index", "PS5-$index", "PS5 Station $index", "ps5", 12_000)
+        }
+        val fixture = renderGaming(
+            1200, 800, 1f, AppearancePreference.Night,
+            initialState = baseState().copy(stations = stations + additionalStations),
+            initialSelectedStationId = "",
+        )
+        awaitWorkspaceGlass()
+        compose.onNodeWithTag("gaming-station-action-ps5-1")
+            .assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals("ps5-1", fixture.selectedStationId.value) }
+
+        val board = bounds("gaming-station-board").intersect(bounds("gaming-glass-fixture-root"))
+        val header = unclippedBoundsPx(
+            compose.onNodeWithTag("gaming-station-table-header", useUnmergedTree = true),
+        )
+        val rows = Rect(board.left, header.bottom, board.right, board.bottom)
+        assertNonEmptyAndContained(
+            "selected row must sit below the sticky header",
+            unclippedBoundsPx(compose.onNodeWithTag("gaming-station-ps5-1", useUnmergedTree = true)),
+            rows,
+        )
+        val start = compose.onNodeWithTag("gaming-start-action")
+            .assertIsDisplayed().assertIsEnabled().assertHeightIsAtLeast(48.dp)
+        assertNonEmptyAndContained("start action without additional scrolling", unclippedBoundsPx(start), rows)
+        start.performClick()
+        compose.runOnIdle { assertEquals(1, fixture.confirmStartCalls) }
     }
 
     @Test
@@ -921,7 +955,7 @@ class GamingGlassUiTest {
                                     selectedFilter = "all",
                                     visibleStations = fixture.state.value.stations,
                                     selectedStationId = fixture.selectedStationId.value,
-                                    showDetail = false,
+                                    showDetail = true,
                                     focusStationId = null,
                                     focusRequested = false,
                                     startTerminalBlockMessage = null,

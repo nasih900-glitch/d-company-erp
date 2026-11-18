@@ -6,6 +6,7 @@
  *
  * Print-friendly: Cmd+P → clean A4 P&L with only the report content visible.
  */
+import { hasExactPermission } from '@/lib/effective-permissions';
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, Calendar, Download, Loader2, Printer, ShieldCheck } from 'lucide-react';
 
@@ -50,6 +51,10 @@ const PERIODS: Array<{ value: Period; label: string }> = [
 const TAX_COMPLIANCE_UI_ENABLED = GAMING_CENTRE_FEATURES.taxCompliance;
 
 interface ReportData {
+  receipt_corrections_minor?: number;
+  receipt_corrections_count?: number;
+  effective_gross_revenue_minor?: number;
+  effective_upi_received_minor?: number;
   tender_reclassifications?: TenderReclassificationDTO[];
   period: Period | 'custom';
   label: string;
@@ -140,13 +145,8 @@ interface TaxComplianceData {
 export default function ReportsScreen() {
   const requests = useLatestRequest();
   const { me, demo } = useAuth();
-  // Same gating shape as the sidebar's insights_reports nav items (see
-  // AppShell.tsx isVisible): protected owners bypass, everyone else needs
-  // the module that analytics.read/analytics.export live under. The GSTR
-  // and analytics CSV exports below all require analytics.export, which is
-  // bundled into this same module — see backend/app/core/permissions.py.
-  const canExport = Boolean(demo || me?.protected_access || me?.accessible_modules?.includes('insights_reports'));
-  const canViewCosting = Boolean(demo || me?.protected_access || me?.accessible_modules?.includes('finance'));
+  const canExport = Boolean(demo || hasExactPermission(me, 'analytics.export'));
+  const canViewCosting = Boolean(demo || hasExactPermission(me, 'finance.read'));
   const [period, setPeriod] = useState<Period>('daily');
   const [report, setReport] = useState<ReportData | null>(null);
   const [reportPeriod, setReportPeriod] = useState<Period>('daily');
@@ -247,6 +247,7 @@ export default function ReportsScreen() {
   }, []);
 
   async function exportPeriodCsv() {
+    if (!canExport) return;
     if (!report || exportingPeriod) return;
     setExportError(null);
     setExportingPeriod(true);
@@ -260,6 +261,7 @@ export default function ReportsScreen() {
   }
 
   async function exportGstr1() {
+    if (!canExport) return;
     if (exportingGstr1) return;
     setExportError(null);
     setExportingGstr1(true);
@@ -273,6 +275,7 @@ export default function ReportsScreen() {
   }
 
   async function exportGstr3b() {
+    if (!canExport) return;
     if (exportingGstr3b) return;
     setExportError(null);
     setExportingGstr3b(true);
@@ -347,7 +350,7 @@ export default function ReportsScreen() {
       {/* Period tabs (hidden in print) */}
       <div className="scroll-strip flex gap-1 bg-bg-surface rounded-xl p-1 border border-bg-border mb-4 print:hidden">
         {PERIODS.map((p) => (
-          <button key={p.value}
+          <button key={p.value} aria-pressed={period === p.value}
             onClick={() => setPeriod(p.value)}
             className={`shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition sm:flex-1 capitalize ${
               period === p.value ? 'bg-accent text-bg' : 'text-fg-muted hover:text-fg'
@@ -531,7 +534,8 @@ export default function ReportsScreen() {
                 <Row label="Less: invoice round-down" v={-report.revenue.rounding_expense_minor}/>}
               <Divider/>
               <Row label="Gross revenue" v={report.revenue.total_minor} bold
-                sub="everything customers paid, before tax and costs"/>
+                sub="original issued sale value, before correction offsets, tax and costs"/>
+              {(report.receipt_corrections_minor ?? 0)>0 && <Row label="Less: mistaken entries — payment not received" v={-(report.receipt_corrections_minor ?? 0)} sub="Separate correction in this period; no customer payout"/>}
               {(report.refunds_issued_minor ?? 0) > 0 && (
                 <Row label="Less: refunds" v={-(report.refunds_issued_minor ?? 0)}/>
               )}
@@ -590,7 +594,8 @@ export default function ReportsScreen() {
             <section className="card print:border print:border-black/30 print:p-3">
               <h4 className="font-bold mb-3">Payment movement</h4>
               <Row label="Cash"   v={report.payments_received.cash_minor}/>
-              <Row label="UPI"    v={report.payments_received.upi_minor}/>
+              <Row label="UPI originally recorded" v={report.payments_received.upi_minor}/>
+              {(report.receipt_corrections_minor ?? 0)>0 && <><Row label="Less: no-payment correction offset" v={-(report.receipt_corrections_minor ?? 0)} sub="No bank transfer or refund was made"/>{typeof report.effective_upi_received_minor==='number' ? <Row label="Effective UPI receipt value" v={report.effective_upi_received_minor} sub="Before actual refund payouts; not a bank balance"/> : <p className="text-sm text-accent-bad">Effective UPI unavailable; refresh this report.</p>}</>}
               <Row label="Card"   v={report.payments_received.card_minor}/>
               <Row label="Bank transfer" v={report.payments_received.bank_minor}/>
               <Row label="QR"     v={report.payments_received.qr_minor}/>
@@ -598,7 +603,7 @@ export default function ReportsScreen() {
               {report.payments_received.other_minor > 0 &&
                 <Row label="Other" v={report.payments_received.other_minor}/>}
               <Divider/>
-              <Row label="Gross payments collected" v={report.payments_received.total_minor}/>
+              <Row label="Gross payments originally recorded" v={report.payments_received.total_minor}/>
               {(report.tips_collected_minor ?? 0) > 0 && (
                 <Row label="Of which: tips held for staff" v={report.tips_collected_minor}
                   sub="included in payments, excluded from revenue"/>

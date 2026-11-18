@@ -1,3 +1,5 @@
+import { currentPaidEndpoint } from '@/lib/paid-bill-api';
+import { paidLoginMatches, originalPaidTerminal, isPaidContextRestore } from '@/lib/paid-bill-context';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import {
   COOKIE_SESSION_MODE,
@@ -24,6 +26,9 @@ import {
 } from '@/lib/operational-context';
 import { connectRealtime, disconnectRealtime } from '@/lib/realtime';
 import { clearOwnerWorkspaces } from '@/lib/owner-workspace';
+import { hasPendingWork } from '@/lib/start-work';
+import { withPaidBillAdmission, invalidatePaidBillReviews, requirePaidBillWorkClear, readPaidBillEnvelope } from '@/lib/paid-bill-journal';
+import { capturePaidWorkspaceFence } from '@/lib/paid-bill-admission';
 import { alarmPermission, requestAlarmPermission } from '@/lib/alarm';
 
 export interface Me {
@@ -69,6 +74,11 @@ async function resolveTerminalClaim(me: Me, signal?: AbortSignal): Promise<Termi
       params: me.branch_id ? { branch_id: me.branch_id } : undefined,
       signal,
     });
+    const original = originalPaidTerminal(currentPaidEndpoint(), me.user_id, me.company_id, me.branch_id, r.data);
+    if (original) {
+      storeTerminalId(original.id);
+      return { terminalId: original.id, options: r.data, issue: null };
+    }
     const resolution = resolveTerminal(
       me.branch_id,
       readStoredTerminalId(),
@@ -252,42 +262,59 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setMe(DEMO_USER);
       return DEMO_USER;
     }
-    clearStoredSession();
-    const r = await api.post<{ access_token: string; refresh_token: string }>(
-      '/auth/login',
-      { email: email.trim().toLowerCase(), password },
-      { headers: sessionTransportHeaders() },
-    );
-    installSessionTokens(r.data.access_token, r.data.refresh_token);
-    const meRes = await api.get<Me>('/auth/me');
-    const claim = await resolveTerminalClaim(meRes.data);
-    applyTerminalClaim(claim);
-    setMe(meRes.data);
-    return meRes.data;
+    const fence = capturePaidWorkspaceFence();
+    return withPaidBillAdmission(async () => {
+      fence.check();
+      // Reauthentication after expiry must recover the original saved command.
+      // Replacing an active account may not leave that command behind.
+      if (me) { requirePaidBillWorkClear(); invalidatePaidBillReviews(); }
+      clearStoredSession();
+      const r = await api.post<{ access_token: string; refresh_token: string }>(
+        '/auth/login', { email: email.trim().toLowerCase(), password },
+        { headers: sessionTransportHeaders() },
+      );
+      if (readPaidBillEnvelope().pending) {
+        const encodedClaims = r.data.access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+        const identity = JSON.parse(atob(encodedClaims)) as { sub: string; company_id: string };
+        if (!paidLoginMatches(currentPaidEndpoint(), identity.sub, identity.company_id)) throw new Error('Use the original Owner and server to recover the saved bill change. Browser evidence was retained.');
+      }
+      installSessionTokens(r.data.access_token, r.data.refresh_token);
+      const meRes = await api.get<Me>('/auth/me');
+      const claim = await resolveTerminalClaim(meRes.data);
+      applyTerminalClaim(claim);
+      setMe(meRes.data);
+      return meRes.data;
+    });
   }
 
   function selectTerminal(nextTerminalId: string) {
-    const terminal = terminalOptions.find((candidate) => candidate.id === nextTerminalId);
-    if (!terminal || !me?.branch_id || terminal.branch_id !== me.branch_id) {
-      setTerminalIssue('The selected terminal does not belong to this account branch.');
-      return;
-    }
-    storeTerminalId(terminal.id);
-    setTerminalId(terminal.id);
-    setTerminalIssue(null);
+    const fence = capturePaidWorkspaceFence();
+    void withPaidBillAdmission(async () => {
+      fence.check();
+      if (hasPendingWork()) throw new Error('Resolve the saved Start work request before changing workspace.');
+      if (!me) throw new Error('Sign in to validate the original terminal.');
+      const fresh = (await api.get<TerminalDTO[]>('/settings/terminals')).data;
+      fence.check();
+      const terminal = fresh.find(candidate => candidate.id === nextTerminalId && candidate.is_active === true);
+      if (!terminal || me.branch_id && terminal.branch_id !== me.branch_id) throw new Error('The selected terminal does not belong to this account branch.');
+      const restoring = isPaidContextRestore({ endpoint: currentPaidEndpoint(), companyId: me.company_id, userId: me.user_id, branchId: terminal.branch_id, terminalId: terminal.id });
+      if (!restoring) { requirePaidBillWorkClear(); invalidatePaidBillReviews(); }
+      storeTerminalId(terminal.id); clearOwnerWorkspaces();
+      setTerminalId(terminal.id); setTerminalOptions(fresh); setTerminalIssue(null);
+    }).catch(cause => { if (fence.current()) setTerminalIssue((cause as Error).message); });
   }
 
   function logout() {
-    if (DEMO_MODE) {
-      setMe(null);
-      return;
-    }
-    clearStoredSession();
-    void clearBrowserRefreshCookie();
-    setTerminalId(null);
-    setTerminalOptions([]);
-    setTerminalIssue(null);
-    setMe(null);
+    if (DEMO_MODE) { setMe(null); return; }
+    const fence = capturePaidWorkspaceFence();
+    void withPaidBillAdmission(async () => {
+      fence.check();
+      if (hasPendingWork()) throw new Error('Resolve the saved Start work request in Shifts before signing out.');
+      requirePaidBillWorkClear(); invalidatePaidBillReviews();
+      clearStoredSession();
+      setTerminalId(null); setTerminalOptions([]); setTerminalIssue(null); setMe(null);
+      await clearBrowserRefreshCookie();
+    }).catch(cause => { if (fence.current()) setTerminalIssue((cause as Error).message); });
   }
 
   return (

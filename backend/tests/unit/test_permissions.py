@@ -149,6 +149,7 @@ def test_auditor_role_is_read_only() -> None:
         "kitchen.write",
         "finance.write",
         "finance.tender.correct",
+        "finance.receipt.correct",
         "finance.partner.write",
         "finance.assets.write",
         "ocr.upload",

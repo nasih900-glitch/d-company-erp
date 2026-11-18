@@ -19,6 +19,7 @@ class SyncResourceLockCoverageTest {
     @Test
     fun `every mutable on-demand projection orders old GET before confirmation`() = runBlocking {
         val resources = listOf(
+            "shifts",
             "customers",
             "staff",
             "inventory",
@@ -198,12 +199,44 @@ class SyncResourceLockCoverageTest {
     }
 
     @Test
+    fun `start work exact GET and open or closed publication stay inside the shifts resource lock`() {
+        val source = readSource(mainSourceRoot().resolve(SYNC_ENGINE_PATH))
+        val hydrate = source.substringAfter("internal suspend fun hydrateStartedWorkShift(")
+            .substringBefore("/** Narrow settings refreshes")
+        val locked = hydrate.bracedBlockAfter("resourceRefreshSerialiser.run(\"shifts\")")
+        for (effect in listOf("shifts.shifts(", "commitToCurrentScope(lease)", ".reconcileServerOpen(", ".deleteExactServerOpen(")) {
+            assertTrue("The entire exact read/publication must be inside the shifts lock: $effect", effect in locked)
+        }
+        val transaction = locked.bracedBlockAfter("db.withTransaction")
+        assertTrue("Both open and closed observations need the scoped transaction", ".reconcileServerOpen(" in transaction && ".deleteExactServerOpen(" in transaction)
+        val lock = hydrate.indexOf("resourceRefreshSerialiser.run(\"shifts\")")
+        val get = hydrate.indexOf("shifts.shifts(")
+        val commit = hydrate.indexOf("commitToCurrentScope(lease)")
+        assertTrue("The exact HTTP read must wait for the same shifts lock as normal refresh", lock >= 0 && get > lock)
+        assertTrue("A lease-guarded commit must follow the locked read", commit > get)
+        assertTrue(hydrate.indexOf(".reconcileServerOpen(") > commit)
+        assertTrue(hydrate.indexOf(".deleteExactServerOpen(") > commit)
+        assertTrue("Historic lookup must include closed state and the exact shift id", "onlyOpen = false" in hydrate && "shiftId = shiftId" in hydrate)
+        for (fact in listOf("shift.openedByUserId == actorId", "shift.openingProtocolRevision == 1",
+            "shift.openingClientInstallationId == installationId", "shift.openingClientPlatform == platform",
+            "shift.openingFloatMinor == openingFloatMinor", "Instant.parse(shift.openedAt) == openedAt",
+            "lease.scope.companyId == companyId", "shift.branchId == branchId", "shift.terminalId == terminalId")) {
+            assertTrue("The exact start must retain provenance check: $fact", fact in hydrate)
+        }
+        assertTrue("Authority must be rechecked after waiting, after HTTP and before/after Room", hydrate.split("check(stillCurrent())").size >= 5)
+        val runtime = readSource(mainSourceRoot().resolve("cloud/dcompany/erp/ui/screens/shift/work/AndroidStartWorkRuntime.kt"))
+        assertTrue("The runtime must use the sync boundary", "app.sync.hydrateStartedWorkShift(" in runtime)
+        assertFalse("The runtime cannot fetch an unlocked shift snapshot", "api.shifts(" in runtime)
+    }
+
+    @Test
     fun `ui layer cannot replace server projections outside sync boundary`() {
         val uiRoot = mainSourceRoot().resolve("cloud/dcompany/erp/ui")
         val forbiddenMutations = listOf(
             ".replaceServerHistoryForTerminal(",
             ".reconcileServerOpen(",
             ".deleteServerOpen(",
+            ".deleteExactServerOpen(",
             ".replaceStations(",
             ".replaceSessionCache(",
             ".replaceOrderCache(",

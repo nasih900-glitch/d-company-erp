@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { hasExactPermission } from '@/lib/effective-permissions';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertCircle, Ban, BookOpen, Loader2, Plus, RefreshCw } from 'lucide-react';
 
 import Modal from '@/components/ui/Modal';
@@ -31,22 +32,22 @@ import { useLatestRequest } from '@/hooks/useLatestRequest';
 // MANUAL COLLECTIONS — auditable off-POS / legacy daily totals
 // ============================================================================
 export default function ManualCollectionsTab() {
+  const canWrite = hasExactPermission(useAuth().me, 'finance.write');
   const requests = useLatestRequest();
   const { me } = useAuth();
   const notifications = useNotifications();
-  const [rows, setRows] = useState<ManualCollectionDTO[]>([]);
-  const [branches, setBranches] = useState<BranchReferenceDTO[]>([]);
-  const [openShifts, setOpenShifts] = useState<ShiftDTO[]>([]);
-  const [companyTimezone, setCompanyTimezone] = useState(DEFAULT_BUSINESS_TIMEZONE);
+  const [snapshot, setSnapshot] = useState<{ rows: ManualCollectionDTO[]; branches: BranchReferenceDTO[]; openShifts: ShiftDTO[]; companyTimezone: string } | null>(null);
+  const { rows, branches, openShifts, companyTimezone } = snapshot ?? { rows: [], branches: [], openShifts: [], companyTimezone: DEFAULT_BUSINESS_TIMEZONE };
+  const [verified, setVerified] = useState(false);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [voiding, setVoiding] = useState<ManualCollectionDTO | null>(null);
   const [correcting, setCorrecting] = useState<ManualCollectionDTO | null>(null);
 
-  const load = useCallback(async (silent = false) => {
+  const load = useCallback(async () => {
     const isCurrent = requests.begin();
-    if (!silent) setLoading(true);
+    setLoading(true); setVerified(false);
     try {
       const [collections, branchRows, receiptIdentity, shiftRows] = await Promise.all([
         finance.listManualCollections({ include_voided: true, limit: 500 }),
@@ -56,10 +57,8 @@ export default function ManualCollectionsTab() {
       ]);
       if (!isCurrent()) return;
       setErr(null);
-      setRows(collections);
-      setBranches(branchRows);
-      setOpenShifts(shiftRows.filter((row) => row.status === 'open'));
-      setCompanyTimezone(receiptIdentity?.timezone || DEFAULT_BUSINESS_TIMEZONE);
+      setSnapshot({ rows: collections, branches: branchRows, openShifts: shiftRows.filter((row) => row.status === 'open'), companyTimezone: receiptIdentity?.timezone || DEFAULT_BUSINESS_TIMEZONE });
+      setVerified(true);
     } catch (error) {
       if (isCurrent()) setErr((error as Error).message);
     } finally {
@@ -68,14 +67,16 @@ export default function ManualCollectionsTab() {
   }, [requests]);
 
   useEffect(() => { void load(); }, [load]);
-  useRealtimeRefresh({ resources: ['finance'], refresh: () => load(true) });
+  useRealtimeRefresh({ resources: ['finance'], refresh: () => load() });
 
-  if (loading) {
+  if (loading && !snapshot) {
     return <div className="card flex items-center gap-3 text-fg-muted"><Loader2 className="animate-spin" size={16}/> Loading manual collections…</div>;
   }
 
   const totals = manualCollectionTotals(rows);
   const branchNames = new Map(branches.map((branch) => [branch.id, branch.name]));
+  const readState: CollectionReadState = { ready: verified && !loading, loading, error: err, retry: load };
+  const sourceReady = (source: ManualCollectionDTO, correction: boolean) => readState.ready && rows.some(row => row.id === source.id && !row.is_voided && !row.is_corrected && row.amount_minor === source.amount_minor && row.branch_id === source.branch_id && row.method === source.method && (row.method === 'cash' && row.source_shift_status !== 'open') === correction);
 
   return (
     <div>
@@ -91,41 +92,46 @@ export default function ManualCollectionsTab() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      {!verified && <div className="card mb-3" role={err ? "alert" : "status"}>
+        <p>{snapshot ? "These are the last verified records. Refresh before recording a change." : "Manual collection records and shop references have not been verified."}</p>
+        {err && <p className="text-accent-bad">{err}</p>}
+        {loading && <p>Checking current records…</p>}
+        <button type="button" className="btn btn-ghost" disabled={loading} onClick={() => void load()}>Retry manual collections</button>
+      </div>}
+      {snapshot && <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         <CollectionStat label="Active total" value={inrShort(totals.total_minor)} sub={inr(totals.total_minor)} tone="good"/>
         <CollectionStat label="Cash" value={inrShort(totals.cash_minor)} sub={inr(totals.cash_minor)}/>
         <CollectionStat label="UPI" value={inrShort(totals.upi_minor)} sub={inr(totals.upi_minor)}/>
         <CollectionStat label="Card + bank" value={inrShort(totals.card_minor + totals.bank_minor)}
           sub={`${totals.active_count} active · ${totals.voided_count} voided`}/>
-      </div>
+      </div>}
 
       <div className="flex justify-between items-center mb-3 flex-wrap gap-2">
         <p className="text-sm text-fg-muted">
           Immutable collection register · newest business date first
         </p>
         <div className="flex gap-2">
-          <button className="btn btn-ghost" onClick={() => void load()} aria-label="Refresh manual collections">
+          <button className="btn btn-ghost" onClick={() => void load()} disabled={loading} aria-label="Refresh manual collections">
             <RefreshCw size={14}/>
           </button>
-          <button className="btn btn-primary" onClick={() => setAddOpen(true)} disabled={!branches.length}>
+          {canWrite && <button className="btn btn-primary" onClick={() => { if (canWrite) setAddOpen(true); }} disabled={!readState.ready || !branches.length}>
             <Plus size={14}/> Add manual collection
-          </button>
+          </button>}
         </div>
       </div>
 
-      {!branches.length && (
+      {verified && !branches.length && (
         <div className="card border-accent-gold/40 bg-accent-gold/10 text-accent-gold text-sm mb-3">
           No shop is available for this collection. Ask the protected owner to check your shop access.
         </div>
       )}
-      {err && <ErrorRow text={err}/>}
       {rows.length === 500 && (
         <div className="card border-accent-gold/40 bg-accent-gold/10 text-accent-gold text-sm mb-3">
           Showing the newest 500 records. Use the report period totals for older collection history.
         </div>
       )}
 
-      {!rows.length ? (
+      {snapshot && (!rows.length ? (
         <div className="card text-fg-muted text-sm">
           No manual collections recorded. Normal orders should continue through Tables, Gaming or
           Shisha into POS; use this register only when no itemized order exists.
@@ -180,13 +186,13 @@ export default function ManualCollectionsTab() {
                     ) : row.is_corrected ? (
                       <span className="chip border-accent-gold/40 text-accent-gold text-[10px]">Corrected</span>
                     ) : row.method === 'cash' && row.source_shift_status !== 'open' ? (
-                      <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs"
-                        onClick={() => setCorrecting(row)} aria-label={`Correct ${row.source_ref}`}>
+                      canWrite && <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs"
+                        onClick={() => { if (canWrite) setCorrecting(row); }} aria-label={`Correct ${row.source_ref}`}>
                         <Ban size={13}/> Correct
                       </button>
                     ) : (
-                      <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs hover:!text-accent-bad"
-                        onClick={() => setVoiding(row)} aria-label={`Void ${row.source_ref}`}>
+                      canWrite && <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs hover:!text-accent-bad"
+                        onClick={() => { if (canWrite) setVoiding(row); }} aria-label={`Void ${row.source_ref}`}>
                         <Ban size={13}/> Void
                       </button>
                     )}
@@ -235,13 +241,13 @@ export default function ManualCollectionsTab() {
                   ) : row.is_corrected ? (
                     <span className="chip border-accent-gold/40 text-accent-gold text-[10px]">Corrected</span>
                   ) : row.method === 'cash' && row.source_shift_status !== 'open' ? (
-                    <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs"
-                      onClick={() => setCorrecting(row)}>
+                    canWrite && <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs"
+                      onClick={() => { if (canWrite) setCorrecting(row); }}>
                       <Ban size={13}/> Correct
                     </button>
                   ) : (
-                    <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs hover:!text-accent-bad"
-                      onClick={() => setVoiding(row)}>
+                    canWrite && <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs hover:!text-accent-bad"
+                      onClick={() => { if (canWrite) setVoiding(row); }}>
                       <Ban size={13}/> Void
                     </button>
                   )}
@@ -250,10 +256,11 @@ export default function ManualCollectionsTab() {
             ))}
           </div>
         </div>
-      )}
+      ))}
 
-      {addOpen && (
+      {canWrite && addOpen && (
         <ManualCollectionForm
+          readState={readState}
           branches={branches}
           openShifts={openShifts}
           defaultBranchId={me?.branch_id ?? branches[0]?.id ?? ''}
@@ -267,8 +274,9 @@ export default function ManualCollectionsTab() {
           }}
         />
       )}
-      {voiding && (
+      {canWrite && voiding && (
         <VoidManualCollectionForm
+          readState={{ ...readState, ready: sourceReady(voiding, false) }}
           row={voiding}
           onClose={() => setVoiding(null)}
           onSuccess={() => {
@@ -279,8 +287,9 @@ export default function ManualCollectionsTab() {
           }}
         />
       )}
-      {correcting && (
+      {canWrite && correcting && (
         <ManualCollectionCorrectionForm
+          readState={{ ...readState, ready: sourceReady(correcting, true) }}
           row={correcting}
           openShifts={openShifts.filter((shift) => shift.branch_id === correcting.branch_id)}
           onClose={() => setCorrecting(null)}
@@ -293,6 +302,21 @@ export default function ManualCollectionsTab() {
       )}
     </div>
   );
+}
+
+interface CollectionReadState { ready: boolean; loading: boolean; error: string | null; retry: () => Promise<void> }
+function CollectionReadStatus({ state }: { state: CollectionReadState }) {
+  const pending = useRef(false);
+  const retry = async () => {
+    if (state.loading || pending.current) return;
+    pending.current = true;
+    try { await state.retry(); }
+    finally { pending.current = false; }
+  };
+  return <div className="rounded-xl border border-bg-border p-3 text-sm">
+    {!state.ready && <p role={state.error ? 'alert' : 'status'}>{state.loading ? 'Checking current records. Your draft is kept.' : state.error ? `Current records could not be verified: ${state.error}` : 'Current references or this source are unavailable. Your draft is kept.'}</p>}
+    <button type="button" className="btn btn-ghost" aria-disabled={state.loading} onClick={() => void retry()}>{state.error ? 'Retry current records' : 'Refresh current records'}</button>
+  </div>;
 }
 
 function newManualCollectionKey(): string {
@@ -310,6 +334,7 @@ function newManualCollectionCorrectionKey(): string {
 }
 
 function ManualCollectionForm({
+  readState,
   branches,
   openShifts,
   defaultBranchId,
@@ -317,6 +342,7 @@ function ManualCollectionForm({
   onClose,
   onSuccess,
 }: {
+  readState: CollectionReadState;
   branches: BranchReferenceDTO[];
   openShifts: ShiftDTO[];
   defaultBranchId: string;
@@ -324,6 +350,7 @@ function ManualCollectionForm({
   onClose: () => void;
   onSuccess: () => void;
 }) {
+  const canWrite = hasExactPermission(useAuth().me, 'finance.write');
   const [form, setForm] = useState<{
     branch_id: string;
     shift_id: string;
@@ -372,8 +399,13 @@ function ManualCollectionForm({
     }));
   }
 
+  const branchAvailable = branches.some(branch => branch.id === form.branch_id);
+  const drawerAvailable = form.method !== 'cash' || openShifts.some(shift => shift.id === form.shift_id && shift.branch_id === form.branch_id);
+  const ready = readState.ready && branchAvailable && drawerAvailable;
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (!canWrite || !ready || busy) return;
     const amountMinor = rupeesToMinor(form.amount_rupees);
     if (amountMinor === null) {
       setErr('Enter an amount greater than 0 with no more than two decimal places.');
@@ -410,6 +442,8 @@ function ManualCollectionForm({
   return (
     <Modal open onClose={busy ? () => undefined : onClose} title="Add manual collection">
       <form onSubmit={submit} className="space-y-3">
+        <CollectionReadStatus state={readState}/>
+        {readState.ready && (!branchAvailable || !drawerAvailable) && <p role="alert">The selected shop or drawer is no longer available. Select a current reference; your draft was kept.</p>}
         <div className="rounded-xl border border-accent-gold/40 bg-accent-gold/10 p-3 text-xs">
           This records an unitemized payment total only. It will not create an order, invoice,
           receipt, table ticket, or gaming session.
@@ -430,6 +464,7 @@ function ManualCollectionForm({
                   shift_id: openShifts.find((shift) => shift.branch_id === branchId)?.id ?? '',
                 }));
               }}>
+              {!branchAvailable && <option value={form.branch_id}>Previously selected shop (unavailable)</option>}
               {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
             </select>
           </Field>
@@ -439,6 +474,7 @@ function ManualCollectionForm({
             <select className="input" required value={form.shift_id}
               onChange={(event) => setForm((current) => ({ ...current, shift_id: event.target.value }))}>
               <option value="">Select an open drawer…</option>
+              {form.shift_id && !drawerAvailable && <option value={form.shift_id}>Previously selected drawer (unavailable)</option>}
               {openShifts.filter((shift) => shift.branch_id === form.branch_id).map((shift) => (
                 <option key={shift.id} value={shift.id}>
                   {(shift.opened_by_name || shift.opened_by_email || 'Authorised staff')} · {inr(shift.expected_minor ?? 0)} expected
@@ -480,7 +516,7 @@ function ManualCollectionForm({
         {err && <ErrorRow text={err}/>}
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={busy}>
+          <button type="submit" className="btn btn-primary" disabled={busy || !ready}>
             {busy ? <Loader2 className="animate-spin" size={14}/> : <BookOpen size={14}/>}
             Record collection
           </button>
@@ -491,20 +527,24 @@ function ManualCollectionForm({
 }
 
 function VoidManualCollectionForm({
+  readState,
   row,
   onClose,
   onSuccess,
 }: {
+  readState: CollectionReadState;
   row: ManualCollectionDTO;
   onClose: () => void;
   onSuccess: () => void;
 }) {
+  const canWrite = hasExactPermission(useAuth().me, 'finance.write');
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (!canWrite || !readState.ready || busy) return;
     setBusy(true);
     setErr(null);
     try {
@@ -520,6 +560,7 @@ function VoidManualCollectionForm({
   return (
     <Modal open onClose={busy ? () => undefined : onClose} title="Void manual collection">
       <form onSubmit={submit} className="space-y-3">
+        <CollectionReadStatus state={readState}/>
         <div className="rounded-xl border border-accent-bad/40 bg-accent-bad/10 p-3 text-sm">
           <b>Void {inr(row.amount_minor)} · {manualCollectionMethodLabel(row.method)} · {row.business_date}?</b>
           <p className="mt-1 text-xs text-fg-muted">
@@ -535,7 +576,7 @@ function VoidManualCollectionForm({
         {err && <ErrorRow text={err}/>}
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
-          <button type="submit" className="btn bg-accent-bad text-white hover:opacity-90" disabled={busy || reason.trim().length < 3}>
+          <button type="submit" className="btn bg-accent-bad text-white hover:opacity-90" disabled={busy || !readState.ready || reason.trim().length < 3}>
             {busy ? <Loader2 className="animate-spin" size={14}/> : <Ban size={14}/>}
             Void collection
           </button>
@@ -546,16 +587,19 @@ function VoidManualCollectionForm({
 }
 
 function ManualCollectionCorrectionForm({
+  readState,
   row,
   openShifts,
   onClose,
   onSuccess,
 }: {
+  readState: CollectionReadState;
   row: ManualCollectionDTO;
   openShifts: ShiftDTO[];
   onClose: () => void;
   onSuccess: () => void;
 }) {
+  const canWrite = hasExactPermission(useAuth().me, 'finance.write');
   const [shiftId, setShiftId] = useState(openShifts[0]?.id ?? '');
   const [reason, setReason] = useState('');
   const [key] = useState(newManualCollectionCorrectionKey);
@@ -564,7 +608,8 @@ function ManualCollectionCorrectionForm({
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!shiftId) {
+    if (!canWrite || !readState.ready || busy) return;
+    if (!openShifts.some(shift => shift.id === shiftId && shift.branch_id === row.branch_id)) {
       setErr('Open a same-branch shift and select its drawer before correcting this entry.');
       return;
     }
@@ -587,12 +632,14 @@ function ManualCollectionCorrectionForm({
   return (
     <Modal open onClose={busy ? () => undefined : onClose} title="Correct closed-shift collection">
       <form onSubmit={submit} className="space-y-3">
+        <CollectionReadStatus state={readState}/>
         <div className="rounded-xl border border-accent-gold/40 bg-accent-gold/10 p-3 text-sm">
           The original {inr(row.amount_minor)} receipt and closed shift stay unchanged. This full reversal is dated now and deducts the amount from a current same-branch drawer.
         </div>
         <Field label="Current open drawer">
           <select className="input" required value={shiftId} onChange={(event) => setShiftId(event.target.value)}>
             <option value="">Select an open drawer…</option>
+            {shiftId && !openShifts.some(shift => shift.id === shiftId) && <option value={shiftId}>Previously selected drawer (unavailable)</option>}
             {openShifts.map((shift) => (
               <option key={shift.id} value={shift.id}>
                 {(shift.opened_by_name || shift.opened_by_email || 'Authorised staff')} · {inr(shift.expected_minor ?? 0)} expected
@@ -607,7 +654,7 @@ function ManualCollectionCorrectionForm({
         {err && <ErrorRow text={err}/>}
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={busy || !shiftId || reason.trim().length < 3}>
+          <button type="submit" className="btn btn-primary" disabled={busy || !readState.ready || !openShifts.some(shift => shift.id === shiftId && shift.branch_id === row.branch_id) || reason.trim().length < 3}>
             {busy ? <Loader2 className="animate-spin" size={14}/> : <Ban size={14}/>} Record full correction
           </button>
         </div>

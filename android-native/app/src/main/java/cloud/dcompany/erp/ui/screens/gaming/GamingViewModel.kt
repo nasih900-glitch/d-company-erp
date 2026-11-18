@@ -1,5 +1,6 @@
 package cloud.dcompany.erp.ui.screens.gaming
 
+import android.os.SystemClock
 import android.util.Log
 import androidx.room.withTransaction
 import androidx.lifecycle.ViewModel
@@ -62,8 +63,8 @@ import cloud.dcompany.erp.core.net.LoginRequest
 import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.core.net.outboxProvenanceHeaders
+import cloud.dcompany.erp.core.checkout.CheckoutClaimWindow
 import cloud.dcompany.erp.core.checkout.CheckoutClientInstancePolicy
-import cloud.dcompany.erp.core.checkout.HeldOrderClaimPolicy
 import cloud.dcompany.erp.core.sync.ResourceRefreshResult
 import cloud.dcompany.erp.core.sync.gamingActionRequestHash
 import kotlinx.serialization.encodeToString
@@ -902,7 +903,7 @@ data class LinkedGamingVoidReviewUi(
     val order: Order,
     val activeAddons: List<SessionAddon>,
     val claimToken: String,
-    val claimExpiresAtMillis: Long,
+    val confirmationWindow: CheckoutClaimWindow?,
     val scopeLease: CacheScopeLease,
 )
 
@@ -1101,12 +1102,12 @@ internal fun linkedGamingVoidClaimError(
     order: Order,
     claim: CheckoutClaimResult,
     scopeLease: CacheScopeLease,
-    nowMillis: Long,
+    confirmationWindow: CheckoutClaimWindow?,
+    nowElapsedMillis: Long,
 ): String? {
-    val expiry = HeldOrderClaimPolicy.claimExpiryMillis(claim)
-        ?: return "The checkout reservation had no valid expiry."
     return when {
-        !HeldOrderClaimPolicy.hasConfirmationWindow(expiry, nowMillis) ->
+        confirmationWindow == null -> CheckoutClaimWindow.UNVERIFIED_TIME_MESSAGE
+        !confirmationWindow.hasConfirmationWindow(claim.claimToken, nowElapsedMillis) ->
             "The checkout reservation expires too soon. Review the bill again."
         claim.orderId != order.id || claim.orderVersion != order.checkoutVersion ||
             claim.orderTotalMinor != order.totalMinor || claim.paidMinor != order.paidMinor ||
@@ -1642,7 +1643,7 @@ internal suspend fun executeLinkedGamingVoidAttempt(
     loadSession: suspend (String) -> GameSession,
     hasPendingPayment: suspend (String) -> Boolean,
     postVoid: suspend (String, GamingOrderVoidRequest, String, String) -> GamingOrderVoidRead,
-    nowMillis: () -> Long = System::currentTimeMillis,
+    nowElapsedMillis: () -> Long = SystemClock::elapsedRealtime,
 ): GamingOrderVoidRead {
     check(currentLease() == attempt.scopeLease) { "The workspace changed before Owner Void." }
     val canonical = loadSession(attempt.review.session.id)
@@ -1654,10 +1655,10 @@ internal suspend fun executeLinkedGamingVoidAttempt(
         check(canonical.matchesVoidReviewSnapshot(attempt.review.session)) {
             "The Gaming session changed. Refresh the Owner Void review."
         }
-        check(HeldOrderClaimPolicy.hasConfirmationWindow(
-            attempt.review.claimExpiresAtMillis,
-            nowMillis(),
-        )) { "The checkout reservation expired. Open the Owner review again." }
+        check(attempt.review.confirmationWindow?.hasConfirmationWindow(
+            attempt.review.claimToken,
+            nowElapsedMillis(),
+        ) == true) { "The checkout reservation expired. Open the Owner review again." }
         check(!hasPendingPayment(attempt.review.order.id)) {
             "A payment attempt now exists for this bill. Reconcile it in POS."
         }
@@ -1692,15 +1693,17 @@ internal suspend fun validateAcquiredGamingVoidClaim(
     order: Order,
     claim: CheckoutClaimResult,
     scopeLease: CacheScopeLease,
-    nowMillis: Long,
+    requestStartedElapsedMillis: Long,
+    nowElapsedMillis: Long,
     currentLease: () -> CacheScopeLease?,
     release: suspend (String, String) -> Unit,
-): Long {
+): CheckoutClaimWindow {
     try {
-        linkedGamingVoidClaimError(order, claim, scopeLease, nowMillis)?.let {
+        val window = CheckoutClaimWindow.from(claim, requestStartedElapsedMillis)
+        linkedGamingVoidClaimError(order, claim, scopeLease, window, nowElapsedMillis)?.let {
             throw IllegalStateException(it)
         }
-        return requireNotNull(HeldOrderClaimPolicy.claimExpiryMillis(claim))
+        return requireNotNull(window)
     } catch (failure: Throwable) {
         if (currentLease() == scopeLease) {
             withContext(NonCancellable) {
@@ -4915,18 +4918,20 @@ class GamingViewModel : ViewModel() {
         linkedGamingVoidReviewOrderError(order, orderId)?.let { throw IllegalStateException(it) }
         val addons = gaming.sessionAddons(current.id).filter { it.voidedAt == null }
         linkedGamingVoidReviewCohortError(order, addons)?.let { throw IllegalStateException(it) }
+        val requestStarted = SystemClock.elapsedRealtime()
         val claim = pos.acquireCheckoutClaim(orderId, checkoutClient)
-        val expiry = validateAcquiredGamingVoidClaim(
+        val confirmationWindow = validateAcquiredGamingVoidClaim(
             order = order,
             claim = claim,
             scopeLease = scopeLease,
-            nowMillis = System.currentTimeMillis(),
+            requestStartedElapsedMillis = requestStarted,
+            nowElapsedMillis = SystemClock.elapsedRealtime(),
             currentLease = appCtx.cacheIsolation::currentLease,
             release = { id, token -> pos.releaseCheckoutClaim(id, token) },
         )
         val originalBinding = requireNotNull(kotlinx.coroutines.currentCoroutineContext()[cloud.dcompany.erp.core.handover.OperationDispatchContext]?.binding)
         appCtx.idleCheckoutClaims.remember(originalBinding, order.id, claim.claimToken)
-        return LinkedGamingVoidReviewUi(current, order, addons, claim.claimToken, expiry, scopeLease)
+        return LinkedGamingVoidReviewUi(current, order, addons, claim.claimToken, confirmationWindow, scopeLease)
     }
 
     fun dismissLinkedGamingVoidReview() {

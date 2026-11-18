@@ -1,5 +1,13 @@
 # D Company ERP — current project state
 
+## Build 74 candidate
+
+Version 3.1.67 targets Android build 74, Room 58 and Alembic 0105. See the
+[current candidate](docs/V3_1_67_RELEASE_CANDIDATE.md) for product scope and
+release checks.
+
+## Earlier checkpoints
+
 ## Current local candidate (updated 2026-10-30)
 
 The owner approved the corrected local emulator workflows and appearance.

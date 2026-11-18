@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.timezone import local_date_bounds_utc
 from app.models import GamingSession, Order, OrderLine, Station
 from app.services.reports.aggregator import PnLReport, ReportsAggregator
+from app.services.pos.receipt_correction_projection import uncorrected_sale
 
 
 POS_LOCAL_HOUR_PROFILE_BASIS: Literal["pos_sales_tip_exclusive_local_hour_profile"] = (
@@ -172,6 +173,7 @@ class ReportsOverviewService:
                     sale_at >= start_at,
                     sale_at < end_at,
                     Order.status.in_(("paid", "refunded")),
+                    uncorrected_sale(as_of=end_at),
                 )
             )
         ).one()
@@ -256,6 +258,7 @@ async def load_overview_top_products(
                 sale_at >= start_at,
                 sale_at < end_at,
                 Order.status.in_(("paid", "refunded")),
+                    uncorrected_sale(as_of=end_at),
                 OrderLine.voided_at.is_(None),
             )
             .group_by(
@@ -397,6 +400,7 @@ async def load_pos_local_hour_profile(
                 sale_at >= from_dt,
                 sale_at < to_dt,
                 Order.status.in_(("paid", "refunded")),
+                uncorrected_sale(as_of=to_dt),
             )
             .group_by(hour)
             .order_by(hour)

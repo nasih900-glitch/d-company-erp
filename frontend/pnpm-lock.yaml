@@ -7,6 +7,8 @@ settings:
 overrides:
   braces: file:braces-compat
   postcss-selector-parser: 7.1.6
+  picomatch@^2: file:vendor/picomatch-v2
+  picomatch@^4: file:vendor/picomatch-v4
 
 importers:
 
@@ -1658,12 +1660,12 @@ packages:
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
 
-  picomatch@2.3.2:
-    resolution: {integrity: sha512-V7+vQEJ06Z+c5tSye8S+nHUfI51xoXIXjHQ99cQtKUkQqqO1kO/KCJUfZXuB47h/YBlDhah2H3hdUGXn8ie0oA==}
+  '@dcompany/picomatch-v2@file:vendor/picomatch-v2':
+    resolution: {directory: vendor/picomatch-v2, type: directory}
     engines: {node: '>=8.6'}
 
-  picomatch@4.0.7:
-    resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
+  '@dcompany/picomatch-v4@file:vendor/picomatch-v4':
+    resolution: {directory: vendor/picomatch-v4, type: directory}
     engines: {node: '>=12'}
 
   pirates@4.0.7:
@@ -2949,7 +2951,7 @@ snapshots:
   anymatch@3.1.3:
     dependencies:
       normalize-path: 3.0.0
-      picomatch: 2.3.2
+      picomatch: '@dcompany/picomatch-v2@file:vendor/picomatch-v2'
 
   arg@5.0.2: {}
 
@@ -3336,9 +3338,9 @@ snapshots:
     dependencies:
       pend: 1.2.0
 
-  fdir@6.5.0(picomatch@4.0.7):
+  fdir@6.5.0(@dcompany/picomatch-v4@file:vendor/picomatch-v4):
     optionalDependencies:
-      picomatch: 4.0.7
+      picomatch: '@dcompany/picomatch-v4@file:vendor/picomatch-v4'
 
   file-entry-cache@6.0.1:
     dependencies:
@@ -3602,7 +3604,7 @@ snapshots:
   micromatch@4.0.8(@dcompany/braces-depth-guard@file:vendor/dcompany-braces-depth-guard):
     dependencies:
       braces: file:braces-compat(@dcompany/braces-depth-guard@file:vendor/dcompany-braces-depth-guard)
-      picomatch: 2.3.2
+      picomatch: '@dcompany/picomatch-v2@file:vendor/picomatch-v2'
     transitivePeerDependencies:
       - '@dcompany/braces-depth-guard'
 
@@ -3716,9 +3718,9 @@ snapshots:
 
   picocolors@1.1.1: {}
 
-  picomatch@2.3.2: {}
+  '@dcompany/picomatch-v2@file:vendor/picomatch-v2': {}
 
-  picomatch@4.0.7: {}
+  '@dcompany/picomatch-v4@file:vendor/picomatch-v4': {}
 
   pirates@4.0.7: {}
 
@@ -3845,7 +3847,7 @@ snapshots:
 
   readdirp@3.6.0:
     dependencies:
-      picomatch: 2.3.2
+      picomatch: '@dcompany/picomatch-v2@file:vendor/picomatch-v2'
 
   recharts-scale@0.4.5:
     dependencies:
@@ -4053,8 +4055,8 @@ snapshots:
 
   tinyglobby@0.2.17:
     dependencies:
-      fdir: 6.5.0(picomatch@4.0.7)
-      picomatch: 4.0.7
+      fdir: 6.5.0(@dcompany/picomatch-v4@file:vendor/picomatch-v4)
+      picomatch: '@dcompany/picomatch-v4@file:vendor/picomatch-v4'
 
   tinyrainbow@3.2.0: {}
 
@@ -4122,8 +4124,8 @@ snapshots:
   vite@6.4.5(@types/node@22.19.21)(jiti@1.21.7):
     dependencies:
       esbuild: 0.25.12
-      fdir: 6.5.0(picomatch@4.0.7)
-      picomatch: 4.0.7
+      fdir: 6.5.0(@dcompany/picomatch-v4@file:vendor/picomatch-v4)
+      picomatch: '@dcompany/picomatch-v4@file:vendor/picomatch-v4'
       postcss: 8.5.26
       rollup: 4.63.1
       tinyglobby: 0.2.17
@@ -4146,7 +4148,7 @@ snapshots:
       magic-string: 0.30.21
       obug: 2.2.1
       pathe: 2.0.3
-      picomatch: 4.0.7
+      picomatch: '@dcompany/picomatch-v4@file:vendor/picomatch-v4'
       std-env: 4.3.0
       tinybench: 2.9.0
       tinyexec: 1.3.1

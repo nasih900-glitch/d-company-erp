@@ -10,6 +10,7 @@ from app.api.v1.staff import router as staff_router
 from app.core.errors import BusinessRuleError, ForbiddenError
 from app.core.tenant import TenantContext
 from app.models import AuditLog, Role, User, UserRole
+from app.core.permissions import PERMISSIONS, _role_allows_permission
 
 
 class _Result:
@@ -71,6 +72,58 @@ def _user(company_id, *, user_id=None) -> User:
         status="active",
         auth_version=0,
     )
+
+
+@pytest.mark.asyncio
+async def test_selecting_existing_secondary_viewer_role_removes_manager_assignment() -> None:
+    tenant = _tenant()
+    user = _user(tenant.company_id)
+    branch_id = uuid4()
+    viewer = Role(id=uuid4(), company_id=tenant.company_id, code="auditor", name="Business Viewer", permissions=[])
+    session = _Session(
+        _Result(scalar=user), _Result(rows=["manager", "auditor"]),
+        _Result(rows=["manager", "auditor"]), _Result(rows=[branch_id]),
+        _Result(scalar=viewer), _Result(), _Result(rows=["auditor"]),
+    )
+    result = await staff_router.update_user(user.id, staff_router.UserUpdate(role_code="auditor"), session, tenant)
+    assignments = [value for value in session.added if isinstance(value, UserRole)]
+    assert len(assignments) == 1
+    assert assignments[0].role_id == viewer.id
+    assert assignments[0].branch_id == branch_id
+    assert any(statement.is_delete for statement in session.statements)
+    audit = next(value for value in session.added if isinstance(value, AuditLog))
+    assert audit.before["before_roles"] == ["auditor", "manager"]
+    assert audit.after["after_roles"] == ["auditor"]
+    assert result.roles == ["auditor"]
+    for permission in PERMISSIONS:
+        if permission.endswith(".write") or permission in {"pos.void", "pos.refund", "pos.shift.open", "pos.shift.close"}:
+            assert not _role_allows_permission(role="auditor", perm=permission, module="staff", override=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("roles", [["auditor"], ["gaming_cashier", "pos_discount"]])
+async def test_unchanged_single_primary_role_preserves_assignment_and_discount_supplement(roles: list[str]) -> None:
+    tenant = _tenant()
+    user = _user(tenant.company_id)
+    session = _Session(_Result(scalar=user), _Result(rows=roles), _Result(rows=roles))
+    result = await staff_router.update_user(user.id, staff_router.UserUpdate(role_code=roles[0]), session, tenant)
+    assert result.roles == roles
+    assert session.added == []
+    assert not any(statement.is_delete for statement in session.statements)
+    assert user.auth_version == 0
+
+
+@pytest.mark.asyncio
+async def test_profile_save_preserves_multiple_roles_without_access_audit_or_replacement() -> None:
+    tenant = _tenant()
+    user = _user(tenant.company_id)
+    roles = ["manager", "auditor"]
+    session = _Session(_Result(scalar=user), _Result(rows=roles), _Result(rows=roles))
+    result = await staff_router.update_user(user.id, staff_router.UserUpdate(name="Updated"), session, tenant)
+    assert set(result.roles) == set(roles)
+    assert session.added == []
+    assert not any(statement.is_delete for statement in session.statements)
+    assert user.auth_version == 0
 
 
 @pytest.mark.asyncio
@@ -299,7 +352,7 @@ async def test_role_catalog_hides_internal_owner_roles_from_ordinary_callers() -
 
     params = list(session.statements[0].compile().params.values())
     hidden = next(value for value in params if isinstance(value, list))
-    assert set(hidden) == {"super_owner", "co_owner", "owner"}
+    assert set(hidden) == {"super_owner", "co_owner", "owner", "pos_discount"}
 
 
 @pytest.mark.asyncio
@@ -311,4 +364,4 @@ async def test_role_catalog_allows_protected_owner_to_see_owner_tiers() -> None:
 
     params = list(session.statements[0].compile().params.values())
     hidden = next(value for value in params if isinstance(value, list))
-    assert set(hidden) == {"super_owner"}
+    assert set(hidden) == {"super_owner", "pos_discount"}

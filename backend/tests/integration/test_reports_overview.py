@@ -147,6 +147,9 @@ def _assert_csv_matches_overview(response, payload) -> list[dict[str, str]]:
 
     for metric, unit, basis in (
         ("gross_revenue_minor", "paise", payload["accounting_basis"]),
+        ("effective_gross_revenue_minor", "paise", payload["accounting_basis"]),
+        ("receipt_corrections_minor", "paise", "no_value_correction_no_payout"),
+        ("effective_upi_received_minor", "paise", "no_value_correction_no_payout"),
         ("orders_count", "count", payload["accounting_basis"]),
         ("sessions_started_count", "count", payload["sessions_basis"]),
     ):
@@ -551,6 +554,7 @@ async def test_overview_is_reduced_branch_scoped_and_uses_one_aggregate(
         "snapshot_at", "accounting_basis", "gross_revenue_minor", "orders_count",
         "sessions_started_count", "sessions_basis", "revenue_by_source",
         "payments_received", "linked_customers", "local_hour_profile",
+        "effective_gross_revenue_minor", "receipt_corrections_minor", "effective_upi_received_minor",
     }
     assert payload["schema_version"] == "reports.overview.v1"
     assert payload["branch_id"] == str(branch.id)

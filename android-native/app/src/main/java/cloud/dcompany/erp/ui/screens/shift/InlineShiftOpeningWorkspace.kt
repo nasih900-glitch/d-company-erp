@@ -33,9 +33,13 @@ internal fun InlineShiftOpeningWorkspace(
     vm: ShiftViewModel = sharedShiftViewModel(),
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
+    val start by vm.startWorkState.collectAsStateWithLifecycle()
+    StartWorkRecovery(vm)
     SideEffect { vm.updateAccess(access) }
     InlineShiftOpeningContent(
-        state = state,
+        state = state.copy(busy = state.busy || start.busy),
+        startBlocked = !start.ready || start.pending.isNotEmpty(),
+        startWorkName = vm.onlineStartWorkName(),
         access = access,
         onOpen = vm::openShift,
         onSync = vm::load,
@@ -70,6 +74,8 @@ internal fun InlineShiftOpeningContent(
     onReturn: () -> Unit,
     onRetryRejected: () -> Unit = {},
     onVerifyRejected: () -> Unit = {},
+    startBlocked: Boolean = false,
+    startWorkName: String? = null,
 ) {
     val heading = remember { BringIntoViewRequester() }
     LaunchedEffect(Unit) { heading.bringIntoView() }
@@ -103,8 +109,8 @@ internal fun InlineShiftOpeningContent(
                         onRetry = onRetryRejected, onVerifyAndClear = onVerifyRejected)
                 }
                 OpenShiftForm(online = state.online, busy = state.busy, canOpen = access.canOpen,
-                    blockedByRejectedShift = state.rejectedShift != null,
-                    onOpenShift = onOpen, offlineGamingSupported = state.offlineGamingSupported)
+                    blockedByRejectedShift = state.rejectedShift != null || startBlocked,
+                    onOpenShift = onOpen, offlineGamingSupported = state.offlineGamingSupported, startWorkName = startWorkName)
             }
         } else if ((state.open.server == null && state.open.local?.serverShiftId == null) || state.syncing) {
             TextButton(

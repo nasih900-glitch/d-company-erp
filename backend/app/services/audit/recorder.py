@@ -26,6 +26,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+from app.models.grn_commands import GrnActionDecision, GrnCompletionProof
 from sqlalchemy import event, insert
 from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import Session
@@ -53,6 +54,7 @@ from app.models import (
     GamingBooking,
     GamingPackage,
     GamingPlaytimeProgramSettings,
+    GamingRetainedBillCorrection,
     GamingSession,
     GamingSessionExtension,
     GamingSessionPackageAmendment,
@@ -91,9 +93,14 @@ from app.models import (
     Order,
     OrderCheckoutClaim,
     OrderLine,
+    PaidBillActionDecision,
+    PaidBillAmendmentIntent,
     Partner,
     Payment,
     PayrollEntry,
+    PosReceiptCorrection,
+    PosReceiptMistakeReport,
+    PosReceiptStockRestoration,
     PosRefundCashHandoff,
     PosRefundCashHandoffCompletion,
     PosRefundEvidenceReconciliation,
@@ -110,6 +117,8 @@ from app.models import (
     RolePermissionOverride,
     Shift,
     ShiftOperatorHandover,
+    ShiftStartWorkCancellation,
+    ShiftStartWorkReceipt,
     StaffWorkPolicy,
     Station,
     StockMovement,
@@ -170,6 +179,7 @@ def set_request_context(
     client_action_id: str | None,
     client_reported_at: datetime | None,
     client_was_offline: bool,
+    paid_recovery: bool = False,
 ) -> None:
     """Capture request provenance independently of authentication.
 
@@ -183,6 +193,7 @@ def set_request_context(
             "client_platform": client_platform,
             "client_version_code": client_version_code,
             "client_action_id": client_action_id,
+            "paid_recovery": paid_recovery,
             "client_reported_at": client_reported_at,
             "client_was_offline": client_was_offline,
             "synced_at": datetime.now(UTC) if client_was_offline else None,
@@ -200,6 +211,13 @@ def clear_request_context() -> None:
 from app.models import DailyTenderReconciliation, PaymentTenderCorrection
 
 TRACKED: set[type] = {
+    GrnActionDecision,
+    GrnCompletionProof,
+    PaidBillAmendmentIntent,
+    PaidBillActionDecision,
+    PosReceiptCorrection,
+    PosReceiptMistakeReport,
+    PosReceiptStockRestoration,
     PaymentTenderCorrection,
     DailyTenderReconciliation,
     Account,
@@ -224,6 +242,7 @@ TRACKED: set[type] = {
     GamingBooking,
     GamingPackage,
     GamingPlaytimeProgramSettings,
+    GamingRetainedBillCorrection,
     GamingSession,
     GamingSessionExtension,
     GamingSessionPackageAmendment,
@@ -281,6 +300,8 @@ TRACKED: set[type] = {
     RolePermissionOverride,
     Shift,
     ShiftOperatorHandover,
+    ShiftStartWorkReceipt,
+    ShiftStartWorkCancellation,
     Station,
     StockMovement,
     Supplier,
@@ -360,6 +381,25 @@ def _serialize(obj: Any) -> dict | None:
         mapper = inspect(obj.__class__)
     except Exception:
         return None
+    if isinstance(obj, (GrnActionDecision, GrnCompletionProof)):
+        return {"id": str(obj.id), "purpose": "inventory_grn_receive"}
+    if isinstance(obj, GRN):
+        return {key: json_safe(getattr(obj, key)) for key in ("id", "purchase_order_id", "received_at", "received_by", "journal_entry_id")}
+    if isinstance(obj, StockMovement) and obj.ref_type == "grn":
+        return {key: json_safe(getattr(obj, key)) for key in ("id", "batch_id", "branch_id", "type", "ref_type", "ref_id", "qty_delta", "cost_per_unit_minor", "created_by")}
+    if isinstance(obj, PaidBillActionDecision) and (request_ctx.get() or {}).get("paid_recovery"):
+        return {key: json_safe(getattr(obj, key)) for key in (
+            "id", "company_id", "recorded_by", "order_id", "branch_id", "terminal_id",
+            "outcome", "accepted_intent_id", "decided_at",
+        )}
+    if isinstance(obj, PosReceiptCorrection):
+        # Full exact-source evidence stays on its protected receipt, not in
+        # duplicated audit JSON (which has its own browsing/export lifecycle).
+        return {key: json_safe(getattr(obj, key)) for key in (
+            "id", "company_id", "order_id", "payment_id", "branch_id",
+            "original_shift_id", "kind", "amount_minor", "recorded_by",
+            "recorded_at", "accounting_at", "source_fingerprint",
+        )}
     return {
         col.key: _REDACTION_MARKER if _is_redacted_column(col)
         else json_safe(getattr(obj, col.key, None))
@@ -432,6 +472,11 @@ _REASON_FIELDS = (
 
 
 def _reason_of(obj: Any) -> str | None:
+    if isinstance(obj, (GrnActionDecision, GrnCompletionProof, GRN)) or isinstance(obj, StockMovement) and obj.ref_type == "grn":
+        return None
+    if isinstance(obj, PaidBillActionDecision):
+        # Recovery reasons stay only in the protected decision, never the general audit reason.
+        return "Exact paid-bill command retired"
     if isinstance(obj, AuditLog):
         for snapshot in (obj.after, obj.before):
             if not isinstance(snapshot, dict):

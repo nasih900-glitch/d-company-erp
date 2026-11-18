@@ -256,3 +256,60 @@ prepare or commit corrections. Existing single-purpose tokens and older clients
 remain valid. New clients must use the bundle instead of performing a second
 password confirmation just to load the read-only history. Expiry, permission
 ceiling, password rate limiting and auth-version revocation remain unchanged.
+
+## Full unsupplied mistaken receipt with recorded stock (schema 0098)
+
+The existing `/pos/receipt-corrections/preview` and `/commit` remain the narrow
+zero-stock contract. They still reject any stock movement. A separate protected
+Owner flow supports recorded consumption only when all its inventory evidence
+reconciles and every recorded ingredient remains physically on hand, untouched.
+No current recipe is used to infer a restoration.
+
+`POST /pos/receipt-corrections/stock/preview` takes `{order_id}`. This is read-only.
+It returns the existing invoice/line review, `source_fingerprint`, a separate
+`stock_fingerprint`, exact original movement/batch/ingredient IDs, quantities and captured base units,
+historical unit costs, `inventory_increase_minor`, and concrete blockers.
+Unrelated/refunded/restored movements, unknown costs or historical shortages,
+missing/cross-tenant parents, inconsistent batch trails or ingredient balances,
+and the existing unsupported invoice/customer/tax/loyalty effects fail closed.
+No raw source snapshots or credentials are returned.
+
+For commit, confirm the protected Owner password using the existing unlock
+endpoint with `scope="receipt_stock"` and the receipt's branch. Send its
+five-minute token only in `X-Tender-Token`; never save it in browser recovery
+storage. `POST /pos/receipt-corrections/stock/commit` takes the existing strict
+no-value request plus `restore_stock:true`, `stock_fingerprint`, and the strict
+boolean `stock_never_consumed:true`. This last attestation means **every shown
+ingredient/quantity was never consumed, removed, prepared or wasted and remains
+on hand in its original batch**. Merely saying a customer received nothing is
+insufficient: prepared-but-unserved food must not be restored by this workflow.
+
+The same exact action key/body is retained for uncertain results. Authority,
+actor/company/branch/auth-version, token expiry, both source fingerprints and
+physical/financial attestations are rechecked, including after inventory lock
+waits. A successful response adds `stock_restored:true`, exact restoration count
+and the actual current-period inventory increase. The original invoice, payment
+and closed shift remain unchanged; payout remains zero. Normal receipt metadata
+adds the same stock facts without changing the existing correction kind.
+
+One transaction inserts the immutable correction, exact unique disposition
+links and new `receipt_restore` movements, restores the original batch and
+ingredient quantities, and writes Audit/outbox evidence. PostgreSQL independently
+checks complete one-to-one restoration, source identity, ownership, quantities,
+costs and source trails. Missing/extra/unlinked effects, raw forged writes and
+same-transaction provenance changes roll back everything. The original key can
+recover its original receipt after later legitimate sales, without restoring
+again. A second action cannot correct the same receipt or movement twice.
+
+Inventory and COGS use the shared chronological rounded-batch-value allocator.
+The displayed increase can differ from the sum of individually rounded original
+sale costs when intervening fractional movements carried a residual. Historical
+movement rows are retained unchanged. The correction offsets revenue/UPI and
+restores inventory/reduces COGS at its current accounting time; it does not
+backdate a closed shift, issue a refund or write a payout. Captured historical
+inventory evidence stays immutable. Ordinary later stock movements are allowed;
+backdated raw inserts that would reallocate retained history are rejected.
+
+This source capability does not reconcile or correct any real incident by
+itself. Real stock-on-hand/cost evidence and the protected Owner's exact review
+are still required before an authorized operating correction.

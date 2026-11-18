@@ -142,6 +142,13 @@ async def test_complete_payment_correction_replay_receipts_and_sheet(client, ses
         )
     )[0]
     assert (snapshot.cash_minor, snapshot.upi_minor, snapshot.total_minor) == (0, 27000, 27000)
+    shifts = await client.get("/api/v1/pos/shifts", headers=headers)
+    assert shifts.status_code == 200, shifts.text
+    summary = next(row for row in shifts.json() if row["id"] == str(shift.id))
+    assert summary["receipt_corrections_minor"] == 0
+    assert summary["effective_upi_collections_minor"] == 27000
+    assert summary["effective_upi_collections_minor"] == summary["reconstructed_upi_collections_minor"]
+    assert summary["effective_net_collections_minor"] == summary["net_collections_minor"]
     receipt = await client.get("/api/v1/pos/receipts/" + str(order.id), headers=headers)
     assert receipt.status_code == 200, receipt.text
     leg = receipt.json()["payments"][0]

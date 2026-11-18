@@ -163,6 +163,8 @@ async def home(
 
 
 class DashboardKPIs(BaseModel):
+    receipt_corrections_minor: int = 0
+    effective_upi_received_minor: int = 0
     branch_id: UUID
     date: _date
     revenue_food_minor: int
@@ -251,6 +253,8 @@ async def dashboard(
     ).scalar_one()
 
     return DashboardKPIs(
+        receipt_corrections_minor=report.receipt_corrections_minor,
+        effective_upi_received_minor=report.effective_upi_received_minor,
         branch_id=tenant.branch_id,
         date=target_date,
         revenue_food_minor=report.revenue.food_minor,
@@ -260,7 +264,7 @@ async def dashboard(
         revenue_memberships_minor=report.revenue.memberships_minor,
         revenue_manual_collections_minor=report.manual_collections_minor,
         discounts_and_points_redeemed_minor=report.revenue.discounts_and_points_redeemed_minor,
-        revenue_total_minor=report.gross_revenue_minor,
+        revenue_total_minor=report.effective_gross_revenue_minor,
         orders_count=report.orders_count,
         tickets_count=report.tickets_count,
         avg_ticket_minor=report.avg_ticket_minor,
@@ -326,6 +330,14 @@ async def export_csv(
     writer.writerow(
         ["Refunds issued", report.refunds_issued_minor, f"{report.refunds_issued_minor / 100:.2f}"]
     )
+    writer.writerow([
+        "No-value receipt corrections (no payout)", report.receipt_corrections_minor,
+        f"{report.receipt_corrections_minor / 100:.2f}",
+    ])
+    writer.writerow([
+        "Effective UPI before refund payouts", report.effective_upi_received_minor,
+        f"{report.effective_upi_received_minor / 100:.2f}",
+    ])
     writer.writerow(
         ["Refunded tips", report.refunded_tips_minor, f"{report.refunded_tips_minor / 100:.2f}"]
     )

@@ -167,6 +167,7 @@ jobs:
       - name: Run complete backend suite
         working-directory: backend
         env:
+          ENV: test
           DATABASE_URL: postgresql+psycopg://erp:erp@localhost:5432/erp_test
           REDIS_URL: redis://localhost:6379/0
         run: pytest
@@ -362,8 +363,12 @@ jobs:
           sudo chmod 0666 /dev/kvm
           test -r /dev/kvm
           test -w /dev/kvm
+      - name: Assemble Android instrumentation APKs before emulator startup
+        run: bash scripts/run_android_instrumentation_ci.sh --assemble-only
       - name: Run Android instrumentation tests
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        env:
+          D_COMPANY_HOSTED_COLD_BOOT: '1'
         with:
           api-level: 35
           arch: x86_64
@@ -374,10 +379,10 @@ jobs:
           profile: pixel_c
           disable-animations: true
           # Keep the same emulator build and host platform as CI.
-          emulator-build: 15917651
-          # Match CI's direct swiftshader request with Vulkan disabled. The
-          # retained runtime diagnostics must prove the actually selected mode.
-          emulator-options: -no-window -gpu swiftshader -feature -Vulkan -no-snapshot -noaudio -no-boot-anim
+          emulator-build: 16740729
+          # Use ANGLE over SwiftShader while keeping guest Vulkan disabled.
+          # The test process verifies the renderer from its startup log.
+          emulator-options: -no-window -gpu swangle -feature -Vulkan -no-snapshot -noaudio -no-boot-anim
           pre-emulator-launch-script: python3 scripts/configure_ci_android_avd.py test
           # The pinned action runs each nonempty line in a fresh shell. Keep
           # capture, normalization, logging, and assertion in one command.

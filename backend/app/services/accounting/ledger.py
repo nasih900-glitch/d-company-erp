@@ -36,6 +36,7 @@ from app.models import (
     Order,
     Partner,
     Payment,
+    PosReceiptCorrection,
     PurchaseOrder,
     Refund,
     SupplierPayment,
@@ -221,6 +222,7 @@ def _manual_collection_ledger_lines(
     """Post active date-only collections at company-local day start."""
     local_zone = ZoneInfo(timezone_name)
     lines: list[LedgerLine] = []
+
     for collection in collections:
         if collection.voided_at is not None:
             continue
@@ -693,6 +695,29 @@ async def build_operational_ledger(
     """Return balanced journal lines in the requested half-open UTC range."""
     lines: list[LedgerLine] = []
 
+    correction_stmt = select(PosReceiptCorrection).where(
+        PosReceiptCorrection.company_id == company_id,
+        PosReceiptCorrection.accounting_at < end_exclusive,
+    )
+    if start_at is not None:
+        correction_stmt = correction_stmt.where(PosReceiptCorrection.accounting_at >= start_at)
+    for correction in await session.scalars(correction_stmt.order_by(
+        PosReceiptCorrection.accounting_at, PosReceiptCorrection.id,
+    )):
+        # Eligibility and its DB guard require zero tax/tip/discount/roundoff;
+        # reverse the original sale and payment legs without a fictitious payout.
+        memo = f"No-value correction of {correction.invoice_no}; no payout"
+        for account, debit, credit in (
+            (SALES_REVENUE.ledger_tuple, correction.amount_minor, 0),
+            (POS_SETTLEMENT_CLEARING.ledger_tuple, 0, correction.amount_minor),
+            (POS_SETTLEMENT_CLEARING.ledger_tuple, correction.amount_minor, 0),
+            (UPI_CLEARING.ledger_tuple, 0, correction.amount_minor),
+        ):
+            lines.append(_line(
+                occurred_at=correction.accounting_at, ref_type="pos_receipt_correction",
+                ref_id=correction.id, account=account, debit=debit, credit=credit, memo=memo,
+            ))
+
     payment_stmt = (
         select(Payment, Order.invoice_no)
         .join(Order, Order.id == Payment.order_id)
@@ -937,7 +962,7 @@ async def build_operational_ledger(
         if inventory_delta == 0:
             continue
         amount = abs(inventory_delta)
-        is_sale_flow = movement.type in {"sale", "refund_restock"}
+        is_sale_flow = movement.type in {"sale", "refund_restock", "receipt_restore"}
         offset_account = (
             COST_OF_GOODS_SOLD.ledger_tuple
             if is_sale_flow
@@ -947,6 +972,7 @@ async def build_operational_ledger(
         default_memo = {
             "sale": "Inventory consumed by sale",
             "refund_restock": "Inventory restocked by refund",
+            "receipt_restore": "Unsupplied mistaken receipt stock restored — no payout",
             "waste": "Inventory written off as waste",
             "damage": "Damaged inventory written off",
             "adjustment": "Inventory count variance",

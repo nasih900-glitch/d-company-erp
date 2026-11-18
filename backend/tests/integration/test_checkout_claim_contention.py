@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -32,8 +32,21 @@ from app.models import (
 )
 
 
+def _assert_server_claim_window(response, requested_at: datetime) -> None:
+    payload = response.json()
+    server_time = datetime.fromisoformat(payload["server_time"])
+    expires_at = datetime.fromisoformat(payload["expires_at"])
+    assert requested_at <= server_time <= datetime.now(UTC)
+    assert timedelta(0) < expires_at - server_time <= timedelta(minutes=10)
+
+
 async def _set_paid_source_cleanup_triggers(session, *, enabled: bool) -> None:
     """Narrow test-only cleanup bypass; production exposes no bypass path."""
+    if enabled:
+        # Drain deferred events from the owned fixture's deletes before DDL.
+        # All changes, including DISABLE/ENABLE, stay in this one transaction;
+        # failure rolls back the cleanup and its temporary trigger state.
+        await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
     verb = "ENABLE" if enabled else "DISABLE"
     for table_name, trigger_name in (
         ("payments", "trg_payments_immutable"),
@@ -45,6 +58,11 @@ async def _set_paid_source_cleanup_triggers(session, *, enabled: bool) -> None:
         await session.execute(
             text(f"ALTER TABLE {table_name} {verb} TRIGGER {trigger_name}")
         )
+        if enabled:
+            assert (await session.execute(text(
+                "SELECT tgenabled::text FROM pg_trigger WHERE tgrelid=CAST(:table AS regclass) "
+                "AND tgname=:trigger"
+            ), {"table": table_name, "trigger": trigger_name})).scalar_one() == "O"
 
 
 @pytest.mark.integration
@@ -183,11 +201,13 @@ async def test_held_order_list_version_matches_claim_after_send_to_pos(
         list_row = next(row for row in listed.json() if row["id"] == str(order.id))
         assert list_row["checkout_version"] == sent_version
 
+        claim_requested_at = datetime.now(UTC)
         claimed = await client.post(
             f"/api/v1/pos/orders/{order.id}/checkout-claim",
             headers=headers,
         )
         assert claimed.status_code == 201, claimed.text
+        _assert_server_claim_window(claimed, claim_requested_at)
         assert claimed.json()["order_version"] == list_row["checkout_version"]
     finally:
         async with AsyncSessionLocal() as cleanup:
@@ -336,6 +356,7 @@ async def test_direct_publish_claim_and_legacy_protected_recovery(
             "Idempotency-Key": publish_key,
             "X-Checkout-Client-Instance": str(client_a),
         }
+        claim_requested_at = datetime.now(UTC)
         published = await client.post(
             f"/api/v1/pos/orders/{published_order_id}/publish-checkout-claim",
             headers=publish_headers,
@@ -344,6 +365,7 @@ async def test_direct_publish_claim_and_legacy_protected_recovery(
             },
         )
         assert published.status_code == 201, published.text
+        _assert_server_claim_window(published, claim_requested_at)
         assert published.headers["cache-control"] == "no-store"
         assert published.json()["order_version"] == (
             publish_source_order["checkout_version"] + 1
@@ -353,6 +375,7 @@ async def test_direct_publish_claim_and_legacy_protected_recovery(
         # A dropped response is recovered without persisting the bearer: the
         # same installation renews/rotates it against the one expected status
         # version bump, while another physical client cannot take it over.
+        retry_requested_at = datetime.now(UTC)
         publish_replay = await client.post(
             f"/api/v1/pos/orders/{published_order_id}/publish-checkout-claim",
             headers=publish_headers,
@@ -361,6 +384,7 @@ async def test_direct_publish_claim_and_legacy_protected_recovery(
             },
         )
         assert publish_replay.status_code == 201, publish_replay.text
+        _assert_server_claim_window(publish_replay, retry_requested_at)
         assert publish_replay.json()["reused"] is True
         assert publish_replay.json()["claim_token"] != published.json()["claim_token"]
 
@@ -874,16 +898,15 @@ async def test_http_claim_is_required_and_consumed_by_held_order_payment(
     assert receipt["invoice_no"]
     assert receipt["invoice_issued_at"]
 
-    # A dropped 201 response is recovered by replaying the exact payment key.
-    # The checkout claim has already been consumed, so only the stored receipt
-    # can make this safe; a second Payment row must never be attempted.
+    # If the tablet has already lost the bearer, a canonical terminal read
+    # does not authorize a new payment; only the original key returns its receipt.
+    canonical = await client.get(f"/api/v1/pos/orders/{order.id}", headers=base_headers)
+    assert canonical.status_code == 200, canonical.text
+    assert canonical.json()["id"] == str(order.id)
+    assert canonical.json()["status"] == "paid"
     replayed = await client.post(
         f"/api/v1/pos/orders/{order.id}/payments",
-        headers={
-            **base_headers,
-            "Idempotency-Key": payment_key,
-            "X-Checkout-Claim": claim_body["claim_token"],
-        },
+        headers={**base_headers, "Idempotency-Key": payment_key},
         json=payment_body,
     )
     assert replayed.status_code == 201, replayed.text

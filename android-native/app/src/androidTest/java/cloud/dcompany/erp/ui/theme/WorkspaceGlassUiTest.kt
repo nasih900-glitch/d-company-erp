@@ -20,6 +20,7 @@ import android.view.ViewConfiguration
 import android.view.Window
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
@@ -31,6 +32,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
@@ -64,7 +66,6 @@ import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertWidthIsAtLeast
-import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -83,6 +84,7 @@ import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.MutableWorkspaceRouteAuthority
 import cloud.dcompany.erp.ui.WorkspaceScaffold
+import cloud.dcompany.erp.ui.captureToImage
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
 import cloud.dcompany.erp.ui.components.SectionCard
 import cloud.dcompany.erp.ui.screens.home.ExecutiveHomeWorkspace
@@ -413,6 +415,63 @@ class WorkspaceGlassUiTest {
         capture("glass-night-wide", 1280, 800, 1f, "Night")
         assertGlassHierarchy(wide = true)
         assertStatusAndRefreshContrast()
+    }
+
+    @Test
+    fun bundledVioletNightUsesShapedTintAndDayRestoresProjection() {
+        val image = bundledWorkspaceBackground(
+            WorkspaceBackgroundSlot.WORKSPACE,
+            presetId = WorkspaceBackgroundPresets.VioletGlassId,
+        )
+        val appearance = mutableStateOf(AppearancePreference.Night)
+        val swatch = androidx.compose.ui.graphics.Color(0xFFE4CFE8)
+        val swatchShape = RoundedCornerShape(24.dp)
+        compose.setContent {
+            DCompanyTheme(appearance.value) {
+                WorkspaceBackgroundRenderer(image = image, modifier = Modifier.width(320.dp).height(180.dp)) {
+                    val scene = LocalWorkspaceGlassScene.current
+                    val day = appearance.value == AppearancePreference.Day
+                    SideEffect { renderedScene.set(scene) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Box(Modifier.width(100.dp).height(64.dp).background(swatch).testTag("violet-panel-swatch")) {
+                            Box(
+                                Modifier.fillMaxSize().workspaceGlass(
+                                    scene, WorkspaceGlassRole.PANEL, day = day, shape = swatchShape,
+                                ),
+                            )
+                        }
+                        Box(Modifier.width(100.dp).height(64.dp).background(swatch).testTag("violet-modal-swatch")) {
+                            Box(
+                                Modifier.fillMaxSize().workspaceGlass(
+                                    scene, WorkspaceGlassRole.MODAL, day = day, shape = swatchShape,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        compose.waitUntil(12_000) { renderedScene.get()?.violetGlass == true }
+        compose.onNodeWithTag("workspace-glass-ready-workspace").assertIsDisplayed()
+        assertEquals(null, renderedScene.get()?.derivative)
+
+        val panelStyle = workspaceGlassRoleStyle(WorkspaceGlassRole.PANEL, day = false)
+        val tint = panelStyle.tint.copy(alpha = .62f).toArgb()
+        val modalFallback = workspaceGlassRoleStyle(WorkspaceGlassRole.MODAL, day = false).fallback.toArgb()
+        val panel = compose.onNodeWithTag("violet-panel-swatch").captureToImage().asAndroidBitmap()
+        val modal = compose.onNodeWithTag("violet-modal-swatch").captureToImage().asAndroidBitmap()
+        try {
+            assertTrue(colorDistance(centerPixel(panel), compositeColor(swatch.toArgb(), tint)) <= 6)
+            assertTrue(colorDistance(panel.getPixel(0, 0), swatch.toArgb()) <= 6)
+            assertTrue(colorDistance(centerPixel(modal), modalFallback) <= 6)
+        } finally {
+            panel.recycle()
+            modal.recycle()
+        }
+
+        compose.runOnIdle { appearance.value = AppearancePreference.Day }
+        val day = awaitExactReadyScene(image)
+        assertTrue(!day.violetGlass && day.derivative != null)
     }
 
     @Test

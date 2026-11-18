@@ -27,8 +27,10 @@ from app.services.audit.query import (
 from app.services.audit.recorder import _enrich_manual_audit_row, json_safe
 
 
-def test_catalogue_contains_28_unique_real_operations_with_valid_states():
-    assert len(BY_CODE) == len(CATALOGUE) == 28
+def test_catalogue_contains_32_unique_real_operations_with_valid_states():
+    assert len(BY_CODE) == len(CATALOGUE) == 32
+    assert BY_CODE["POS-NVC"].label == "No-value receipt corrected; no payout"
+    assert BY_CODE["STK-RCR"].label == "Mistaken sale stock restored; no payout"
     assert "STK-XFR" not in BY_CODE
     assert "PIK" not in BY_CODE
     for action, expected in EXPLICIT.items():
@@ -368,3 +370,36 @@ def test_update_policy_event_has_business_vocabulary_and_retained_reason():
     assert (row.action_code, row.stage, row.outcome) == ("UPD-POL", "committed", "completed")
     assert row.business_details["reason"] == "Owner reviewed supported builds"
     assert row.business_details["minimum_supported_build"] == 54
+
+
+def test_retained_mistake_correction_is_business_pos_activity_with_reason_and_bill_link():
+    bill_id, original_receipt_id, correction_id = (str(uuid4()) for _ in range(3))
+    reason = "All retained items were entered by mistake and none supplied"
+    row = AuditLog(
+        company_id=uuid4(),
+        actor_user_id=uuid4(),
+        action="gaming_retained_bill_mistake_correction",
+        entity_type="Order",
+        entity_id=bill_id,
+        operation_id="retained-mistake:stable-command",
+        source_reference=bill_id,
+        reason=reason,
+        after={
+            "order_id": bill_id,
+            "original_receipt_id": original_receipt_id,
+            "correction_id": correction_id,
+            "all_items_mistaken_not_supplied": True,
+            "no_money_collected_or_refunded": True,
+        },
+    )
+    _enrich_manual_audit_row(row)
+    view = describe(row)
+    assert view["action_code"] == "POS-MSC"
+    assert view["action_label"] == "Mistaken retained Gaming items cancelled"
+    assert view["category"] == "pos"
+    assert (view["stage"], view["outcome"]) == ("committed", "completed")
+    assert view["source_reference"] == bill_id
+    assert view["business_details"]["original_receipt_id"] == original_receipt_id
+    assert view["business_details"]["correction_id"] == correction_id
+    assert view["business_details"]["all_items_mistaken_not_supplied"] is True
+    assert row.reason == reason

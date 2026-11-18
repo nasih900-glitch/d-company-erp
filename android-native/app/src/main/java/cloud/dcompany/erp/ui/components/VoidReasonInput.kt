@@ -9,6 +9,10 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -23,10 +27,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -37,6 +47,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntSize
 import cloud.dcompany.erp.ui.theme.Brand
 import kotlinx.coroutines.launch
 
@@ -82,6 +93,7 @@ internal fun resolvedVoidReason(selectedId: String?, customReason: String): Stri
  * ignored by Android.
  */
 @Composable
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 fun VoidReasonInput(
     selectedId: String?,
     customReason: String,
@@ -93,12 +105,31 @@ fun VoidReasonInput(
     onExitCustomMode: () -> Unit = {},
     compactCustomActions: (@Composable RowScope.() -> Unit)? = null,
     required: Boolean = true,
+    parentViewportSize: IntSize = IntSize.Zero,
+    parentScrollOwnerIsFrame: Boolean = false,
+    onCustomOwnerSizeChanged: (IntSize) -> Unit = {},
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
     val customFocus = remember { FocusRequester() }
     val scrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
     val customSelected = selectedId == VOID_REASON_OTHER_ID
+    val customOwnerView = remember { BringIntoViewRequester() }
+    var customFocused by remember { mutableStateOf(false) }
+    var ownerSize by remember { mutableStateOf(IntSize.Zero) }
+    var ownViewportSize by remember { mutableStateOf(IntSize.Zero) }
+    val viewportSize = if (parentOwnsScrolling) parentViewportSize else ownViewportSize
+    val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
+    var initialKeyboardReady by remember(customSelected, compactCustomLayout, parentOwnsScrolling) {
+        mutableStateOf(false)
+    }
+
+    LaunchedEffect(customSelected, customFocused, initialKeyboardReady, viewportSize, ownerSize, imeBottom, parentScrollOwnerIsFrame) {
+        if (customSelected && customFocused && initialKeyboardReady && viewportSize.width > 0 && viewportSize.height > 0) {
+            withFrameNanos { }
+            customOwnerView.bringIntoView()
+        }
+    }
 
     LaunchedEffect(customSelected, compactCustomLayout, parentOwnsScrolling) {
         if (customSelected) {
@@ -112,6 +143,9 @@ fun VoidReasonInput(
             if (!parentOwnsScrolling) {
                 scrollState.scrollTo(scrollState.maxValue)
             }
+            // Relocation follows the existing focus/show/bottom-scroll sequence;
+            // a late bottom scroll must not undo full-owner visibility.
+            initialKeyboardReady = true
         }
     }
 
@@ -128,6 +162,7 @@ fun VoidReasonInput(
                     VOID_REASON_MAX_EDITOR_HEIGHT
                 },
             )
+            .onSizeChanged { ownViewportSize = it }
             .verticalScroll(scrollState)
             // Standalone forms consume the IME inset here. Compact custom
             // mode intentionally keeps its deterministic 120dp body.
@@ -234,7 +269,7 @@ fun VoidReasonInput(
                     null
                 },
                 minLines = if (compactCustomLayout) 1 else 2,
-                maxLines = if (compactCustomLayout) 1 else Int.MAX_VALUE,
+                maxLines = if (compactCustomLayout) 1 else 2,
                 keyboardOptions = KeyboardOptions(
                     capitalization = KeyboardCapitalization.Sentences,
                     keyboardType = KeyboardType.Text,
@@ -244,6 +279,12 @@ fun VoidReasonInput(
                 modifier = Modifier
                     .fillMaxWidth()
                     .focusRequester(customFocus)
+                    .bringIntoViewRequester(customOwnerView)
+                    .onFocusChanged { customFocused = it.isFocused }
+                    .onSizeChanged {
+                        ownerSize = it
+                        onCustomOwnerSizeChanged(it)
+                    }
                     .semantics {
                         contentDescription = "Custom cancellation reason"
                         stateDescription = if (customReason.isBlank()) {
@@ -267,6 +308,7 @@ fun VoidReasonInput(
                                 if (!parentOwnsScrolling) {
                                     scrollState.scrollTo(scrollState.maxValue)
                                 }
+                                customOwnerView.bringIntoView()
                             }
                         },
                         modifier = Modifier
@@ -290,6 +332,7 @@ fun VoidReasonInput(
                             if (!parentOwnsScrolling) {
                                 scrollState.scrollTo(scrollState.maxValue)
                             }
+                            customOwnerView.bringIntoView()
                         }
                     },
                     modifier = Modifier

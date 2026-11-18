@@ -10,6 +10,7 @@ object ErpPermission {
     const val PosDiscountLarge = "pos.discount.large"
     const val PosShiftOpen = "pos.shift.open"
     const val PosShiftClose = "pos.shift.close"
+    const val PosShiftHandoverRecover = "pos.shift.handover.recover"
     const val PosRefund = "pos.refund"
     const val PosRefundReconcile = "pos.refund.reconcile"
     const val TablesRead = "tables.read"
@@ -69,6 +70,7 @@ data class PosAccess(
     val canCreateAndCollect: Boolean = false,
     val canVoid: Boolean = false,
     val canApplyDiscount: Boolean = false,
+    val canCorrectRetainedMistakes: Boolean = false,
 )
 data class GamingAccess(
     val canManageSessions: Boolean = false,
@@ -181,7 +183,7 @@ fun StaffAccess.loadPlan(): StaffLoadPlan = StaffLoadPlan(
  * responses always use the exact post-override server set, including a
  * deliberately empty set.
  */
-class EffectivePermissions private constructor(private val granted: Set<String>) {
+class EffectivePermissions private constructor(private val granted: Set<String>, private val owner: Boolean) {
     fun has(permission: String): Boolean = permission in granted
 
     fun hasAny(vararg permissions: String): Boolean = permissions.any(::has)
@@ -216,6 +218,9 @@ class EffectivePermissions private constructor(private val granted: Set<String>)
         canCreateAndCollect = requiresOperationalWorkspace() && has(ErpPermission.PosWrite),
         canVoid = requiresOperationalWorkspace() && has(ErpPermission.PosVoid),
         canApplyDiscount = requiresOperationalWorkspace() && has(ErpPermission.PosDiscountLarge),
+        canCorrectRetainedMistakes = owner && requiresOperationalWorkspace() &&
+            has(ErpPermission.PosRead) && has(ErpPermission.PosWrite) &&
+            has(ErpPermission.PosVoid) && has(ErpPermission.GamingWrite),
     )
 
     fun staffAccess(): StaffAccess = StaffAccess(
@@ -291,7 +296,9 @@ class EffectivePermissions private constructor(private val granted: Set<String>)
 
     companion object {
         fun from(profile: MeResponse): EffectivePermissions {
-            profile.effectivePermissions?.let { return EffectivePermissions(it.toSet()) }
+            profile.effectivePermissions?.let { return EffectivePermissions(it.toSet(), profile.roles.hasNormalizedOwnerRole()) }
+            // This role was introduced with exact server capabilities; it has no legacy payload.
+            if ("store_staff" in profile.roles) return EffectivePermissions(emptySet(), false)
 
             val legacy = when {
                 profile.protectedAccess -> LEGACY_OPERATIONAL_PERMISSIONS
@@ -312,7 +319,7 @@ class EffectivePermissions private constructor(private val granted: Set<String>)
                     PERMISSION_MODULE[permission]?.let { it !in modules } == true
                 }
             }
-            return EffectivePermissions(legacy)
+            return EffectivePermissions(legacy, profile.roles.hasNormalizedOwnerRole())
         }
     }
 }

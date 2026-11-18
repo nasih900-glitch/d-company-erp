@@ -2,8 +2,10 @@ package cloud.dcompany.erp.ui.screens
 
 import android.graphics.Bitmap
 import android.view.PixelCopy
+import android.os.Build
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -13,8 +15,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -30,9 +34,15 @@ import cloud.dcompany.erp.core.db.ShiftSource
 import cloud.dcompany.erp.core.db.ShiftState
 import cloud.dcompany.erp.core.db.SyncState
 import cloud.dcompany.erp.core.sync.OutboxWorkStatus
+import cloud.dcompany.erp.ui.COMPOSE_PIXEL_COPY_EXCEPTION
 import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceScaffold
+import cloud.dcompany.erp.ui.captureActivityWindowAfterPixelCopyTimeout
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
+import cloud.dcompany.erp.ui.isPixelCopyTimeout
+import cloud.dcompany.erp.ui.isWindowRedrawTimeout
+import androidx.test.filters.SdkSuppress
+import androidx.test.platform.graphics.HardwareRendererCompat
 import cloud.dcompany.erp.ui.screens.customers.CustomerLeaderboardPanel
 import cloud.dcompany.erp.ui.screens.customers.CustomerPlaytimeUiState
 import cloud.dcompany.erp.ui.screens.customers.PlaytimeLeaderboardItem
@@ -44,21 +54,10 @@ import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
-
-private const val COMPOSE_PIXEL_COPY_EXCEPTION =
-    "androidx.compose.ui.test.android.PixelCopyException"
-
-private fun RuntimeException.isPixelCopyTimeout(): Boolean {
-    if (javaClass.name != COMPOSE_PIXEL_COPY_EXCEPTION) return false
-    val status = try {
-        javaClass.getMethod("getCopyResultStatus").invoke(this) as? Int
-    } catch (_: ReflectiveOperationException) {
-        null
-    }
-    return status == PixelCopy.ERROR_TIMEOUT
-}
 
 private fun <T> captureWithSinglePixelCopyTimeoutRetry(
     beforeRetry: () -> Unit = {},
@@ -70,6 +69,18 @@ private fun <T> captureWithSinglePixelCopyTimeoutRetry(
     beforeRetry()
     capture()
 }
+
+private fun composeRedrawTimeout(): ComposeTimeoutException =
+    ComposeTimeoutException("Condition still not satisfied after 2000 ms").apply {
+        stackTrace = arrayOf(
+            StackTraceElement("androidx.compose.ui.test.android.WindowCapture_androidKt",
+                "waitUntil", "WindowCapture.android.kt", 181),
+            StackTraceElement("androidx.compose.ui.test.android.WindowCapture_androidKt",
+                "forceRedraw", "WindowCapture.android.kt", 124),
+            StackTraceElement("androidx.compose.ui.test.android.WindowCapture_androidKt\$captureRegionToImage\$1\$1",
+                "invoke", "WindowCapture.android.kt", 51),
+        )
+    }
 
 /** Deterministic visual fixture: synthetic values are never written to the ERP. */
 class ControlDeckFullShellScreenshotsUiTest {
@@ -129,17 +140,44 @@ class ControlDeckFullShellScreenshotsUiTest {
         capture("control-deck-customers-full-1280x800.png")
     }
 
+    @Test
+    @SdkSuppress(minSdkVersion = Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    fun redrawTimeoutRecoveryCapturesCommittedActivityPixels() {
+        val colour = mutableStateOf(Color.Red)
+        compose.setContent {
+            Box(Modifier.fillMaxSize().background(colour.value).testTag("capture-redraw-probe"))
+        }
+        compose.runOnIdle { colour.value = Color.Blue }
+        val drawingWasEnabled = HardwareRendererCompat.isDrawingEnabled()
+        val bitmap = compose.onNodeWithTag("capture-redraw-probe")
+            .captureActivityWindowAfterPixelCopyTimeout(composeRedrawTimeout()).asAndroidBitmap()
+        try {
+            assertEquals(drawingWasEnabled, HardwareRendererCompat.isDrawingEnabled())
+            assertEquals(android.graphics.Color.BLUE, bitmap.getPixel(bitmap.width / 2, bitmap.height / 2))
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
     private fun capture(filename: String) {
         compose.waitForIdle()
         val output = File(requireNotNull(compose.activity.getExternalFilesDir(null)), filename)
-        val bitmap = captureWithSinglePixelCopyTimeoutRetry(
-            beforeRetry = {
-                compose.runOnIdle { compose.activity.window.decorView.invalidate() }
-                compose.waitForIdle()
-            },
-        ) {
+        val bitmap = try {
+            captureWithSinglePixelCopyTimeoutRetry(
+                beforeRetry = {
+                    compose.runOnIdle { compose.activity.window.decorView.invalidate() }
+                    compose.waitForIdle()
+                },
+            ) {
+                compose.onNodeWithTag("control-deck-full-shell")
+                    .captureToImage().asAndroidBitmap()
+            }
+        } catch (error: RuntimeException) {
             compose.onNodeWithTag("control-deck-full-shell")
-                .captureToImage().asAndroidBitmap()
+                .captureActivityWindowAfterPixelCopyTimeout(error).asAndroidBitmap()
+        } catch (error: AssertionError) {
+            compose.onNodeWithTag("control-deck-full-shell")
+                .captureActivityWindowAfterPixelCopyTimeout(error).asAndroidBitmap()
         }
         try {
             output.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
@@ -153,6 +191,19 @@ class ControlDeckFullShellScreenshotsUiTest {
 }
 
 class ControlDeckScreenshotCaptureRetryPolicyTest {
+    @Test fun onlyKnownWindowCaptureRedrawTimeoutIsRecovered() {
+        assertTrue(composeRedrawTimeout().isWindowRedrawTimeout())
+        val unrelated = ComposeTimeoutException("Condition still not satisfied after 2000 ms")
+        assertFalse(unrelated.isWindowRedrawTimeout())
+        val wrongLocation = composeRedrawTimeout().apply {
+            stackTrace = stackTrace.clone().also { it[0] = StackTraceElement(
+                "androidx.compose.ui.test.android.WindowCapture_androidKt",
+                "waitUntil", "WindowCapture.android.kt", 182,
+            ) }
+        }
+        assertFalse(wrongLocation.isWindowRedrawTimeout())
+    }
+
     @Test fun timeoutThenSuccessCapturesExactlyTwice() {
         val timeout = pixelCopyFailure(PixelCopy.ERROR_TIMEOUT)
         var captures = 0
@@ -266,7 +317,7 @@ private fun PosFullShellFixture() {
         onRetryHeldPayment = {}, onPrepareHeldOrder = {},
         onUpdateHeldOrderDiscount = { _, _ -> }, onContinueHeldOrder = {},
         onConfirmHeldOrder = { _, _, _ -> true }, onConfirmHeldOrderSplit = { _, _ -> true },
-        onConfirmHeldOrderZero = {}, onVoidOrder = { _, _ -> },
+        onConfirmHeldOrderZero = {}, onVoidOrder = { _, _, _ -> },
         onDismissHeldOrderReview = {}, onDismissHeldOrder = {},
         onDismissNotice = {}, onAcknowledgeReceipt = {},
         onRefreshReceiptHistory = {}, onLoadMoreReceiptHistory = {},

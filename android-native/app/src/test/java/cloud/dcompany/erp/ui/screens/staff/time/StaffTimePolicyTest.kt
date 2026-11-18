@@ -24,7 +24,8 @@ class StaffTimePolicyTest {
     @Test fun attendanceDoesNotGrantSalaryOrDirectoryAuthority() {
         assertEquals(StaffTimeAccess(true, false), staffTimeAccess(me()))
         assertEquals(StaffTimeAccess(false, false), staffTimeAccess(me(permissions = listOf("staff.read", "staff.write"))))
-        assertEquals(StaffTimeAccess(true, false), staffTimeAccess(me(listOf("partner"), listOf(STAFF_PAYROLL_WRITE))))
+        assertEquals(StaffTimeAccess(false, false), staffTimeAccess(me(listOf("partner"), listOf(STAFF_PAYROLL_WRITE))))
+        assertEquals(StaffTimeAccess(true, false), staffTimeAccess(me(listOf("partner"), listOf(STAFF_PAYROLL_WRITE, "staff.attendance.write"))))
         assertEquals(StaffTimeAccess(true, true), staffTimeAccess(me(listOf("owner"), listOf(STAFF_PAYROLL_WRITE))))
         assertEquals(StaffTimeAccess(true, false), staffTimeAccess(me(listOf("owner"))))
     }

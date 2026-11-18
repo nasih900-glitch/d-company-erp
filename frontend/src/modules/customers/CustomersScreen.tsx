@@ -7,7 +7,10 @@
  *  - Edit name / email / birthday / notes
  *  - See visit count, total spent, loyalty points
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useLocation } from 'react-router-dom';
+import { useInlineWorkspaceFocus } from '@/lib/use-inline-workspace-focus';
+import { ownerWorkspaceGeneration } from '@/lib/owner-workspace';
 import {
   UserPlus, Edit2, Search, Loader2, AlertCircle, RefreshCw,
   Phone, Award, ShoppingBag, Trophy, Trash2,
@@ -44,6 +47,13 @@ export default function CustomersScreen() {
   const notifications = useNotifications();
   const { me, demo } = useAuth();
   const canWrite = canWriteCustomers(me, demo);
+  const location = useLocation();
+  const editorContext = JSON.stringify([me?.company_id, me?.user_id, me?.branch_id, ownerWorkspaceGeneration(), location.key, location.pathname, location.search, location.hash]);
+  const captureEditorFocus = useRef<(() => void) | null>(null);
+  const originalInvoker = useRef<{ node: HTMLElement; context: string; generation: number } | null>(null);
+  const returnFrame = useRef<number | null>(null);
+  const currentContext = useRef(editorContext); currentContext.current = editorContext;
+  useEffect(() => () => { if (returnFrame.current !== null) window.cancelAnimationFrame(returnFrame.current); }, [editorContext]);
   const [rows, setRows] = useState<CustomerDTO[]>([]);
   const [q, setQ] = useState('');
   const [activeQuery, setActiveQuery] = useState('');
@@ -58,9 +68,15 @@ export default function CustomersScreen() {
   const [wideWorkspace, setWideWorkspace] = useState(() =>
     typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches);
 
+  const wideWorkspaceRef = useRef(wideWorkspace);
   useEffect(() => {
     const media = window.matchMedia('(min-width: 1024px)');
-    const update = () => setWideWorkspace(media.matches);
+    const update = () => {
+      if (media.matches === wideWorkspaceRef.current) return;
+      captureEditorFocus.current?.();
+      wideWorkspaceRef.current = media.matches;
+      setWideWorkspace(media.matches);
+    };
     update();
     media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);
@@ -118,9 +134,27 @@ export default function CustomersScreen() {
   const firstVisibleIndex = (currentPage - 1) * DIRECTORY_PAGE_SIZE;
   const visibleRows = rows.slice(firstVisibleIndex, firstVisibleIndex + DIRECTORY_PAGE_SIZE);
   const editorOpen = addOpen || edit !== null;
+  const editorFocus = useInlineWorkspaceFocus(editorOpen, editorContext);
+  const openFrom = (node: HTMLElement) => {
+    if (returnFrame.current !== null) window.cancelAnimationFrame(returnFrame.current);
+    originalInvoker.current = { node, context: editorContext, generation: ownerWorkspaceGeneration() };
+    editorFocus.openFrom(node);
+  };
+  const closeEditor = () => {
+    const saved = originalInvoker.current; originalInvoker.current = null;
+    editorFocus.closeToInvoker(); if (edit) setEdit(null); else setAddOpen(false);
+    // A closing modal releases background inertness after parent layout effects.
+    if (saved) returnFrame.current = window.requestAnimationFrame(() => {
+      returnFrame.current = null;
+      const active = document.activeElement;
+      if (currentContext.current !== saved.context || ownerWorkspaceGeneration() !== saved.generation || active instanceof HTMLElement && active !== document.body && active.isConnected) return;
+      if (saved.node.isConnected) saved.node.focus();
+      if (document.activeElement !== saved.node) editorFocus.fallbackRef.current?.focus();
+    });
+  };
 
   return (
-    <div>
+    <div ref={editorFocus.fallbackRef} tabIndex={-1}>
       <header className="flex items-end justify-between mb-6 flex-wrap gap-4">
         <div>
           <h2 className="text-2xl font-bold">Customers</h2>
@@ -132,7 +166,7 @@ export default function CustomersScreen() {
           <button className="btn btn-ghost shrink-0" aria-label="Refresh customer directory" onClick={() => load(activeQuery)}><RefreshCw size={14}/></button>
           {canWrite && (
             <button className="btn btn-primary flex-1 sm:flex-none" disabled={editorOpen}
-              onClick={() => setAddOpen(true)}>
+              onClick={event => { openFrom(event.currentTarget); setAddOpen(true); }}>
               <UserPlus size={14}/> Add customer
             </button>
           )}
@@ -212,7 +246,7 @@ export default function CustomersScreen() {
                     {canWrite && <>
                     <button className="text-fg-muted hover:text-accent disabled:opacity-40"
                       aria-label={`Edit ${c.name || c.phone}`}
-                      disabled={editorOpen} onClick={() => setEdit(c)}>
+                      disabled={editorOpen} onClick={event => { openFrom(event.currentTarget); setEdit(c); }}>
                       <Edit2 size={14}/>
                     </button>
                     <button
@@ -246,7 +280,7 @@ export default function CustomersScreen() {
                       aria-label={`Edit ${c.name || c.phone}`}
                       className="btn btn-ghost !min-h-[32px] !min-w-[32px] !px-2 !py-1"
                       disabled={editorOpen}
-                      onClick={() => setEdit(c)}
+                      onClick={event => { openFrom(event.currentTarget); setEdit(c); }}
                     >
                       <Edit2 size={14}/>
                     </button>
@@ -306,11 +340,10 @@ export default function CustomersScreen() {
       {canWrite && editorOpen && (
         <CustomerForm
           inline={wideWorkspace}
+          focusContext={editorContext}
+          captureFocus={captureEditorFocus}
           customer={edit ?? undefined}
-          onClose={() => {
-            if (edit) setEdit(null);
-            else setAddOpen(false);
-          }}
+          onClose={closeEditor}
           onSuccess={() => {
             if (edit) setEdit(null);
             else setAddOpen(false);
@@ -346,8 +379,8 @@ export default function CustomersScreen() {
 }
 
 function CustomerForm({
-  customer, onClose, onSuccess, inline = false,
-}: { customer?: CustomerDTO; onClose: () => void; onSuccess: () => void; inline?: boolean }) {
+  customer, onClose, onSuccess, inline = false, focusContext, captureFocus,
+}: { customer?: CustomerDTO; onClose: () => void; onSuccess: () => void; inline?: boolean; focusContext: string; captureFocus: React.MutableRefObject<(() => void) | null> }) {
   const isEdit = !!customer;
   const [form, setForm] = useState({
     phone: customer?.phone ?? '',
@@ -356,6 +389,39 @@ function CustomerForm({
     birthday: customer?.birthday ? customer.birthday.slice(0, 10) : '',
     notes: customer?.notes ?? '',
   });
+  const formRef = useRef<HTMLFormElement>(null);
+  const entered = useRef(false);
+  const focused = useRef<{ field: string; start: number | null; end: number | null; direction: 'forward' | 'backward' | 'none' | null; context: string } | null>(null);
+  useLayoutEffect(() => {
+    const capture = () => {
+      const active = document.activeElement;
+      if (!(active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) || !formRef.current?.contains(active) || !active.dataset.customerField) { focused.current = null; return; }
+      focused.current = { field: active.dataset.customerField, start: active.selectionStart, end: active.selectionEnd, direction: active.selectionDirection, context: focusContext };
+    };
+    captureFocus.current = capture;
+    return () => { if (captureFocus.current === capture) captureFocus.current = null; };
+  }, [captureFocus, focusContext]);
+  useLayoutEffect(() => {
+    const saved = focused.current; focused.current = null;
+    let frame: number | null = null;
+    if (saved?.context === focusContext) {
+      const generation = ownerWorkspaceGeneration();
+      const restore = () => {
+        const field = formRef.current?.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[data-customer-field="${saved.field}"]`);
+        const active = document.activeElement;
+        if (ownerWorkspaceGeneration() !== generation || !field?.isConnected || field.disabled || active instanceof HTMLElement && active !== document.body && active.isConnected && !formRef.current?.contains(active)) return;
+        field.focus({ preventScroll: true });
+        if (saved.start !== null && saved.end !== null) {
+          try { field.setSelectionRange(saved.start, saved.end, saved.direction ?? undefined); } catch { /* Some input types have no public selection API. */ }
+        }
+        return document.activeElement === field;
+      };
+      // On modal exit the background remains inert until its effect cleanup.
+      if (!restore()) frame = window.requestAnimationFrame(restore);
+    }
+    entered.current = true;
+    return () => { if (frame !== null) window.cancelAnimationFrame(frame); };
+  }, [inline, focusContext]);
   const [phoneUnlocked, setPhoneUnlocked] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -385,11 +451,11 @@ function CustomerForm({
 
   const title = isEdit ? `Edit ${customer!.name || customer!.phone}` : 'New customer';
   const formContent = (
-      <form onSubmit={submit} className="space-y-3" data-testid="customer-editor-form">
+      <form ref={formRef} onSubmit={submit} className="space-y-3" data-testid="customer-editor-form">
         <Field label="Phone (10+ digits, +country if needed)">
           <div className="flex gap-2">
-            <input className="input font-mono flex-1" required disabled={isEdit && !phoneUnlocked} autoFocus={!isEdit}
-              value={form.phone}
+            <input className="input font-mono flex-1" required disabled={isEdit && !phoneUnlocked} autoFocus={!isEdit && !entered.current}
+              data-customer-field="phone" value={form.phone}
               onChange={(e) => setForm({ ...form, phone: e.target.value })}/>
             {isEdit && !phoneUnlocked && (
               <button type="button" className="btn btn-ghost shrink-0 !text-xs"
@@ -406,19 +472,19 @@ function CustomerForm({
           )}
         </Field>
         <Field label="Name">
-          <input className="input" value={form.name}
+          <input className="input" data-customer-field="name" value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}/>
         </Field>
         <Field label="Email (optional)">
-          <input type="email" className="input" value={form.email}
+          <input type="email" className="input" data-customer-field="email" value={form.email}
             onChange={(e) => setForm({ ...form, email: e.target.value })}/>
         </Field>
         <Field label="Birthday (optional)">
-          <input type="date" className="input" value={form.birthday}
+          <input type="date" className="input" data-customer-field="birthday" value={form.birthday}
             onChange={(e) => setForm({ ...form, birthday: e.target.value })}/>
         </Field>
         <Field label="Notes">
-          <textarea className="input" rows={2} value={form.notes}
+          <textarea className="input" data-customer-field="notes" rows={2} value={form.notes}
             onChange={(e) => setForm({ ...form, notes: e.target.value })}/>
         </Field>
         {isEdit && (

@@ -32,7 +32,6 @@ import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertWidthIsAtLeast
-import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
@@ -71,6 +70,7 @@ import cloud.dcompany.erp.core.db.SyncState
 import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.ui.Destination
 import cloud.dcompany.erp.ui.WorkspaceScaffold
+import cloud.dcompany.erp.ui.captureToImage
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
 import cloud.dcompany.erp.ui.theme.AppearancePreference
 import cloud.dcompany.erp.ui.theme.DCompanyTheme
@@ -588,7 +588,7 @@ class PosGlassUiTest {
                                     onRetryRejectedSale = {}, onRetryHeldPayment = {}, onPrepareHeldOrder = {},
                                     onUpdateHeldOrderDiscount = { _, _ -> }, onContinueHeldOrder = {},
                                     onConfirmHeldOrder = { _, _, _ -> true }, onConfirmHeldOrderSplit = { _, _ -> true },
-                                    onConfirmHeldOrderZero = {}, onVoidOrder = { _, _ -> },
+                                    onConfirmHeldOrderZero = {}, onVoidOrder = { _, _, _ -> },
                                     onDismissHeldOrderReview = {}, onDismissHeldOrder = {}, onDismissNotice = {},
                                     onAcknowledgeReceipt = {}, onRefreshReceiptHistory = {}, onLoadMoreReceiptHistory = {},
                                     onOpenCanonicalReceipt = {}, onFocusOldestOverdue = {}, onSnoozeOverdue = {},

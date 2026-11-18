@@ -1,10 +1,10 @@
 import type { Me } from '@/modules/auth/AuthContext';
 import type { ApiError } from '@/lib/api';
-export function canUseStaffTime(me: Pick<Me, 'effective_permissions'> | null | undefined): boolean {
-  return me?.effective_permissions?.some(p => ['staff.attendance.write', 'staff.payroll.write'].includes(p)) === true;
+export function canUseStaffTime(me: Pick<Me, 'effective_permissions'> & Partial<Pick<Me, 'roles'>> | null | undefined): boolean {
+  return me?.effective_permissions?.includes('staff.attendance.write') === true || canManageStaffTime(me);
 }
-export function canManageStaffTime(me: Pick<Me, 'roles' | 'effective_permissions'> | null | undefined): boolean {
-  return Boolean(me?.roles.some(r => ['owner', 'super_owner', 'co_owner'].includes(r)) && me.effective_permissions?.includes('staff.payroll.write'));
+export function canManageStaffTime(me: Pick<Me, 'effective_permissions'> & Partial<Pick<Me, 'roles'>> | null | undefined): boolean {
+  return Boolean(me?.roles?.some(r => ['owner', 'super_owner', 'co_owner'].includes(r)) && me.effective_permissions?.includes('staff.payroll.write'));
 }
 export function confirmedWriteRefusal(error: unknown): boolean {
   const {

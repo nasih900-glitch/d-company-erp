@@ -1031,6 +1031,73 @@ class GamingVoidReceipt(Base, TenantMixin):
     voided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class GamingRetainedBillCorrection(Base, TenantMixin):
+    """Append-only Owner attestation correcting an entirely mistaken retained bill."""
+
+    __tablename__ = "gaming_retained_bill_corrections"
+    __table_args__ = (
+        UniqueConstraint(
+            "retained_order_id", name="uq_gaming_retained_correction_order"
+        ),
+        UniqueConstraint(
+            "company_id", "idempotency_key", name="uq_gaming_retained_correction_key"
+        ),
+        CheckConstraint(
+            "all_items_mistaken_not_supplied AND length(trim(reason)) BETWEEN 3 AND 500 "
+            "AND expected_checkout_version >= 1 AND request_hash ~ '^[0-9a-f]{64}$' "
+            "AND review_hash ~ '^[0-9a-f]{64}$' AND length(trim(idempotency_key)) > 0",
+            name="ck_gaming_retained_correction_identity",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(order_snapshot) = 'object' AND jsonb_typeof(line_snapshot) = 'array' "
+            "AND jsonb_typeof(request_payload) = 'object' AND jsonb_typeof(response_payload) = 'object'",
+            name="ck_gaming_retained_correction_snapshots",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    original_receipt_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("gaming_void_receipts.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    retained_order_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("orders.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    gaming_session_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("gaming_sessions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    actor_user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    terminal_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("terminals.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    expected_checkout_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    all_items_mistaken_not_supplied: Mapped[bool] = mapped_column(
+        Boolean, nullable=False
+    )
+    reason: Mapped[str] = mapped_column(String(500), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    review_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    order_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    line_snapshot: Mapped[list] = mapped_column(JSONB, nullable=False)
+    request_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    response_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    corrected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
 class GamingVoidAddonLine(Base):
     """Immutable one-to-one add-on and retained POS line evidence."""
 
@@ -1079,7 +1146,7 @@ def _guard_gaming_void_evidence_delete(_mapper, _connection, _row) -> None:
     raise ValueError("gaming Void financial evidence cannot be deleted")
 
 
-for _immutable_model in (GamingVoidReceipt, GamingVoidAddonLine):
+for _immutable_model in (GamingVoidReceipt, GamingVoidAddonLine, GamingRetainedBillCorrection):
     event.listen(_immutable_model, "before_update", _guard_gaming_void_evidence_update)
     event.listen(_immutable_model, "before_delete", _guard_gaming_void_evidence_delete)
 

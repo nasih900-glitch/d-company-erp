@@ -44,6 +44,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.ViewRootForTest
+import androidx.compose.ui.input.pointer.motionEventSpy
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -59,7 +60,6 @@ import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.assertTextEquals
-import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -232,17 +232,59 @@ private class DiagnosticRouteOwner(
     @Synchronized fun events(): List<DiagnosticRouteEvent> = history.toList()
 }
 
+private class RailFailureInputObserver {
+    private var count = 0
+    private var first: org.json.JSONObject? = null
+    private var latest: org.json.JSONObject? = null
+
+    @Synchronized fun record(event: android.view.MotionEvent) {
+        // motionEventSpy observes the real dispatched event without consuming it.
+        runCatching {
+            val sample = org.json.JSONObject()
+                .put("action", event.actionMasked).put("event_ms", event.eventTime)
+                .put("down_ms", event.downTime).put("wall_ms", System.currentTimeMillis())
+                .put("x", event.x).put("y", event.y).put("pointers", event.pointerCount)
+            count += 1
+            if (first == null) first = sample
+            latest = sample
+        }
+    }
+
+    @Synchronized fun snapshot(): org.json.JSONObject = org.json.JSONObject()
+        .put("count", count).put("first", first ?: org.json.JSONObject.NULL)
+        .put("latest", latest ?: org.json.JSONObject.NULL)
+}
+
 private class BoundedRailTrace(private val maximumEvents: Int = 512) {
     private val events = mutableListOf<ExecutiveRailScrubTraceEvent>()
     private var dropped = 0
+    private var latest: ExecutiveRailScrubTraceEvent? = null
+    private var lastStopped: ExecutiveRailScrubTraceEvent? = null
 
     @Synchronized
     fun record(event: ExecutiveRailScrubTraceEvent) {
+        latest = event
+        if (event.kind == ExecutiveRailScrubTraceKind.STOPPED) lastStopped = event
         if (events.size < maximumEvents) events += event else dropped += 1
     }
 
     @Synchronized fun snapshot(): Pair<List<ExecutiveRailScrubTraceEvent>, Int> =
         events.toList() to dropped
+
+    @Synchronized fun failureSnapshot(): org.json.JSONObject {
+        fun event(value: ExecutiveRailScrubTraceEvent?): Any = value?.let {
+            org.json.JSONObject().put("sequence", it.sequence).put("uptime_ms", it.uptimeMillis)
+                .put("kind", it.kind.name).put("phase", it.phase.name)
+                .put("candidate", it.candidate?.name ?: org.json.JSONObject.NULL)
+                .put("target", it.proposedTarget?.name ?: org.json.JSONObject.NULL)
+                .put("committed", it.localCommitted.name)
+                .put("observed", it.observedDestination?.name ?: org.json.JSONObject.NULL)
+                .put("scroll_delta", it.scrollDeltaPx)
+                .put("stop", it.stopReason?.name ?: org.json.JSONObject.NULL)
+        } ?: org.json.JSONObject.NULL
+        return org.json.JSONObject().put("stored", events.size).put("dropped", dropped)
+            .put("latest", event(latest)).put("last_stopped", event(lastStopped))
+    }
 
     @Synchronized
     fun containsStop(): Boolean = events.any { it.kind == ExecutiveRailScrubTraceKind.STOPPED }
@@ -367,8 +409,8 @@ class WorkspaceScaffoldUiTest {
         assertTrue(
             "Window must fit the observed display mode: window=${proof.windowBounds} " +
                 "mode=${proof.modeWidthPx}x${proof.modeHeightPx}",
-            proof.windowBounds.width() <= proof.modeWidthPx &&
-                proof.windowBounds.height() <= proof.modeHeightPx,
+            maxOf(proof.windowBounds.width(), proof.windowBounds.height()) <= maxOf(proof.modeWidthPx, proof.modeHeightPx) &&
+                minOf(proof.windowBounds.width(), proof.windowBounds.height()) <= minOf(proof.modeWidthPx, proof.modeHeightPx),
         )
         assertTrue(
             "Decor view must be attached and measured: ${proof.decorWidthPx}x${proof.decorHeightPx}",
@@ -527,6 +569,102 @@ class WorkspaceScaffoldUiTest {
             expectedHeightDp = 563,
             fontScale = 1.0f,
         )
+    }
+
+    @Test
+    fun hideDuringRailEnterAnimationUsesStableWorkspaceGestureArea() {
+        render(width = 1_280.dp, height = 800.dp, touchExplorationOverride = false)
+        val route = compose.onNodeWithTag("workspace-route-content")
+        val visibleRoute = route.getUnclippedBoundsInRoot()
+        compose.onNodeWithTag("workspace-rail-hide").performClick()
+        compose.waitUntil(5_000L) {
+            compose.onAllNodesWithTag("workspace-navigation-rail").fetchSemanticsNodes().isEmpty()
+        }
+        val hiddenRoute = route.getUnclippedBoundsInRoot()
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.onNodeWithTag("workspace-rail-show").performClick()
+            compose.mainClock.advanceTimeBy(48L)
+            val movingRail = compose.onNodeWithTag("workspace-navigation-rail")
+                .getUnclippedBoundsInRoot()
+            val startX = (8.dp + ExecutiveSidebarWidth - 12.dp)
+            assertTrue(
+                "The regression must start outside the still-sliding rail: $movingRail",
+                movingRail.right < startX,
+            )
+            assertEquals(
+                "The route must use its final visible-rail width while the rail still slides",
+                visibleRoute,
+                route.getUnclippedBoundsInRoot(),
+            )
+            val density = compose.activity.resources.displayMetrics.density
+            compose.onNodeWithTag("workspace-wide-gesture-host").performTouchInput {
+                val start = Offset(startX.value * density, height * 0.5f)
+                down(start)
+                advanceEventTime(24L)
+                moveTo(Offset(start.x - 120f * density, start.y))
+                advanceEventTime(24L)
+                up()
+            }
+            compose.mainClock.advanceTimeByFrame()
+            compose.onNodeWithTag("workspace-rail-reveal-hint").assertIsDisplayed()
+            assertEquals(
+                "Interrupting the rail animation must restore the final hidden-rail width",
+                hiddenRoute,
+                route.getUnclippedBoundsInRoot(),
+            )
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+    }
+
+    @Test
+    fun railTracksFingerBeforeReleaseAndReturnsAfterReversalOrCancellation() {
+        render(width = 1_280.dp, height = 800.dp, touchExplorationOverride = false)
+        val rail = compose.onNodeWithTag("workspace-navigation-rail")
+        val route = compose.onNodeWithTag("workspace-route-content")
+        val header = compose.onNodeWithTag("workspace-wide-top-stack")
+        val openRail = rail.getUnclippedBoundsInRoot()
+        val openRoute = route.getUnclippedBoundsInRoot()
+        val openHeader = header.getUnclippedBoundsInRoot()
+        val density = compose.activity.resources.displayMetrics.density
+        val start = nodeCenterInRoot("workspace-navigation-rail") + Offset(32f * density, 0f)
+        val hide = beginHeldPointer(start)
+        try {
+            hide.slideTo(start - Offset(88f * density, 0f))
+            val movingRail = rail.getUnclippedBoundsInRoot()
+            assertTrue("The rail must follow the finger before lift: $movingRail",
+                openRail.right - movingRail.right in 87.dp..89.dp)
+            assertEquals(openRoute, route.getUnclippedBoundsInRoot())
+            assertEquals(openHeader, header.getUnclippedBoundsInRoot())
+
+            hide.moveTo(start - Offset(24f * density, 0f))
+            assertTrue("Reversing the finger must immediately move the rail back", rail.getUnclippedBoundsInRoot().right > movingRail.right)
+            hide.up()
+            compose.waitForIdle()
+            assertEquals(openRail, rail.getUnclippedBoundsInRoot())
+            assertEquals(openRoute, route.getUnclippedBoundsInRoot())
+        } finally { hide.cancelIfDown() }
+
+        compose.onNodeWithTag("workspace-rail-hide").performClick()
+        compose.waitUntil(5_000L) {
+            compose.onAllNodesWithTag("workspace-navigation-rail").fetchSemanticsNodes().isEmpty()
+        }
+        val hiddenRoute = route.getUnclippedBoundsInRoot()
+        val hiddenHeader = header.getUnclippedBoundsInRoot()
+        val revealStart = Offset(14f * density, start.y)
+        val reveal = beginHeldPointer(revealStart)
+        try {
+            reveal.slideTo(revealStart + Offset(84f * density, 0f))
+            val revealing = rail.getUnclippedBoundsInRoot()
+            assertTrue("The hidden rail must appear before lift: $revealing", revealing.right in 90.dp..94.dp)
+            assertEquals(hiddenRoute, route.getUnclippedBoundsInRoot())
+            assertEquals(hiddenHeader, header.getUnclippedBoundsInRoot())
+        } finally { reveal.cancelIfDown() }
+        compose.waitUntil(5_000L) {
+            compose.onAllNodesWithTag("workspace-navigation-rail").fetchSemanticsNodes().isEmpty()
+        }
+        assertEquals(hiddenRoute, route.getUnclippedBoundsInRoot())
     }
 
     @Test
@@ -1555,7 +1693,7 @@ class WorkspaceScaffoldUiTest {
     }
 
     @Test
-    fun liveRailFollowsStationaryDwellsBeforeUpAndRetainsRouteState() {
+    fun liveRailFollowsEnteredTargetsBeforeUpAndRetainsRouteState() {
         assertRequestedDisplayHost()
         val destinations = CopyOnWriteArrayList<Destination>()
         val constructions = ConcurrentHashMap<Destination, Int>()
@@ -1588,7 +1726,7 @@ class WorkspaceScaffoldUiTest {
             assertChromeMatches(baseline, "live scrub POS before up")
             captureRoot(
                 name = "workspace-live-rail-before-up",
-                testName = "liveRailFollowsStationaryDwellsBeforeUpAndRetainsRouteState",
+                testName = "liveRailFollowsEnteredTargetsBeforeUpAndRetainsRouteState",
                 expectedWidthDp = 1_280,
                 expectedHeightDp = 800,
                 fontScale = 1.0f,
@@ -1602,14 +1740,14 @@ class WorkspaceScaffoldUiTest {
         }
 
         assertEquals(listOf(Destination.Gaming, Destination.Pos), destinations.toList())
-        assertEquals("Only dwell-committed Gaming constructs", 1, constructions[Destination.Gaming])
-        assertEquals("Only dwell-committed POS constructs", 1, constructions[Destination.Pos])
+        assertEquals("Only entered Gaming constructs", 1, constructions[Destination.Gaming])
+        assertEquals("Only entered POS constructs", 1, constructions[Destination.Pos])
         compose.onNodeWithTag("workspace-rail-Dashboard").performSemanticsAction(SemanticsActions.OnClick)
         compose.onNodeWithText("Dashboard count 1").assertIsDisplayed()
     }
 
     @Test
-    fun stationaryLongPressStillStartsTheSameDwellNavigation() {
+    fun stationaryLongPressCanClaimBeforeAnEnteredTargetNavigates() {
         assertRequestedDisplayHost()
         val destinations = CopyOnWriteArrayList<Destination>()
         val trace = BoundedRailTrace()
@@ -1626,7 +1764,6 @@ class WorkspaceScaffoldUiTest {
                 "A stationary long press must claim before any vertical slide",
                 trace.snapshot().first.any { it.kind == ExecutiveRailScrubTraceKind.CLAIMED },
             )
-            Thread.sleep(ExecutiveRailTargetDwellMillis + 80L)
             assertTrue("Holding the origin must not navigate", destinations.isEmpty())
             pointer.moveTo(gaming)
             compose.waitUntil(3_000) { destinations.lastOrNull() == Destination.Gaming }
@@ -1653,7 +1790,6 @@ class WorkspaceScaffoldUiTest {
         try {
             pointer.slideTo(Offset(dashboard.x + 24f * density, dashboard.y + 24f * density))
             pointer.activateAt(nodeCenterInRoot("workspace-rail-Gaming"))
-            Thread.sleep(ExecutiveRailTargetDwellMillis + 80L)
             assertFalse(
                 "An ambiguous stream must never gain scrub ownership",
                 trace.snapshot().first.any { it.kind == ExecutiveRailScrubTraceKind.CLAIMED },
@@ -1694,18 +1830,17 @@ class WorkspaceScaffoldUiTest {
         )
         val dashboard = nodeCenterInRoot("workspace-rail-Dashboard")
         val gaming = nodeCenterInRoot("workspace-rail-Gaming")
-        // Dispatch movement and its interruption together. The follower's 190 ms dwell
-        // uses real uptime, so separate Compose lookups here could legitimately allow
-        // navigation on a busy host before the next pointer event is injected.
+        val density = compose.activity.resources.displayMetrics.density
+        val insideOrigin = Offset(dashboard.x, dashboard.y + 12f * density)
         compose.onNodeWithTag("phase-b-workspace-root").performTouchInput {
             down(dashboard)
             advanceEventTime(32L)
-            moveTo(gaming)
-            down(1, Offset(gaming.x + 12f, gaming.y))
+            moveTo(insideOrigin)
+            down(1, Offset(insideOrigin.x + 12f, insideOrigin.y))
             up(1)
+            moveTo(gaming)
             up()
         }
-        Thread.sleep(ExecutiveRailTargetDwellMillis + 80L)
         assertTrue(
             "A second pointer must stop a claimed immediate slide",
             trace.snapshot().first.any {
@@ -1718,16 +1853,15 @@ class WorkspaceScaffoldUiTest {
         compose.onNodeWithTag("phase-b-workspace-root").performTouchInput {
             down(dashboard)
             advanceEventTime(32L)
-            moveTo(gaming)
+            moveTo(insideOrigin)
             cancel()
         }
         assertEquals(
             "The cancelled fresh stream must also have claimed immediate ownership",
             2, trace.snapshot().first.count { it.kind == ExecutiveRailScrubTraceKind.CLAIMED },
         )
-        Thread.sleep(ExecutiveRailTargetDwellMillis + 80L)
         compose.waitForIdle()
-        assertTrue("Cancelled contact must not finish its pending dwell", destinations.isEmpty())
+        assertTrue("Cancelled contact inside the origin must not navigate", destinations.isEmpty())
     }
 
     @Test
@@ -1874,7 +2008,7 @@ class WorkspaceScaffoldUiTest {
                 requests.contains(Destination.Pos),
             )
             assertTrue(
-                "The follower must observe the destination-equal owner revision before stopping",
+                "The move must observe the destination-equal owner revision before stopping",
                 trace.containsObservedOwnerAfter(
                     uptimeMillis = abaCompletedAt,
                     expected = WorkspaceRouteSnapshot(Destination.Gaming, 3L),
@@ -1930,10 +2064,6 @@ class WorkspaceScaffoldUiTest {
         val oldPointer = beginHeldPointer(dashboard)
         try {
             oldPointer.slideTo(gaming)
-            // The scrub follower deliberately uses real uptime for its 190 ms dwell. Give that
-            // bounded follower interval wall-clock time before polling Compose state; advancing
-            // the injected pointer clock above only establishes immediate vertical ownership.
-            Thread.sleep(ExecutiveRailTargetDwellMillis + 80L)
             compose.waitUntil(3_000) {
                 oldRequests.contains(Destination.Gaming) || trace.containsStop()
             }
@@ -1951,7 +2081,6 @@ class WorkspaceScaffoldUiTest {
                 )
             }
             oldPointer.moveTo(pos)
-            Thread.sleep(ExecutiveRailTargetDwellMillis + 80L)
             assertFalse("The disposed old stream must not request POS", oldRequests.contains(Destination.Pos))
             assertTrue("The replacement owner must not inherit the held pointer", newRequests.isEmpty())
             oldPointer.up()
@@ -1960,15 +2089,12 @@ class WorkspaceScaffoldUiTest {
         }
 
         // The replacement pointer-input effect saw the tail of the old physical stream. Let its
-        // awaitEachGesture cleanup observe the old UP before beginning the independent fresh DOWN;
-        // otherwise Compose's synthetic dispatcher can admit the fresh slide while starving
-        // the follower launched from that half-overlapped gesture.
+        // awaitEachGesture cleanup observe the old UP before beginning the independent fresh DOWN.
         compose.waitForIdle()
         val stopsBeforeFreshGesture = trace.stopCount()
         val freshPointer = beginHeldPointer(dashboard)
         try {
             freshPointer.slideTo(gaming)
-            Thread.sleep(ExecutiveRailTargetDwellMillis + 80L)
             compose.waitUntil(3_000) {
                 newRequests.contains(Destination.Gaming) || trace.stopCount() > stopsBeforeFreshGesture
             }
@@ -1995,7 +2121,7 @@ class WorkspaceScaffoldUiTest {
     }
 
     @Test
-    fun liveRailFastCrossSkipsConstructionAndMoreStaysTapOnly() {
+    fun liveRailFollowsEachEnteredRowAndMoreStaysTapOnly() {
         assertRequestedDisplayHost()
         val destinations = CopyOnWriteArrayList<Destination>()
         val constructions = ConcurrentHashMap<Destination, Int>()
@@ -2014,18 +2140,17 @@ class WorkspaceScaffoldUiTest {
         val pointer = beginHeldPointer(dashboard)
         try {
             pointer.slideTo(gaming)
-            Thread.sleep(45L)
+            assertEquals(listOf(Destination.Gaming), destinations.toList())
+            compose.onNodeWithText("Gaming count 0").assertIsDisplayed()
+            assertEquals(1, constructions[Destination.Gaming])
+
             pointer.moveTo(pos)
-            compose.waitUntil(3_000) { destinations.lastOrNull() == Destination.Pos }
-            assertFalse("A crossed row must not navigate", destinations.contains(Destination.Gaming))
-            assertEquals("A crossed row must not construct", null, constructions[Destination.Gaming])
+            assertEquals(listOf(Destination.Gaming, Destination.Pos), destinations.toList())
             compose.onNodeWithText("Pos count 0").assertIsDisplayed()
-            compose.waitUntil(3_000) { constructions[Destination.Pos] == 1 }
             assertEquals(1, constructions[Destination.Pos])
 
             val beforeMore = destinations.toList()
             pointer.moveTo(more)
-            Thread.sleep(ExecutiveRailTargetDwellMillis + 80L)
             compose.waitForIdle()
             compose.onNodeWithTag("workspace-more-panel").assertDoesNotExist()
             assertEquals("More must not open or navigate under scrub contact", beforeMore, destinations.toList())
@@ -2061,13 +2186,14 @@ class WorkspaceScaffoldUiTest {
         val reports = nodeCenterInRoot("workspace-rail-Reports")
         val pointer = beginHeldPointer(dashboard)
         try {
-            pointer.slideTo(reports)
+            val density = compose.activity.resources.displayMetrics.density
+            pointer.slideTo(Offset(dashboard.x, dashboard.y + 12f * density))
             compose.runOnIdle {
                 allowed.value = AllowedDestinations.filterNot { it == Destination.Reports }
             }
-            Thread.sleep(ExecutiveRailTargetDwellMillis + 80L)
             compose.waitForIdle()
-            assertFalse("Removed permission must cancel the candidate", destinations.contains(Destination.Reports))
+            pointer.moveTo(reports)
+            assertTrue("A changed permission model must end the held stream", destinations.isEmpty())
             compose.onNodeWithTag("workspace-rail-Reports").assertDoesNotExist()
             pointer.up()
         } finally {
@@ -2082,11 +2208,17 @@ class WorkspaceScaffoldUiTest {
     fun largeTextEdgeScrollSuppressesTransitRoutesAndCommitsStableSettings() {
         assertRequestedDisplayHost()
         val destinations = CopyOnWriteArrayList<Destination>()
+        val trace = BoundedRailTrace()
+        val input = RailFailureInputObserver()
+        val current = mutableStateOf(Destination.Dashboard)
         render(
             width = 1_280.dp,
             height = 360.dp,
             fontScale = 1.3f,
             onDestinationChanged = destinations::add,
+            currentDestinationState = current,
+            railScrubTrace = trace::record,
+            motionEventObserver = input::record,
         )
         captureRoot(
             name = "workspace-live-rail-edge-font1_3-initial",
@@ -2097,15 +2229,31 @@ class WorkspaceScaffoldUiTest {
         )
         val dashboard = nodeCenterInRoot("workspace-rail-Dashboard")
         val viewport = nodeBoundsInRootPixels("workspace-navigation-rail-scrub-viewport")
+        val owner = compose.onNodeWithTag("phase-b-workspace-root").fetchSemanticsNode().root as ViewRootForTest
+        val activity = compose.activity
+        var stage = "settings-visibility"
+        var lastPredicateFailure: Throwable? = null
         val pointer = beginHeldPointer(dashboard)
         try {
             pointer.slideTo(Offset(dashboard.x, viewport.bottom - 3f))
-            compose.waitUntil(5_000) {
+            waitForWallPacedRailVisibility(
+                clock = object : RailWaitClock {
+                    override var autoAdvance: Boolean
+                        get() = compose.mainClock.autoAdvance
+                        set(value) { compose.mainClock.autoAdvance = value }
+                    override val currentTime: Long get() = compose.mainClock.currentTime
+                    override fun advanceExact(milliseconds: Long) {
+                        compose.mainClock.advanceTimeBy(milliseconds, ignoreFrameDuration = true)
+                    }
+                },
+                timeout = { throw androidx.compose.ui.test.ComposeTimeoutException("Condition still not satisfied after 5000 ms") },
+            ) {
                 runCatching {
                     compose.onNodeWithTag("workspace-rail-Settings").assertIsDisplayed()
                     true
-                }.getOrDefault(false)
+                }.onFailure { lastPredicateFailure = it }.getOrDefault(false)
             }
+            stage = "settings-exposed-capture"
             captureRoot(
                 name = "workspace-live-rail-edge-font1_3-settings-exposed",
                 testName = "largeTextEdgeScrollSuppressesTransitRoutesAndCommitsStableSettings",
@@ -2113,7 +2261,9 @@ class WorkspaceScaffoldUiTest {
                 expectedHeightDp = 360,
                 fontScale = 1.3f,
             )
+            stage = "settings-stable"
             val settings = waitForStableRailTargetOutsideEdgeZone("workspace-rail-Settings")
+            stage = "settings-settled-capture"
             captureRoot(
                 name = "workspace-live-rail-edge-font1_3-settings-settled",
                 testName = "largeTextEdgeScrollSuppressesTransitRoutesAndCommitsStableSettings",
@@ -2121,6 +2271,8 @@ class WorkspaceScaffoldUiTest {
                 expectedHeightDp = 360,
                 fontScale = 1.3f,
             )
+            stage = "route-commit"
+            assertTrue("Edge scrolling alone must not navigate", destinations.isEmpty())
             pointer.moveTo(settings)
             compose.waitUntil(3_000) { destinations.lastOrNull() == Destination.Settings }
             assertEquals(
@@ -2130,6 +2282,16 @@ class WorkspaceScaffoldUiTest {
             )
             assertTrue(pointer.isDown)
             pointer.up()
+            compose.waitForIdle()
+            assertEquals(listOf(Destination.Settings), destinations.toList())
+        } catch (failure: Throwable) {
+            // Observe before cancellation; no raw predicate message is attached or printed.
+            runCatching {
+                failure.addSuppressed(AssertionError("DCOMPANY_RAIL_FAILURE_V1=" + railFailureObservation(
+                    owner, activity, stage, pointer.isDown, lastPredicateFailure, trace, input, current,
+                )))
+            }
+            throw failure
         } finally {
             pointer.cancelIfDown()
         }
@@ -2151,7 +2313,6 @@ class WorkspaceScaffoldUiTest {
         val pointer = beginHeldPointer(dashboard)
         try {
             pointer.slideTo(pos)
-            Thread.sleep(ExecutiveRailTargetDwellMillis + 80L)
             pointer.up()
         } finally {
             pointer.cancelIfDown()
@@ -2166,7 +2327,6 @@ class WorkspaceScaffoldUiTest {
         val bodyPointer = beginHeldPointer(bodyStart)
         try {
             bodyPointer.slideTo(Offset(bodyStart.x + 90f, bodyStart.y + 80f))
-            Thread.sleep(ExecutiveRailTargetDwellMillis + 60L)
             bodyPointer.up()
         } finally {
             bodyPointer.cancelIfDown()
@@ -2233,7 +2393,7 @@ class WorkspaceScaffoldUiTest {
             y = (before.top + before.bottom) / 2f,
         )
         val density = compose.activity.resources.displayMetrics.density
-        val stepPx = 24f * density
+        val stepPx = 4f * density
         val gestureDurationMillis = 96L
         assertTrue(
             "The slide probe must finish before the platform long-press threshold",
@@ -2276,7 +2436,7 @@ class WorkspaceScaffoldUiTest {
             "A claimed vertical slide must suppress ordinary drag scrolling away from edge zones",
             0f, geometryDeltaPx, 1f,
         )
-        assertTrue("Releasing before stable target dwell must not navigate", destinations.isEmpty())
+        assertTrue("A slide that stays in its origin row must not navigate", destinations.isEmpty())
         assertEquals(
             "A short slide must not construct another destination body",
             mapOf(Destination.Dashboard to 1),
@@ -2314,9 +2474,7 @@ class WorkspaceScaffoldUiTest {
 
             compose.runOnIdle { current.value = Destination.Dashboard }
             compose.onNodeWithText("Dashboard count 0").assertIsDisplayed()
-            Thread.sleep(120L)
             pointer.moveTo(pos)
-            Thread.sleep(ExecutiveRailTargetDwellMillis + 80L)
             captureRoot(
                 name = "workspace-live-rail-external-reset-before-up",
                 testName = "externalRouteReplacementCancelsClaimedRailStream",
@@ -2338,6 +2496,74 @@ class WorkspaceScaffoldUiTest {
         compose.onNodeWithTag("workspace-rail-Pos").performSemanticsAction(SemanticsActions.OnClick)
         compose.onNodeWithText("Pos count 0").assertIsDisplayed()
         assertEquals(listOf(Destination.Gaming, Destination.Pos), destinations.toList())
+    }
+
+    private fun railFailureObservation(
+        owner: ViewRootForTest,
+        activity: ComponentActivity,
+        stage: String,
+        pointerHeld: Boolean,
+        predicateFailure: Throwable?,
+        trace: BoundedRailTrace,
+        input: RailFailureInputObserver,
+        current: MutableState<Destination>,
+    ): org.json.JSONObject {
+        val diagnostic = org.json.JSONObject().put("stage", stage)
+            .put("failure_wall_ms", System.currentTimeMillis()).put("failure_uptime_ms", SystemClock.uptimeMillis())
+            .put("pointer_held", pointerHeld).put("last_predicate_class", predicateFailure?.javaClass?.name ?: "NONE")
+            .put("last_predicate_kind", when {
+                predicateFailure == null -> "NONE"
+                predicateFailure is AssertionError -> "DISPLAY_ASSERTION"
+                predicateFailure.javaClass.simpleName == "ComposeTimeoutException" -> "COMPOSE_TIMEOUT"
+                else -> "OTHER"
+            }).put("trace", trace.failureSnapshot()).put("input", input.snapshot())
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        val ready = java.util.concurrent.CountDownLatch(1)
+        val expired = java.util.concurrent.atomic.AtomicBoolean(false)
+        val sample = AtomicReference(org.json.JSONObject().put("status", "TIMEOUT"))
+        val callback = Runnable {
+            try {
+                if (!expired.get()) runCatching {
+                    val view = owner.view
+                    val nodes = owner.semanticsOwner.getAllSemanticsNodes(mergingEnabled = false)
+                    fun node(tag: String) = nodes.singleOrNull { it.config.getOrNull(SemanticsProperties.TestTag) == tag }
+                    fun bounds(tag: String): Any = runCatching { node(tag)?.let {
+                        val b = it.boundsInRoot
+                        org.json.JSONObject().put("bounds", org.json.JSONArray(listOf(b.left, b.top, b.right, b.bottom)))
+                            .put("attached", it.layoutInfo.isAttached).put("placed", it.layoutInfo.isPlaced)
+                    } }.getOrNull() ?: org.json.JSONObject.NULL
+                    val range = node("workspace-navigation-rail-scrub-viewport")?.config
+                        ?.getOrNull(SemanticsProperties.VerticalScrollAxisRange)
+                    val accessibility = activity.getSystemService(android.content.Context.ACCESSIBILITY_SERVICE)
+                        as android.view.accessibility.AccessibilityManager
+                    val observed = org.json.JSONObject().put("status", "READY").put("route", current.value.name)
+                        .put("focused", view.hasWindowFocus()).put("resumed", activity.lifecycle.currentState
+                            .isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))
+                        .put("attached", view.isAttachedToWindow).put("laid_out", view.isLaidOut)
+                        .put("layout_requested", view.isLayoutRequested).put("pending_compose_layout", owner.hasPendingMeasureOrLayout)
+                        .put("touch_exploration", accessibility.isTouchExplorationEnabled)
+                        .put("accessibility_enabled", accessibility.isEnabled)
+                        .put("decor_width", activity.window.decorView.width).put("decor_height", activity.window.decorView.height)
+                        .put("root", bounds("phase-b-workspace-root")).put("dashboard", bounds("workspace-rail-Dashboard"))
+                        .put("viewport", bounds("workspace-navigation-rail-scrub-viewport")).put("settings", bounds("workspace-rail-Settings"))
+                        .put("scroll", range?.let { org.json.JSONObject().put("value", it.value().takeIf { value -> value.isFinite() } ?: org.json.JSONObject.NULL)
+                            .put("max", it.maxValue().takeIf { value -> value.isFinite() } ?: org.json.JSONObject.NULL).put("reverse", it.reverseScrolling) } ?: org.json.JSONObject.NULL)
+                    if (!expired.get()) sample.set(observed)
+                }.onFailure {
+                    if (!expired.get()) sample.set(org.json.JSONObject().put("status", "ERROR"))
+                }
+            } finally {
+                ready.countDown()
+            }
+        }
+        try {
+            if (handler.post(callback)) ready.await(250, java.util.concurrent.TimeUnit.MILLISECONDS)
+            else sample.set(org.json.JSONObject().put("status", "POST_REJECTED"))
+        } finally {
+            expired.set(true)
+            handler.removeCallbacks(callback)
+        }
+        return diagnostic.put("sample", sample.get())
     }
 
     private inner class HeldPointer {
@@ -2464,6 +2690,7 @@ class WorkspaceScaffoldUiTest {
         )
     }
 
+    @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
     private fun render(
         width: Dp,
         height: Dp,
@@ -2488,6 +2715,7 @@ class WorkspaceScaffoldUiTest {
         railRouteAuthority: ExecutiveRailRouteAuthority? = null,
         railRouteAuthorityState: MutableState<ExecutiveRailRouteAuthority?>? = null,
         railScrubTrace: ExecutiveRailScrubTraceSink? = null,
+        motionEventObserver: ((android.view.MotionEvent) -> Unit)? = null,
         backgroundStateState: MutableState<WorkspaceBackgroundUiState>? = null,
         workspaceSceneObserver: ((WorkspaceGlassScene?) -> Unit)? = null,
         commandDialogRootObserver: ((View) -> Unit)? = null,
@@ -2517,7 +2745,8 @@ class WorkspaceScaffoldUiTest {
                 DCompanyTheme(appearancePreference) {
                     Box(
                         Modifier.width(widthState?.value ?: width).height(height)
-                            .testTag("phase-b-workspace-root"),
+                            .testTag("phase-b-workspace-root")
+                            .then(if (motionEventObserver == null) Modifier else Modifier.motionEventSpy(motionEventObserver)),
                     ) {
                         WorkspaceScaffold(
                             destinations = destinationsState?.value ?: AllowedDestinations,

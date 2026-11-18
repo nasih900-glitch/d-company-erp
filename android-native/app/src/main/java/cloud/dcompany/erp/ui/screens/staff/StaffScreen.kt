@@ -1,5 +1,7 @@
 package cloud.dcompany.erp.ui.screens.staff
 
+import cloud.dcompany.erp.core.auth.roleDisplayLabel
+import cloud.dcompany.erp.core.auth.rolePurposeSummary
 import cloud.dcompany.erp.ui.theme.operationalDanger
 import cloud.dcompany.erp.ui.theme.operationalDangerContainer
 import cloud.dcompany.erp.ui.theme.operationalGood
@@ -449,7 +451,7 @@ private fun StaffDirectory(state: StaffUiState, vm: StaffViewModel, modifier: Mo
             row.name.contains(needle, ignoreCase = true) ||
                 row.email.contains(needle, ignoreCase = true) ||
                 row.phone.orEmpty().contains(needle, ignoreCase = true) ||
-                row.roles.any { it.contains(needle, ignoreCase = true) }
+                row.roles.any { it.contains(needle, ignoreCase = true) || roleDisplayLabel(it).contains(needle, ignoreCase = true) }
         }
     }
 
@@ -542,8 +544,8 @@ private fun StaffRowCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    row.phone?.takeIf(String::isNotBlank)?.let { "$it · ${row.roles.joinToString(", ").ifBlank { "No role" }}" }
-                        ?: row.roles.joinToString(", ").ifBlank { "No role assigned" },
+                    row.phone?.takeIf(String::isNotBlank)?.let { "$it · ${row.roles.filter { it != "pos_discount" }.joinToString(", ") { roleDisplayLabel(it) }.ifBlank { "No role" }}" }
+                        ?: row.roles.filter { it != "pos_discount" }.joinToString(", ") { roleDisplayLabel(it) }.ifBlank { "No role assigned" },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -686,18 +688,52 @@ private fun EditDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (editor.roleChangesLocked) {
+                    OutlinedTextField(
+                        value = roleDisplayLabel(editor.roleCode, editor.managedRoles != null),
+                        onValueChange = {},
+                        label = { Text("Role") },
+                        enabled = false,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    RoleDropdown(editableStaffRoles(roles, editor), editor.roleCode, editor.managedRoles != null, !saving) {
+                        onChange(editor.copy(roleCode = it, replaceMultipleRoles = true))
+                    }
+                }
+                Text(
+                    (if (editor.hasMultiplePrimaryRoles) "Selected role purpose: " else "") + rolePurposeSummary(editor.roleCode),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+                if (editor.hasMultiplePrimaryRoles) {
+                    Text(
+                        "This account combines multiple roles. A role replacement removes other assignments. Profile-only saves preserve them.",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    if (!editor.roleChangesLocked) TextButton(
+                        onClick = { onChange(editor.copy(replaceMultipleRoles = true)) },
+                        enabled = !saving && !editor.replaceMultipleRoles,
+                    ) {
+                        Text(if (editor.replaceMultipleRoles) "Save will use only the selected role" else "Use only the selected role when saving")
+                    }
+                }
+                Text(
+                    "Role choices use existing permissions. Configurable access may differ; review Access Control for exact actions.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 if (editor.accessChangesLocked) {
                     Text(
-                        if (editor.isSelf) {
-                            "You can't change your own role or status."
-                        } else {
-                            "Only the protected owner can change another owner account's role or status."
+                        when {
+                            editor.isSelf -> "You can't change your own role or status."
+                            editor.managedRoles?.contains("super_owner") == true -> "Protected audit-owner access cannot be changed from Staff."
+                            editor.canManageOwnerAccess && editor.managedRoles == null -> "Exact owner access is unavailable. Connect and reopen this editor before changing access."
+                            else -> "Only the protected owner can change another owner account's role or status."
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
-                    RoleDropdown(roles, editor.roleCode) { onChange(editor.copy(roleCode = it)) }
                     rolesError?.let {
                         Text(it, color = MaterialTheme.colorScheme.operationalWarning, style = MaterialTheme.typography.labelSmall)
                     }
@@ -705,6 +741,7 @@ private fun EditDialog(
                         Text("Suspended", color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
                         Switch(
                             checked = editor.status == "suspended",
+                            enabled = !saving,
                             onCheckedChange = { onChange(editor.copy(status = if (it) "suspended" else "active")) },
                         )
                     }
@@ -737,25 +774,41 @@ private fun EditDialog(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun RoleDropdown(roles: List<StaffRole>, selectedCode: String, onSelect: (String) -> Unit) {
+private fun RoleDropdown(
+    roles: List<StaffRole>, selectedCode: String, exactOwnerAccess: Boolean,
+    enabled: Boolean, onSelect: (String) -> Unit,
+) {
     var expanded by remember { mutableStateOf(false) }
-    val label = roles.firstOrNull { it.code == selectedCode }?.name ?: selectedCode.ifBlank { "Pick a role" }
-    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+    var showAdvanced by remember(selectedCode) { mutableStateOf(selectedCode !in EVERYDAY_STAFF_ROLES) }
+    val label = roleDisplayLabel(selectedCode, exactOwnerAccess).ifBlank { "Pick a role" }
+    val everyday = EVERYDAY_STAFF_ROLES.mapNotNull { code -> roles.firstOrNull { it.code == code } }
+    val advanced = roles.filter { it.code !in EVERYDAY_STAFF_ROLES }
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { if (enabled) expanded = it }) {
         OutlinedTextField(
             value = label,
             onValueChange = {},
             readOnly = true,
             label = { Text("Role") },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true),
+            enabled = enabled,
+            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = enabled),
         )
         LiquidDropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
             role = WorkspaceGlassRole.CONTROL,
         ) {
-            roles.forEach { r ->
-                DropdownMenuItem(text = { Text(r.name) }, onClick = { onSelect(r.code); expanded = false })
+            everyday.forEach { role ->
+                DropdownMenuItem(text = { Text(roleDisplayLabel(role.code, exactOwnerAccess)) }, onClick = { onSelect(role.code); expanded = false })
+            }
+            if (advanced.isNotEmpty()) {
+                DropdownMenuItem(
+                    text = { Text(if (showAdvanced) "Hide advanced / legacy roles" else "Advanced / legacy roles…") },
+                    onClick = { showAdvanced = !showAdvanced },
+                )
+                if (showAdvanced) advanced.forEach { role ->
+                    DropdownMenuItem(text = { Text(roleDisplayLabel(role.code, exactOwnerAccess)) }, onClick = { onSelect(role.code); expanded = false })
+                }
             }
         }
     }

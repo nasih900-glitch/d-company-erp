@@ -36,7 +36,23 @@ class _Session:
         self.results = list(results)
         self.statements = []
 
+    async def scalars(self, statement):
+        from app.models import PosReceiptCorrection
+
+        assert [column["entity"] for column in statement.column_descriptions] == [PosReceiptCorrection]
+        return []  # No immutable no-value corrections in these legacy fixtures.
+
     async def execute(self, statement):
+        from app.models import PosReceiptCorrection
+
+        columns = statement.column_descriptions
+        if [column["entity"] for column in columns] == [PosReceiptCorrection, PosReceiptCorrection]:
+            assert [str(column["expr"]) for column in columns] == [
+                "count(pos_receipt_corrections.id)",
+                "coalesce(sum(pos_receipt_corrections.amount_minor), :coalesce_1)",
+            ]
+            assert "JOIN orders ON orders.id = pos_receipt_corrections.order_id" in str(statement)
+            return _Result(row=(0, 0))
         self.statements.append(statement)
         return self.results.pop(0)
 

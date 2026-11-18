@@ -100,6 +100,21 @@ def external_actions(source: str) -> list[str]:
 
 
 class AndroidReleasePipelineTest(unittest.TestCase):
+
+    def test_kotlin_plugin_markers_use_the_checksum_pinned_repository(self) -> None:
+        source = (ROOT / "android-native/settings.gradle.kts").read_text()
+        exclusive = source.split("exclusiveContent {", 1)[1].split("\n        }", 1)[0]
+        self.assertIn("forRepository { mavenCentral() }", exclusive)
+        for marker in ("android", "plugin.compose", "plugin.serialization"):
+            group = f"org.jetbrains.kotlin.{marker}"
+            module = f"{group}.gradle.plugin"
+            self.assertRegex(
+                exclusive,
+                rf'includeModule\(\s*"{re.escape(group)}",\s*"{re.escape(module)}",?\s*\)',
+            )
+        self.assertIn("<verify-metadata>true</verify-metadata>", (
+            ROOT / "android-native/gradle/verification-metadata.xml"
+        ).read_text())
     def test_api35_profile_installer_is_explicitly_locked_and_verified(self) -> None:
         import xml.etree.ElementTree as ET
 
@@ -917,9 +932,74 @@ class AndroidReleasePipelineTest(unittest.TestCase):
                 "hw.lcd.width=2560\nhw.lcd.height=1600\nhw.lcd.density=320\n",
             )
 
+    def test_ci_cold_boot_keeps_assembly_and_inventory_before_the_gaming_lane(self) -> None:
+        instrumentation = INSTRUMENTATION_SCRIPT.read_text(encoding="utf-8")
+        assembly = "run: bash scripts/run_android_instrumentation_ci.sh --assemble-only"
+        for workflow in (CI_WORKFLOW, WORKFLOW):
+            with self.subTest(workflow=workflow.name):
+                source = workflow.read_text(encoding="utf-8")
+                self.assertLess(
+                    source.index(assembly),
+                    source.index("uses: reactivecircus/android-emulator-runner@"),
+                )
+                self.assertEqual(source.count("D_COMPANY_HOSTED_COLD_BOOT: '1'"), 1)
+
+        main = instrumentation.split("# Discover the exact runner inventory once", 1)[1]
+        self.assertLess(
+            main.index("if ! discover_instrumentation_tests"),
+            main.index("if ! cold_boot_hosted_emulator"),
+        )
+        self.assertLess(main.index("if ! cold_boot_hosted_emulator"), main.index("'gaming-board'"))
+        self.assertEqual(main.count("if ! cold_boot_hosted_emulator"), 1)
+        cold_boot = instrumentation.split("cold_boot_hosted_emulator() {", 1)[1].split("\n}\n", 1)[0]
+        launch = re.sub(r"\s*\\\n\s*", " ", cold_boot)
+        self.assertIn(
+            "-port 5554 -avd test -no-window -gpu swangle -feature -Vulkan "
+            "-no-snapshot -noaudio -no-boot-anim",
+            launch,
+        )
+        self.assertIn('"${boot_id}" != "${original_boot_id}"', cold_boot)
+        self.assertIn(""""${cpu_online}" == '0-1'""", cold_boot)
+        self.assertLess(
+            cold_boot.index("get-started-user-state 0"),
+            cold_boot.index('keyguard_input timeout 20s'),
+        )
+        self.assertIn('"${user_state:-}" == \'RUNNING_UNLOCKED\'', cold_boot)
+        self.assertLess(
+            cold_boot.index("gesture_apply timeout 10s"),
+            cold_boot.index("cmd overlay list --user 0"),
+        )
+        self.assertIn("cold_boot_check tablet_viewport configure_tablet_viewport || return 1", cold_boot)
+        self.assertIn("Android emulator version 37.2.13.0 (build_id 16740729)", cold_boot)
+        self.assertIn("cold_boot_check renderer_selection grep -Eq", cold_boot)
+        self.assertIn("vulkan_mode_selected:swiftshader gles_mode_selected:swangle[[:space:]]*$", cold_boot)
+        self.assertIn("cold_boot_check renderer_adapter grep -Eq", cold_boot)
+        self.assertIn(r"Graphics Adapter Android Emulator OpenGL ES Translator \(ANGLE \(", cold_boot)
+        self.assertIn("SwiftShader Device", cold_boot)
+        self.assertIn("if ! stop_owned_emulator; then", main)
+
+    def test_cold_boot_reports_failed_stage_without_masking_the_exit_status(self) -> None:
+        source = INSTRUMENTATION_SCRIPT.read_text(encoding="utf-8")
+        guards = source[source.index("cold_boot_failed() {"):source.index("cold_boot_hosted_emulator() {")]
+        with tempfile.TemporaryDirectory() as temporary:
+            result = subprocess.run(
+                ["bash", "-c", guards + "cold_boot_check keyguard_input sh -c 'exit 124'"],
+                env={**os.environ, "diagnostics_dir": temporary},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 124)
+            expected = "cold_boot_failed_stage=keyguard_input\ncold_boot_failed_status=124\n"
+            self.assertEqual(result.stderr, expected)
+            self.assertEqual(
+                (Path(temporary) / "emulator-cold-boot.txt").read_text(encoding="utf-8"),
+                expected,
+            )
+
     def test_ci_and_release_request_same_bounded_linux_emulator_quadrant(self) -> None:
         expected = (
-            "-no-window -gpu swiftshader -feature -Vulkan "
+            "-no-window -gpu swangle -feature -Vulkan "
             "-no-snapshot -noaudio -no-boot-anim"
         )
         for workflow_path in (CI_WORKFLOW, WORKFLOW):
@@ -955,7 +1035,7 @@ class AndroidReleasePipelineTest(unittest.TestCase):
                     job,
                     flags=re.MULTILINE,
                 )
-                self.assertEqual(emulator_builds, ["15917651"])
+                self.assertEqual(emulator_builds, ["16740729"])
                 options = re.findall(
                     r"^\s*emulator-options:\s*(.+)$",
                     job,

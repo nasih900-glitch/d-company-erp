@@ -8,6 +8,7 @@ import socket
 import subprocess
 import time
 from contextlib import closing
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -15,16 +16,31 @@ import redis
 from redis.exceptions import AuthenticationError, NoPermissionError, RedisError
 
 from app.core.config import Settings
-from app.core.errors import ServiceUnavailableError
+from app.core.errors import BusinessRuleError, ServiceUnavailableError
+from app.services.audit import snapshots
 from app.services.remote_assistance import relay
 from app.services.remote_assistance.relay import ValidatedJpeg
 
 _PASSWORD = "0123456789abcdef" * 4
-_ACL_COMMANDS = (
-    "+ping +eval +get +set +pttl +time +zremrangebyscore +zcard +zadd "
-    "+pexpire +hset +expire +incr +incrby +ttl +del +hgetall +multi +exec "
-    "+discard +select +client|setinfo"
-)
+
+
+def _production_backend_acl() -> str:
+    # Execute the actual production template, not a duplicated test allowlist.
+    compose = Path(__file__).resolve().parents[3] / "docker-compose.prod.yml"
+    lines = [
+        line.strip().removesuffix("\\").strip()
+        for line in compose.read_text().splitlines()
+        if '"user erp_backend on ' in line
+    ]
+    assert len(lines) == 1
+    quoted = lines[0]
+    assert quoted.startswith('"')
+    assert quoted.endswith('"')
+    template = quoted[1:-1]
+    assert template.startswith("user erp_backend on >$${REDIS_PASSWORD} ~dcompany:* -@all ")
+    result = template.replace("$${REDIS_PASSWORD}", _PASSWORD)
+    assert "$" not in result
+    return result
 
 
 def _free_port() -> int:
@@ -44,7 +60,7 @@ def test_production_redis_acl_allows_app_ops_and_denies_admin_commands(
 
     acl_path = tmp_path / "users.acl"
     acl_path.write_text(
-        f"user default off\nuser erp_backend on >{_PASSWORD} ~dcompany:* -@all {_ACL_COMMANDS}\n",
+        f"user default off\n{_production_backend_acl()}\n",
         encoding="ascii",
     )
     port = _free_port()
@@ -235,8 +251,62 @@ def test_production_redis_acl_allows_app_ops_and_denies_admin_commands(
         finally:
             binary_client.close()
 
+        monkeypatch.setattr(snapshots, "get_settings", lambda: relay_settings)
+        monkeypatch.setattr(snapshots, "SNAPSHOT_TTL_SECONDS", 30)
+
+        async def exercise_real_audit_snapshot_retention() -> None:
+            company_id, user_id = uuid4(), uuid4()
+            identities = []
+            for number in range(snapshots.MAX_OWNER_SNAPSHOTS + 2):
+                identity = await snapshots.save_snapshot(
+                    company_id=company_id,
+                    user_id=user_id,
+                    fingerprint="synthetic-filter-fingerprint",
+                    ids=[number + 1],
+                )
+                identities.append(identity)
+                assert await snapshots.load_snapshot(
+                    company_id=company_id,
+                    user_id=user_id,
+                    fingerprint="synthetic-filter-fingerprint",
+                    snapshot_id=identity,
+                ) == [number + 1]
+            registry = snapshots._key(company_id, user_id, "recent")
+            assert client.llen(registry) == snapshots.MAX_OWNER_SNAPSHOTS
+            assert client.get(snapshots._key(company_id, user_id, identities[0])) is None
+            with pytest.raises(BusinessRuleError, match="expired"):
+                await snapshots.load_snapshot(
+                    company_id=company_id,
+                    user_id=user_id,
+                    fingerprint="synthetic-filter-fingerprint",
+                    snapshot_id=identities[0],
+                )
+            assert 0 < client.ttl(registry) <= 30
+            monkeypatch.setattr(snapshots, "SNAPSHOT_TTL_SECONDS", 1)
+            expiring_company, expiring_user = uuid4(), uuid4()
+            expiring = await snapshots.save_snapshot(
+                company_id=expiring_company,
+                user_id=expiring_user,
+                fingerprint="synthetic-filter-fingerprint",
+                ids=[100],
+            )
+            await asyncio.sleep(1.1)
+            assert client.get(snapshots._key(expiring_company, expiring_user, expiring)) is None
+            assert client.llen(snapshots._key(expiring_company, expiring_user, "recent")) == 0
+            with pytest.raises(BusinessRuleError, match="expired"):
+                await snapshots.load_snapshot(
+                    company_id=expiring_company,
+                    user_id=expiring_user,
+                    fingerprint="synthetic-filter-fingerprint",
+                    snapshot_id=expiring,
+                )
+
+        asyncio.run(exercise_real_audit_snapshot_retention())
+
         with pytest.raises(NoPermissionError):
             client.set("outside:test", "denied")
+        with pytest.raises(NoPermissionError):
+            client.lpush("outside:audit", "denied")
         for command in (
             ("FLUSHALL",),
             ("CONFIG", "GET", "*"),

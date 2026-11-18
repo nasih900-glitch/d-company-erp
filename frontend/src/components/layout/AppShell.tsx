@@ -1,3 +1,5 @@
+import SavedOwnerRecoveryLink from '@/components/ui/SavedOwnerRecoveryLink';
+import PaidBillWorkNotice from '@/components/ui/PaidBillWorkNotice';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { NavLink, Outlet, useLocation, type To } from 'react-router-dom';
 import {
@@ -95,11 +97,6 @@ export default function AppShell({ children }: { children?: ReactNode }) {
   const mobileHeaderRef = useRef<HTMLElement>(null);
   const [appearance, setAppearance] = useState<AppearancePreference>(() => readAppearancePreference());
   const [systemNight, setSystemNight] = useState(() => globalThis.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false);
-  // protected_access (co_owner or super_owner) bypasses per-module Access
-  // Control gating below. audit_access (super_owner only) additionally
-  // gates the Audit Log nav item — a co_owner must not see a tab that the
-  // backend will 403 on (see core/permissions.py's admin.audit.read carve-out).
-  const isProtectedOwner = Boolean(demo || me?.protected_access);
   const hasAuditAccess = Boolean(demo || me?.audit_access);
   const hasSystemAccess = hasSupportAccess(me);
   const hasRefundAccess = Boolean(demo || canAccessRefunds(me));
@@ -110,7 +107,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
   const hasStaffTimeAccess = canUseStaffTime(me);
   const navGroups = useMemo(
     () => visibleProfileNavigationGroups({
-      isOwner: isProtectedOwner,
+      identity: me,
       hasAuditAccess,
       hasSystemAccess,
       hasRefundAccess,
@@ -126,8 +123,8 @@ export default function AppShell({ children }: { children?: ReactNode }) {
       hasProductManagementAccess,
       hasRefundAccess,
       hasSystemAccess,
-      isProtectedOwner,
       hasStaffTimeAccess,
+      me,
     ],
   );
   const navItems = useMemo(() => navGroups.flatMap((group) => group.items), [navGroups]);
@@ -444,6 +441,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
         {!terminalReady && terminalIssue && (
           <div className="card mb-4 border-accent-gold/40 bg-accent-gold/10 text-sm">
             <div className="font-semibold text-fg">Shared register setup needs attention</div>
+            <SavedOwnerRecoveryLink/>
             <p className="mt-1 text-fg-muted">{terminalIssue}</p>
             {GAMING_CENTRE_TERMINAL_POLICY.showRoutineSelector
               && terminalOptions.length > 1 && (
@@ -461,6 +459,7 @@ export default function AppShell({ children }: { children?: ReactNode }) {
             )}
           </div>
         )}
+        <PaidBillWorkNotice showColdEntry={terminalReady || !terminalIssue}/>
         {children ?? <Outlet />}
       </main>
       <SupportLauncher inboxUnread={hasSystemAccess ? supportUnread : 0} />

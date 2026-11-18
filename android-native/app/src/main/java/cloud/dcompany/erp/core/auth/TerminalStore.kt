@@ -26,6 +26,7 @@ data class ValidatedTerminalDisplay(
     /** Raw server value. Unknown future values stay unknown and fail closed in feature policy. */
     val purpose: String,
     val offlineShiftCaptureSupported: Boolean = false,
+    val onlineStartWorkSupported: Boolean = false,
 )
 
 internal fun confirmedTerminalId(
@@ -54,6 +55,7 @@ class TerminalStore(private val context: Context) {
     private val branchKey = stringPreferencesKey("terminal_branch_id")
     private val purposeKey = stringPreferencesKey("terminal_purpose")
     private val offlineShiftCaptureKey = booleanPreferencesKey("terminal_offline_shift_capture_supported")
+    private val onlineStartWorkKey = booleanPreferencesKey("terminal_online_start_work_supported")
 
     @Volatile private var cached: String? = null
     @Volatile private var persistedDisplay: ValidatedTerminalDisplay? = null
@@ -88,6 +90,7 @@ class TerminalStore(private val context: Context) {
             branchId = prefs[branchKey],
             purpose = prefs[purposeKey] ?: TerminalPurpose.HYBRID,
             offlineShiftCaptureSupported = prefs[offlineShiftCaptureKey] ?: false,
+            onlineStartWorkSupported = prefs[onlineStartWorkKey] ?: false,
         )
         _terminalId.value = cached
         // Loading a persisted candidate is not runtime activation. SessionViewModel
@@ -113,6 +116,7 @@ class TerminalStore(private val context: Context) {
             it.remove(branchKey)
             it.remove(purposeKey)
             it.remove(offlineShiftCaptureKey)
+            it.remove(onlineStartWorkKey)
         }
         // Publish only after persistence succeeds.
         cached = id
@@ -133,6 +137,7 @@ class TerminalStore(private val context: Context) {
             branchId = terminal.branchId,
             purpose = terminal.purpose,
             offlineShiftCaptureSupported = terminal.offlineShiftCaptureSupported,
+            onlineStartWorkSupported = terminal.onlineStartWorkSupported,
         ) ?: throw IllegalArgumentException("A validated till must have an id and branch")
         context.terminalDataStore.edit {
             it[key] = display.terminalId
@@ -140,6 +145,7 @@ class TerminalStore(private val context: Context) {
             it[branchKey] = display.branchId
             it[purposeKey] = display.purpose
             it[offlineShiftCaptureKey] = display.offlineShiftCaptureSupported
+            it[onlineStartWorkKey] = display.onlineStartWorkSupported
         }
         cached = display.terminalId
         persistedDisplay = display
@@ -170,6 +176,7 @@ class TerminalStore(private val context: Context) {
         branchId: String?,
         purpose: String?,
         offlineShiftCaptureSupported: Boolean = false,
+        onlineStartWorkSupported: Boolean = false,
     ): ValidatedTerminalDisplay? {
         val id = terminalId?.trim()?.takeIf(String::isNotEmpty) ?: return null
         val branch = branchId?.trim()?.takeIf(String::isNotEmpty) ?: return null
@@ -180,6 +187,6 @@ class TerminalStore(private val context: Context) {
         // widened into local POS authority by an older client.
         val resolvedPurpose = purpose?.trim()?.takeIf(String::isNotEmpty)
             ?: TerminalPurpose.HYBRID
-        return ValidatedTerminalDisplay(id, name, branch, resolvedPurpose, offlineShiftCaptureSupported)
+        return ValidatedTerminalDisplay(id, name, branch, resolvedPurpose, offlineShiftCaptureSupported, onlineStartWorkSupported)
     }
 }

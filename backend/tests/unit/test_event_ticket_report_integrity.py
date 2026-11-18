@@ -44,17 +44,28 @@ class _Session:
         self.statements = []
 
     async def scalars(self, statement):
-        # These pre-correction fixtures contain no immutable tender receipts.
+        # These fixtures contain no immutable tender or no-value correction receipts.
         # Keep every legacy query strict and ordered; only these additive
         # model projections have an explicitly empty source in this fixture.
-        from app.models import DailyTenderReconciliation, PaymentTenderCorrection
+        from app.models import DailyTenderReconciliation, PaymentTenderCorrection, PosReceiptCorrection
 
         assert [column["entity"] for column in statement.column_descriptions] in (
-            [PaymentTenderCorrection], [DailyTenderReconciliation],
+            [PaymentTenderCorrection], [DailyTenderReconciliation], [PosReceiptCorrection],
         ), f"Unexpected scalar query: {statement}"
         return _Result(rows=[])
 
     async def execute(self, statement):
+        # This fixture has no no-value corrections in its issued-sale cohort.
+        from app.models import PosReceiptCorrection
+
+        columns = statement.column_descriptions
+        if [column["entity"] for column in columns] == [PosReceiptCorrection, PosReceiptCorrection]:
+            assert [str(column["expr"]) for column in columns] == [
+                "count(pos_receipt_corrections.id)",
+                "coalesce(sum(pos_receipt_corrections.amount_minor), :coalesce_1)",
+            ]
+            assert "JOIN orders ON orders.id = pos_receipt_corrections.order_id" in str(statement)
+            return _Result(one=(0, 0))
         self.statements.append(statement)
         assert self.results, f"unexpected SQL: {statement}"
         return self.results.pop(0)

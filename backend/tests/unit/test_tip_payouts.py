@@ -153,13 +153,13 @@ class _QueuedSession:
         self.flushes = 0
 
     async def scalars(self, statement):
-        # These pre-correction fixtures contain no immutable tender receipts.
+        # These fixtures contain no immutable tender or no-value correction receipts.
         # Keep every legacy query strict and ordered; only these additive
         # model projections have an explicitly empty source in this fixture.
-        from app.models import DailyTenderReconciliation, PaymentTenderCorrection
+        from app.models import DailyTenderReconciliation, PaymentTenderCorrection, PosReceiptCorrection
 
         assert [column["entity"] for column in statement.column_descriptions] in (
-            [PaymentTenderCorrection], [DailyTenderReconciliation],
+            [PaymentTenderCorrection], [DailyTenderReconciliation], [PosReceiptCorrection],
         ), f"Unexpected scalar query: {statement}"
         return _Result(rows=[])
 

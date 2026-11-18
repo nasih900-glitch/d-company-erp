@@ -55,27 +55,15 @@ PY
 SCANNER_TOOL_DIR=$(canonical_path "$(dirname "${BASH_SOURCE[0]}")")
 SCANNER_REPO_ROOT=$(canonical_path "$SCANNER_TOOL_DIR/../..")
 ARCHIVE_IDENTITY_VERIFIER="$SCANNER_TOOL_DIR/verify-image-archive-identity.py"
-ZLIB_VEX_GENERATOR="$SCANNER_TOOL_DIR/generate-zlib-vex.py"
 ZLIB_VEX_VERIFIER="$SCANNER_TOOL_DIR/verify-zlib-vex.py"
-ZLIB_VEX_TEMPLATE_RAW="$SCANNER_REPO_ROOT/infra/security/vex/zlib-cve-2026-85091.openvex.json"
-if [ -L "$ZLIB_VEX_TEMPLATE_RAW" ]; then
-  echo "Reviewed zlib VEX template must not be a symbolic link." >&2
-  exit 1
-fi
-ZLIB_VEX_TEMPLATE=$(canonical_path "$ZLIB_VEX_TEMPLATE_RAW")
 if [ ! -f "$ARCHIVE_IDENTITY_VERIFIER" ] || [ -L "$ARCHIVE_IDENTITY_VERIFIER" ] || \
    [ "$(canonical_path "$ARCHIVE_IDENTITY_VERIFIER")" != "$ARCHIVE_IDENTITY_VERIFIER" ]; then
   echo "Archive identity verifier is missing or linked." >&2
   exit 1
 fi
-if [ ! -f "$ZLIB_VEX_GENERATOR" ] || [ -L "$ZLIB_VEX_GENERATOR" ] || \
-   [ "$(canonical_path "$ZLIB_VEX_GENERATOR")" != "$ZLIB_VEX_GENERATOR" ] || \
-   [ ! -f "$ZLIB_VEX_VERIFIER" ] || [ -L "$ZLIB_VEX_VERIFIER" ] || \
-   [ "$(canonical_path "$ZLIB_VEX_VERIFIER")" != "$ZLIB_VEX_VERIFIER" ] || \
-   [ "$ZLIB_VEX_TEMPLATE" != "$ZLIB_VEX_TEMPLATE_RAW" ] || \
-   [ ! -f "$ZLIB_VEX_TEMPLATE" ] || \
-   [ "$(stat -Lc '%a:%F' "$ZLIB_VEX_TEMPLATE")" != "644:regular file" ]; then
-  echo "Reviewed zlib VEX generator, verifier, or template is missing, linked, or has an unsafe mode." >&2
+if [ ! -f "$ZLIB_VEX_VERIFIER" ] || [ -L "$ZLIB_VEX_VERIFIER" ] || \
+   [ "$(canonical_path "$ZLIB_VEX_VERIFIER")" != "$ZLIB_VEX_VERIFIER" ]; then
+  echo "Official zlib verifier is missing or linked." >&2
   exit 1
 fi
 
@@ -108,7 +96,7 @@ declare -a ARCHIVES=()
 declare -a SYFT_REPORTS=()
 declare -a GRYPE_REPORTS=()
 declare -a CONFIG_IMAGE_IDS=()
-declare -a ZLIB_VEX_DOCUMENTS=()
+declare -a ARCHIVE_PLATFORMS=()
 SERVICE_KEYS='|'
 OUTPUT_KEYS='|'
 archive_total_bytes=0
@@ -120,7 +108,7 @@ while [ "$#" -gt 0 ]; do
   syft_report=$5
   grype_report=$6
   shift 6
-  if ! [[ "$service" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || \
+  if ! [[ "$service" =~ ^(backend|frontend|caddy|postgres|redis)$ ]] || \
      [[ "$SERVICE_KEYS" == *"|$service|"* ]]; then
     echo "Scanner service names must be unique and safe: $service" >&2
     exit 1
@@ -180,42 +168,32 @@ for index in "${!SERVICES[@]}"; do
       exit 1
     }
   config_key=${service//-/_}_scanner_config_image_id
+  platform_key=${service//-/_}_archive_platform
   scanner_config_id=""
+  archive_platform=""
   while IFS='=' read -r key value; do
     if [ "$key" = "$config_key" ]; then
-      if [ -n "$scanner_config_id" ]; then
-        echo "Archive identity verifier returned duplicate config identity for $service." >&2
+      if [ -n "$scanner_config_id" ] || ! [[ "$value" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        echo "Archive identity verifier returned duplicate or invalid config identity for $service." >&2
         exit 1
       fi
       scanner_config_id=$value
+    elif [ "$key" = "$platform_key" ]; then
+      if [ -n "$archive_platform" ] || [ "$value" != linux/amd64 ]; then
+        echo "Archive identity verifier returned duplicate or invalid platform for $service." >&2
+        exit 1
+      fi
+      archive_platform=$value
     fi
   done <<< "$identity_validation"
-  if ! [[ "$scanner_config_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-    echo "Archive identity verifier returned invalid config identity for $service." >&2
+  if [ -z "$scanner_config_id" ] || [ -z "$archive_platform" ]; then
+    echo "Archive identity verifier did not bind the config and platform for $service." >&2
     exit 1
   fi
   CONFIG_IMAGE_IDS+=("$scanner_config_id")
+  ARCHIVE_PLATFORMS+=("$archive_platform")
   printf '%s\n' "$identity_validation" >> "$METADATA"
-  if { [ "$service" = caddy ] || [ "$service" = backend ]; }; then
-    ZLIB_VEX_DOCUMENTS+=("")
-    continue
-  fi
-  vex_document="$EVIDENCE_ROOT/$service-zlib.openvex.json"
-  if [ -e "$vex_document" ] || [ -L "$vex_document" ]; then
-    echo "Image-specific zlib VEX output already exists for $service." >&2
-    exit 1
-  fi
-  python3 "$ZLIB_VEX_GENERATOR" \
-    "$ZLIB_VEX_TEMPLATE" "${IMAGE_REFS[$index]}" "$scanner_config_id" \
-    "$vex_document" >> "$METADATA"
-  if [ "$(stat -Lc '%u:%g:%a:%F' "$vex_document")" != "0:0:444:regular file" ]; then
-    echo "Generated zlib VEX has unsafe ownership or mode for $service." >&2
-    exit 1
-  fi
-  python3 "$ZLIB_VEX_VERIFIER" \
-    "$vex_document" "${IMAGE_REFS[$index]}" "$scanner_config_id" \
-    >> "$METADATA"
-  ZLIB_VEX_DOCUMENTS+=("$vex_document")
+
 done
 
 available_bytes=$(df -PB1 "$WORK_ROOT" | awk 'END {print $4}')
@@ -461,6 +439,10 @@ run_owned_container() {
     exit 1
   fi
   if [ "$run_status" -ne 0 ]; then
+    if [ "$run_status" -eq 2 ] && [ "$state" != false:2 ]; then
+      echo "Scanner threshold exit was not confirmed by its container state." >&2
+      return 1
+    fi
     return "$run_status"
   fi
   if [ "$state" != false:0 ]; then
@@ -512,6 +494,15 @@ print(total)
 PY
 }
 
+# This projection cannot admit a scan or replace its original nonzero status.
+summarize_grype_failure() {
+  if ! timeout --signal=TERM --kill-after=1s 10s \
+    python3 "$ZLIB_VEX_VERIFIER" --scan-failure-summary "$1" "$2" "$3" 2>/dev/null; then
+    echo 'Grype failure summary unavailable; original scanner failure retained.' >&2
+  fi
+  return 0
+}
+
 sample_cache_peak() {
   local current peak
   current=$(cache_usage_bytes)
@@ -536,10 +527,10 @@ for index in "${!SERVICES[@]}"; do
   image_ref=${IMAGE_REFS[$index]}
   runtime_image_id=${IMAGE_IDS[$index]}
   config_image_id=${CONFIG_IMAGE_IDS[$index]}
+  archive_platform=${ARCHIVE_PLATFORMS[$index]}
   archive=${ARCHIVES[$index]}
   syft_report=${SYFT_REPORTS[$index]}
   grype_report=${GRYPE_REPORTS[$index]}
-  zlib_vex_document=${ZLIB_VEX_DOCUMENTS[$index]}
   scanner_status=0
   run_owned_container 900s "$syft_report" offline \
     --tmpfs "$TMPFS_SPEC" \
@@ -591,12 +582,43 @@ PY
   chmod 0444 "$syft_report"
 
   # Re-resolve the exact tag at the final boundary before Grype consumes the
-  # archive and, for the three r0 services, the image-specific VEX. The archive
-  # verifier binds this runtime identity to the config image ID carried by the
-  # scanner reports and any generated VEX.
+  # archive. The archive verifier binds this runtime identity to the config
+  # image ID carried by the scanner reports and official runtime proof.
   if [ "$(docker image inspect --format '{{.Id}}' "$image_ref")" != "$runtime_image_id" ]; then
     echo "Scanner image reference changed before Grype for $service." >&2
     exit 1
+  fi
+
+  # Retain immutable runtime evidence even when Grype later rejects a different CVE.
+  runtime_raw="$EVIDENCE_ROOT/$service-zlib-runtime.raw.json"
+  runtime_proof="$EVIDENCE_ROOT/$service-zlib-runtime.json"
+  if [ -e "$runtime_raw" ] || [ -L "$runtime_raw" ] || \
+     [ -e "$runtime_proof" ] || [ -L "$runtime_proof" ]; then
+    echo "Official runtime proof output already exists for $service." >&2
+    exit 1
+  fi
+  if [ "$(docker image inspect --format '{{.Os}}:{{.Architecture}}' "$runtime_image_id")" != linux:amd64 ]; then
+    echo "Official runtime config has an unexpected OS/architecture for $service." >&2
+    exit 1
+  fi
+  run_owned_container 60s "$runtime_raw" offline \
+    --tmpfs "$TMPFS_SPEC" -e "GOMEMLIMIT=$GOMEMLIMIT" -e "GOMAXPROCS=$GOMAXPROCS" \
+    --entrypoint /usr/local/bin/verify-caddy-zlib \
+    "$runtime_image_id" "$service"
+  chmod 0444 "$runtime_raw"
+  python3 "$ZLIB_VEX_VERIFIER" --bind-runtime-proof "$service" "$runtime_raw" \
+    "$image_ref" "$config_image_id" "$runtime_proof"
+
+  if [ "$service" = backend ]; then
+    hashlib_runtime="$EVIDENCE_ROOT/backend-hashlib-runtime.json"
+    if [ -e "$hashlib_runtime" ] || [ -L "$hashlib_runtime" ]; then
+      echo "Hashlib runtime evidence already exists." >&2; exit 1
+    fi
+    run_owned_container 60s "$hashlib_runtime" offline \
+      --tmpfs "$TMPFS_SPEC" --entrypoint /usr/local/bin/python \
+      "$runtime_image_id" -I -B /usr/local/bin/verify-hashlib-fips.py
+    chmod 0444 "$hashlib_runtime"
+    python3 "$ZLIB_VEX_VERIFIER" --validate-hashlib-runtime "$hashlib_runtime" "$image_ref" "$config_image_id" >> "$METADATA"
   fi
 
   grype_arguments=(
@@ -608,34 +630,47 @@ PY
     --mount "type=bind,src=$CACHE_MOUNT,dst=/scanner-cache" \
     --mount "type=bind,src=$archive,dst=/scan/image.tar,readonly"
   )
-  if [ "$service" != caddy ] && [ "$service" != backend ]; then
-    grype_arguments+=(
-      --mount "type=bind,src=$zlib_vex_document,dst=/scan/zlib.openvex.json,readonly"
-    )
-  fi
   grype_arguments+=("$GRYPE_IMAGE" "docker-archive:/scan/image.tar")
-  if [ "$service" != caddy ] && [ "$service" != backend ]; then
-    grype_arguments+=(--vex /scan/zlib.openvex.json)
-  fi
   grype_arguments+=(--fail-on high --output json)
   scanner_status=0
   run_owned_container 1200s "$grype_report" online "${grype_arguments[@]}" \
     || scanner_status=$?
+  hashlib_vex_argument=""
+  if [ "$service" = backend ] && [ "$scanner_status" -eq 2 ]; then
+    raw_grype="$EVIDENCE_ROOT/backend-grype-unfiltered.json"
+    hashlib_vex="$EVIDENCE_ROOT/backend-hashlib-fixed.openvex.json"
+    if [ -e "$raw_grype" ] || [ -L "$raw_grype" ]; then
+      echo "Hashlib security evidence already exists." >&2; exit 1
+    fi
+    mv "$grype_report" "$raw_grype"
+    chmod 0444 "$raw_grype"
+    if ! python3 "$ZLIB_VEX_VERIFIER" --prove-fixed-hashlib "$raw_grype" "$image_ref" \
+      "$config_image_id" "$hashlib_runtime" "$hashlib_vex" >> "$METADATA"; then
+      summarize_grype_failure "$raw_grype" "$image_ref" "$config_image_id"
+      exit "$scanner_status"
+    fi
+    if [ "$(docker image inspect --format '{{.Id}}' "$image_ref")" != "$runtime_image_id" ]; then
+      echo "Backend tag changed before the verified fixed CVE rescan." >&2; exit 1
+    fi
+    scanner_status=0
+    run_owned_container 1200s "$grype_report" online \
+      --mount "type=bind,src=$hashlib_vex,dst=/scan/hashlib-fixed.openvex.json,readonly" \
+      "${grype_arguments[@]}" --vex /scan/hashlib-fixed.openvex.json || scanner_status=$?
+    hashlib_vex_argument="--hashlib-vex=$hashlib_vex"
+  fi
   if [ "$scanner_status" -ne 0 ]; then
     echo "Grype failed for $service." >&2
+    summarize_grype_failure "$grype_report" "$image_ref" "$config_image_id"
     exit "$scanner_status"
   fi
   if [ ! -s "$grype_report" ]; then
     echo "Grype produced no evidence for $service." >&2
     exit 1
   fi
-  if { [ "$service" = caddy ] || [ "$service" = backend ]; }; then
-    python3 "$ZLIB_VEX_VERIFIER" "--$service-fixed-sbom" "$syft_report" \
-      "$image_ref" "$config_image_id" "$service=$grype_report" >> "$METADATA"
-  else
-    python3 "$ZLIB_VEX_VERIFIER" "$zlib_vex_document" \
-      "$image_ref" "$config_image_id" "$service=$grype_report" >> "$METADATA"
-  fi
+  python3 "$ZLIB_VEX_VERIFIER" "--$service-fixed-sbom" "$syft_report" \
+    "$image_ref" "$config_image_id" "$service=$grype_report" \
+    "--runtime-proof=$runtime_proof" "--archive-platform=$archive_platform@$config_image_id" \
+    ${hashlib_vex_argument:+"$hashlib_vex_argument"} >> "$METADATA"
   validation=$(python3 - "$grype_report" "$service" "$config_image_id" <<'PY'
 import json
 import sys
@@ -678,7 +713,9 @@ print(f"{service}_grype_db_valid=true")
 print(f"{service}_source_image_id={actual_image_id}")
 PY
   )
-  printf '%s\n' "$validation" >> "$METADATA"
+  # The fixed report verifier above already emits these exact scanner/DB
+  # details. Append only the additional validity and source attestations.
+  printf '%s\n' "$validation" | grep -E "^${service}_(grype_db_valid|source_image_id)=" >> "$METADATA"
   chmod 0444 "$grype_report"
   remaining_bytes=$(df -PB1 "$WORK_ROOT" | awk 'END {print $4}')
   if ! [[ "$remaining_bytes" =~ ^[0-9]+$ ]] || [ "$remaining_bytes" -lt "$MIN_REMAINING_BYTES" ]; then
