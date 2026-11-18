@@ -3518,7 +3518,7 @@ REVIEWED_CODE30_4_BUILD75_SHA256 = {'.env.production.example': 'cb328fa12c0e9b91
  'tests/verify_production_installer_lock_metadata.py': '8eceb19678ff080ddcb6d6e4d6f71faef2d736f2d2b3641001ab67ec5186c9a6'}
 
 REVIEWED_CODE30_4_BUILD76_SHA256 = {'.env.production.example': '0147b90e91a99e94ebda1f7ee47312add507645fbb7785533f5faf29817c096c',
- 'PROJECT_STATE.md': '0d7e286864821dee6d2174bb07214117d8033abe3a839c32f5e60c4a3aafeb78',
+ 'PROJECT_STATE.md': '9b170fc10737d1fe7ff27e1f85dd85ba9b6b3e12e46dbff02de60b2a584f9883',
  'README.md': 'fa9622307629a14c095031d14de8cebe81d9a7930194050efeecf14a80e40005',
  'android-native/app/build.gradle.kts': 'ef31f252c0f0b20949839a565e6e02d7a10726750bf2378cd117c09bd2daa9d1',
  'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': 'de8279ead521c8348317c07e47e78022449b4132d0645d8b9f7b40a373e7b358',
@@ -3529,7 +3529,7 @@ REVIEWED_CODE30_4_BUILD76_SHA256 = {'.env.production.example': '0147b90e91a99e94
  'backend/tests/unit/test_release_contracts.py': 'c795238758898e615f5aa5f669e111ec6c852d48c867bf9fb7e2d7d09a8f6875',
  'backend/tests/unit/test_remote_assistance_contract.py': '12ca4c0b1cb74633a6c1584f7d9362d21d4e1d25db19fdd661b4090b2f500c5a',
  'docker-compose.prod.yml': '5eb9eb2701b91912fd29523d4218e94eced2bbd13bf13d03e065add16f703344',
- 'docs/V3_1_69_RELEASE_CANDIDATE.md': 'd7166f7e0c895107185c482c3c8c92fe6bf6b9c7bec15e67c291a6f988b09a32',
+ 'docs/V3_1_69_RELEASE_CANDIDATE.md': 'dbd0c0f47312126bd40827ba2c43089493cc840429082158b17aca5629682568',
  'frontend/.env.example': 'c726355f5a766816ec51bb3c1b4fae30ba54b95f38357e4f426dbd91eaedd578',
  'frontend/package-lock.json': 'c270e43f2592d053dde6e5ea379b8ef1a5282a3161c816789e9ecaa1145cc333',
  'frontend/package.json': '6aa26f31d869b90d9e2193eef937be3293e7677c28563db20da43f21fc4cb958',

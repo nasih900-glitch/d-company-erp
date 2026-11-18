@@ -19,8 +19,10 @@ signing and production admission remain distinct requirements. The
 
 The immutable v3.1.68 tag remains historical evidence. Build 76 corrects three
 scanner test contracts exposed by the complete root preflight; it retains the
-same tablet implementation and scanner policies. Full branch CI precedes a new
-tag, signing and any production offer.
+same tablet implementation and scanner policies. A reviewed tag may start the
+protected exact-source release workflow while branch CI is in progress. All
+full release gates must pass before signing; signed upgrade preservation and
+production, idle-shop and tablet admission remain required before offering.
 
 ## Earlier checkpoints
 

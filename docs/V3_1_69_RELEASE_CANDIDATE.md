@@ -14,8 +14,14 @@ the earlier failed v3.1.65/v3.1.66 candidates remain immutable history.
 The corrected contracts explicitly verify every guarded scanner/statement step,
 the exact per-service VEX inputs, both final assessment arguments and the
 ordered raw/proof/rescan pipelines. Existing threshold, scanner digest,
-isolation, original-evidence and maintenance-order guarantees remain. Full
-branch CI must pass before a new protected tag, signing and production offer.
+isolation, original-evidence and maintenance-order guarantees remain. The
+protected exact-source release workflow is authoritative before signing or
+offering an update; its reviewed tag may start while branch CI is in progress.
+Before signing, that workflow must pass the complete repository, backend and
+frontend checks, both image-store security gates, Android instrumentation,
+unit tests and lint, and independent reproduction. Signed in-place upgrade
+preservation and production, idle-shop and tablet admission remain mandatory
+before an update is offered.
 
 ## Image security assessment and admission checks
 
