@@ -273,6 +273,8 @@ def test_upgrade_samples_live_services_before_and_after_writer_shutdown(evidence
 
     def query(container, sql):
         assert container == "postgres"
+        if "pg_settings" in sql:
+            return json.loads((SCRIPTS.parent / "security/vex/postgres16-pgcrypto-openssl-reviewed.json").read_text())["database_state"]
         return current["fleet"] if "client_installation_guard_function_sha256" in sql else current["business_quiescence"]
 
     class Clock:
@@ -463,3 +465,30 @@ def test_cli_never_reports_admission(evidence, monkeypatch, capsys):
     args[args.index(runtime_digest)] = "0" * 64
     assert main() == 1
     assert "runtime baseline" in capsys.readouterr().err
+
+
+def test_upgrade_checks_live_postgres_crypto_catalogue_read_only_and_fails_closed(monkeypatch):
+    probe = UPGRADE_RUNTIME["verify_postgres_crypto_runtime"]
+    expected = json.loads((SCRIPTS.parent / "security/vex/postgres16-pgcrypto-openssl-reviewed.json").read_text())["database_state"]
+    observed = copy.deepcopy(expected)
+    statements = []
+
+    def query(container, statement):
+        assert container == "postgres"
+        statements.append(statement)
+        return observed
+
+    monkeypatch.setitem(probe.__globals__, "query", query)
+    probe("postgres")
+    assert statements and "BEGIN READ ONLY;" in statements[0]
+    assert all(name in statements[0] for name in ("pg_settings", "pg_extension", "pg_proc", "pg_db_role_setting"))
+    observed["settings"]["shared_preload_libraries"] = "unreviewed"
+    with pytest.raises(ValueError, match="crypto/preload/extension"):
+        probe("postgres")
+
+    def unavailable(*args):
+        raise OSError("database unavailable")
+
+    monkeypatch.setitem(probe.__globals__, "query", unavailable)
+    with pytest.raises(OSError):
+        probe("postgres")

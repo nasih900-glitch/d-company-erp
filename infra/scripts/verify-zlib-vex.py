@@ -380,7 +380,7 @@ def validate_fixed_report(
     path: Path,
     expected_product: str,
     expected_image_id: str,
-    *, hashlib_exception: str | None = None,
+    *, hashlib_exception: str | None = None, openssl_ignored: list[dict[str, Any]] | None = None,
 ) -> None:
     report = load_json(path)
     descriptor = report.get("descriptor")
@@ -416,6 +416,14 @@ def validate_fixed_report(
     ignored = report.get("ignoredMatches", [])
     if not isinstance(matches, list) or not isinstance(ignored, list):
         raise SystemExit(f"{service.capitalize()} Grype report match arrays are invalid")
+    if openssl_ignored is not None:
+        # These exact records were independently bound to raw evidence, the
+        # current image, native/source/configuration closure and VEX status.
+        ignored = ignored.copy()
+        for entry in openssl_ignored:
+            if entry not in ignored:
+                raise SystemExit("Missing verified OpenSSL ignored record")
+            ignored.remove(entry)
     if ignored and hashlib_exception != "fixed":
         raise SystemExit(f"{service.capitalize()} fixed zlib report must not contain ignored findings")
     if hashlib_exception == "fixed" and (
@@ -526,14 +534,23 @@ def validate_hashlib_vex(path: Path, product: str, image_id: str) -> None:
 
 
 def prove_fixed_hashlib(arguments: list[str]) -> int:
-    if len(arguments) != 7:
+    if len(arguments) not in (7, 8):
         raise SystemExit("Hashlib remediation requires raw Grype report, image tag, config ID, runtime proof and VEX output")
     raw, product, image_id, proof_path, output = arguments[2:7]
+    openssl_ignored = None
+    if len(arguments) == 8:
+        flag = "--openssl-assessment="
+        if not arguments[7].startswith(flag):
+            raise SystemExit("Unexpected hashlib assessment argument")
+        from runpy import run_path
+        helper = run_path(str(Path(__file__).with_name("backend-openssl-assessment.py")))
+        openssl_ignored = helper["verify_report"](Path(raw).parent, Path(arguments[7].removeprefix(flag)),
+                                                  product, image_id, Path(raw))
     validate_expected_identity(product, image_id)
     proof = validate_hashlib_proof(Path(proof_path))
     # Only the unfiltered threshold failure for this exact, proved-fixed
     # runtime component can produce a one-CVE VEX statement.
-    validate_fixed_report("backend", Path(raw), product, image_id, hashlib_exception="raw")
+    validate_fixed_report("backend", Path(raw), product, image_id, hashlib_exception="raw", openssl_ignored=openssl_ignored)
     document = {
         "@context": "https://openvex.dev/ns/v0.2.0",
         "@id": f"urn:dcompany:openvex:cve-2026-119170:{image_id.removeprefix('sha256:')}",
@@ -545,7 +562,10 @@ def prove_fixed_hashlib(arguments: list[str]) -> int:
         json.dump(document, stream, sort_keys=True)
         stream.write("\n")
     destination.chmod(0o444)
-    for name, path in (("raw_grype", raw), ("vex", output)):
+    metadata_raw = str(Path(raw).with_name("backend-grype-unfiltered.json")) if openssl_ignored is not None else raw
+    if openssl_ignored is not None:
+        print(f"backend_hashlib_assessed_grype_sha256={hashlib.sha256(Path(raw).read_bytes()).hexdigest()}")
+    for name, path in (("raw_grype", metadata_raw), ("vex", output)):
         print(f"backend_hashlib_{name}_sha256={hashlib.sha256(Path(path).read_bytes()).hexdigest()}")
     return 0
 
@@ -635,7 +655,7 @@ def bind_official_runtime(arguments: list[str]) -> int:
 def validate_fixed_mode(arguments: list[str], fixed_service: str) -> int:
     usage = (f"Usage: {arguments[0]} --{fixed_service}-fixed-sbom SYFT_REPORT "
              f"IMAGE_PRODUCT IMAGE_ID {fixed_service}=GRYPE_REPORT" +
-             " --runtime-proof=PROOF [--archive-platform=PLATFORM@CONFIG_IMAGE_ID] [--hashlib-vex=VEX]")
+             " --runtime-proof=PROOF [--archive-platform=PLATFORM@CONFIG_IMAGE_ID] [--hashlib-vex=VEX] [--openssl-assessment=VEX]")
     if len(arguments) < 6:
         raise SystemExit(usage)
     sbom_path = Path(arguments[2]).resolve(strict=True)
@@ -646,6 +666,7 @@ def validate_fixed_mode(arguments: list[str], fixed_service: str) -> int:
         raise SystemExit(f"--{fixed_service}-fixed-sbom requires exactly one {fixed_service} Grype report binding")
     archive_platform_binding = None
     hashlib_vex = None
+    openssl_assessment = None
     if fixed_service in OFFICIAL_PROFILES:
         if len(arguments) < 7 or not arguments[6].startswith("--runtime-proof="):
             raise SystemExit(usage)
@@ -657,6 +678,8 @@ def validate_fixed_mode(arguments: list[str], fixed_service: str) -> int:
                 archive_platform_binding = value
             elif flag == "--hashlib-vex" and fixed_service == "backend" and hashlib_vex is None:
                 hashlib_vex = Path(value)
+            elif flag == "--openssl-assessment" and fixed_service in {"backend", "frontend", "caddy", "postgres"} and openssl_assessment is None:
+                openssl_assessment = Path(value)
             else:
                 raise SystemExit(usage)
         proof_path = Path(arguments[6].removeprefix("--runtime-proof="))
@@ -675,8 +698,23 @@ def validate_fixed_mode(arguments: list[str], fixed_service: str) -> int:
     validate_fixed_sbom(fixed_service, sbom_path, expected_image_id, archive_platform_binding=archive_platform_binding)
     if hashlib_vex is not None:
         validate_hashlib_vex(hashlib_vex, expected_product, expected_image_id)
+    openssl_ignored = None
+    if openssl_assessment is not None:
+        from runpy import run_path
+        if fixed_service == "backend":
+            if hashlib_vex is None or openssl_assessment != hashlib_vex.with_name("backend-reviewed.openvex.json"):
+                raise SystemExit("OpenSSL assessment requires the same-directory verified Python fix")
+            helper = run_path(str(Path(__file__).with_name("backend-openssl-assessment.py")))
+            openssl_ignored = helper["verify_report"](openssl_assessment.parent, sbom_path, expected_product,
+                                                      expected_image_id, report_path, final=True)
+        else:
+            if openssl_assessment.name != f"{fixed_service}-openssl-reviewed.openvex.json":
+                raise SystemExit("Service OpenSSL assessment path differs")
+            helper = run_path(str(Path(__file__).with_name("service-openssl-assessments.py")))
+            openssl_ignored = helper["verify_report"](fixed_service, openssl_assessment.parent, sbom_path,
+                                                      expected_product, expected_image_id, report_path)
     validate_fixed_report(fixed_service, report_path, expected_product, expected_image_id,
-                          hashlib_exception="fixed" if hashlib_vex else None)
+                          hashlib_exception="fixed" if hashlib_vex else None, openssl_ignored=openssl_ignored)
     return 0
 
 

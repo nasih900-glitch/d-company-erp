@@ -190,6 +190,7 @@ def verify_live_schema(project: str, expected_postgres: str) -> None:
     postgres = service(project, "postgres")
     require(process_is_running(postgres) and postgres["Image"] == expected_postgres,
             "Build 72 PostgreSQL is not the admitted image")
+    verify_postgres_crypto_runtime(postgres["Id"])
     observed = query(postgres["Id"], """
 SELECT jsonb_build_object('revisions', jsonb_agg(version_num)) FROM public.alembic_version;
 """)
@@ -273,6 +274,29 @@ def query(postgres: str, statement: str, *psql_flags: str) -> dict:
                              "-d", "erp", *psql_flags, sql=statement))
 
 
+def verify_postgres_crypto_runtime(postgres: str) -> None:
+    observed = query(postgres, """
+BEGIN READ ONLY;
+SELECT jsonb_build_object(
+  'settings', (SELECT jsonb_object_agg(name, setting) FROM pg_settings
+    WHERE name IN ('ssl', 'dynamic_library_path', 'local_preload_libraries',
+                   'shared_preload_libraries', 'session_preload_libraries')),
+  'extensions', (SELECT jsonb_agg(jsonb_build_object('name', extname, 'version', extversion) ORDER BY extname)
+    FROM pg_extension),
+  'C_libraries', (SELECT jsonb_agg(probin ORDER BY probin) FROM
+    (SELECT DISTINCT probin FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
+     WHERE l.lanname = 'c') native),
+  'role_database_library_overrides', (SELECT jsonb_agg(jsonb_build_object(
+      'database', setdatabase, 'role', setrole, 'settings', setconfig) ORDER BY setdatabase, setrole)
+    FROM pg_db_role_setting WHERE EXISTS (SELECT 1 FROM unnest(setconfig) setting
+      WHERE split_part(setting, '=', 1) IN ('dynamic_library_path', 'local_preload_libraries',
+                                          'shared_preload_libraries', 'session_preload_libraries'))));
+COMMIT;
+""")
+    assessment = run_path(str(SCRIPTS / "service-openssl-assessments.py"))
+    assessment["verify_postgres_database_state"](observed)
+
+
 def tablet(postgres: str, installation_id: str) -> dict:
     return query(postgres, """
 BEGIN READ ONLY;
@@ -347,6 +371,7 @@ def observe(args, record: dict) -> dict:
                     "a production application writer is still running")
     postgres = rows["postgres"]["Id"]
     require(postgres == args.postgres, "PostgreSQL identity changed from the installer snapshot")
+    verify_postgres_crypto_runtime(postgres)
     storage = {
         "postgres_mount": postgres_mount(rows["postgres"]), "database_identity": database_identity(postgres),
         "caddy": caddy_storage(rows["caddy"], args.apk_root, args.caddy_config, exact_path=False),

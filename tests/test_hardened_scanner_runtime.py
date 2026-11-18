@@ -994,6 +994,14 @@ def test_action_hands_off_exact_caddy_proofs_and_cleans_only_owned_evidence(tmp_
         for service in ("backend", "frontend", "caddy", "postgres", "redis")
         for suffix in (".raw", "")
     }
+    proofs.update({name: b'{"fixture":"image-bound assessment metadata"}\n' for name in (
+        "backend-openssl-runtime.json", "backend-openssl-reviewed.openvex.json",
+        "backend-grype-openssl-filtered.json", "backend-reviewed.openvex.json",
+    )})
+    proofs.update({f"{service}-{suffix}": b'{"fixture":"service-bound assessment metadata"}\n'
+                   for service in ("caddy", "frontend", "postgres") for suffix in (
+                       "grype-unfiltered.json", "openssl-runtime.raw.txt", "openssl-runtime.json",
+                       "openssl-runtime-probe.sh", "openssl-reviewed.openvex.json")})
     for name, content in proofs.items():
         (private / name).write_bytes(content)
         (private / name).chmod(0o444)

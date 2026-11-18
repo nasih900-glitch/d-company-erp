@@ -5,6 +5,31 @@ Room remains 58 and the backend migration target remains Alembic 0105. Signed
 Build 74 / v3.1.67 remains immutable predecessor evidence and is superseded for
 new staging. The failed v3.1.65 and v3.1.66 candidates remain in release history.
 
+## Image security assessment and admission checks
+
+The security-only follow-up retains the exact product versions and tablet
+implementation. It adds separate, image-bound OpenSSL execution-path
+assessments for the backend, static-Go Caddy, HTTP-only Nginx frontend and
+PostgreSQL16/pgcrypto. They retain the original raw scans, unchanged High fail
+gate and exact package versions. The backend's separately proven CPython
+hashlib backport remains a `fixed` statement. Redis has no new assessment.
+
+Each assessed image requires fresh offline runtime evidence and exact
+source/startup/configuration/native-library closure. Final rescans must explain
+only the reviewed eight OpenSSL matches per image and, for the backend, the
+single proven Python backport finding. All other original records remain;
+unrelated or changed findings stay blocking. See the
+[backend assessment](../infra/security/vex/README.backend-openssl.md) and
+[three separate service assessments](../infra/security/vex/README.service-openssl.md).
+
+PostgreSQL's mutable data-volume configuration is checked separately. The
+existing upgrade-runtime probe reads live TLS/preload settings, extensions,
+native C-function libraries and role/database overrides before maintenance,
+after shutdown and when validating the admitted migration head. Changed or
+unavailable state refuses admission; it is not repaired by the verifier.
+These source controls still require independent security review, final
+exact-source CI and the existing signing/deployment/idle-shop gates.
+
 ## Tablet interaction changes
 
 Dynamic glass scenes and Home insets invalidate their actual consumers instead

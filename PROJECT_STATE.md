@@ -11,6 +11,12 @@ identity. They do not establish newly signed Build 75 or live Redmi acceptance.
 The signed Build 74 / v3.1.67 source and assets remain immutable history.
 Production deployment and update offer are separate, still guarded steps.
 
+The security follow-up adds four separately bounded image execution-path
+assessments and a readonly PostgreSQL configuration/catalogue admission check.
+Scanner thresholds and original reports remain intact; final exact-source CI,
+signing and production admission remain distinct requirements. The
+[candidate document](docs/V3_1_68_RELEASE_CANDIDATE.md) links the scoped contracts.
+
 ## Earlier checkpoints
 
 ## Current local candidate (updated 2026-10-30)
