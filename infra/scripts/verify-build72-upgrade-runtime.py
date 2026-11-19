@@ -24,8 +24,8 @@ PG_MOUNT = "/var/lib/postgresql/data"
 CADDY_CONFIG = "/etc/caddy/Caddyfile"
 CADDY_APKS = "/srv/releases/android"
 INSTALL_RECEIPTS = Path("/var/lib/dcompany-erp/build72-deployments")
-RELEASE_VERSION = "3.1.69"
-RELEASE_BUILD = 76
+RELEASE_VERSION = "3.1.70"
+RELEASE_BUILD = 77
 RELEASE_SCHEMA = "0105"
 CANDIDATE_SERVICES = ("postgres", "backend", "frontend", "caddy")
 
@@ -298,17 +298,8 @@ COMMIT;
 
 
 def tablet(postgres: str, installation_id: str) -> dict:
-    return query(postgres, """
-BEGIN READ ONLY;
-SET LOCAL timezone = 'UTC';
-SELECT jsonb_build_object(
-    'installation_id', installation_id, 'platform', platform, 'version_code', version_code,
-    'version_name', version_name, 'pending_outbox_count', pending_outbox_count,
-    'last_successful_sync_at', to_char(last_successful_sync_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
-    'last_seen_at', to_char(last_seen_at, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))
-FROM public.client_installations WHERE installation_id = :'selected'::uuid;
-COMMIT;
-""", "-v", f"selected={installation_id}")
+    return query(postgres, (SCRIPTS / "verify-build77-tablet-close.sql").read_text(),
+                 "-v", f"selected={installation_id}")
 
 
 def database_identity(postgres: str) -> dict:
@@ -378,15 +369,19 @@ def observe(args, record: dict) -> dict:
     }
     if args.phase == "stopped":
         require(storage == sealed_storage(args), "PostgreSQL or Caddy storage changed during writer shutdown")
+    tablet_before = tablet(postgres, record["tablet_installation_id"])
+    business = query(postgres, (SCRIPTS / "verify-production-business-quiescence.sql").read_text())
+    fleet = query(postgres, (SCRIPTS / "verify-build45-pending-state.sql").read_text())
+    tablet_after = tablet(postgres, record["tablet_installation_id"])
+    READY["verify_tablet_capture_pair"](tablet_before, tablet_after)
     sampled_at = datetime.now(UTC)
     current = {
         "schema_version": 1, "captured_at": sampled_at.isoformat(timespec="microseconds").replace("+00:00", "Z"),
         "source_revision": args.source_revision, "candidate_revision": args.revision,
         "source_archive_sha256": args.source_archive_sha256,
         "image_ids": {**{name: row["Image"] for name, row in rows.items()}, "redis": redis["image_id"]},
-        "business_quiescence": query(postgres, (SCRIPTS / "verify-production-business-quiescence.sql").read_text()),
-        "fleet": query(postgres, (SCRIPTS / "verify-build45-pending-state.sql").read_text()),
-        "current_tablet": tablet(postgres, record["tablet_installation_id"]), "redis": redis,
+        "business_quiescence": business, "fleet": fleet,
+        "current_tablet": tablet_after, "redis": redis,
     }
     prior = checked_document(record["reviewed_prior_fleet"], record["reviewed_prior_fleet_sha256"])
     READY["verify_evidence"](current, prior, redis_records, reviewed, receipt_hashes,

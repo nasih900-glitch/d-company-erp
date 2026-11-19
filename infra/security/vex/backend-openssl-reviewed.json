@@ -4,7 +4,7 @@
     "libssl3": "50488fed0c55512a758ec0632e7e7f893d0eb389f253330744350f9c979c0306"
   },
   "deployment_sources": {
-    "docker-compose.prod.yml": "5eb9eb2701b91912fd29523d4218e94eced2bbd13bf13d03e065add16f703344",
+    "docker-compose.prod.yml": "9c5a1f6c6930e98a7f433fa2e4b33e0b7f02f24f3d2e64d6afaa11fa5bd890c2",
     "infra/docker/backend-entrypoint.sh": "ea9d1677631b6dbcfa581ff1f1aafa9e396d673388c9a5c1aa16e201d9d257b0",
     "infra/docker/backend.Dockerfile": "14d10f5b7e5e54fe40694d7b60d59738ed8b67a72f2d5f949c7e4c7d89140e63"
   },
@@ -30,7 +30,7 @@
       "aesgcm_12_byte_nonce": true,
       "p256_canonical_der_and_signature": true
     },
-    "application_sha256": "54b396e745573a342ee5434dfaa2417007d9339fcc6ec9f92af0b68751ab4247",
+    "application_sha256": "f26eead77e80ee151ddbbfb4fb129019316346dc374f62ed9e072339fcca30cd",
     "configuration_sha256": {
       "/app/requirements.lock": "83ace6c37e8158251a544f023d48fd55e99c5bd5a1010715f9f24ad1fbd01150",
       "/entrypoint.sh": "ea9d1677631b6dbcfa581ff1f1aafa9e396d673388c9a5c1aa16e201d9d257b0",

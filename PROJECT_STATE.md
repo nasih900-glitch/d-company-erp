@@ -1,28 +1,27 @@
 # D Company ERP — current project state
 
-## Build 76 candidate
+## Build 77 candidate
 
-Version 3.1.69 targets Android build 76, Room 58 and Alembic 0105. See the
-[current candidate](docs/V3_1_69_RELEASE_CANDIDATE.md) for the tablet motion and
-focus corrections, retained product scope and remaining release checks.
-Physical probes used an isolated release-like package with the prior QA
-identity. They do not establish newly signed Build 76 or live Redmi acceptance.
+Version 3.1.70 targets Android build 77, Room 58 and Alembic 0105. The
+[current candidate](docs/V3_1_70_RELEASE_CANDIDATE.md) retains the tested tablet
+motion, touch and focus changes and adds a bounded normal-close alternative to
+the fresh selected-tablet admission path. No business or Android interaction
+code changes in this successor.
 
-The signed Build 74 / v3.1.67 source and assets remain immutable history.
-Production deployment and update offer are separate, still guarded steps.
+A fresh readonly server snapshot must identify the selected installation's
+newest terminal shift and its exact completed Build 71 Android close. The close
+proves that shift only. Its historical zero queue report is not evidence that
+no later local work exists: existing compatible replay, signed in-place upgrade
+preservation and an optional update remain required. Unknown or nonzero reports,
+recovery closes, ambiguous evidence, new shifts or live business activity refuse
+admission. Unrelated legacy fleet queues remain protected.
 
-The security follow-up adds four separately bounded image execution-path
-assessments and a readonly PostgreSQL configuration/catalogue admission check.
-Scanner thresholds and original reports remain intact; final exact-source CI,
-signing and production admission remain distinct requirements. The
-[candidate document](docs/V3_1_69_RELEASE_CANDIDATE.md) links the scoped contracts.
-
-The immutable v3.1.68 tag remains historical evidence. Build 76 corrects three
-scanner test contracts exposed by the complete root preflight; it retains the
-same tablet implementation and scanner policies. A reviewed tag may start the
-protected exact-source release workflow while branch CI is in progress. All
-full release gates must pass before signing; signed upgrade preservation and
-production, idle-shop and tablet admission remain required before offering.
+Build 76 / v3.1.69 and all earlier signed or tagged sources remain immutable.
+The protected exact-source workflow is authoritative before signing or offering;
+its reviewed tag may start while branch CI is in progress. All complete release
+checks, independent reproduction, image security gates, signed upgrade proof,
+production and idle-shop admission still apply. Candidate source is not a
+claim of deployment or acceptance on the shop's Redmi.
 
 ## Earlier checkpoints
 

@@ -5,7 +5,7 @@
   },
   "database_state": null,
   "deployment_sources": {
-    "docker-compose.prod.yml": "5eb9eb2701b91912fd29523d4218e94eced2bbd13bf13d03e065add16f703344",
+    "docker-compose.prod.yml": "9c5a1f6c6930e98a7f433fa2e4b33e0b7f02f24f3d2e64d6afaa11fa5bd890c2",
     "infra/docker/frontend.Dockerfile": "b660bf4417b4a86eb19c19ecb43d259fff989a98232f1fa7d7cd24928f74d1d2",
     "infra/nginx/frontend.conf": "1e935a53ce1fa472187018781000a9b3c079d5141a273ad376fbb0f02ca9fabb"
   },

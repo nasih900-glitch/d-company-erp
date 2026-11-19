@@ -163,11 +163,76 @@ def verify_fleet(report: dict, schema: str) -> None:
     )
 
 
+TABLET_REPORT_FIELDS = {
+    "installation_id", "platform", "version_code", "version_name",
+    "pending_outbox_count", "last_successful_sync_at", "last_seen_at",
+}
+TABLET_CLOSE_FIELDS = {"company_id", "terminal_id", "observed_at", "close_fence"}
+
+
+def verify_tablet_capture_pair(before: dict, after: dict) -> None:
+    require(isinstance(before, dict) and isinstance(after, dict), "selected tablet capture is missing")
+    require({key: value for key, value in before.items() if key != "observed_at"}
+            == {key: value for key, value in after.items() if key != "observed_at"},
+            "selected tablet report or close evidence changed during capture")
+    if "observed_at" in before or "observed_at" in after:
+        require(utc_timestamp(before.get("observed_at"), "first tablet snapshot")
+                <= utc_timestamp(after.get("observed_at"), "second tablet snapshot"),
+                "selected tablet snapshots are unordered")
+
+
+def verify_tablet_close(tablet: dict, synced: datetime, observed: datetime) -> None:
+    fence = tablet.get("close_fence")
+    check_fields(fence, {"schema_version", "latest_shift_count", "later_shift_count", "normal_close_count",
+                         "recovery_close_count", "shift", "normal_close"}, "tablet close fence")
+    require(type(fence["schema_version"]) is int and fence["schema_version"] == 1
+            and all(type(fence[key]) is int and fence[key] == expected for key, expected in (
+                ("latest_shift_count", 1), ("later_shift_count", 0),
+                ("normal_close_count", 1), ("recovery_close_count", 0))),
+            "tablet close evidence is missing, ambiguous, superseded or a recovery")
+    shift, audit = fence["shift"], fence["normal_close"]
+    check_fields(shift, {"id", "company_id", "terminal_id", "status", "closed_by", "opened_at", "created_at",
+                         "opening_received_at", "closed_at", "opening_protocol_revision", "opening_client_platform",
+                         "opening_client_installation_id", "opening_action_id"}, "latest tablet shift")
+    check_fields(audit, {"id", "action", "entity_type", "entity_id", "company_id", "terminal_id", "actor_user_id",
+                         "client_platform", "client_version_code", "client_action_id", "action_code", "stage", "outcome",
+                         "created_at", "before_status", "after_status", "after_closed_by"}, "normal tablet close audit")
+    require(canonical_uuid(shift["id"]) and canonical_uuid(shift["closed_by"])
+            and shift["status"] == "closed"
+            and type(shift["opening_protocol_revision"]) is int and shift["opening_protocol_revision"] == 1
+            and shift["opening_client_platform"] == "android"
+            and shift["opening_client_installation_id"] == tablet["installation_id"]
+            and all(shift[key] == tablet[key] == audit[key] for key in ("company_id", "terminal_id")),
+            "latest shift does not belong to the exact selected tablet and terminal")
+    require(type(audit["id"]) is int and audit["id"] > 0 and audit["action"] == "shift_closed"
+            and audit["entity_type"] == "Shift" and audit["entity_id"] == shift["id"]
+            and audit["actor_user_id"] == shift["closed_by"] == audit["after_closed_by"]
+            and audit["client_platform"] == "android" and type(audit["client_version_code"]) is int
+            and audit["client_version_code"] == 71
+            and (audit["action_code"], audit["stage"], audit["outcome"]) == ("SHF-CLS", "committed", "completed")
+            and audit["before_status"] == "open" and audit["after_status"] == "closed",
+            "normal close is not completed Build 71 Android evidence from the real closer")
+    key = shift["opening_action_id"]
+    suffix = key.removeprefix("shift-open:") if isinstance(key, str) else ""
+    require(isinstance(key, str) and key.startswith("shift-open:") and canonical_uuid(suffix)
+            and UUID(suffix).version == 4 and audit["client_action_id"] == "shift-close:" + suffix,
+            "normal close action does not match the retained opening action")
+    opened = utc_timestamp(shift["opened_at"], "shift opening")
+    received = utc_timestamp(shift["opening_received_at"], "shift opening receipt")
+    created = utc_timestamp(shift["created_at"], "shift creation")
+    closed = utc_timestamp(shift["closed_at"], "normal shift close")
+    audited = utc_timestamp(audit["created_at"], "normal close audit")
+    require(opened <= closed <= observed and opened <= synced <= observed
+            and created <= received <= closed and opened <= received + timedelta(seconds=1)
+            and opened <= audited <= observed,
+            "normal close, opening, zero-report sync or audit timestamps are inconsistent")
+    # This fences the exact normal close only. It does not assert that later
+    # local work is absent; compatible replay and optional upgrade preserve it.
+
+
 def verify_tablet(tablet: dict, installation_id: str, captured_at: datetime) -> None:
-    check_fields(tablet, {
-        "installation_id", "platform", "version_code", "version_name",
-        "pending_outbox_count", "last_successful_sync_at", "last_seen_at",
-    }, "current tablet")
+    extended = isinstance(tablet, dict) and set(tablet) == TABLET_REPORT_FIELDS | TABLET_CLOSE_FIELDS
+    check_fields(tablet, TABLET_REPORT_FIELDS | TABLET_CLOSE_FIELDS if extended else TABLET_REPORT_FIELDS, "current tablet")
     require(
         canonical_uuid(installation_id) and tablet["installation_id"] == installation_id
         and tablet["platform"] == "android" and type(tablet["version_code"]) is int
@@ -177,7 +242,16 @@ def verify_tablet(tablet: dict, installation_id: str, captured_at: datetime) -> 
     )
     seen = utc_timestamp(tablet["last_seen_at"], "current tablet heartbeat")
     synced = utc_timestamp(tablet["last_successful_sync_at"], "current tablet sync")
-    require(captured_at - MAX_TABLET_AGE <= synced <= seen <= captured_at, "selected tablet sync or heartbeat is stale or inconsistent")
+    require(synced <= seen <= captured_at, "selected tablet sync or heartbeat is stale or inconsistent")
+    if extended:
+        require(canonical_uuid(tablet["company_id"]) and canonical_uuid(tablet["terminal_id"]), "selected tablet tenant or terminal is missing")
+        observed = utc_timestamp(tablet["observed_at"], "tablet server snapshot")
+        require(captured_at - MAX_CAPTURE_AGE <= observed <= captured_at and seen <= observed,
+                "tablet server snapshot is stale, future-dated or inconsistent")
+    if captured_at - MAX_TABLET_AGE <= synced:
+        return  # Preserve the existing fresh known-zero report admission.
+    require(extended, "selected tablet sync or heartbeat is stale or inconsistent")
+    verify_tablet_close(tablet, synced, observed)
 
 
 def _redis_paths(active: dict) -> tuple[Path, Path]:

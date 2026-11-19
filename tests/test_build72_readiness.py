@@ -262,6 +262,7 @@ def test_upgrade_samples_live_services_before_and_after_writer_shutdown(evidence
     retained = {"redis": current["redis"], "started_at": "unchanged-docker-start"}
     statuses = dict.fromkeys(READINESS["SERVICES"], "running")
     events = []
+    samples = []
 
     def service(project, service):
         assert project == "erp-qa"
@@ -275,7 +276,9 @@ def test_upgrade_samples_live_services_before_and_after_writer_shutdown(evidence
         assert container == "postgres"
         if "pg_settings" in sql:
             return json.loads((SCRIPTS.parent / "security/vex/postgres16-pgcrypto-openssl-reviewed.json").read_text())["database_state"]
-        return current["fleet"] if "client_installation_guard_function_sha256" in sql else current["business_quiescence"]
+        kind = "fleet" if "client_installation_guard_function_sha256" in sql else "business_quiescence"
+        samples.append(kind)
+        return current[kind]
 
     class Clock:
         @staticmethod
@@ -292,7 +295,12 @@ def test_upgrade_samples_live_services_before_and_after_writer_shutdown(evidence
     monkeypatch.setitem(scope, "sealed_storage", lambda args: running["storage"])
     monkeypatch.setitem(scope, "redis_observation", lambda row: (current["redis"], retained.copy()))
     monkeypatch.setitem(scope, "query", query)
-    monkeypatch.setitem(scope, "tablet", lambda container, installation: current["current_tablet"])
+    def selected_tablet(container, installation):
+        assert (container, installation) == ("postgres", TABLET)
+        samples.append("tablet")
+        return copy.deepcopy(current["current_tablet"])
+
+    monkeypatch.setitem(scope, "tablet", selected_tablet)
     monkeypatch.setitem(scope, "read_root_document", lambda path: (saved, "c" * 64))
     args = SimpleNamespace(project="erp-qa", phase="running", baseline=None, baseline_sha256="c" * 64,
                            source_revision=READINESS["BUILD71"], source_archive_sha256=REVIEWED_SOURCE,
@@ -302,12 +310,15 @@ def test_upgrade_samples_live_services_before_and_after_writer_shutdown(evidence
     saved = running["retained"]
     assert set(events) == READINESS["SERVICES"]
     assert running["current"]["fleet"] == current["fleet"]
+    assert samples == ["tablet", "business_quiescence", "fleet", "tablet"]
+    samples.clear()
 
     args.phase, args.baseline = "stopped", Path("/sealed.json")
     with pytest.raises(ValueError, match="writer is still running"):
         observe(args, record)
     statuses.update(caddy="exited", backend="exited", frontend="exited")
     assert observe(args, record)["retained"] == saved
+    assert samples == ["tablet", "business_quiescence", "fleet", "tablet"]
 
     args.phase = "redis-only"
     events.clear()
@@ -382,7 +393,7 @@ def test_successful_deployment_receipt_is_private_bound_and_contains_no_credenti
     retained = {"redis": {"image_id": "older-verified-image"}}
     checksums = {"active": "8" * 64, "result": "9" * 64, "hold": "a" * 64}
     images = {name: "sha256:" + "c" * 64 for name in UPGRADE_RUNTIME["CANDIDATE_SERVICES"]}
-    running = {"version_name": "3.1.69", "source_git_sha": CANDIDATE,
+    running = {"version_name": "3.1.70", "source_git_sha": CANDIDATE,
                "services": {name: {"image_id": image} for name, image in images.items()}}
     args = SimpleNamespace(baseline=baseline, baseline_sha256="d" * 64, revision=CANDIDATE,
                            candidate_source_archive_sha256="e" * 64, project="erp", repo_root=repository)
@@ -492,3 +503,156 @@ def test_upgrade_checks_live_postgres_crypto_catalogue_read_only_and_fails_close
     monkeypatch.setitem(probe.__globals__, "query", unavailable)
     with pytest.raises(OSError):
         probe("postgres")
+
+
+@pytest.fixture()
+def normally_closed_tablet(evidence):
+    tablet = evidence[0]["current_tablet"]
+    company = "33333333-3333-4333-8333-333333333333"
+    terminal = "44444444-4444-4444-8444-444444444444"
+    shift_id = "55555555-5555-4555-8555-555555555555"
+    closer = "66666666-6666-4666-8666-666666666666"
+    action = "77777777-7777-4777-8777-777777777777"
+    tablet.update({
+        "company_id": company, "terminal_id": terminal,
+        "observed_at": "2026-11-17T10:28:59Z",
+        "last_successful_sync_at": "2026-11-16T22:08:18Z",
+        "last_seen_at": "2026-11-16T22:08:19Z",
+        "close_fence": {
+            "schema_version": 1, "latest_shift_count": 1, "later_shift_count": 0,
+            "normal_close_count": 1, "recovery_close_count": 0,
+            "shift": {
+                "id": shift_id, "company_id": company, "terminal_id": terminal,
+                "status": "closed", "closed_by": closer,
+                "opened_at": "2026-11-16T08:29:02Z",
+                "created_at": "2026-11-16T08:29:02.100000Z",
+                "opening_received_at": "2026-11-16T08:29:02.200000Z",
+                "closed_at": "2026-11-16T22:11:08.179946Z",
+                "opening_protocol_revision": 1, "opening_client_platform": "android",
+                "opening_client_installation_id": TABLET, "opening_action_id": "shift-open:" + action,
+            },
+            "normal_close": {
+                "id": 123, "action": "shift_closed", "entity_type": "Shift", "entity_id": shift_id,
+                "company_id": company, "terminal_id": terminal, "actor_user_id": closer,
+                "client_platform": "android", "client_version_code": 71,
+                "client_action_id": "shift-close:" + action, "action_code": "SHF-CLS",
+                "stage": "committed", "outcome": "completed",
+                "created_at": "2026-11-16T22:11:08.137664Z",
+                "before_status": "open", "after_status": "closed", "after_closed_by": closer,
+            },
+        },
+    })
+    return tablet
+
+
+def test_normal_close_admits_exact_shift_without_requiring_audit_after_close(evidence, normally_closed_tablet):
+    verify(evidence)
+    assert normally_closed_tablet["close_fence"]["normal_close"]["created_at"] < normally_closed_tablet["close_fence"]["shift"]["closed_at"]
+    assert evidence[0]["fleet"]["pending_outbox_count"] == 5
+
+
+def test_normal_close_has_no_age_cap_but_capture_is_fresh(evidence, normally_closed_tablet):
+    for field in ("last_successful_sync_at", "last_seen_at"):
+        normally_closed_tablet[field] = normally_closed_tablet[field].replace("2026-11-16", "2020-01-01")
+    for section in ("shift", "normal_close"):
+        for field, value in normally_closed_tablet["close_fence"][section].items():
+            if field.endswith("_at"):
+                normally_closed_tablet["close_fence"][section][field] = value.replace("2026-11-16", "2020-01-01")
+    verify(evidence)
+
+
+def test_normal_close_accepts_later_successful_zero_report(evidence, normally_closed_tablet):
+    normally_closed_tablet["last_successful_sync_at"] = "2026-11-16T23:00:00Z"
+    normally_closed_tablet["last_seen_at"] = "2026-11-16T23:00:01Z"
+    verify(evidence)
+
+
+@pytest.mark.parametrize(("location", "value"), [
+    (("pending_outbox_count",), None), (("pending_outbox_count",), 1),
+    (("pending_outbox_count",), False), (("pending_outbox_count",), -1),
+    (("version_code",), 72), (("platform",), "ios"),
+    (("company_id",), "unknown"), (("terminal_id",), None),
+    (("observed_at",), "2026-11-17T10:23:59Z"), (("observed_at",), "2026-11-17T10:29:01Z"),
+    (("last_successful_sync_at",), None), (("last_successful_sync_at",), "2026-11-16T08:00:00Z"),
+    (("last_seen_at",), "2026-11-16T22:00:00Z"), (("close_fence",), None),
+    (("close_fence", "latest_shift_count"), 2), (("close_fence", "later_shift_count"), 1),
+    (("close_fence", "normal_close_count"), 0), (("close_fence", "normal_close_count"), 2),
+    (("close_fence", "recovery_close_count"), 1), (("close_fence", "schema_version"), True),
+    (("close_fence", "shift"), None), (("close_fence", "normal_close"), None),
+    (("close_fence", "shift", "status"), "open"),
+    (("close_fence", "shift", "closed_by"), None),
+    (("close_fence", "shift", "opening_protocol_revision"), True),
+    (("close_fence", "shift", "opening_client_platform"), "web"),
+    (("close_fence", "shift", "opening_client_installation_id"), "22222222-2222-4222-8222-222222222222"),
+    (("close_fence", "shift", "opening_action_id"), "shift-open:77777777-7777-1777-8777-777777777777"),
+    (("close_fence", "shift", "closed_at"), None),
+    (("close_fence", "shift", "opening_received_at"), "2026-11-16T08:29:01Z"),
+    (("close_fence", "normal_close", "id"), True),
+    (("close_fence", "normal_close", "entity_type"), "Receipt"),
+    (("close_fence", "normal_close", "entity_id"), TABLET),
+    (("close_fence", "normal_close", "company_id"), TABLET),
+    (("close_fence", "normal_close", "terminal_id"), TABLET),
+    (("close_fence", "normal_close", "actor_user_id"), TABLET),
+    (("close_fence", "normal_close", "after_closed_by"), TABLET),
+    (("close_fence", "normal_close", "client_platform"), "web"),
+    (("close_fence", "normal_close", "client_version_code"), 72),
+    (("close_fence", "normal_close", "client_action_id"), "shift-close:" + TABLET),
+    (("close_fence", "normal_close", "action_code"), "SHF-REC"),
+    (("close_fence", "normal_close", "stage"), "requested"),
+    (("close_fence", "normal_close", "outcome"), "failed"),
+    (("close_fence", "normal_close", "before_status"), "closed"),
+    (("close_fence", "normal_close", "after_status"), "open"),
+    (("close_fence", "normal_close", "created_at"), "2026-11-16T08:00:00Z"),
+])
+def test_normal_close_refuses_unproven_or_changed_evidence(evidence, normally_closed_tablet, location, value):
+    target = normally_closed_tablet
+    for key in location[:-1]:
+        target = target[key]
+    target[location[-1]] = value
+    with pytest.raises(ValueError):
+        verify(evidence)
+
+
+def test_fresh_zero_report_keeps_original_path(evidence, normally_closed_tablet):
+    normally_closed_tablet["last_successful_sync_at"] = "2026-11-17T10:28:00Z"
+    normally_closed_tablet["last_seen_at"] = "2026-11-17T10:28:30Z"
+    normally_closed_tablet["close_fence"] = None
+    verify(evidence)
+
+
+@pytest.mark.parametrize("mutation", ["queue", "close", "reversed", "missing"])
+def test_capture_pair_refuses_concurrent_selected_tablet_change(normally_closed_tablet, mutation):
+    before, after = copy.deepcopy(normally_closed_tablet), copy.deepcopy(normally_closed_tablet)
+    if mutation == "queue":
+        after["pending_outbox_count"] = 1
+    elif mutation == "close":
+        after["close_fence"]["recovery_close_count"] = 1
+    elif mutation == "missing":
+        after.pop("observed_at")
+    else:
+        after["observed_at"] = "2026-11-17T10:28:58Z"
+    with pytest.raises(ValueError):
+        READINESS["verify_tablet_capture_pair"](before, after)
+
+
+def test_capture_pair_allows_only_forward_server_capture_time(normally_closed_tablet):
+    after = copy.deepcopy(normally_closed_tablet)
+    after["observed_at"] = "2026-11-17T10:29:00Z"
+    READINESS["verify_tablet_capture_pair"](normally_closed_tablet, after)
+
+
+def test_tablet_capture_uses_one_readonly_snapshot_and_selected_parameter(monkeypatch):
+    scope = UPGRADE_RUNTIME["tablet"].__globals__
+    calls = []
+    monkeypatch.setitem(scope, "query", lambda *args: calls.append(args) or {"captured": True})
+    assert scope["tablet"]("postgres-id", TABLET) == {"captured": True}
+    container, sql, option, selected = calls.pop()
+    assert container == "postgres-id" and option == "-v" and selected == "selected=" + TABLET
+    assert "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;" in sql
+    assert "installation_id = :'selected'::uuid" in sql
+    assert "ORDER BY created_at DESC, id DESC" in sql
+    assert "'latest_shift_count'" in sql and "'later_shift_count'" in sql
+    assert "shift_android_origin_recovery_close" in sql and "shift_closed" in sql
+    assert "'pending_outbox_count', c.pending_outbox_count" in sql
+    assert "'observed_at', to_char(clock_timestamp()" in sql
+    assert not any(word in sql.upper().split() for word in ("INSERT", "UPDATE", "DELETE", "TRUNCATE"))
