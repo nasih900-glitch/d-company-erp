@@ -9,7 +9,7 @@ RUN cc -O2 -Wall -Wextra -Werror /tmp/zlib-runtime-probe.c -ldl -o /tmp/dcompany
 # Backport the upstream CVE-2026-119170 fix to the official CPython ABI.
 FROM python:3.14.10-alpine3.24@sha256:eb2c62658b8d51bff0acc408504b76521d02030de56a8a3c1e830083e89b89d2 AS hashlib-backport
 RUN apk add --no-cache 'gcc=15.2.0-r5' 'musl-dev=1.2.6-r3' 'binutils=2.45.1-r1' \
-      'openssl-dev=3.5.9-r0' 'patch=2.8.1-r0'
+      'openssl-dev=3.5.9-r1' 'patch=2.8.1-r0'
 WORKDIR /tmp/cpython
 COPY infra/docker/cpython/cpython-7d9da920.patch .
 COPY infra/docker/cpython/build-hashlib-backport.py .
@@ -21,14 +21,14 @@ FROM python:3.14.10-alpine3.24@sha256:eb2c62658b8d51bff0acc408504b76521d02030de5
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 COPY infra/scripts/bootstrap-verified-pip.py /tmp/bootstrap-verified-pip.py
 RUN apk add --no-cache --upgrade \
-      'libcrypto3=3.5.9-r0' \
-      'libssl3=3.5.9-r0' \
+      'libcrypto3=3.5.9-r1' \
+      'libssl3=3.5.9-r1' \
       'libuuid=2.42.3-r1' \
       'ca-certificates=20261020-r0' \
       'ca-certificates-bundle=20261020-r0' \
     && installed_packages="$(apk info -v)" \
-    && printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r0' \
-    && printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0' \
+    && printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r1' \
+    && printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r1' \
     && printf '%s\n' "$installed_packages" | grep -Fx 'libuuid-2.42.3-r1' \
     && printf '%s\n' "$installed_packages" | grep -Fx 'ca-certificates-20261020-r0' \
     && printf '%s\n' "$installed_packages" | grep -Fx 'ca-certificates-bundle-20261020-r0' \
@@ -68,14 +68,14 @@ RUN set -eux; \
 
 RUN apk add --no-cache --upgrade \
       'zlib=1.4-r0' \
-      'libcrypto3=3.5.9-r0' \
-      'libssl3=3.5.9-r0' \
+      'libcrypto3=3.5.9-r1' \
+      'libssl3=3.5.9-r1' \
       'libuuid=2.42.3-r1' \
       'ca-certificates=20261020-r0' \
       'ca-certificates-bundle=20261020-r0' \
     && installed_packages="$(apk info -v)" \
-    && printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r0' \
-    && printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0' \
+    && printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r1' \
+    && printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r1' \
     && printf '%s\n' "$installed_packages" | grep -Fx 'libuuid-2.42.3-r1' \
     && printf '%s\n' "$installed_packages" | grep -Fx 'ca-certificates-20261020-r0' \
     && printf '%s\n' "$installed_packages" | grep -Fx 'ca-certificates-bundle-20261020-r0' \

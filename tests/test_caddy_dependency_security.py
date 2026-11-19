@@ -867,6 +867,10 @@ def test_postgres_runtime_changes_only_reviewed_security_corrections() -> None:
             expected, check,
             f'    printf \'%s\\n\' "$installed_packages" | grep -Fx \'{name}-{version}\'; \\\n' + check,
         )
+    # Preserve the complete reviewed r0 recipe, then permit only the vendor
+    # Alpine3.24 revision in installation pins and installed-package checks.
+    assert _file_at("f3178f70b4994c46fd0d2e48af76bbb7606c941b", POSTGRES_DOCKERFILE) == expected
+    expected = expected.replace("3.5.9-r0", "3.5.9-r1")
     assert POSTGRES_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
@@ -999,6 +1003,10 @@ def test_backend_image_changes_only_reviewed_openssl_runtime_controls() -> None:
         "COPY --chmod=0644 infra/docker/cpython/verify-hashlib-fips.py /usr/local/bin/verify-hashlib-fips.py\n" + entrypoint,
     )
     expected = _replace_once(expected, "USER erp\n", "USER erp\nRUN python -I -B /usr/local/bin/verify-hashlib-fips.py\n")
+    # Preserve the complete reviewed r0 recipe, then permit only the vendor
+    # Alpine3.24 revision in installation pins and installed-package checks.
+    assert _file_at("f3178f70b4994c46fd0d2e48af76bbb7606c941b", BACKEND_DOCKERFILE) == expected
+    expected = expected.replace("3.5.9-r0", "3.5.9-r1")
     assert BACKEND_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
@@ -1131,6 +1139,10 @@ def test_frontend_image_changes_only_reviewed_security_controls() -> None:
         "COPY frontend/vendor/picomatch-v4 ./vendor/picomatch-v4\n"
         "RUN npm ci --no-audit --no-fund\n",
     )
+    # Preserve the complete reviewed r0 recipe, then permit only the vendor
+    # Alpine3.24 revision in installation pins and installed-package checks.
+    assert _file_at("f3178f70b4994c46fd0d2e48af76bbb7606c941b", FRONTEND_DOCKERFILE) == expected
+    expected = expected.replace("3.5.9-r0", "3.5.9-r1")
     assert FRONTEND_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 

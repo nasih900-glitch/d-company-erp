@@ -1,12 +1,14 @@
 # D Company ERP — current project state
 
-## Build 77 candidate
+## Build 78 candidate
 
-Version 3.1.70 targets Android build 77, Room 58 and Alembic 0105. The
-[current candidate](docs/V3_1_70_RELEASE_CANDIDATE.md) retains the tested tablet
-motion, touch and focus changes and adds a bounded normal-close alternative to
-the fresh selected-tablet admission path. No business or Android interaction
-code changes in this successor.
+Version 3.1.71 targets Android build 78, Room 58 and Alembic 0105. The
+[current candidate](docs/V3_1_71_RELEASE_CANDIDATE.md) retains the tested tablet
+motion, touch and focus changes and its bounded normal-close alternative to the fresh selected-tablet admission
+path. This successor updates only Alpine3.24 OpenSSL pins to vendor revision
+3.5.9-r1 for backend/frontend/PostgreSQL (including backend openssl-dev); Caddy
+stays on its reviewed Alpine3.23 r0. No business or Android interaction code
+changes. Historical r0 evidence is retained and cannot admit current r1 source.
 
 A fresh readonly server snapshot must identify the selected installation's
 newest terminal shift and its exact completed Build 71 Android close. The close
@@ -16,7 +18,7 @@ preservation and an optional update remain required. Unknown or nonzero reports,
 recovery closes, ambiguous evidence, new shifts or live business activity refuse
 admission. Unrelated legacy fleet queues remain protected.
 
-Build 76 / v3.1.69 and all earlier signed or tagged sources remain immutable.
+Build 77 / v3.1.70 and all earlier signed or tagged sources remain immutable.
 The protected exact-source workflow is authoritative before signing or offering;
 its reviewed tag may start while branch CI is in progress. All complete release
 checks, independent reproduction, image security gates, signed upgrade proof,

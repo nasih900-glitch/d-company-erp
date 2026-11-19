@@ -9,6 +9,8 @@ from runpy import run_path
 
 import pytest
 
+from openssl_historical_fixtures import BUILD77, historical_source_root
+
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "infra/scripts/service-openssl-assessments.py"
 
@@ -22,6 +24,9 @@ def evidence(request, tmp_path, monkeypatch):
     service = request.param
     h = run_path(str(HELPER))
     review = h["reviewed"](service)
+    if service != "caddy":
+        historical = historical_source_root(tmp_path, review)
+        monkeypatch.setitem(h["validate_context"].__globals__, "HERE", historical / "infra/scripts")
     fixture = json.loads((ROOT / f"tests/fixtures/{service}_openssl_reviewed_matches.json").read_text())
     config_bytes = json.dumps({"os": "linux", "architecture": "amd64", "config": review["image_startup"]}).encode()
     image_id = "sha256:" + hashlib.sha256(config_bytes).hexdigest()
@@ -181,3 +186,34 @@ def test_collector_cannot_report_empty_crypto_environment_when_env_fails(tmp_pat
     assert result.returncode == 24
     assert "environment unavailable" in result.stderr
     assert "CRYPTOENV" not in result.stdout
+
+
+def test_historical_r0_service_proof_cannot_admit_current_r1_source(evidence, monkeypatch):
+    h, service, directory, product, image_id, *_ = evidence
+    if service == "caddy":
+        # Its unchanged Alpine3.23 runtime remains a current reviewed r0 path.
+        h["main"]([str(HELPER), "--prove", service, str(directory), str(directory / f"{service}.syft.json"), product, image_id])
+    else:
+        monkeypatch.setitem(h["validate_context"].__globals__, "HERE", ROOT / "infra/scripts")
+        with pytest.raises(SystemExit, match="deployment source changed"):
+            h["main"]([str(HELPER), "--prove", service, str(directory), str(directory / f"{service}.syft.json"), product, image_id])
+        assert not (directory / f"{service}-openssl-reviewed.openvex.json").exists()
+
+
+def test_vendor_r1_refresh_changes_only_three_exact_openssl_recipe_pins():
+    import subprocess
+
+    for service in ("backend", "frontend", "postgres", "caddy"):
+        name = f"infra/docker/{service}.Dockerfile"
+        old = subprocess.check_output(["git", "show", f"{BUILD77}:{name}"], cwd=ROOT, text=True)
+        current = (ROOT / name).read_text()
+        expected = old if service == "caddy" else old.replace("3.5.9-r0", "3.5.9-r1")
+        assert current == expected, service
+        if service != "caddy":
+            assert "'libcrypto3=3.5.9-r1'" in current
+            assert "'libssl3=3.5.9-r1'" in current
+            assert "'libcrypto3-3.5.9-r1'" in current
+            assert "'libssl3-3.5.9-r1'" in current
+            assert "3.5.9-r0" not in current
+        if service == "backend":
+            assert "'openssl-dev=3.5.9-r1'" in current

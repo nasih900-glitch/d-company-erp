@@ -173,7 +173,8 @@ def test_psycopg_must_use_the_locked_binary_implementation(profile, monkeypatch,
     ('3.1.68', '3.1.68', '0105'),
     ('3.1.69', '3.1.69', '0105'),
     ('3.1.70', '3.1.70', '0105'),
-    ('3.1.71', '3.1.71', None),
+    ('3.1.71', '3.1.71', '0105'),
+    ('3.1.72', '3.1.72', None),
 ])
 def test_runtime_revision_is_bound_to_installed_and_configured_identity(profile, installed, configured, expected):
     if expected is None:
@@ -297,10 +298,10 @@ def test_scanner_child_failure_propagates_through_actual_find(tmp_path, before_w
     assert 'UNREACHABLE' not in completed.stdout
 
 
-@pytest.mark.parametrize('version,expected', [('3.1.57', 7), ('3.1.58', 7), ('3.1.59', 7), ('3.1.60', 7), ('3.1.61', 7), ('3.1.62', 7), ('3.1.63', 7), ('3.1.64', 7), ('3.1.65', 7), ('3.1.66', 7), ('3.1.67', 7), ('3.1.68', 7), ('3.1.69', 7), ('3.1.70', 7), ('3.1.44', 0), ('3.1.45', 0), ('3.1.46', 0)])
+@pytest.mark.parametrize('version,expected', [('3.1.57', 7), ('3.1.58', 7), ('3.1.59', 7), ('3.1.60', 7), ('3.1.61', 7), ('3.1.62', 7), ('3.1.63', 7), ('3.1.64', 7), ('3.1.65', 7), ('3.1.66', 7), ('3.1.67', 7), ('3.1.68', 7), ('3.1.69', 7), ('3.1.70', 7), ('3.1.71', 7), ('3.1.44', 0), ('3.1.45', 0), ('3.1.46', 0)])
 def test_new_profile_is_mandatory_only_for_current_runtime(version, expected, tmp_path):
     source = (ROOT / 'infra/scripts/verify-production-runtime-images.sh').read_text()
-    marker = '# The final-image profile is mandatory for Builds 64 through 77.'
+    marker = '# The final-image profile is mandatory for Builds 64 through 78.'
     block = source[source.index(marker):].split('\nfi\n', 1)[0] + '\nfi\n'
     fake = tmp_path / 'compose'
     fake.write_text('#!/bin/sh\nexit 7\n')
@@ -314,10 +315,10 @@ def test_build75_requires_both_final_image_trust_and_runtime_profile_gates():
     source = (ROOT / 'infra/scripts/verify-production-runtime-images.sh').read_text()
     conditions = [line for line in source.splitlines() if line.startswith('if [ "$APP_VERSION" = 3.1.57 ]')]
     assert len(conditions) == 2
-    assert all('[ "$APP_VERSION" = 3.1.70 ]' in line for line in conditions)
+    assert all('[ "$APP_VERSION" = 3.1.71 ]' in line for line in conditions)
 
 
-@pytest.mark.parametrize('version,expected', [('3.1.65', 7), ('3.1.66', 7), ('3.1.67', 7), ('3.1.68', 7), ('3.1.69', 7), ('3.1.70', 7), ('3.1.71', 0)])
+@pytest.mark.parametrize('version,expected', [('3.1.65', 7), ('3.1.66', 7), ('3.1.67', 7), ('3.1.68', 7), ('3.1.69', 7), ('3.1.70', 7), ('3.1.71', 7), ('3.1.72', 0)])
 def test_build75_final_image_trust_failure_cannot_be_skipped(version, expected):
     source = (ROOT / 'infra/scripts/verify-production-runtime-images.sh').read_text()
     marker = '# Build55 proves the actual final-image trust stores and image encoders offline.'

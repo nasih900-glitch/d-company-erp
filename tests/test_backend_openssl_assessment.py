@@ -10,6 +10,8 @@ from runpy import run_path
 
 import pytest
 
+from openssl_historical_fixtures import historical_backend_hashes, historical_source_root
+
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "infra/scripts/backend-openssl-assessment.py"
 PRODUCT = "erp-backend:test"
@@ -24,6 +26,11 @@ def evidence(tmp_path, monkeypatch):
     h = run_path(str(HELPER))
     globals_ = h["validate_context"].__globals__
     review = h["reviewed"]()
+    historical = historical_source_root(tmp_path, review)
+    validator = h["base"]()
+    monkeypatch.setitem(globals_, "base", lambda: validator)
+    h["base"] = globals_["base"]
+    monkeypatch.setitem(globals_, "HERE", historical / "infra/scripts")
     raw_matches = json.loads((ROOT / "tests/fixtures/backend_openssl_reviewed_matches.json").read_text())["matches"]
     config = {"architecture": "amd64", "os": "linux", "config": {
         "Entrypoint": ["/entrypoint.sh"], "WorkingDir": "/app", "Env": ["PATH=/usr/local/bin:/usr/bin:/bin"]}}
@@ -86,9 +93,7 @@ def test_reviewed_contract_covers_complete_inventory_and_independent_scanner_rec
     matches = json.loads((ROOT / "tests/fixtures/backend_openssl_reviewed_matches.json").read_text())["matches"]
     assert {m["vulnerability"]["id"] + "/" + m["artifact"]["name"]: h["match_signature"](m)
             for m in matches if m["vulnerability"]["id"] in h["CVES"]} == review["matches"]
-    app = {str(p.relative_to(ROOT / "backend")): hashlib.sha256(p.read_bytes()).hexdigest()
-           for p in (ROOT / "backend").rglob("*") if p.is_file() and "__pycache__" not in p.parts
-           and ".pytest_cache" not in p.parts}
+    app = historical_backend_hashes()
     assert len(app) == 686
     assert h["digest"](app) == review["runtime"]["application_sha256"]
 
@@ -184,3 +189,11 @@ def test_malformed_or_cross_service_assessment_cannot_be_accepted(evidence, defe
     product = "erp-frontend:test" if defect == "wrong-service" else PRODUCT
     with pytest.raises(SystemExit):
         h["main"]([str(HELPER), "--prove", str(directory), str(directory / "backend.syft.json"), product, image_id])
+
+
+def test_historical_r0_backend_proof_cannot_admit_current_r1_source(evidence, monkeypatch):
+    h, directory, image_id, *_ = evidence
+    monkeypatch.setitem(h["validate_context"].__globals__, "HERE", ROOT / "infra/scripts")
+    with pytest.raises(SystemExit, match="startup/deployment source changed"):
+        h["main"]([str(HELPER), "--prove", str(directory), str(directory / "backend.syft.json"), PRODUCT, image_id])
+    assert not (directory / "backend-openssl-reviewed.openvex.json").exists()

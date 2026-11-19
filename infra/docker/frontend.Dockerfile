@@ -49,8 +49,8 @@ RUN set -eux; \
 RUN set -eux; \
     apk add --no-cache --upgrade \
       'zlib=1.4-r0' \
-      'libcrypto3=3.5.9-r0' \
-      'libssl3=3.5.9-r0' \
+      'libcrypto3=3.5.9-r1' \
+      'libssl3=3.5.9-r1' \
       'pcre2=10.49-r0'; \
     test "$(apk --print-arch)" = 'x86_64'; \
     printf '%s\n' 'e09fa32f0a0eab2b879ccbbc4d0e4fb9751486eedda75e35fac65802cc9faa266425edf83e261137a2f4d16281ce2c1a5f4502930fe75154723da014214f0655  /etc/apk/keys/nginx_signing.rsa.pub' | sha512sum -c -; \
@@ -59,8 +59,8 @@ RUN set -eux; \
     apk add --no-cache --no-network --upgrade --repositories-file /dev/null /tmp/dcompany-nginx-1.31.8-r1.apk; \
     rm /tmp/dcompany-nginx-1.31.8-r1.apk; \
     installed_packages="$(apk info -v)"; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r0'; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r1'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r1'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'pcre2-10.49-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'nginx-1.31.8-r1'; \
     test "$NGINX_VERSION" = '1.31.8'; \

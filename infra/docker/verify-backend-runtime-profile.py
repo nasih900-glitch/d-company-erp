@@ -103,7 +103,7 @@ def verify_application_imports() -> int:
 def expected_runtime_revision(runtime_version: str, configured_version: str | None) -> str:
     if configured_version != runtime_version:
         raise RuntimeError('Configured and installed application versions differ')
-    expected = {'3.1.57': '0094', '3.1.58': '0094', '3.1.59': '0095', '3.1.60': '0095', '3.1.61': '0095', '3.1.62': '0095', '3.1.63': '0095', '3.1.64': '0095', '3.1.65': '0105', '3.1.66': '0105', '3.1.67': '0105', '3.1.68': '0105', '3.1.69': '0105', '3.1.70': '0105'}.get(runtime_version)
+    expected = {'3.1.57': '0094', '3.1.58': '0094', '3.1.59': '0095', '3.1.60': '0095', '3.1.61': '0095', '3.1.62': '0095', '3.1.63': '0095', '3.1.64': '0095', '3.1.65': '0105', '3.1.66': '0105', '3.1.67': '0105', '3.1.68': '0105', '3.1.69': '0105', '3.1.70': '0105', '3.1.71': '0105'}.get(runtime_version)
     if expected is None:
         raise RuntimeError('No PostgreSQL runtime proof is defined for this application version')
     return expected
