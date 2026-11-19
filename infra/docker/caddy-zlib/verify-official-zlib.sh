@@ -8,7 +8,8 @@ service=${1:-caddy}
 case "$service" in
     caddy) distro=3.23.5; PORT=0436c6d655a04cbfd7987202a970f5aa7870a901; directory=caddy-zlib ;;
     backend) distro=3.24.3; PORT=bdf501c870a92a05c097857401f69c48c4810384; directory=zlib ;;
-    frontend|postgres) distro=3.24.1; PORT=bdf501c870a92a05c097857401f69c48c4810384; directory=zlib ;;
+    frontend) distro=3.24.1; PORT=bdf501c870a92a05c097857401f69c48c4810384; directory=zlib ;;
+    postgres) distro=3.24.4; PORT=bdf501c870a92a05c097857401f69c48c4810384; directory=zlib ;;
     redis) distro=3.21.8; PORT=d3332621d44c2c4cf52e52217b16674db190212c; directory=zlib ;;
     *) echo 'Unknown official zlib service profile.' >&2; exit 1 ;;
 esac

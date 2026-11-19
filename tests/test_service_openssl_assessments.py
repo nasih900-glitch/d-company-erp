@@ -9,6 +9,8 @@ from runpy import run_path
 
 import pytest
 
+from postgres16_security_fixtures import reviewed_postgres1616_recipe
+
 from openssl_historical_fixtures import BUILD77, historical_source_root
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -208,6 +210,8 @@ def test_vendor_r1_refresh_changes_only_three_exact_openssl_recipe_pins():
         old = subprocess.check_output(["git", "show", f"{BUILD77}:{name}"], cwd=ROOT, text=True)
         current = (ROOT / name).read_text()
         expected = old if service == "caddy" else old.replace("3.5.9-r0", "3.5.9-r1")
+        if service == "postgres":
+            expected = reviewed_postgres1616_recipe(expected)
         assert current == expected, service
         if service != "caddy":
             assert "'libcrypto3=3.5.9-r1'" in current

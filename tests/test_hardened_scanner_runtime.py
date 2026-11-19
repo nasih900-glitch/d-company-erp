@@ -167,7 +167,7 @@ elif args[0] == "start":
         distro, port = {
             "backend": ("3.24.3", "bdf501c870a92a05c097857401f69c48c4810384"),
             "frontend": ("3.24.1", "bdf501c870a92a05c097857401f69c48c4810384"),
-            "postgres": ("3.24.1", "bdf501c870a92a05c097857401f69c48c4810384"),
+            "postgres": ("3.24.4", "bdf501c870a92a05c097857401f69c48c4810384"),
             "redis": ("3.21.8", "d3332621d44c2c4cf52e52217b16674db190212c"),
             "caddy": ("3.23.5", "0436c6d655a04cbfd7987202a970f5aa7870a901"),
         }[service]
@@ -477,7 +477,7 @@ def _run_helper(
         } for service, (distro, port) in {
             "backend": ("3.24.3", "bdf501c870a92a05c097857401f69c48c4810384"),
             "frontend": ("3.24.1", "bdf501c870a92a05c097857401f69c48c4810384"),
-            "postgres": ("3.24.1", "bdf501c870a92a05c097857401f69c48c4810384"),
+            "postgres": ("3.24.4", "bdf501c870a92a05c097857401f69c48c4810384"),
             "redis": ("3.21.8", "d3332621d44c2c4cf52e52217b16674db190212c"),
             "caddy": ("3.23.5", "0436c6d655a04cbfd7987202a970f5aa7870a901"),
         }.items()}),

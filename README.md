@@ -127,11 +127,11 @@ separately identified prototype, not another supported ERP app.
   links only to the live web ERP and verified artifacts from the official GitHub repository.
 
 Tagging a release that exactly matches the Android `versionName` triggers
-`.github/workflows/release.yml`. The current local candidate is `3.1.72`,
-Android installation build `79`, Room `58` and Alembic `0105`. Its production
+`.github/workflows/release.yml`. The current local candidate is `3.1.73`,
+Android installation build `80`, Room `58` and Alembic `0105`. Its production
 installer admission is closed pending actual runtime, Redis and fleet evidence;
 release/device gates remain pending. See the
-[current candidate](docs/V3_1_72_RELEASE_CANDIDATE.md) for bounded local evidence.
+[current candidate](docs/V3_1_73_RELEASE_CANDIDATE.md) for bounded local evidence.
 The candidate also carries separately scoped, image-bound security assessments
 and readonly PostgreSQL configuration admission checks; scanner thresholds,
 raw evidence and production-release gates remain required.

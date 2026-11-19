@@ -26,11 +26,11 @@ def make_evidence(service, tmp_path):
     config = json.dumps({"os": "linux", "architecture": "amd64", "config": {"Env": []}}).encode()
     image = "sha256:" + hashlib.sha256(config).hexdigest()
     product = "erp-" + service + ":vendor-test"
-    if service == "backend":
-        for artifact in fixture["artifacts"]:
-            artifact["purl"] = artifact["purl"].replace("alpine-3.24.1", "alpine-3.24.3")
-        for match in fixture["matches"]:
-            match["artifact"]["purl"] = match["artifact"]["purl"].replace("alpine-3.24.1", "alpine-3.24.3")
+    distro = review["services"][service]
+    for artifact in fixture["artifacts"]:
+        artifact["purl"] = artifact["purl"].replace("alpine-3.24.1", "alpine-" + distro)
+    for match in fixture["matches"]:
+        match["artifact"]["purl"] = match["artifact"]["purl"].replace("alpine-3.24.1", "alpine-" + distro)
     sbom = {"schema": h["COMMON"]["base"]()["SYFT_SCHEMA"], "descriptor": {"name": "syft", "version": "1.42.3"},
             "source": {"type": "image", "metadata": {"imageID": image, "config": base64.b64encode(config).decode()}},
             "artifacts": fixture["artifacts"], "files": [{"location": {"path": path}, "executable": {"format": "elf"},

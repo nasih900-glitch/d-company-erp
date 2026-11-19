@@ -9,6 +9,8 @@ import unittest
 
 import yaml
 
+from postgres16_security_fixtures import NEW_IMAGE
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SELECTOR = ROOT / "infra/scripts/select-ci-postgres16-client.sh"
@@ -27,7 +29,7 @@ class CiPostgres16ClientTest(unittest.TestCase):
         self.path_file = self.root / "github-path"
         self.path_file.touch()
         for client in CLIENTS:
-            self.write_tool(self.versioned, client, "16.15")
+            self.write_tool(self.versioned, client, "16.16")
             self.write_tool(self.wrappers, client, "18.0")
         self.environment = {
             **os.environ,
@@ -77,7 +79,7 @@ class CiPostgres16ClientTest(unittest.TestCase):
         self.assertNotIn("18.0", next_step.stdout)
         for client in CLIENTS:
             self.assertIn(str(self.versioned / client), next_step.stdout)
-            self.assertIn(f"{client} (PostgreSQL) 16.15", next_step.stdout)
+            self.assertIn(f"{client} (PostgreSQL) 16.16", next_step.stdout)
 
     def test_wrong_major_for_any_client_stops_before_path_publication(self) -> None:
         for client in CLIENTS:
@@ -89,7 +91,24 @@ class CiPostgres16ClientTest(unittest.TestCase):
                     self.assertNotEqual(0, result.returncode)
                     self.assertIn(f"Expected PostgreSQL 16 {client}", result.stderr)
                     self.assertEqual("", self.path_file.read_text())
-                    self.write_tool(self.versioned, client, "16.15")
+                    self.write_tool(self.versioned, client, "16.16")
+
+    def test_old_or_ambiguous_minor_stops_before_path_publication(self) -> None:
+        for client in CLIENTS:
+            for version in ("16.15", "16.9", "16", "16.016", "16.99999", "16.16suffix", "16.16.1"):
+                with self.subTest(client=client, version=version):
+                    self.write_tool(self.versioned, client, version)
+                    self.path_file.write_text("")
+                    result = self.select()
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertIn("security minor 16.16", result.stderr)
+                    self.assertEqual("", self.path_file.read_text())
+                    self.write_tool(self.versioned, client, "16.16")
+
+    def test_later_security_minor_in_same_major_is_accepted(self) -> None:
+        for client in CLIENTS:
+            self.write_tool(self.versioned, client, "16.17")
+        self.assertEqual(0, self.select().returncode)
 
     def test_missing_client_cannot_fall_back_to_wrapper18(self) -> None:
         for client in CLIENTS:
@@ -99,7 +118,7 @@ class CiPostgres16ClientTest(unittest.TestCase):
                 self.assertNotEqual(0, result.returncode)
                 self.assertIn("client is missing", result.stderr)
                 self.assertEqual("", self.path_file.read_text())
-                self.write_tool(self.versioned, client, "16.15")
+                self.write_tool(self.versioned, client, "16.16")
 
     def test_shell_function_cannot_win_over_exact_versioned_binary(self) -> None:
         result = self.select('pg_dump() { printf "%s\\n" "pg_dump (PostgreSQL) 16.15"; }; ')
@@ -123,6 +142,7 @@ class CiPostgres16ClientTest(unittest.TestCase):
             with self.subTest(workflow=workflow):
                 document = yaml.safe_load((ROOT / ".github/workflows" / workflow).read_text())
                 self.assertEqual("ubuntu-24.04", document["jobs"][job]["runs-on"])
+                self.assertEqual(NEW_IMAGE, document["jobs"][job]["services"]["postgres"]["image"])
                 steps = document["jobs"][job]["steps"]
                 installs = [index for index, step in enumerate(steps)
                             if "apt-get install" in step.get("run", "")

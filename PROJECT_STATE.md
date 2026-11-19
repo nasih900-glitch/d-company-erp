@@ -1,33 +1,30 @@
 # D Company ERP — current project state
 
-## Build 79 candidate
+## Build 80 candidate
 
-Version 3.1.72 targets Android build 79, Room 58 and Alembic 0105. The
-[current candidate](docs/V3_1_72_RELEASE_CANDIDATE.md) retains Build 78's product,
-tablet interactions, image recipes and OpenSSL r1 package pins. It adds an exact
-signed-vendor-content proof for stale NVD CPE matches, retaining original raw
-reports and the unchanged High threshold. Caddy's r0 execution-path assessment
-and the backend's independent hashlib proof remain separate.
+Version 3.1.73 targets Android build 80, Room 58 and Alembic 0105. The
+[current candidate](docs/V3_1_73_RELEASE_CANDIDATE.md) retains all product/tablet
+behavior and updates PostgreSQL 16.15 to the pinned official 16.16 security base.
+Hosted integration databases use that exact image, and hosted PG16 client tools
+must be 16.16 or newer in major 16. The live predecessor remains frozen 16.15.
 
-The exact public key, APK/source/package metadata, extracted and runtime hashes,
-image/Syft bindings and all eight reviewed matcher records must agree. Unknown
-High findings, extra ignores, content drift and non-equivalent rescans block.
-A naturally clean raw scan still uses the original path. Both image-store and
-full integrated scanner checks remain mandatory; isolated probes do not establish
-newly signed Build 79 or live Redmi acceptance.
+The isolated exact-candidate old→new→old same-volume and dump/fresh-restore
+proof passed with pgcrypto, btree_gist and composite-trigger/exclusion fixtures.
+It requires composite_type_mismatch=error on 16.16. Data volume paths, migration,
+restore, rollback and prior runtime identities remain guarded; no blanket index
+rewrite or data migration is added. PostgreSQL runtime trust profiles move only
+to its actual Alpine 3.24.4 base; signed vendor key/APK/payload hashes remain.
 
-Build 77's fresh-sync/normal-close tablet admission code and readonly SQL remain
-unchanged. A normal close proves its exact shift only. Historical zero reports
-do not prove later local work absent; compatible replay, retained legacy queues,
-optional updates and signed upgrade preservation remain required. New/open
-shifts or live trading still refuse production admission.
+Build 79's refreshed scanner exposed PostgreSQL 16.15 findings after the vendor
+OpenSSL backports were recognized. No PostgreSQL exception or threshold change
+is added: the exact updated images must pass fresh full scans. All previous
+source/tags/assets and literal maps stay immutable.
 
-Build 78 / v3.1.71 and all preceding source/tags/assets remain immutable. Its
-ordinary source/backend/web and instrumentation gates passed while the two image
-stores failed the stale package matches; this is not a passing complete release.
-The protected exact-source workflow remains authoritative before signing or
-offering, including all full checks, independent reproduction, both image stores,
-signed upgrade and production/idle-shop/tablet admission.
+Build 77 fresh-sync/normal-close tablet admission remains unchanged. A normal
+close proves its shift only; compatible replay, retained queues, optional updates,
+signed upgrade preservation and idle-shop requirements remain. The protected
+exact-source workflow, full checks, both image stores, independent reproduction
+and actual production/tablet admission remain mandatory before signing/offering.
 
 ## Earlier checkpoints
 

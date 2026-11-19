@@ -10,8 +10,8 @@
   "deployment_sources": {
     "infra/docker/backend.Dockerfile": "ace1bad25e18ad127d23f774613b6a5fb5bb2c7fbfd728bf843d3289a5d789a4",
     "infra/docker/frontend.Dockerfile": "0f8c7a8f5b88c28d5f8dc8ade038072e00bc1ff09bea10c0f32b1343ec73cd45",
-    "infra/docker/openssl/verify-vendor-r1.sh": "fe6c70da6e6856198bc1434372bdb5b8cadd3e491a02ac3a193fe73dd41586e9",
-    "infra/docker/postgres.Dockerfile": "83bd0095f59e7a135bc198382240f65ba5f9bbc1a2101b5ccb8b0c46f8fd6a3c"
+    "infra/docker/openssl/verify-vendor-r1.sh": "ea1dcba0912d2161ee172838d64c961c3ab34329f18eaffa61242cf0b73fd392",
+    "infra/docker/postgres.Dockerfile": "d9a6e091ee26b6d12b41c81202360e487e61336f1d4f7a1e5f80326a182c442e"
   },
   "matches": {
     "CVE-2026-107496/libcrypto3": "22dd1741be2f1e233e3385f258bff3d667980a36283a4106c2352bd2d02c9a47",
@@ -54,7 +54,7 @@
   "services": {
     "backend": "3.24.3",
     "frontend": "3.24.1",
-    "postgres": "3.24.1"
+    "postgres": "3.24.4"
   },
   "signature_key": "alpine-devel@lists.alpinelinux.org-6165ee59",
   "signature_key_sha256": "207e4696d3c05f7cb05966aee557307151f1f00217af4143c1bcaf33b8df733f",

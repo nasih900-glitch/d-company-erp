@@ -4,7 +4,7 @@ set -euo pipefail
 
 select_postgres16_client() {
   local client_bin=$1
-  local client selected version
+  local client selected version minor
   [[ "$client_bin" == /* && "$client_bin" != *$'\n'* && "$client_bin" != *$'\r'* ]] || return 1
   [[ -n "${GITHUB_PATH:-}" && "$GITHUB_PATH" == /* ]] || {
     echo "PostgreSQL 16 selection requires GITHUB_PATH." >&2
@@ -27,6 +27,15 @@ select_postgres16_client() {
       echo "Expected PostgreSQL 16 ${client}; got: ${version}" >&2
       return 1
     }
+    if ! [[ "$version" =~ \(PostgreSQL\)[[:space:]]16\.([0-9]+)([[:space:]]|$) ]]; then
+      echo "Expected PostgreSQL 16 ${client} at security minor 16.16 or later; got: ${version}" >&2
+      return 1
+    fi
+    minor=${BASH_REMATCH[1]}
+    if ! [[ "$minor" =~ ^(0|[1-9][0-9]{0,3})$ ]] || ((10#$minor < 16)); then
+      echo "Expected PostgreSQL 16 ${client} at security minor 16.16 or later; got: ${version}" >&2
+      return 1
+    fi
     printf '%s: %s\n' "$selected" "$version"
   done
   # The export covers this step; GITHUB_PATH covers every subsequent step.

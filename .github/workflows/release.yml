@@ -86,7 +86,7 @@ jobs:
     timeout-minutes: 65
     services:
       postgres:
-        image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+        image: postgres:16.16-alpine3.24@sha256:1d5b02d3a9941fbd52437db4107f8c52d6297dac553ca1e5c299ebb3756b4857
         env:
           POSTGRES_USER: erp
           POSTGRES_PASSWORD: erp

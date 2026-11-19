@@ -28,7 +28,7 @@ def reviewed():
                            "deployment_sources"} and value["schema"] == 1
             and value["package_version"] == "3.5.9-r1"
             and value["vendor_commit"] == "0f4c7e8d0f5f7cebbdc2156eca4391080b732bf2"
-            and value["services"] == {"backend": "3.24.3", "frontend": "3.24.1", "postgres": "3.24.1"}
+            and value["services"] == {"backend": "3.24.3", "frontend": "3.24.1", "postgres": "3.24.4"}
             and set(value["matches"]) == {cve + "/" + package for cve in CVES for package in PACKAGES},
             "invalid fixed-only vendor review")
     return value

@@ -8,7 +8,8 @@ service=$1
 archives=$2
 case "$service" in
     backend) distro=3.24.3 ;;
-    frontend|postgres) distro=3.24.1 ;;
+    frontend) distro=3.24.1 ;;
+    postgres) distro=3.24.4 ;;
     *) echo 'No fixed OpenSSL vendor profile for this service.' >&2; exit 1 ;;
 esac
 port=0f4c7e8d0f5f7cebbdc2156eca4391080b732bf2

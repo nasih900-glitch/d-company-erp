@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from postgres16_security_fixtures import BUILD79, NEW_IMAGE, OLD_IMAGE, reviewed_postgres1616_recipe
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CODE28_SCANNER_BASE = "aac3a2167a298b0eae5330a831fb01875c37bf25"
@@ -871,6 +873,8 @@ def test_postgres_runtime_changes_only_reviewed_security_corrections() -> None:
     # Alpine3.24 revision in installation pins and installed-package checks.
     assert _file_at("f3178f70b4994c46fd0d2e48af76bbb7606c941b", POSTGRES_DOCKERFILE) == expected
     expected = expected.replace("3.5.9-r0", "3.5.9-r1")
+    assert _file_at(BUILD79, POSTGRES_DOCKERFILE) == expected
+    expected = reviewed_postgres1616_recipe(expected)
     assert POSTGRES_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
@@ -882,7 +886,7 @@ def test_postgres_compatibility_gate_binds_the_current_gosu_binary() -> None:
         "1.19 (go1.26.9 on linux/",
     )
     expected = _replace_once(expected, OLD_GOSU_SHA256, CURRENT_GOSU_SHA256)
-    assert POSTGRES_COMPATIBILITY.read_text(encoding="utf-8") == expected
+    assert _file_at(BUILD79, POSTGRES_COMPATIBILITY) == expected
 
 
 def test_backend_image_changes_only_reviewed_openssl_runtime_controls() -> None:
@@ -1256,6 +1260,8 @@ def test_caddy_binary_hash_is_coordinated_across_ci_and_release() -> None:
             "          # The test process verifies the renderer from its startup log.\n"
             "          emulator-options: -no-window -gpu swangle -feature -Vulkan -no-snapshot -noaudio -no-boot-anim\n",
         )
+        expected = _replace_once(expected,
+            "postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685", NEW_IMAGE)
         assert workflow.read_text(encoding="utf-8") == expected
 
     assert "go 1.26.9" in GO_MOD.read_text(encoding="utf-8")
@@ -1263,3 +1269,23 @@ def test_caddy_binary_hash_is_coordinated_across_ci_and_release() -> None:
         encoding="utf-8"
     )
     assert "v2.11.4-dcompany.3" in CADDY_DOCKERFILE.read_text(encoding="utf-8")
+
+
+def test_current_postgres_security_transition_keeps_frozen_predecessor_and_disposable_roundtrip():
+    source = POSTGRES_COMPATIBILITY.read_text()
+    assert f"ORIGINAL_IMAGE='{OLD_IMAGE}'" in source
+    assert "'postgres (PostgreSQL) 16.16'" in source
+    assert source.count("SHOW composite_type_mismatch") == 2
+    assert "postgres16-compatibility-fixture.sql" in source
+    assert "btree_gist:1.7,pgcrypto:1.3" in source
+    for container in ("original_container", "hardened_container", "rollback_container", "restore_container"):
+        assert f'verify_fixture "${container}"' in source
+    for container in ("original_container", "hardened_container", "rollback_container"):
+        assert f'docker stop --time 60 "${container}"' in source
+        assert f'docker rm -f "${container}" >/dev/null' not in source
+    assert 'pg_dump -U erp -d erp --format=custom > "$dump_file"' in source
+    assert '--exit-on-error --no-owner < "$dump_file"' in source
+    fixture = (ROOT / "infra/scripts/postgres16-compatibility-fixture.sql").read_text()
+    assert "CREATE EXTENSION pgcrypto;" in fixture and "CREATE EXTENSION btree_gist;" in fixture
+    assert "CREATE TRIGGER compatibility_typed_guard" in fixture
+    assert "EXCLUDE USING gist(station WITH =, period WITH &&)" in fixture

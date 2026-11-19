@@ -32,14 +32,14 @@ RUN set -eux; \
     echo 'ffd70d9dcf141b9f13ae293ec5a6c48cf8d04f56bddc80cf244c62398b24f2ea  /out/gosu' | sha256sum -c -; \
     go version -m /out/gosu | grep -F 'go1.26.9'
 
-FROM postgres:16.15-alpine3.24@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685 AS zlib-probe-builder
+FROM postgres:16.16-alpine3.24@sha256:1d5b02d3a9941fbd52437db4107f8c52d6297dac553ca1e5c299ebb3756b4857 AS zlib-probe-builder
 RUN apk add --no-cache --virtual .zlib-probe-build-deps build-base
 COPY infra/docker/caddy-zlib/runtime-probe.c /tmp/zlib-runtime-probe.c
 RUN cc -O2 -Wall -Wextra -Werror /tmp/zlib-runtime-probe.c -ldl -o /tmp/dcompany-caddy-zlib-probe
 
-# Preserve the exact PostgreSQL 16.15 base, entrypoint and data-directory
+# Use the exact PostgreSQL 16.16 security base, preserving entrypoint and data-directory
 # contract. Only patched Alpine libraries and the rebuilt gosu are overlaid.
-FROM postgres:16.15-alpine3.24@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+FROM postgres:16.16-alpine3.24@sha256:1d5b02d3a9941fbd52437db4107f8c52d6297dac553ca1e5c299ebb3756b4857
 
 ARG APP_VERSION=dev
 ARG APP_REVISION=unknown
@@ -48,7 +48,7 @@ LABEL org.opencontainers.image.title="D Company ERP PostgreSQL" \
       org.opencontainers.image.version="${APP_VERSION}" \
       org.opencontainers.image.revision="${APP_REVISION}" \
       org.opencontainers.image.source="https://github.com/docker-library/postgres" \
-      com.dcompany.upstream.version="16.15" \
+      com.dcompany.upstream.version="16.16" \
       com.dcompany.gosu.version="1.19" \
       com.dcompany.gosu.revision="6456aaa0f3c854d199d0f037f068eb97515b7513" \
       com.dcompany.zlib.version="1.4-r0" \
@@ -84,7 +84,7 @@ RUN set -eux; \
     printf '%s\n' "$installed_packages" | grep -Fx 'krb5-libs-1.22.3-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libuuid-2.42.3-r1'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'zlib-1.4-r0'; \
-    test "$(postgres --version)" = 'postgres (PostgreSQL) 16.15'
+    test "$(postgres --version)" = 'postgres (PostgreSQL) 16.16'
 
 COPY --from=gosu-builder /out/gosu /usr/local/bin/gosu
 
