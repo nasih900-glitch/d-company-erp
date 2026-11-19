@@ -198,7 +198,7 @@ def _assert_successor_cannot_enter_mutating_bootstrap(temporary_root: Path) -> N
     copied.write_bytes(INSTALLER.read_bytes())
     (source / ".env.production.example").write_text("APP_VERSION=3.1.64\n")
     result = _run_installer_with_lock_fd(
-        work, None, installer=copied, extra_environment={"LOCK_GIT_VERSION": "3.1.71"}
+        work, None, installer=copied, extra_environment={"LOCK_GIT_VERSION": "3.1.72"}
     )
     assert result.returncode == 1, result
     assert "repository selects the unreviewed successor" in result.stderr, result

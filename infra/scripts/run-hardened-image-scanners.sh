@@ -59,6 +59,9 @@ ZLIB_VEX_VERIFIER="$SCANNER_TOOL_DIR/verify-zlib-vex.py"
 OPENSSL_ASSESSOR="$SCANNER_TOOL_DIR/backend-openssl-assessment.py"
 OPENSSL_REVIEW="$SCANNER_REPO_ROOT/infra/security/vex/backend-openssl-reviewed.json"
 SERVICE_OPENSSL_ASSESSOR="$SCANNER_TOOL_DIR/service-openssl-assessments.py"
+VENDOR_OPENSSL_ASSESSOR="$SCANNER_TOOL_DIR/openssl-vendor-fixed.py"
+VENDOR_OPENSSL_REVIEW="$SCANNER_REPO_ROOT/infra/security/vex/openssl-alpine324-r1-fixed.json"
+VENDOR_OPENSSL_COLLECTOR="$SCANNER_REPO_ROOT/infra/docker/openssl/verify-vendor-r1.sh"
 if [ ! -f "$ARCHIVE_IDENTITY_VERIFIER" ] || [ -L "$ARCHIVE_IDENTITY_VERIFIER" ] || \
    [ "$(canonical_path "$ARCHIVE_IDENTITY_VERIFIER")" != "$ARCHIVE_IDENTITY_VERIFIER" ]; then
   echo "Archive identity verifier is missing or linked." >&2
@@ -71,6 +74,7 @@ if [ ! -f "$ZLIB_VEX_VERIFIER" ] || [ -L "$ZLIB_VEX_VERIFIER" ] || \
 fi
 
 for tool in "$OPENSSL_ASSESSOR" "$OPENSSL_REVIEW" "$SERVICE_OPENSSL_ASSESSOR" \
+  "$VENDOR_OPENSSL_ASSESSOR" "$VENDOR_OPENSSL_REVIEW" "$VENDOR_OPENSSL_COLLECTOR" \
   "$SCANNER_REPO_ROOT/infra/security/vex/caddy-static-go-openssl-reviewed.json" \
   "$SCANNER_REPO_ROOT/infra/security/vex/frontend-http-only-openssl-reviewed.json" \
   "$SCANNER_REPO_ROOT/infra/security/vex/postgres16-pgcrypto-openssl-reviewed.json"; do
@@ -534,6 +538,7 @@ touch "$RUN_DIR/cache-monitor-active"
 ) &
 MONITOR_PID=$!
 
+vendor_archives_prepared=false
 for index in "${!SERVICES[@]}"; do
   service=${SERVICES[$index]}
   image_ref=${IMAGE_REFS[$index]}
@@ -649,6 +654,54 @@ PY
     || scanner_status=$?
   hashlib_vex_argument=""
   openssl_vex_argument=""
+  openssl_vendor_argument=""
+  vendor_vex=""
+  case "$service" in
+    backend|frontend|postgres)
+      if [ "$scanner_status" -eq 2 ] && \
+         python3 "$VENDOR_OPENSSL_ASSESSOR" --has-findings "$service" "$grype_report" "$image_ref" "$config_image_id"; then
+        vendor_raw="$EVIDENCE_ROOT/$service-grype-vendor-unfiltered.json"
+        if [ -e "$vendor_raw" ] || [ -L "$vendor_raw" ]; then
+          echo "Original vendor scan already exists." >&2; exit 1
+        fi
+        mv "$grype_report" "$vendor_raw"
+        chmod 0444 "$vendor_raw"
+        vendor_archives="$EVIDENCE_ROOT/openssl-vendor-apks"
+        if [ "$vendor_archives_prepared" != true ]; then
+          python3 "$VENDOR_OPENSSL_ASSESSOR" --prepare-archives "$vendor_archives" >> "$METADATA"
+          vendor_archives_prepared=true
+        fi
+        vendor_runtime_raw="$EVIDENCE_ROOT/$service-openssl-vendor-runtime.raw.json"
+        if [ -e "$vendor_runtime_raw" ] || [ -L "$vendor_runtime_raw" ]; then
+          echo "Vendor runtime evidence already exists." >&2; exit 1
+        fi
+        if [ "$(docker image inspect --format '{{.Id}}' "$image_ref")" != "$runtime_image_id" ]; then
+          echo "Vendor runtime image tag changed before proof." >&2; exit 1
+        fi
+        run_owned_container 60s "$vendor_runtime_raw" offline --tmpfs "$TMPFS_SPEC" \
+          --mount "type=bind,src=$VENDOR_OPENSSL_COLLECTOR,dst=/scan/verify-vendor-r1.sh,readonly" \
+          --mount "type=bind,src=$vendor_archives/libcrypto3-3.5.9-r1.apk,dst=/scan/vendor-apks/libcrypto3-3.5.9-r1.apk,readonly" \
+          --mount "type=bind,src=$vendor_archives/libssl3-3.5.9-r1.apk,dst=/scan/vendor-apks/libssl3-3.5.9-r1.apk,readonly" \
+          --entrypoint /bin/sh "$runtime_image_id" /scan/verify-vendor-r1.sh "$service" /scan/vendor-apks
+        chmod 0444 "$vendor_runtime_raw"
+        python3 "$VENDOR_OPENSSL_ASSESSOR" --bind-runtime "$service" "$vendor_runtime_raw" \
+          "$EVIDENCE_ROOT/$service-openssl-vendor-runtime.json" "$image_ref" "$config_image_id"
+        python3 "$VENDOR_OPENSSL_ASSESSOR" --prove "$service" "$EVIDENCE_ROOT" "$syft_report" \
+          "$image_ref" "$config_image_id" >> "$METADATA"
+        vendor_vex="$EVIDENCE_ROOT/$service-openssl-vendor-fixed.openvex.json"
+        if [ "$(docker image inspect --format '{{.Id}}' "$image_ref")" != "$runtime_image_id" ]; then
+          echo "Vendor image tag changed before fixed rescan." >&2; exit 1
+        fi
+        scanner_status=0
+        run_owned_container 1200s "$grype_report" online \
+          --mount "type=bind,src=$vendor_vex,dst=/scan/openssl-vendor-fixed.openvex.json,readonly" \
+          "${grype_arguments[@]}" --vex /scan/openssl-vendor-fixed.openvex.json || scanner_status=$?
+        python3 "$VENDOR_OPENSSL_ASSESSOR" --verify "$service" "$EVIDENCE_ROOT" "$syft_report" \
+          "$image_ref" "$config_image_id" "$grype_report" "--scanner-exit=$scanner_status" >> "$METADATA"
+        openssl_vendor_argument="--openssl-vendor-fixed=$vendor_vex"
+      fi
+      ;;
+  esac
   if [ "$service" = backend ] && [ "$scanner_status" -eq 2 ]; then
     raw_grype="$EVIDENCE_ROOT/backend-grype-unfiltered.json"
     hashlib_vex="$EVIDENCE_ROOT/backend-hashlib-fixed.openvex.json"
@@ -660,7 +713,9 @@ PY
     hashlib_raw="$raw_grype"
     final_vex="$hashlib_vex"
     assessment_argument=""
-    if python3 "$OPENSSL_ASSESSOR" --has-findings "$raw_grype" "$image_ref" "$config_image_id"; then
+    if [ -n "$vendor_vex" ]; then
+      assessment_argument="--openssl-vendor-fixed=$syft_report"
+    elif python3 "$OPENSSL_ASSESSOR" --has-findings "$raw_grype" "$image_ref" "$config_image_id"; then
       openssl_runtime="$EVIDENCE_ROOT/backend-openssl-runtime.json"
       if [ -e "$openssl_runtime" ] || [ -L "$openssl_runtime" ]; then
         echo "Backend OpenSSL runtime evidence already exists." >&2; exit 1
@@ -691,7 +746,12 @@ PY
       summarize_grype_failure "$raw_grype" "$image_ref" "$config_image_id"
       exit "$scanner_status"
     fi
-    if [ -n "$assessment_argument" ]; then
+    if [ -n "$vendor_vex" ]; then
+      python3 "$VENDOR_OPENSSL_ASSESSOR" --combine "$EVIDENCE_ROOT" "$syft_report" \
+        "$image_ref" "$config_image_id" "$hashlib_raw" >> "$METADATA"
+      final_vex="$EVIDENCE_ROOT/backend-vendor-reviewed.openvex.json"
+      openssl_vendor_argument="--openssl-vendor-fixed=$final_vex"
+    elif [ -n "$assessment_argument" ]; then
       python3 "$OPENSSL_ASSESSOR" --combine "$EVIDENCE_ROOT" "$syft_report" "$image_ref" "$config_image_id" >> "$METADATA"
       final_vex="$EVIDENCE_ROOT/backend-reviewed.openvex.json"
       openssl_vex_argument="--openssl-assessment=$final_vex"
@@ -756,7 +816,8 @@ PY
   python3 "$ZLIB_VEX_VERIFIER" "--$service-fixed-sbom" "$syft_report" \
     "$image_ref" "$config_image_id" "$service=$grype_report" \
     "--runtime-proof=$runtime_proof" "--archive-platform=$archive_platform@$config_image_id" \
-    ${hashlib_vex_argument:+"$hashlib_vex_argument"} ${openssl_vex_argument:+"$openssl_vex_argument"} >> "$METADATA"
+    ${hashlib_vex_argument:+"$hashlib_vex_argument"} ${openssl_vex_argument:+"$openssl_vex_argument"} \
+    ${openssl_vendor_argument:+"$openssl_vendor_argument"} >> "$METADATA"
   validation=$(python3 - "$grype_report" "$service" "$config_image_id" <<'PY'
 import json
 import sys

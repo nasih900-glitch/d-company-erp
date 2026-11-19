@@ -1,29 +1,33 @@
 # D Company ERP — current project state
 
-## Build 78 candidate
+## Build 79 candidate
 
-Version 3.1.71 targets Android build 78, Room 58 and Alembic 0105. The
-[current candidate](docs/V3_1_71_RELEASE_CANDIDATE.md) retains the tested tablet
-motion, touch and focus changes and its bounded normal-close alternative to the fresh selected-tablet admission
-path. This successor updates only Alpine3.24 OpenSSL pins to vendor revision
-3.5.9-r1 for backend/frontend/PostgreSQL (including backend openssl-dev); Caddy
-stays on its reviewed Alpine3.23 r0. No business or Android interaction code
-changes. Historical r0 evidence is retained and cannot admit current r1 source.
+Version 3.1.72 targets Android build 79, Room 58 and Alembic 0105. The
+[current candidate](docs/V3_1_72_RELEASE_CANDIDATE.md) retains Build 78's product,
+tablet interactions, image recipes and OpenSSL r1 package pins. It adds an exact
+signed-vendor-content proof for stale NVD CPE matches, retaining original raw
+reports and the unchanged High threshold. Caddy's r0 execution-path assessment
+and the backend's independent hashlib proof remain separate.
 
-A fresh readonly server snapshot must identify the selected installation's
-newest terminal shift and its exact completed Build 71 Android close. The close
-proves that shift only. Its historical zero queue report is not evidence that
-no later local work exists: existing compatible replay, signed in-place upgrade
-preservation and an optional update remain required. Unknown or nonzero reports,
-recovery closes, ambiguous evidence, new shifts or live business activity refuse
-admission. Unrelated legacy fleet queues remain protected.
+The exact public key, APK/source/package metadata, extracted and runtime hashes,
+image/Syft bindings and all eight reviewed matcher records must agree. Unknown
+High findings, extra ignores, content drift and non-equivalent rescans block.
+A naturally clean raw scan still uses the original path. Both image-store and
+full integrated scanner checks remain mandatory; isolated probes do not establish
+newly signed Build 79 or live Redmi acceptance.
 
-Build 77 / v3.1.70 and all earlier signed or tagged sources remain immutable.
-The protected exact-source workflow is authoritative before signing or offering;
-its reviewed tag may start while branch CI is in progress. All complete release
-checks, independent reproduction, image security gates, signed upgrade proof,
-production and idle-shop admission still apply. Candidate source is not a
-claim of deployment or acceptance on the shop's Redmi.
+Build 77's fresh-sync/normal-close tablet admission code and readonly SQL remain
+unchanged. A normal close proves its exact shift only. Historical zero reports
+do not prove later local work absent; compatible replay, retained legacy queues,
+optional updates and signed upgrade preservation remain required. New/open
+shifts or live trading still refuse production admission.
+
+Build 78 / v3.1.71 and all preceding source/tags/assets remain immutable. Its
+ordinary source/backend/web and instrumentation gates passed while the two image
+stores failed the stale package matches; this is not a passing complete release.
+The protected exact-source workflow remains authoritative before signing or
+offering, including all full checks, independent reproduction, both image stores,
+signed upgrade and production/idle-shop/tablet admission.
 
 ## Earlier checkpoints
 

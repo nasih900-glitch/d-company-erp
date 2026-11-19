@@ -371,8 +371,8 @@ def test_exact_candidate_images_are_scanned_before_maintenance() -> None:
     assert "--network none --read-only --cap-drop ALL" in source
     assert source.count("--security-opt no-new-privileges") >= 2
     vex_paths = ("/scan/openssl-reviewed.openvex.json", "/scan/hashlib-fixed.openvex.json",
-                 "/scan/service-openssl-reviewed.openvex.json")
-    assert scanner_source.count(" --vex ") == len(vex_paths) == 3
+                 "/scan/service-openssl-reviewed.openvex.json", "/scan/openssl-vendor-fixed.openvex.json")
+    assert scanner_source.count(" --vex ") == len(vex_paths) == 4
     assert all(scanner_source.count(f" --vex {path}") == 1 for path in vex_paths)
     assert '--vex /scan/hashlib-fixed.openvex.json' in scanner_source
     scan_order = (
@@ -420,6 +420,25 @@ def test_exact_candidate_images_are_scanned_before_maintenance() -> None:
     assert '--bind-runtime-proof "$service"' in scanner_source
     assert '^(backend|frontend|caddy|postgres|redis)$' in scanner_source
     assert scanner_source.index('--bind-runtime-proof') < scanner_source.index('  grype_arguments=(')
+    vendor_order = (
+        'vendor_raw="$EVIDENCE_ROOT/$service-grype-vendor-unfiltered.json"',
+        'mv "$grype_report" "$vendor_raw"', '--prepare-archives "$vendor_archives"',
+        'src=$VENDOR_OPENSSL_COLLECTOR,dst=/scan/verify-vendor-r1.sh,readonly',
+        'src=$vendor_archives/libcrypto3-3.5.9-r1.apk,dst=/scan/vendor-apks/libcrypto3-3.5.9-r1.apk,readonly',
+        'src=$vendor_archives/libssl3-3.5.9-r1.apk,dst=/scan/vendor-apks/libssl3-3.5.9-r1.apk,readonly',
+        '--entrypoint /bin/sh "$runtime_image_id" /scan/verify-vendor-r1.sh',
+        '--bind-runtime "$service" "$vendor_runtime_raw"',
+        '--prove "$service" "$EVIDENCE_ROOT" "$syft_report"',
+        '--vex /scan/openssl-vendor-fixed.openvex.json',
+        '--verify "$service" "$EVIDENCE_ROOT" "$syft_report"',
+        '"--scanner-exit=$scanner_status"',
+        'if [ "$service" = backend ] && [ "$scanner_status" -eq 2 ]; then',
+    )
+    offset = 0
+    for statement in vendor_order:
+        offset = scanner_source.index(statement, offset) + len(statement)
+    assert '${openssl_vendor_argument:+"$openssl_vendor_argument"}' in scanner_source
+
     assert 'python3 "$ZLIB_VEX_VERIFIER"' in source
 
 

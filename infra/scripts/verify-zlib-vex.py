@@ -539,13 +539,19 @@ def prove_fixed_hashlib(arguments: list[str]) -> int:
     raw, product, image_id, proof_path, output = arguments[2:7]
     openssl_ignored = None
     if len(arguments) == 8:
-        flag = "--openssl-assessment="
-        if not arguments[7].startswith(flag):
-            raise SystemExit("Unexpected hashlib assessment argument")
         from runpy import run_path
-        helper = run_path(str(Path(__file__).with_name("backend-openssl-assessment.py")))
-        openssl_ignored = helper["verify_report"](Path(raw).parent, Path(arguments[7].removeprefix(flag)),
-                                                  product, image_id, Path(raw))
+        flag = "--openssl-assessment="
+        vendor_flag = "--openssl-vendor-fixed="
+        if arguments[7].startswith(vendor_flag):
+            helper = run_path(str(Path(__file__).with_name("openssl-vendor-fixed.py")))
+            openssl_ignored = helper["verify_report"]("backend", Path(raw).parent,
+                Path(arguments[7].removeprefix(vendor_flag)), product, image_id, Path(raw))
+        elif arguments[7].startswith(flag):
+            helper = run_path(str(Path(__file__).with_name("backend-openssl-assessment.py")))
+            openssl_ignored = helper["verify_report"](Path(raw).parent, Path(arguments[7].removeprefix(flag)),
+                                                      product, image_id, Path(raw))
+        else:
+            raise SystemExit("Unexpected hashlib assessment argument")
     validate_expected_identity(product, image_id)
     proof = validate_hashlib_proof(Path(proof_path))
     # Only the unfiltered threshold failure for this exact, proved-fixed
@@ -655,7 +661,7 @@ def bind_official_runtime(arguments: list[str]) -> int:
 def validate_fixed_mode(arguments: list[str], fixed_service: str) -> int:
     usage = (f"Usage: {arguments[0]} --{fixed_service}-fixed-sbom SYFT_REPORT "
              f"IMAGE_PRODUCT IMAGE_ID {fixed_service}=GRYPE_REPORT" +
-             " --runtime-proof=PROOF [--archive-platform=PLATFORM@CONFIG_IMAGE_ID] [--hashlib-vex=VEX] [--openssl-assessment=VEX]")
+             " --runtime-proof=PROOF [--archive-platform=PLATFORM@CONFIG_IMAGE_ID] [--hashlib-vex=VEX] [--openssl-assessment=VEX | --openssl-vendor-fixed=VEX]")
     if len(arguments) < 6:
         raise SystemExit(usage)
     sbom_path = Path(arguments[2]).resolve(strict=True)
@@ -667,6 +673,7 @@ def validate_fixed_mode(arguments: list[str], fixed_service: str) -> int:
     archive_platform_binding = None
     hashlib_vex = None
     openssl_assessment = None
+    openssl_vendor_fixed = None
     if fixed_service in OFFICIAL_PROFILES:
         if len(arguments) < 7 or not arguments[6].startswith("--runtime-proof="):
             raise SystemExit(usage)
@@ -678,8 +685,10 @@ def validate_fixed_mode(arguments: list[str], fixed_service: str) -> int:
                 archive_platform_binding = value
             elif flag == "--hashlib-vex" and fixed_service == "backend" and hashlib_vex is None:
                 hashlib_vex = Path(value)
-            elif flag == "--openssl-assessment" and fixed_service in {"backend", "frontend", "caddy", "postgres"} and openssl_assessment is None:
+            elif flag == "--openssl-assessment" and fixed_service in {"backend", "frontend", "caddy", "postgres"} and openssl_assessment is None and openssl_vendor_fixed is None:
                 openssl_assessment = Path(value)
+            elif flag == "--openssl-vendor-fixed" and fixed_service in {"backend", "frontend", "postgres"} and openssl_vendor_fixed is None and openssl_assessment is None:
+                openssl_vendor_fixed = Path(value)
             else:
                 raise SystemExit(usage)
         proof_path = Path(arguments[6].removeprefix("--runtime-proof="))
@@ -713,6 +722,15 @@ def validate_fixed_mode(arguments: list[str], fixed_service: str) -> int:
             helper = run_path(str(Path(__file__).with_name("service-openssl-assessments.py")))
             openssl_ignored = helper["verify_report"](fixed_service, openssl_assessment.parent, sbom_path,
                                                       expected_product, expected_image_id, report_path)
+    if openssl_vendor_fixed is not None:
+        from runpy import run_path
+        final = hashlib_vex is not None
+        expected_name = "backend-vendor-reviewed.openvex.json" if final else f"{fixed_service}-openssl-vendor-fixed.openvex.json"
+        if openssl_vendor_fixed.name != expected_name or (final and openssl_vendor_fixed.parent != hashlib_vex.parent):
+            raise SystemExit("Vendor fixed statement differs from its same-directory independent proof")
+        helper = run_path(str(Path(__file__).with_name("openssl-vendor-fixed.py")))
+        openssl_ignored = helper["verify_report"](fixed_service, openssl_vendor_fixed.parent, sbom_path,
+                                                  expected_product, expected_image_id, report_path, final=final)
     validate_fixed_report(fixed_service, report_path, expected_product, expected_image_id,
                           hashlib_exception="fixed" if hashlib_vex else None, openssl_ignored=openssl_ignored)
     return 0

@@ -290,6 +290,13 @@ runs:
           "$evidence_dir/docker-connection-after-hardened.json"; then
           scan_status=1
         fi
+        for package in libcrypto3 libssl3; do
+          archive="$scanner_evidence/openssl-vendor-apks/$package-3.5.9-r1.apk"
+          if sudo test -f "$archive"; then
+            sudo install -o "$runner_uid" -g "$runner_gid" -m 0600 \
+              "$archive" "$evidence_dir/$package-3.5.9-r1.apk"
+          fi
+        done
         for evidence in hardened-scan-metadata.txt \
           backend.syft.json backend-hardened-grype.json \
           frontend.syft.json frontend-hardened-grype.json \
@@ -308,6 +315,13 @@ runs:
           frontend-openssl-runtime-probe.sh frontend-openssl-reviewed.openvex.json \
           postgres-grype-unfiltered.json postgres-openssl-runtime.raw.txt postgres-openssl-runtime.json \
           postgres-openssl-runtime-probe.sh postgres-openssl-reviewed.openvex.json \
+          backend-grype-vendor-unfiltered.json backend-openssl-vendor-runtime.raw.json \
+          backend-openssl-vendor-runtime.json backend-openssl-vendor-fixed.openvex.json \
+          frontend-grype-vendor-unfiltered.json frontend-openssl-vendor-runtime.raw.json \
+          frontend-openssl-vendor-runtime.json frontend-openssl-vendor-fixed.openvex.json \
+          postgres-grype-vendor-unfiltered.json postgres-openssl-vendor-runtime.raw.json \
+          postgres-openssl-vendor-runtime.json postgres-openssl-vendor-fixed.openvex.json \
+          backend-vendor-reviewed.openvex.json \
           postgres.syft.json postgres-hardened-grype.json \
           redis.syft.json redis-hardened-grype.json; do
           if sudo test -f "$scanner_evidence/$evidence"; then
@@ -340,10 +354,22 @@ runs:
           frontend-openssl-runtime-probe.sh frontend-openssl-reviewed.openvex.json \
           postgres-grype-unfiltered.json postgres-openssl-runtime.raw.txt postgres-openssl-runtime.json \
           postgres-openssl-runtime-probe.sh postgres-openssl-reviewed.openvex.json \
+          backend-grype-vendor-unfiltered.json backend-openssl-vendor-runtime.raw.json \
+          backend-openssl-vendor-runtime.json backend-openssl-vendor-fixed.openvex.json \
+          frontend-grype-vendor-unfiltered.json frontend-openssl-vendor-runtime.raw.json \
+          frontend-openssl-vendor-runtime.json frontend-openssl-vendor-fixed.openvex.json \
+          postgres-grype-vendor-unfiltered.json postgres-openssl-vendor-runtime.raw.json \
+          postgres-openssl-vendor-runtime.json postgres-openssl-vendor-fixed.openvex.json \
+          backend-vendor-reviewed.openvex.json \
           postgres.syft.json postgres-hardened-grype.json \
           redis.syft.json redis-hardened-grype.json; do
           sudo rm -f "$scanner_evidence/$evidence"
         done
+        if sudo test -d "$scanner_evidence/openssl-vendor-apks"; then
+          sudo rm -f "$scanner_evidence/openssl-vendor-apks/libcrypto3-3.5.9-r1.apk" \
+            "$scanner_evidence/openssl-vendor-apks/libssl3-3.5.9-r1.apk"
+          sudo rmdir "$scanner_evidence/openssl-vendor-apks"
+        fi
         sudo rmdir "$scanner_work"
         sudo rmdir "$scanner_evidence"
 
@@ -356,7 +382,18 @@ runs:
       run: |
         set -euo pipefail
         evidence_dir="$RUNNER_TEMP/container-security"
+        validate_vendor_hashes() {
+          local service=$1 binding key file expected
+          for binding in runtime:openssl-vendor-runtime.json original:grype-vendor-unfiltered.json vex:openssl-vendor-fixed.openvex.json; do
+            key=${binding%%:*}; file="$evidence_dir/$service-${binding#*:}"
+            [ -f "$file" ] && [ ! -L "$file" ]
+            expected=$(sed -n "s/^${service}_openssl_vendor_${key}_sha256=//p" "$evidence_dir/hardened-scan-metadata.txt")
+            [[ "$expected" =~ ^[a-f0-9]{64}$ ]]
+            printf '%s  %s\n' "$expected" "$file" | sha256sum -c -
+          done
+        }
         vex="$evidence_dir/backend-hashlib-fixed.openvex.json"
+        vendor="$evidence_dir/backend-openssl-vendor-fixed.openvex.json"
         validate_evidence_hash() {
           local key=$1 file=$2 expected
           [ -f "$file" ] && [ ! -L "$file" ]
@@ -371,7 +408,18 @@ runs:
           printf 'path=%s\n' "$vex" >> "$GITHUB_OUTPUT"
           scan_vex="$vex"
           combined="$evidence_dir/backend-reviewed.openvex.json"
-          if [ -e "$combined" ] || [ -L "$combined" ]; then
+          vendor_combined="$evidence_dir/backend-vendor-reviewed.openvex.json"
+          if [ -e "$vendor_combined" ] || [ -L "$vendor_combined" ]; then
+            [ ! -e "$combined" ] && [ ! -L "$combined" ]
+            validate_vendor_hashes backend
+            [ -f "$vendor_combined" ] && [ ! -L "$vendor_combined" ]
+            expected=$(sed -n 's/^backend_openssl_vendor_combined_vex_sha256=//p' "$evidence_dir/hardened-scan-metadata.txt")
+            [[ "$expected" =~ ^[a-f0-9]{64}$ ]]
+            printf '%s  %s\n' "$expected" "$vendor_combined" | sha256sum -c -
+            validate_evidence_hash assessed_grype "$evidence_dir/backend-grype-unfiltered.json"
+            scan_vex="$vendor_combined"
+            printf 'vendor_path=%s\n' "$vendor_combined" >> "$GITHUB_OUTPUT"
+          elif [ -e "$combined" ] || [ -L "$combined" ]; then
             for binding in runtime_proof:backend-openssl-runtime.json vex:backend-openssl-reviewed.openvex.json combined_vex:backend-reviewed.openvex.json; do
               key=${binding%%:*}; file="$evidence_dir/${binding#*:}"
               [ -f "$file" ] && [ ! -L "$file" ]
@@ -382,11 +430,19 @@ runs:
             validate_evidence_hash assessed_grype "$evidence_dir/backend-grype-openssl-filtered.json"
             scan_vex="$combined"
             printf 'openssl_path=%s\n' "$combined" >> "$GITHUB_OUTPUT"
+          elif [ -e "$vendor" ] || [ -L "$vendor" ]; then
+            echo "Missing combined vendor/Python statement." >&2; exit 1
           elif [ -e "$evidence_dir/backend-openssl-reviewed.openvex.json" ] || \
                grep -q '^backend_openssl_' "$evidence_dir/hardened-scan-metadata.txt"; then
             echo "Incomplete backend OpenSSL assessment evidence." >&2; exit 1
           fi
           printf 'scan_path=%s\n' "$scan_vex" >> "$GITHUB_OUTPUT"
+        elif [ -e "$vendor" ] || [ -L "$vendor" ]; then
+          validate_vendor_hashes backend
+          printf 'vendor_path=%s\nscan_path=%s\n' "$vendor" "$vendor" >> "$GITHUB_OUTPUT"
+        elif [ -e "$evidence_dir/backend-grype-vendor-unfiltered.json" ] || \
+             grep -q '^backend_openssl_vendor_' "$evidence_dir/hardened-scan-metadata.txt"; then
+          echo "Incomplete verified vendor assessment evidence." >&2; exit 1
         elif [ -e "$evidence_dir/backend-grype-unfiltered.json" ] || \
              grep -q '^backend_hashlib_vex_sha256=' "$evidence_dir/hardened-scan-metadata.txt"; then
           echo "Incomplete verified hashlib assessment evidence." >&2
@@ -400,9 +456,24 @@ runs:
       run: |
         set -euo pipefail
         evidence_dir="$RUNNER_TEMP/container-security"
+        validate_vendor_hashes() {
+          local service=$1 binding key file expected
+          for binding in runtime:openssl-vendor-runtime.json original:grype-vendor-unfiltered.json vex:openssl-vendor-fixed.openvex.json; do
+            key=${binding%%:*}; file="$evidence_dir/$service-${binding#*:}"
+            [ -f "$file" ] && [ ! -L "$file" ]
+            expected=$(sed -n "s/^${service}_openssl_vendor_${key}_sha256=//p" "$evidence_dir/hardened-scan-metadata.txt")
+            [[ "$expected" =~ ^[a-f0-9]{64}$ ]]
+            printf '%s  %s\n' "$expected" "$file" | sha256sum -c -
+          done
+        }
         for service in caddy frontend postgres; do
           vex="$evidence_dir/$service-openssl-reviewed.openvex.json"
-          if [ -e "$vex" ] || [ -L "$vex" ]; then
+          vendor="$evidence_dir/$service-openssl-vendor-fixed.openvex.json"
+          if [ -e "$vendor" ] || [ -L "$vendor" ]; then
+            [ "$service" != caddy ] && [ ! -e "$vex" ] && [ ! -L "$vex" ]
+            validate_vendor_hashes "$service"
+            printf '%s_path=%s\n' "$service" "$vendor" >> "$GITHUB_OUTPUT"
+          elif [ -e "$vex" ] || [ -L "$vex" ]; then
             for binding in runtime_proof:openssl-runtime.json raw_grype:grype-unfiltered.json vex:openssl-reviewed.openvex.json; do
               key=${binding%%:*}; file="$evidence_dir/$service-${binding#*:}"
               [ -f "$file" ] && [ ! -L "$file" ]
@@ -411,7 +482,8 @@ runs:
               printf '%s  %s\n' "$expected" "$file" | sha256sum -c -
             done
             printf '%s_path=%s\n' "$service" "$vex" >> "$GITHUB_OUTPUT"
-          elif [ -e "$evidence_dir/$service-grype-unfiltered.json" ] || \
+          elif [ -e "$evidence_dir/$service-grype-vendor-unfiltered.json" ] || \
+               [ -e "$evidence_dir/$service-grype-unfiltered.json" ] || \
                grep -q "^${service}_openssl_" "$evidence_dir/hardened-scan-metadata.txt"; then
             echo "Incomplete service OpenSSL assessment evidence." >&2; exit 1
           fi
@@ -492,6 +564,7 @@ runs:
         REDIS_IMAGE: ${{ inputs.redis-image }}
         VERIFIED_HASHLIB_VEX: ${{ steps.backend-hashlib-vex.outputs.path }}
         VERIFIED_OPENSSL_VEX: ${{ steps.backend-hashlib-vex.outputs.openssl_path }}
+        VERIFIED_VENDOR_BACKEND_VEX: ${{ steps.backend-hashlib-vex.outputs.vendor_path }}
         VERIFIED_CADDY_VEX: ${{ steps.service-openssl-vex.outputs.caddy_path }}
         VERIFIED_FRONTEND_VEX: ${{ steps.service-openssl-vex.outputs.frontend_path }}
         VERIFIED_POSTGRES_VEX: ${{ steps.service-openssl-vex.outputs.postgres_path }}
@@ -525,6 +598,7 @@ runs:
           fi
           hashlib_vex=()
           openssl_vex=()
+          openssl_vendor=()
           if [ "$service" = backend ] && [ -n "$VERIFIED_HASHLIB_VEX" ]; then
             [ "$VERIFIED_HASHLIB_VEX" = "$evidence_dir/backend-hashlib-fixed.openvex.json" ]
             hashlib_vex=("--hashlib-vex=$VERIFIED_HASHLIB_VEX")
@@ -533,6 +607,15 @@ runs:
               openssl_vex=("--openssl-assessment=$VERIFIED_OPENSSL_VEX")
             fi
           fi
+          if [ "$service" = backend ] && [ -n "$VERIFIED_VENDOR_BACKEND_VEX" ]; then
+            [ -z "$VERIFIED_OPENSSL_VEX" ]
+            if [ -n "$VERIFIED_HASHLIB_VEX" ]; then
+              [ "$VERIFIED_VENDOR_BACKEND_VEX" = "$evidence_dir/backend-vendor-reviewed.openvex.json" ]
+            else
+              [ "$VERIFIED_VENDOR_BACKEND_VEX" = "$evidence_dir/backend-openssl-vendor-fixed.openvex.json" ]
+            fi
+            openssl_vendor=("--openssl-vendor-fixed=$VERIFIED_VENDOR_BACKEND_VEX")
+          fi
           case "$service" in
             caddy) service_vex=$VERIFIED_CADDY_VEX ;;
             frontend) service_vex=$VERIFIED_FRONTEND_VEX ;;
@@ -540,15 +623,20 @@ runs:
             *) service_vex="" ;;
           esac
           if [ -n "$service_vex" ]; then
-            [ "$service_vex" = "$evidence_dir/$service-openssl-reviewed.openvex.json" ]
-            openssl_vex=("--openssl-assessment=$service_vex")
+            if [ "$service_vex" = "$evidence_dir/$service-openssl-vendor-fixed.openvex.json" ]; then
+              [ "$service" = frontend ] || [ "$service" = postgres ]
+              openssl_vendor=("--openssl-vendor-fixed=$service_vex")
+            else
+              [ "$service_vex" = "$evidence_dir/$service-openssl-reviewed.openvex.json" ]
+              openssl_vex=("--openssl-assessment=$service_vex")
+            fi
           fi
           python3 "$verifier" \
             "--$service-fixed-sbom" "$evidence_dir/$service.syft.json" \
             "$image" "${config_ids[0]}" \
             "$service=$evidence_dir/$service-grype.json" \
             "--runtime-proof=$evidence_dir/$service-zlib-runtime.json" \
-            "--archive-platform=${archive_platforms[0]}@${config_ids[0]}" "${hashlib_vex[@]}" "${openssl_vex[@]}" >> "$validation"
+            "--archive-platform=${archive_platforms[0]}@${config_ids[0]}" "${hashlib_vex[@]}" "${openssl_vex[@]}" "${openssl_vendor[@]}" >> "$validation"
         done
 
     - name: Retain container security evidence

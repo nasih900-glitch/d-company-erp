@@ -224,7 +224,7 @@ class DockerContextSafetyTest(unittest.TestCase):
             '            "$image" "${config_ids[0]}" \\\n'
             '            "$service=$evidence_dir/$service-grype.json" \\\n'
             '            "--runtime-proof=$evidence_dir/$service-zlib-runtime.json" \\\n'
-            '            "--archive-platform=${archive_platforms[0]}@${config_ids[0]}" "${hashlib_vex[@]}" "${openssl_vex[@]}" >> "$validation"',
+            '            "--archive-platform=${archive_platforms[0]}@${config_ids[0]}" "${hashlib_vex[@]}" "${openssl_vex[@]}" "${openssl_vendor[@]}" >> "$validation"',
             action,
         )
         for service in ("frontend", "caddy", "postgres"):

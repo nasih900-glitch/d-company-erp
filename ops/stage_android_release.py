@@ -572,8 +572,10 @@ def _inspect_running_release(payload: dict[str, Any]) -> dict[str, Any]:
     if version == "3.1.70" or code == 77:
         raise AndroidReleaseStagingError("Build 77 is a superseded tagged candidate")
     if version == "3.1.71" or code == 78:
-        if version != "3.1.71" or type(code) is not int or code != 78:
-            raise AndroidReleaseStagingError("Build 78 staging requires its exact Android version pair")
+        raise AndroidReleaseStagingError("Build 78 is a superseded tagged candidate")
+    if version == "3.1.72" or code == 79:
+        if version != "3.1.72" or type(code) is not int or code != 79:
+            raise AndroidReleaseStagingError("Build 79 staging requires its exact Android version pair")
         try:
             verifier = Path(__file__).resolve().parents[1] / "infra/scripts/verify-build72-upgrade-runtime.py"
             project, expected, redis, receipt_digest = run_path(str(verifier))["staging_identity"](Path(root), revision)
@@ -583,7 +585,7 @@ def _inspect_running_release(payload: dict[str, Any]) -> dict[str, Any]:
                                                                         for name, image in expected.items()}},
             )
         except (KeyError, OSError, TypeError, ValueError, RuntimeParityError, subprocess.TimeoutExpired) as exc:
-            raise AndroidReleaseStagingError("Exact Build 78 deployment or retained Redis proof failed") from exc
+            raise AndroidReleaseStagingError("Exact Build 79 deployment or retained Redis proof failed") from exc
         return {**running, "services": {**running["services"], "redis": redis},
                 "deployment_receipt_sha256": receipt_digest, "project_name": project}
     try:

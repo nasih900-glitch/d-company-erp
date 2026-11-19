@@ -470,7 +470,7 @@ def test_composite_gates_every_scanner_on_verified_connection_and_hardened_scan(
         '            "$image" "${config_ids[0]}" \\\n'
         '            "$service=$evidence_dir/$service-grype.json" \\\n'
         '            "--runtime-proof=$evidence_dir/$service-zlib-runtime.json" \\\n'
-        '            "--archive-platform=${archive_platforms[0]}@${config_ids[0]}" "${hashlib_vex[@]}" "${openssl_vex[@]}" >> "$validation"'
+        '            "--archive-platform=${archive_platforms[0]}@${config_ids[0]}" "${hashlib_vex[@]}" "${openssl_vex[@]}" "${openssl_vendor[@]}" >> "$validation"'
         in zlib_validation
     )
     for service in ("caddy", "frontend", "postgres"):
@@ -481,3 +481,20 @@ def test_composite_gates_every_scanner_on_verified_connection_and_hardened_scan(
     assert '"DOCKER_HOST=$EXPECTED_DOCKER_HOST"' in action
     assert "/var/run/docker.sock" not in action
     assert scanner_steps.count("continue-on-error") == 0
+
+
+def test_vendor_fixed_evidence_is_retained_and_selected_only_after_its_hash_checks():
+    action = (ROOT / ".github/actions/scan-production-images/action.yml").read_text()
+    for service in ("backend", "frontend", "postgres"):
+        for suffix in ("grype-vendor-unfiltered.json", "openssl-vendor-runtime.raw.json",
+                       "openssl-vendor-runtime.json", "openssl-vendor-fixed.openvex.json"):
+            assert action.count(service + "-" + suffix) >= 2
+    assert action.count("backend-vendor-reviewed.openvex.json") >= 3
+    assert 'validate_vendor_hashes backend' in action
+    assert 'validate_vendor_hashes "$service"' in action
+    assert 'backend_openssl_vendor_combined_vex_sha256=' in action
+    assert 'openssl_vendor=("--openssl-vendor-fixed=$VERIFIED_VENDOR_BACKEND_VEX")' in action
+    assert 'openssl_vendor=("--openssl-vendor-fixed=$service_vex")' in action
+    assert '[ "$service" != caddy ] && [ ! -e "$vex" ] && [ ! -L "$vex" ]' in action
+    assert '"$archive" "$evidence_dir/$package-3.5.9-r1.apk"' in action
+    assert 'sudo rmdir "$scanner_evidence/openssl-vendor-apks"' in action
