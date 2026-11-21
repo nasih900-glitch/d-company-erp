@@ -17,6 +17,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.AnnotatedString
 import androidx.test.espresso.Espresso.closeSoftKeyboard
 import androidx.compose.ui.test.assertIsDisplayed
@@ -31,6 +32,7 @@ import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -107,6 +109,7 @@ class LoginWorkspaceUiTest {
         compose.runOnIdle { assertEquals(AppearancePreference.Night, appearance.value) }
         compose.onNodeWithTag("login-email").assertTextEquals("synthetic@example.test")
         compose.onNodeWithContentDescription("Show password").performClick()
+        compose.onNodeWithContentDescription("Hide password").assertIsDisplayed()
         assertPasswordText("temporary-secret")
         closeSoftKeyboard()
         compose.onNodeWithTag("login-submit").performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
@@ -224,11 +227,20 @@ class LoginWorkspaceUiTest {
     }
 
     private fun assertPasswordText(expected: String) {
-        // The field owns its editable text. A merged read can traverse icon semantics off-main.
-        val field = compose.onNodeWithTag("login-password", useUnmergedTree = true).fetchSemanticsNode()
-        compose.runOnIdle {
-            assertEquals(AnnotatedString(expected), field.config[SemanticsProperties.EditableText])
+        // ui-test 1.7.5's single-node fetch recursively prints live semantics
+        // off-main. Refetch the collection for each sample and read its current
+        // editable text on UI, after the visibility transformation is published.
+        var snapshot: Pair<Int, AnnotatedString?> = 0 to null
+        compose.waitUntil(timeoutMillis = 5_000) {
+            val fields = compose.onAllNodesWithTag("login-password", useUnmergedTree = true)
+                .fetchSemanticsNodes()
+            snapshot = compose.runOnIdle {
+                fields.size to fields.singleOrNull()?.config?.getOrNull(SemanticsProperties.EditableText)
+            }
+            snapshot == (1 to AnnotatedString(expected))
         }
+        assertEquals("Exactly one password field must publish editable text", 1, snapshot.first)
+        assertEquals(AnnotatedString(expected), snapshot.second)
     }
 
     private fun assertVersionDoesNotCoverVisibleControls() {

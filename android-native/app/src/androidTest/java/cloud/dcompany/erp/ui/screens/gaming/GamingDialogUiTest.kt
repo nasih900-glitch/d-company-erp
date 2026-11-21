@@ -21,6 +21,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
@@ -232,14 +233,23 @@ class GamingDialogUiTest {
             automation.serviceInfo = automation.serviceInfo.apply {
                 flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
             }
+            val searchMatcher = hasTestTag("gaming-customer-search")
             val customerSearch = compose.onNodeWithTag("gaming-customer-search")
-            customerSearch.performAndroidScreenTouchWithOptionalIme()
+            customerSearch.performAndroidScreenTouchWithOptionalIme(searchMatcher)
                 .assertIsFocused().performTextReplacement("Amina")
-            val nativeSearchRoot = (customerSearch.fetchSemanticsNode().root as ViewRootForTest).view
+            // Avoid fetchOneOrThrow's off-main recursive diagnostic print in
+            // pinned ui-test 1.7.5 while the IME is still changing layout.
+            var searchNodes = emptyList<SemanticsNode>()
+            compose.waitUntil(timeoutMillis = 5_000) {
+                searchNodes = compose.onAllNodes(searchMatcher).fetchSemanticsNodes()
+                searchNodes.size == 1
+            }
             compose.runOnIdle {
+                assertEquals("Exactly one customer search field must own focus", 1, searchNodes.size)
+                val nativeSearchRoot = (searchNodes.single().root as ViewRootForTest).view
                 check(nativeSearchRoot.isInTouchMode) { "Saved-customer finger input must enter native touch mode" }
             }
-            customerSearch.awaitImeSettledTouchTarget()
+            customerSearch.awaitImeSettledTouchTarget(searchMatcher)
             val playersList = compose.onNodeWithTag("gaming-players-list")
             playersList.performScrollToNode(hasText("Amina Rahman · 9876543210"))
             compose.onNodeWithText("Amina Rahman · 9876543210").performClick()
@@ -252,7 +262,7 @@ class GamingDialogUiTest {
             // dispose its previous semantics node when the selected row recomposes.
             playersList.performScrollToNode(hasTestTag("gaming-customer-search"))
             compose.onNodeWithTag("gaming-customer-search")
-                .awaitImeHiddenSettledTouchTarget()
+                .awaitImeHiddenSettledTouchTarget(searchMatcher)
             compose.onNodeWithTag("gaming-customer-search").assertIsNotFocused()
             compose.onNodeWithTag("gaming-add-player")
                 .performScrollTo()
@@ -260,9 +270,10 @@ class GamingDialogUiTest {
                 .assertIsEnabled()
                 .performClick()
             compose.runOnIdle { assertTrue(joins.isEmpty()) }
-            compose.onNodeWithText("Confirm join").awaitImeHiddenSettledTouchTarget()
+            compose.onNodeWithText("Confirm join").awaitImeHiddenSettledTouchTarget(hasText("Confirm join"))
             val reviewTitle = compose.onNodeWithText("Review friend join")
-            Log.i("GamingJoinReview", "Before strict review assertion: ${reviewTitle.dialogTouchSnapshot()}")
+            Log.i("GamingJoinReview", "Before strict review assertion: " +
+                reviewTitle.dialogTouchSnapshot(hasText("Review friend join")))
             compose.onNodeWithText("Amina Rahman").assertIsDisplayed()
             compose.onNodeWithText("Player-controller fees after join · 30.00 estimated")
                 .assertIsDisplayed()
@@ -2724,21 +2735,27 @@ down(Offset(width * 0.50f, height * 0.90f))
             bounds.top >= usableBounds.top && bounds.bottom <= usableBounds.bottom
     }
 
-    private fun SemanticsNodeInteraction.dialogTouchSnapshot(): DialogTouchSnapshot {
-        val node = fetchSemanticsNode()
-        // boundsInWindow is clipped; position + size preserves the WHOLE button.
-        val position = node.positionOnScreen
-        val bounds = Rect(
-            position.x, position.y,
-            position.x + node.size.width, position.y + node.size.height,
-        )
-        val root = node.root as ViewRootForTest
-        val clippedInWindow = node.boundsInWindow
+    /** Collection fetch avoids ui-test 1.7.5's off-main recursive single-node print. */
+    private fun SemanticsNodeInteraction.snapshotNode(matcher: SemanticsMatcher?): SemanticsNode {
+        if (matcher == null) return fetchSemanticsNode()
+        val nodes = compose.onAllNodes(matcher).fetchSemanticsNodes()
+        assertEquals("Exactly one live dialog node must match $matcher", 1, nodes.size)
+        return nodes.single()
+    }
+
+    private fun SemanticsNodeInteraction.dialogTouchSnapshot(matcher: SemanticsMatcher? = null): DialogTouchSnapshot {
+        val node = snapshotNode(matcher)
         val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
         val keyboardBounds = automation.windows
             .firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
             ?.let { android.graphics.Rect().also(it::getBoundsInScreen) }
         return compose.runOnIdle {
+            // Read the entire live layout on its owner thread in one snapshot.
+            // Position + size preserves the WHOLE button, unlike clipped bounds.
+            val position = node.positionOnScreen
+            val bounds = Rect(position.x, position.y, position.x + node.size.width, position.y + node.size.height)
+            val root = node.root as ViewRootForTest
+            val clippedInWindow = node.boundsInWindow
             val view = root.view
             val screenOrigin = IntArray(2).also(view::getLocationOnScreen)
             val windowOrigin = IntArray(2).also(view::getLocationInWindow)
@@ -2768,7 +2785,7 @@ down(Offset(width * 0.50f, height * 0.90f))
     }
 
     /** Wait for Android's IME/window work, not just Compose's recomposition clock. */
-    private fun SemanticsNodeInteraction.awaitImeSettledTouchTarget(): DialogTouchSnapshot {
+    private fun SemanticsNodeInteraction.awaitImeSettledTouchTarget(matcher: SemanticsMatcher? = null): DialogTouchSnapshot {
         // Text replacement changes editor focus and asynchronously resizes the
         // dialog. performClick injects coordinates; a partly visible node can
         // otherwise move after isDisplayed succeeds. Keep the IME OPEN and
@@ -2783,7 +2800,7 @@ down(Offset(width * 0.50f, height * 0.90f))
             // five-second layout/touch-target check after the IME appears.
             compose.waitUntil(timeoutMillis = 10_000) {
                 awaitAndroidFrame()
-                val snapshot = dialogTouchSnapshot()
+                val snapshot = dialogTouchSnapshot(matcher)
                 if (snapshot != previous) Log.i("GamingDialogTouch", "Waiting for IME: $snapshot")
                 previous = snapshot
                 snapshot.imeVisible && snapshot.imeBottom > 0
@@ -2791,7 +2808,7 @@ down(Offset(width * 0.50f, height * 0.90f))
             previous = null
             compose.waitUntil(timeoutMillis = 5_000) {
                 awaitAndroidFrame()
-                val snapshot = dialogTouchSnapshot()
+                val snapshot = dialogTouchSnapshot(matcher)
                 if (snapshot != previous) Log.i("GamingDialogTouch", "IME target: $snapshot")
                 stableSamples = if (snapshot.ready && snapshot == previous) stableSamples + 1 else 0
                 previous = snapshot
@@ -2805,19 +2822,20 @@ down(Offset(width * 0.50f, height * 0.90f))
     }
 
     /** Observe native IME removal and layout, without polling or changing focus. */
-    private fun SemanticsNodeInteraction.awaitImeHiddenSettledTouchTarget(): DialogTouchSnapshot {
+    private fun SemanticsNodeInteraction.awaitImeHiddenSettledTouchTarget(matcher: SemanticsMatcher? = null): DialogTouchSnapshot {
         var previous: DialogTouchSnapshot? = null
         var stableSamples = 0
         try {
             compose.waitUntil(timeoutMillis = 5_000) {
                 awaitAndroidFrame()
-                val view = (fetchSemanticsNode().root as ViewRootForTest).view
+                val node = snapshotNode(matcher)
                 val rawImeHidden = compose.runOnIdle {
+                    val view = (node.root as ViewRootForTest).view
                     val insets = ViewCompat.getRootWindowInsets(view)
                     insets != null && !insets.isVisible(WindowInsetsCompat.Type.ime()) &&
                         insets.getInsets(WindowInsetsCompat.Type.ime()).bottom == 0
                 }
-                val snapshot = dialogTouchSnapshot()
+                val snapshot = dialogTouchSnapshot(matcher)
                 stableSamples = if (rawImeHidden && snapshot.imeBottom == 0 &&
                     snapshot.touchTargetReady && snapshot == previous
                 ) stableSamples + 1 else 0
@@ -2862,7 +2880,7 @@ down(Offset(width * 0.50f, height * 0.90f))
     }
 
     /** Initial real input touch; the keyboard need not be open before focus. */
-    private fun SemanticsNodeInteraction.performAndroidScreenTouchWithOptionalIme(): SemanticsNodeInteraction {
+    private fun SemanticsNodeInteraction.performAndroidScreenTouchWithOptionalIme(matcher: SemanticsMatcher? = null): SemanticsNodeInteraction {
         val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
         val originalFlags = automation.serviceInfo.flags
         try {
@@ -2875,7 +2893,7 @@ down(Offset(width * 0.50f, height * 0.90f))
             var stableSamples = 0
             compose.waitUntil(timeoutMillis = 5_000) {
                 awaitAndroidFrame()
-                val snapshot = dialogTouchSnapshot()
+                val snapshot = dialogTouchSnapshot(matcher)
                 stableSamples = if (snapshot.touchTargetReady && snapshot == previous) stableSamples + 1 else 0
                 previous = snapshot
                 stableSamples >= 3
@@ -2884,7 +2902,7 @@ down(Offset(width * 0.50f, height * 0.90f))
             compose.waitForIdle()
             awaitAndroidFrame()
             val target = checkNotNull(previous)
-            val finalSnapshot = dialogTouchSnapshot()
+            val finalSnapshot = dialogTouchSnapshot(matcher)
             check(target.touchTargetReady && finalSnapshot.touchTargetReady && target == finalSnapshot) {
                 "Initial input target moved before touch: stable=$target final=$finalSnapshot"
             }
