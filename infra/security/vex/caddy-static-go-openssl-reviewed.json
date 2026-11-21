@@ -5,7 +5,7 @@
   },
   "database_state": null,
   "deployment_sources": {
-    "docker-compose.prod.yml": "99d9a8267ad359d175196dc3b25fa0715ed0ef132bc21482274a53aa93501e30",
+    "docker-compose.prod.yml": "c8cfb655071157db64504e658a88b3031f24f41bf1ca07e4865a14c8655673b8",
     "infra/caddy/Caddyfile": "3007646fc99d73db1e513f72e33c2fa8cf841f650f0d0824a072e52a526243ac",
     "infra/docker/caddy-build/go.mod": "672bef1f67a2d8b616bbb6000a1ca591a81a2f220a1c961c7c4673bb16a007cf",
     "infra/docker/caddy-build/go.sum": "20ad2dbec847df1fb9c2bcaf1963089230850fe14d2301ff9bf41573cd15e16b",

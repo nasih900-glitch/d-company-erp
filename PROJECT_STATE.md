@@ -1,30 +1,23 @@
 # D Company ERP — current project state
 
-## Build 80 candidate
+## Local Build 81 fallback candidate
 
-Version 3.1.73 targets Android build 80, Room 58 and Alembic 0105. The
-[current candidate](docs/V3_1_73_RELEASE_CANDIDATE.md) retains all product/tablet
-behavior and updates PostgreSQL 16.15 to the pinned official 16.16 security base.
-Hosted integration databases use that exact image, and hosted PG16 client tools
-must be 16.16 or newer in major 16. The live predecessor remains frozen 16.15.
+Version 3.1.74 targets Android build 81, Room 58 and Alembic 0105. The
+[local fallback](docs/V3_1_74_RELEASE_CANDIDATE.md) preserves the scoped Android
+instrumentation synchronization fixes and coordinates only the release identity
+and exact admission guards. Product APK behavior, PostgreSQL 16.16, image/vendor
+safeguards, calendar and normal-close admission, retained queues and rollback
+requirements remain unchanged.
 
-The isolated exact-candidate old→new→old same-volume and dump/fresh-restore
-proof passed with pgcrypto, btree_gist and composite-trigger/exclusion fixtures.
-It requires composite_type_mismatch=error on 16.16. Data volume paths, migration,
-restore, rollback and prior runtime identities remain guarded; no blanket index
-rewrite or data migration is added. PostgreSQL runtime trust profiles move only
-to its actual Alpine 3.24.4 base; signed vendor key/APK/payload hashes remain.
+Build 80 remains eligible under its immutable source and protected workflow,
+which is still being checked. Build 81 is local and unshipped; if Build 80 passes,
+this fallback need not be launched. All 53 historical literal maps remain
+byte-identical. No Build 81 tag, pipeline, signing or production/tablet offer has
+been performed as part of this preparation.
 
-Build 79's refreshed scanner exposed PostgreSQL 16.15 findings after the vendor
-OpenSSL backports were recognized. No PostgreSQL exception or threshold change
-is added: the exact updated images must pass fresh full scans. All previous
-source/tags/assets and literal maps stay immutable.
-
-Build 77 fresh-sync/normal-close tablet admission remains unchanged. A normal
-close proves its shift only; compatible replay, retained queues, optional updates,
-signed upgrade preservation and idle-shop requirements remain. The protected
-exact-source workflow, full checks, both image stores, independent reproduction
-and actual production/tablet admission remain mandatory before signing/offering.
+The protected exact-source workflow, full repository/backend/frontend and
+Android checks, both image stores, independent reproduction, signed upgrade and
+actual production/tablet admission remain mandatory before signing/offering.
 
 ## Earlier checkpoints
 
