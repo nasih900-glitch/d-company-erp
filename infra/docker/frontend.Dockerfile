@@ -32,7 +32,9 @@ LABEL org.opencontainers.image.title="D Company ERP Web" \
       org.opencontainers.image.revision="${APP_REVISION}" \
       com.dcompany.zlib.version="1.4-r0" \
       com.dcompany.zlib.provenance="signed-alpine-apk" \
-      com.dcompany.zlib.apk-port.commit="bdf501c870a92a05c097857401f69c48c4810384"
+      com.dcompany.zlib.apk-port.commit="bdf501c870a92a05c097857401f69c48c4810384" \
+      com.dcompany.openssl.version="3.5.9_p20261123-r0" \
+      com.dcompany.openssl.provenance="signed-local-backport-apks"
 COPY --from=zlib-probe-builder /tmp/dcompany-caddy-zlib-probe /usr/local/bin/dcompany-caddy-zlib-probe
 COPY infra/docker/caddy-zlib/verify-official-zlib.sh /usr/local/bin/verify-caddy-zlib
 
@@ -64,9 +66,17 @@ RUN set -eux; \
     printf '%s\n' "$installed_packages" | grep -Fx 'pcre2-10.49-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'nginx-1.31.8-r1'; \
     test "$NGINX_VERSION" = '1.31.8'; \
-    nginx -v 2>&1 | grep -Fx 'nginx version: nginx/1.31.8'; \
     apk info -e zlib; \
     apk info -v | grep -Fx 'zlib-1.4-r0'
+RUN --mount=type=bind,from=openssl_backport,source=/,target=/tmp/openssl-backport,ro \
+    --mount=type=bind,source=infra/docker/openssl/install-backport.sh,target=/tmp/install-openssl-backport.sh,ro \
+    sh /tmp/install-openssl-backport.sh frontend /tmp/openssl-backport
+RUN set -eux; \
+    apk info -e 'libcrypto3=3.5.9_p20261123-r0'; \
+    apk info -e 'libssl3=3.5.9_p20261123-r0'; \
+    test -s /etc/dcompany/openssl-backport/provenance.json; \
+    nginx_version="$(nginx -v 2>&1)"; \
+    test "$nginx_version" = 'nginx version: nginx/1.31.8'
 RUN --mount=type=bind,source=infra/docker/install-pinned-musl-utils.sh,target=/tmp/install-pinned-musl-utils.sh,ro \
     sh /tmp/install-pinned-musl-utils.sh 3.24
 COPY infra/nginx/frontend.conf /etc/nginx/conf.d/default.conf

@@ -371,9 +371,10 @@ def test_exact_candidate_images_are_scanned_before_maintenance() -> None:
     assert "--network none --read-only --cap-drop ALL" in source
     assert source.count("--security-opt no-new-privileges") >= 2
     vex_paths = ("/scan/openssl-reviewed.openvex.json", "/scan/hashlib-fixed.openvex.json",
-                 "/scan/service-openssl-reviewed.openvex.json", "/scan/openssl-vendor-fixed.openvex.json")
-    assert scanner_source.count(" --vex ") == len(vex_paths) == 4
+                 "/scan/service-openssl-reviewed.openvex.json")
+    assert scanner_source.count(" --vex ") == 5
     assert all(scanner_source.count(f" --vex {path}") == 1 for path in vex_paths)
+    assert scanner_source.count(" --vex /scan/openssl-vendor-fixed.openvex.json") == 2
     assert '--vex /scan/hashlib-fixed.openvex.json' in scanner_source
     scan_order = (
         '--validate-hashlib-runtime "$hashlib_runtime" "$image_ref" "$config_image_id"',
@@ -438,6 +439,17 @@ def test_exact_candidate_images_are_scanned_before_maintenance() -> None:
     for statement in vendor_order:
         offset = scanner_source.index(statement, offset) + len(statement)
     assert '${openssl_vendor_argument:+"$openssl_vendor_argument"}' in scanner_source
+    custom_order = (
+        '--custom-has-findings "$service"',
+        'src=$CUSTOM_OPENSSL_COLLECTOR,dst=/scan/verify-backport-runtime.sh,readonly',
+        'src=$BACKPORT_SCAN_CONTEXT,dst=/scan/backport,readonly',
+        '--custom-bind-runtime "$service"', '--custom-prove "$service"',
+        '--vex /scan/openssl-vendor-fixed.openvex.json',
+        '--verify "$service" "$EVIDENCE_ROOT" "$syft_report"',
+    )
+    offset = 0
+    for statement in custom_order:
+        offset = scanner_source.index(statement, offset) + len(statement)
 
     assert 'python3 "$ZLIB_VEX_VERIFIER"' in source
 

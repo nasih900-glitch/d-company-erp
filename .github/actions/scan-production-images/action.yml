@@ -175,6 +175,18 @@ runs:
         chmod 700 "$scanner_evidence"
         mkdir "$scanner_work"
         chmod 700 "$scanner_work"
+        source_backport_context=${DCOMPANY_OPENSSL_BACKPORT_CONTEXT:?}
+        source_backport_context=$(realpath "$source_backport_context")
+        case "$source_backport_context" in "$RUNNER_TEMP"/*) ;; *)
+          echo "OpenSSL backport export is outside the trusted runner temp root." >&2; exit 1 ;;
+        esac
+        [ -d "$source_backport_context" ] && [ ! -L "$source_backport_context" ]
+        [ -z "$(find "$source_backport_context" -type l -print -quit)" ]
+        backport_scanner_context="$scanner_evidence/openssl-backport-export"
+        mkdir "$backport_scanner_context"
+        cp -R "$source_backport_context/." "$backport_scanner_context/"
+        find "$backport_scanner_context" -type d -exec chmod 700 {} +
+        find "$backport_scanner_context" -type f -exec chmod 600 {} +
         metadata="$scanner_evidence/hardened-scan-metadata.txt"
         printf 'source_git_sha=%s\nscanned_at_utc=%s\n' \
           "$SOURCE_GIT_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$metadata"
@@ -218,6 +230,7 @@ runs:
         sudo /usr/bin/env -i \
           "PATH=$docker_cli_dir:/usr/sbin:/usr/bin:/sbin:/bin" \
           "DOCKER_HOST=$EXPECTED_DOCKER_HOST" \
+          "DCOMPANY_OPENSSL_BACKPORT_CONTEXT=$backport_scanner_context" \
           HOME=/root LC_ALL=C \
           /bin/bash "$scanner_tool" \
             "$scanner_work" "$metadata" "$syft_image" "$grype_image" \
@@ -297,6 +310,10 @@ runs:
               "$archive" "$evidence_dir/$package-3.5.9-r1.apk"
           fi
         done
+        sudo cp -R "$backport_scanner_context" "$evidence_dir/openssl-backport-export"
+        sudo chown -R "$runner_uid:$runner_gid" "$evidence_dir/openssl-backport-export"
+        sudo find "$evidence_dir/openssl-backport-export" -type d -exec chmod 0700 {} +
+        sudo find "$evidence_dir/openssl-backport-export" -type f -exec chmod 0600 {} +
         for evidence in hardened-scan-metadata.txt \
           backend.syft.json backend-hardened-grype.json \
           frontend.syft.json frontend-hardened-grype.json \
@@ -311,6 +328,8 @@ runs:
           backend-grype-openssl-filtered.json backend-reviewed.openvex.json \
           caddy-grype-unfiltered.json caddy-openssl-runtime.raw.txt caddy-openssl-runtime.json \
           caddy-openssl-runtime-probe.sh caddy-openssl-reviewed.openvex.json \
+          caddy-grype-vendor-unfiltered.json caddy-openssl-vendor-runtime.raw.json \
+          caddy-openssl-vendor-runtime.json caddy-openssl-vendor-fixed.openvex.json \
           frontend-grype-unfiltered.json frontend-openssl-runtime.raw.txt frontend-openssl-runtime.json \
           frontend-openssl-runtime-probe.sh frontend-openssl-reviewed.openvex.json \
           postgres-grype-unfiltered.json postgres-openssl-runtime.raw.txt postgres-openssl-runtime.json \
@@ -350,6 +369,8 @@ runs:
           backend-grype-openssl-filtered.json backend-reviewed.openvex.json \
           caddy-grype-unfiltered.json caddy-openssl-runtime.raw.txt caddy-openssl-runtime.json \
           caddy-openssl-runtime-probe.sh caddy-openssl-reviewed.openvex.json \
+          caddy-grype-vendor-unfiltered.json caddy-openssl-vendor-runtime.raw.json \
+          caddy-openssl-vendor-runtime.json caddy-openssl-vendor-fixed.openvex.json \
           frontend-grype-unfiltered.json frontend-openssl-runtime.raw.txt frontend-openssl-runtime.json \
           frontend-openssl-runtime-probe.sh frontend-openssl-reviewed.openvex.json \
           postgres-grype-unfiltered.json postgres-openssl-runtime.raw.txt postgres-openssl-runtime.json \
@@ -370,6 +391,7 @@ runs:
             "$scanner_evidence/openssl-vendor-apks/libssl3-3.5.9-r1.apk"
           sudo rmdir "$scanner_evidence/openssl-vendor-apks"
         fi
+        sudo rm -rf "$backport_scanner_context"
         sudo rmdir "$scanner_work"
         sudo rmdir "$scanner_evidence"
 
@@ -470,7 +492,7 @@ runs:
           vex="$evidence_dir/$service-openssl-reviewed.openvex.json"
           vendor="$evidence_dir/$service-openssl-vendor-fixed.openvex.json"
           if [ -e "$vendor" ] || [ -L "$vendor" ]; then
-            [ "$service" != caddy ] && [ ! -e "$vex" ] && [ ! -L "$vex" ]
+            [ ! -e "$vex" ] && [ ! -L "$vex" ]
             validate_vendor_hashes "$service"
             printf '%s_path=%s\n' "$service" "$vendor" >> "$GITHUB_OUTPUT"
           elif [ -e "$vex" ] || [ -L "$vex" ]; then
@@ -624,7 +646,7 @@ runs:
           esac
           if [ -n "$service_vex" ]; then
             if [ "$service_vex" = "$evidence_dir/$service-openssl-vendor-fixed.openvex.json" ]; then
-              [ "$service" = frontend ] || [ "$service" = postgres ]
+              [ "$service" = caddy ] || [ "$service" = frontend ] || [ "$service" = postgres ]
               openssl_vendor=("--openssl-vendor-fixed=$service_vex")
             else
               [ "$service_vex" = "$evidence_dir/$service-openssl-reviewed.openvex.json" ]

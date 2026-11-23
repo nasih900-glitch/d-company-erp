@@ -62,6 +62,8 @@ SERVICE_OPENSSL_ASSESSOR="$SCANNER_TOOL_DIR/service-openssl-assessments.py"
 VENDOR_OPENSSL_ASSESSOR="$SCANNER_TOOL_DIR/openssl-vendor-fixed.py"
 VENDOR_OPENSSL_REVIEW="$SCANNER_REPO_ROOT/infra/security/vex/openssl-alpine324-r1-fixed.json"
 VENDOR_OPENSSL_COLLECTOR="$SCANNER_REPO_ROOT/infra/docker/openssl/verify-vendor-r1.sh"
+CUSTOM_OPENSSL_REVIEW="$SCANNER_REPO_ROOT/infra/security/vex/openssl-dcompany-backport-fixed.json"
+CUSTOM_OPENSSL_COLLECTOR="$SCANNER_REPO_ROOT/infra/docker/openssl/verify-backport-runtime.sh"
 if [ ! -f "$ARCHIVE_IDENTITY_VERIFIER" ] || [ -L "$ARCHIVE_IDENTITY_VERIFIER" ] || \
    [ "$(canonical_path "$ARCHIVE_IDENTITY_VERIFIER")" != "$ARCHIVE_IDENTITY_VERIFIER" ]; then
   echo "Archive identity verifier is missing or linked." >&2
@@ -75,6 +77,7 @@ fi
 
 for tool in "$OPENSSL_ASSESSOR" "$OPENSSL_REVIEW" "$SERVICE_OPENSSL_ASSESSOR" \
   "$VENDOR_OPENSSL_ASSESSOR" "$VENDOR_OPENSSL_REVIEW" "$VENDOR_OPENSSL_COLLECTOR" \
+  "$CUSTOM_OPENSSL_REVIEW" "$CUSTOM_OPENSSL_COLLECTOR" \
   "$SCANNER_REPO_ROOT/infra/security/vex/caddy-static-go-openssl-reviewed.json" \
   "$SCANNER_REPO_ROOT/infra/security/vex/frontend-http-only-openssl-reviewed.json" \
   "$SCANNER_REPO_ROOT/infra/security/vex/postgres16-pgcrypto-openssl-reviewed.json"; do
@@ -104,6 +107,37 @@ if [ ! -f "$METADATA" ] || [ -L "$METADATA" ] || \
   exit 1
 fi
 WORK_ROOT_ID=$(stat -Lc '%d:%i:%u:%g:%a:%F' "$WORK_ROOT")
+
+ORIGINAL_BACKPORT_CONTEXT=${DCOMPANY_OPENSSL_BACKPORT_CONTEXT:-}
+if [ -z "$ORIGINAL_BACKPORT_CONTEXT" ] || [ ! -d "$ORIGINAL_BACKPORT_CONTEXT" ] || \
+   [ -L "$ORIGINAL_BACKPORT_CONTEXT" ] || \
+   [ "$(canonical_path "$ORIGINAL_BACKPORT_CONTEXT")" != "$ORIGINAL_BACKPORT_CONTEXT" ] || \
+   [ "$(stat -Lc '%u:%g:%a:%F' "$ORIGINAL_BACKPORT_CONTEXT")" != "0:0:700:directory" ] || \
+   [ -n "$(find "$ORIGINAL_BACKPORT_CONTEXT" -type l -print -quit)" ]; then
+  echo "OpenSSL backport scanner context must be canonical, root-private, and link-free." >&2
+  exit 1
+fi
+BACKPORT_SCAN_CONTEXT="$WORK_ROOT/openssl-backport-context"
+mkdir "$BACKPORT_SCAN_CONTEXT" "$BACKPORT_SCAN_CONTEXT/keys" \
+  "$BACKPORT_SCAN_CONTEXT/repository" "$BACKPORT_SCAN_CONTEXT/repository/x86_64"
+for backport_file in provenance.json patches.sha256 openssl-signature.status; do
+  install -o "$SCANNER_UID" -g "$SCANNER_GID" -m 0400 \
+    "$ORIGINAL_BACKPORT_CONTEXT/$backport_file" "$BACKPORT_SCAN_CONTEXT/$backport_file"
+done
+backport_keys=("$ORIGINAL_BACKPORT_CONTEXT"/keys/*.rsa.pub)
+[ "${#backport_keys[@]}" -eq 1 ]
+install -o "$SCANNER_UID" -g "$SCANNER_GID" -m 0400 "${backport_keys[0]}" \
+  "$BACKPORT_SCAN_CONTEXT/keys/$(basename "${backport_keys[0]}")"
+for backport_file in APKINDEX.tar.gz \
+    libcrypto3-3.5.9_p20261123-r0.apk libssl3-3.5.9_p20261123-r0.apk; do
+  install -o "$SCANNER_UID" -g "$SCANNER_GID" -m 0400 \
+    "$ORIGINAL_BACKPORT_CONTEXT/repository/x86_64/$backport_file" \
+    "$BACKPORT_SCAN_CONTEXT/repository/x86_64/$backport_file"
+done
+chown -R "$SCANNER_UID:$SCANNER_GID" "$BACKPORT_SCAN_CONTEXT"
+find "$BACKPORT_SCAN_CONTEXT" -type d -exec chmod 0500 {} +
+BACKPORT_SCAN_CONTEXT_ID=$(stat -Lc '%d:%i:%u:%g:%a:%F' "$BACKPORT_SCAN_CONTEXT")
+python3 "$VENDOR_OPENSSL_ASSESSOR" --validate-custom-export "$ORIGINAL_BACKPORT_CONTEXT" >> "$METADATA"
 
 declare -a SERVICES=()
 declare -a IMAGE_REFS=()
@@ -656,9 +690,39 @@ PY
   openssl_vex_argument=""
   openssl_vendor_argument=""
   vendor_vex=""
+  if [ "$scanner_status" -eq 2 ] && \
+     python3 "$VENDOR_OPENSSL_ASSESSOR" --custom-has-findings "$service" "$grype_report" "$image_ref" "$config_image_id"; then
+    vendor_raw="$EVIDENCE_ROOT/$service-grype-vendor-unfiltered.json"
+    if [ -e "$vendor_raw" ] || [ -L "$vendor_raw" ]; then
+      echo "Original backport scan already exists." >&2; exit 1
+    fi
+    mv "$grype_report" "$vendor_raw"
+    chmod 0444 "$vendor_raw"
+    vendor_runtime_raw="$EVIDENCE_ROOT/$service-openssl-vendor-runtime.raw.json"
+    if [ -e "$vendor_runtime_raw" ] || [ -L "$vendor_runtime_raw" ]; then
+      echo "Backport runtime evidence already exists." >&2; exit 1
+    fi
+    run_owned_container 60s "$vendor_runtime_raw" offline --tmpfs "$TMPFS_SPEC" \
+      --mount "type=bind,src=$CUSTOM_OPENSSL_COLLECTOR,dst=/scan/verify-backport-runtime.sh,readonly" \
+      --mount "type=bind,src=$BACKPORT_SCAN_CONTEXT,dst=/scan/backport,readonly" \
+      --entrypoint /bin/sh "$runtime_image_id" /scan/verify-backport-runtime.sh "$service" /scan/backport
+    chmod 0444 "$vendor_runtime_raw"
+    python3 "$VENDOR_OPENSSL_ASSESSOR" --custom-bind-runtime "$service" "$vendor_runtime_raw" \
+      "$EVIDENCE_ROOT/$service-openssl-vendor-runtime.json" "$ORIGINAL_BACKPORT_CONTEXT" "$image_ref" "$config_image_id"
+    python3 "$VENDOR_OPENSSL_ASSESSOR" --custom-prove "$service" "$EVIDENCE_ROOT" "$syft_report" \
+      "$image_ref" "$config_image_id" >> "$METADATA"
+    vendor_vex="$EVIDENCE_ROOT/$service-openssl-vendor-fixed.openvex.json"
+    scanner_status=0
+    run_owned_container 1200s "$grype_report" online \
+      --mount "type=bind,src=$vendor_vex,dst=/scan/openssl-vendor-fixed.openvex.json,readonly" \
+      "${grype_arguments[@]}" --vex /scan/openssl-vendor-fixed.openvex.json || scanner_status=$?
+    python3 "$VENDOR_OPENSSL_ASSESSOR" --verify "$service" "$EVIDENCE_ROOT" "$syft_report" \
+      "$image_ref" "$config_image_id" "$grype_report" "--scanner-exit=$scanner_status" >> "$METADATA"
+    openssl_vendor_argument="--openssl-vendor-fixed=$vendor_vex"
+  fi
   case "$service" in
     backend|frontend|postgres)
-      if [ "$scanner_status" -eq 2 ] && \
+      if [ -z "$vendor_vex" ] && [ "$scanner_status" -eq 2 ] && \
          python3 "$VENDOR_OPENSSL_ASSESSOR" --has-findings "$service" "$grype_report" "$image_ref" "$config_image_id"; then
         vendor_raw="$EVIDENCE_ROOT/$service-grype-vendor-unfiltered.json"
         if [ -e "$vendor_raw" ] || [ -L "$vendor_raw" ]; then
@@ -872,6 +936,13 @@ PY
   printf '%s_disk_available_after_scan_bytes=%s\n' "$service" "$remaining_bytes" \
     >> "$METADATA"
 done
+
+if [ "$(stat -Lc '%d:%i:%u:%g:%a:%F' "$BACKPORT_SCAN_CONTEXT")" != "$BACKPORT_SCAN_CONTEXT_ID" ] || \
+   [ "$(dirname "$BACKPORT_SCAN_CONTEXT")" != "$WORK_ROOT" ]; then
+  echo "Backport scanner context identity changed; refusing cleanup." >&2
+  exit 1
+fi
+rm -rf "$BACKPORT_SCAN_CONTEXT"
 
 stop_cache_monitor
 printf 'scanner_cache_sampled_max_bytes=%s\nscanner_cache_final_bytes=%s\n' \

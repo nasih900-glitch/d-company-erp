@@ -46,6 +46,66 @@ def _fake_commands(tmp_path: Path) -> tuple[Path, Path]:
     state.mkdir()
 
     _write_executable(
+        bin_dir / "python3",
+        f"""#!{sys.executable}
+import os
+import sys
+
+if (len(sys.argv) >= 3 and sys.argv[1].endswith("/openssl-vendor-fixed.py")
+        and sys.argv[2] == "--validate-custom-export"):
+    print("openssl_backport_export_path=" + sys.argv[3])
+    raise SystemExit(0)
+os.execv({sys.executable!r}, [{sys.executable!r}, *sys.argv[1:]])
+""",
+    )
+    _write_executable(
+        bin_dir / "install",
+        f"""#!{sys.executable}
+import os
+import shutil
+import sys
+
+args = sys.argv[1:]
+mode = None
+index = 0
+while index < len(args) - 2 and args[index].startswith("-"):
+    option = args[index]
+    if option in {{"-o", "-g", "-m"}}:
+        if option == "-m":
+            mode = int(args[index + 1], 8)
+        index += 2
+    else:
+        raise SystemExit("unexpected install option: " + option)
+source, destination = args[index:]
+shutil.copyfile(source, destination)
+if mode is not None:
+    os.chmod(destination, mode)
+""",
+    )
+    _write_executable(bin_dir / "chown", "#!/bin/sh\nexit 0\n")
+    _write_executable(
+        bin_dir / "rm",
+        f"""#!{sys.executable}
+import os
+import shutil
+import sys
+
+if sys.argv[1:2] == ["-rf"]:
+    for value in sys.argv[2:]:
+        if os.path.isdir(value) and not os.path.islink(value):
+            for root, directories, _files in os.walk(value):
+                os.chmod(root, 0o700)
+                for directory in directories:
+                    os.chmod(os.path.join(root, directory), 0o700)
+            shutil.rmtree(value)
+        elif os.path.lexists(value):
+            os.unlink(value)
+    raise SystemExit(0)
+os.execv("/bin/rm", ["/bin/rm", *sys.argv[1:]])
+""",
+    )
+
+    _write_executable(
         bin_dir / "docker",
         """#!/usr/bin/env python3
 import json
@@ -413,6 +473,18 @@ def _run_helper(
     work_root.mkdir(mode=0o700)
     metadata = evidence / "metadata.txt"
     metadata.write_text("source_git_sha=" + "b" * 40 + "\n", encoding="utf-8")
+    backport_context = tmp_path / "openssl-backport-context"
+    (backport_context / "keys").mkdir(parents=True, mode=0o700)
+    (backport_context / "repository" / "x86_64").mkdir(parents=True, mode=0o700)
+    for name in ("provenance.json", "patches.sha256", "openssl-signature.status"):
+        (backport_context / name).write_text("test-only scanner boundary\n", encoding="utf-8")
+    (backport_context / "keys" / "test.rsa.pub").write_text("test-only public key\n", encoding="utf-8")
+    for name in (
+        "APKINDEX.tar.gz",
+        "libcrypto3-3.5.9_p20261123-r0.apk",
+        "libssl3-3.5.9_p20261123-r0.apk",
+    ):
+        (backport_context / "repository" / "x86_64" / name).write_bytes(b"test-only signed archive boundary\n")
     arguments: list[str] = [
         str(scanner),
         str(work_root),
@@ -461,6 +533,7 @@ def _run_helper(
         "FAKE_SCANNER_STATE": str(state),
         "FAKE_IMAGE_ID": scanner_config_id,
         "FAKE_RUNTIME_IMAGE_ID": runtime_image_id,
+        "DCOMPANY_OPENSSL_BACKPORT_CONTEXT": str(backport_context),
         "FAKE_IMAGE_REFS": json.dumps(image_refs),
         "FAKE_HASHLIB_RUNTIME_PROOF": json.dumps(run_path(str(SCANNER.with_name("verify-zlib-vex.py")))["HASHLIB_PROOF"]),
         "FAKE_RUNTIME_PROOFS": json.dumps({service: {
@@ -1014,8 +1087,10 @@ def test_action_hands_off_exact_caddy_proofs_and_cleans_only_owned_evidence(tmp_
     script = tmp_path / 'handoff.sh'
     script.write_text('set -Eeuo pipefail\n'
                       + 'scanner_evidence=$1\nscanner_work=$2\nevidence_dir=$3\n'
+                      + 'backport_scanner_context=$scanner_evidence/openssl-backport-export\n'
                       + 'runner_uid=$4\nrunner_gid=$5\nscan_status=$6\narchives=("$7")\n'
                       + block)
+    (private / 'openssl-backport-export').mkdir(mode=0o700)
     result = subprocess.run(['bash', str(script), str(private), str(work), str(public),
                              str(os.getuid()), str(os.getgid()), '2' if mode == 'scan-failure' else '0', str(archive)],
                             env={**os.environ, 'PATH': str(fake_bin) + os.pathsep + os.environ['PATH']},

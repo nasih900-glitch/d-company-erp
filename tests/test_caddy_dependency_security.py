@@ -274,7 +274,7 @@ def test_caddy_graph_applies_only_the_reviewed_go_security_closure() -> None:
     )
 
 
-def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> None:
+def test_caddy_build_contract_adds_only_reviewed_module_zlib_and_openssl_changes() -> None:
     signed_expected = _replace_once(
         _file_at(CODE28_SCANNER_BASE, CADDY_DOCKERFILE),
         'golang.org/x/net)" = "v0.57.0"',
@@ -579,6 +579,39 @@ def test_caddy_build_contract_adds_only_reviewed_module_and_zlib_changes() -> No
         "    chmod 0444 /etc/dcompany/caddy-zlib/zlib-1.4-r0.apk; \\\n"
         '    rm -rf -- "$zlib_download_dir"; \\\n',
     )
+    expected = _replace_once(
+        expected,
+        '      com.dcompany.zlib.apk-port.commit="0436c6d655a04cbfd7987202a970f5aa7870a901"\n',
+        '      com.dcompany.zlib.apk-port.commit="0436c6d655a04cbfd7987202a970f5aa7870a901" \\\n'
+        '      com.dcompany.openssl.version="3.5.9_p20261123-r0" \\\n'
+        '      com.dcompany.openssl.provenance="signed-local-backport-apks"\n',
+    )
+    expected = _replace_once(
+        expected,
+        "      'zlib=1.4-r0'; \\\n"
+        "    update-ca-certificates --fresh; \\\n"
+        "    /tmp/verify-caddy-system-ca; \\\n"
+        "    rm -f /tmp/verify-caddy-system-ca; \\\n",
+        "      'zlib=1.4-r0'; \\\n",
+    )
+    expected = _replace_once(
+        expected,
+        "    printf '%s\\n' \"$installed_packages\" | grep -Fx 'zlib-1.4-r0'\n\n"
+        "COPY --from=caddy-zlib-probe-builder",
+        "    printf '%s\\n' \"$installed_packages\" | grep -Fx 'zlib-1.4-r0'\n\n"
+        "RUN --mount=type=bind,from=openssl_backport,source=/,target=/tmp/openssl-backport,ro \\\n"
+        "    --mount=type=bind,source=infra/docker/openssl/install-backport.sh,"
+        "target=/tmp/install-openssl-backport.sh,ro \\\n"
+        "    sh /tmp/install-openssl-backport.sh caddy /tmp/openssl-backport\n\n"
+        "RUN set -eux; \\\n"
+        "    apk info -e 'libcrypto3=3.5.9_p20261123-r0'; \\\n"
+        "    apk info -e 'libssl3=3.5.9_p20261123-r0'; \\\n"
+        "    test -s /etc/dcompany/openssl-backport/provenance.json; \\\n"
+        "    update-ca-certificates --fresh; \\\n"
+        "    /tmp/verify-caddy-system-ca; \\\n"
+        "    rm -f /tmp/verify-caddy-system-ca\n\n"
+        "COPY --from=caddy-zlib-probe-builder",
+    )
     assert CADDY_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
@@ -875,6 +908,28 @@ def test_postgres_runtime_changes_only_reviewed_security_corrections() -> None:
     expected = expected.replace("3.5.9-r0", "3.5.9-r1")
     assert _file_at(BUILD79, POSTGRES_DOCKERFILE) == expected
     expected = reviewed_postgres1616_recipe(expected)
+    expected = _replace_once(
+        expected,
+        '      com.dcompany.zlib.apk-port.commit="bdf501c870a92a05c097857401f69c48c4810384"\n',
+        '      com.dcompany.zlib.apk-port.commit="bdf501c870a92a05c097857401f69c48c4810384" \\\n'
+        '      com.dcompany.openssl.version="3.5.9_p20261123-r0" \\\n'
+        '      com.dcompany.openssl.provenance="signed-local-backport-apks"\n',
+    )
+    expected = _replace_once(
+        expected,
+        "    printf '%s\\n' \"$installed_packages\" | grep -Fx 'zlib-1.4-r0'; \\\n"
+        "    test \"$(postgres --version)\" = 'postgres (PostgreSQL) 16.16'\n",
+        "    printf '%s\\n' \"$installed_packages\" | grep -Fx 'zlib-1.4-r0'\n\n"
+        "RUN --mount=type=bind,from=openssl_backport,source=/,target=/tmp/openssl-backport,ro \\\n"
+        "    --mount=type=bind,source=infra/docker/openssl/install-backport.sh,"
+        "target=/tmp/install-openssl-backport.sh,ro \\\n"
+        "    sh /tmp/install-openssl-backport.sh postgres /tmp/openssl-backport\n\n"
+        "RUN set -eux; \\\n"
+        "    apk info -e 'libcrypto3=3.5.9_p20261123-r0'; \\\n"
+        "    apk info -e 'libssl3=3.5.9_p20261123-r0'; \\\n"
+        "    test -s /etc/dcompany/openssl-backport/provenance.json; \\\n"
+        "    test \"$(postgres --version)\" = 'postgres (PostgreSQL) 16.16'\n",
+    )
     assert POSTGRES_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
@@ -1011,6 +1066,36 @@ def test_backend_image_changes_only_reviewed_openssl_runtime_controls() -> None:
     # Alpine3.24 revision in installation pins and installed-package checks.
     assert _file_at("f3178f70b4994c46fd0d2e48af76bbb7606c941b", BACKEND_DOCKERFILE) == expected
     expected = expected.replace("3.5.9-r0", "3.5.9-r1")
+    expected = _replace_once(
+        expected,
+        '      com.dcompany.zlib.apk-port.commit="bdf501c870a92a05c097857401f69c48c4810384"\n',
+        '      com.dcompany.zlib.apk-port.commit="bdf501c870a92a05c097857401f69c48c4810384" \\\n'
+        '      com.dcompany.openssl.version="3.5.9_p20261123-r0" \\\n'
+        '      com.dcompany.openssl.provenance="signed-local-backport-apks"\n',
+    )
+    expected = _replace_once(
+        expected,
+        '    && update-ca-certificates \\\n'
+        '    && python -I -B /tmp/bootstrap-verified-pip.py --verify-system-ca \\\n'
+        "    && python -c 'import ssl; assert ssl.OPENSSL_VERSION_INFO == (3, 5, 0, 9, 0), (ssl.OPENSSL_VERSION_INFO, ssl.OPENSSL_VERSION)' \\\n",
+        "",
+    )
+    expected = _replace_once(
+        expected,
+        "    && adduser -S -D -u 1001 -G erp -h /home/erp erp\n",
+        "    && adduser -S -D -u 1001 -G erp -h /home/erp erp\n"
+        "RUN --mount=type=bind,from=openssl_backport,source=/,target=/tmp/openssl-backport,ro \\\n"
+        "    --mount=type=bind,source=infra/docker/openssl/install-backport.sh,"
+        "target=/tmp/install-openssl-backport.sh,ro \\\n"
+        "    sh /tmp/install-openssl-backport.sh backend /tmp/openssl-backport\n"
+        "RUN set -eux; \\\n"
+        "    apk info -e 'libcrypto3=3.5.9_p20261123-r0'; \\\n"
+        "    apk info -e 'libssl3=3.5.9_p20261123-r0'; \\\n"
+        "    test -s /etc/dcompany/openssl-backport/provenance.json; \\\n"
+        "    update-ca-certificates; \\\n"
+        "    python -I -B /tmp/bootstrap-verified-pip.py --verify-system-ca; \\\n"
+        "    python -c 'import ssl; assert ssl.OPENSSL_VERSION_INFO == (3, 5, 0, 9, 0), (ssl.OPENSSL_VERSION_INFO, ssl.OPENSSL_VERSION)'\n",
+    )
     assert BACKEND_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
@@ -1147,6 +1232,35 @@ def test_frontend_image_changes_only_reviewed_security_controls() -> None:
     # Alpine3.24 revision in installation pins and installed-package checks.
     assert _file_at("f3178f70b4994c46fd0d2e48af76bbb7606c941b", FRONTEND_DOCKERFILE) == expected
     expected = expected.replace("3.5.9-r0", "3.5.9-r1")
+    expected = _replace_once(
+        expected,
+        '      com.dcompany.zlib.apk-port.commit="bdf501c870a92a05c097857401f69c48c4810384"\n',
+        '      com.dcompany.zlib.apk-port.commit="bdf501c870a92a05c097857401f69c48c4810384" \\\n'
+        '      com.dcompany.openssl.version="3.5.9_p20261123-r0" \\\n'
+        '      com.dcompany.openssl.provenance="signed-local-backport-apks"\n',
+    )
+    expected = _replace_once(
+        expected,
+        "    nginx -v 2>&1 | grep -Fx 'nginx version: nginx/1.31.8'; \\\n",
+        "",
+    )
+    expected = _replace_once(
+        expected,
+        "    apk info -v | grep -Fx 'zlib-1.4-r0'\n"
+        "RUN --mount=type=bind,source=infra/docker/install-pinned-musl-utils.sh",
+        "    apk info -v | grep -Fx 'zlib-1.4-r0'\n"
+        "RUN --mount=type=bind,from=openssl_backport,source=/,target=/tmp/openssl-backport,ro \\\n"
+        "    --mount=type=bind,source=infra/docker/openssl/install-backport.sh,"
+        "target=/tmp/install-openssl-backport.sh,ro \\\n"
+        "    sh /tmp/install-openssl-backport.sh frontend /tmp/openssl-backport\n"
+        "RUN set -eux; \\\n"
+        "    apk info -e 'libcrypto3=3.5.9_p20261123-r0'; \\\n"
+        "    apk info -e 'libssl3=3.5.9_p20261123-r0'; \\\n"
+        "    test -s /etc/dcompany/openssl-backport/provenance.json; \\\n"
+        "    nginx_version=\"$(nginx -v 2>&1)\"; \\\n"
+        "    test \"$nginx_version\" = 'nginx version: nginx/1.31.8'\n"
+        "RUN --mount=type=bind,source=infra/docker/install-pinned-musl-utils.sh",
+    )
     assert FRONTEND_DOCKERFILE.read_text(encoding="utf-8") == expected
 
 
@@ -1262,6 +1376,39 @@ def test_caddy_binary_hash_is_coordinated_across_ci_and_release() -> None:
         )
         expected = _replace_once(expected,
             "postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685", NEW_IMAGE)
+        expected = _replace_once(
+            expected,
+            "          APP_VERSION=$(node -p \"require('./frontend/package.json').version\")\n"
+            "          docker buildx build --load --platform linux/amd64 --sbom=false \\\n",
+            "          APP_VERSION=$(node -p \"require('./frontend/package.json').version\")\n"
+            '          openssl_backport_root=$(mktemp -d "$RUNNER_TEMP/'
+            'openssl-backport-${{ matrix.store }}.XXXXXX")\n'
+            '          openssl_backport_context="$openssl_backport_root/artifact"\n'
+            '          test ! -e "$openssl_backport_context"\n'
+            "          docker buildx build --platform linux/amd64 --sbom=false \\\n"
+            '            --target artifact --output "type=local,dest=$openssl_backport_context" \\\n'
+            "            -f infra/docker/openssl/backport.Dockerfile .\n"
+            '          test -d "$openssl_backport_context" && test ! -L "$openssl_backport_context"\n'
+            '          test -f "$openssl_backport_context/provenance.json"\n'
+            '          test -d "$openssl_backport_context/keys"\n'
+            '          test -d "$openssl_backport_context/repository/x86_64"\n'
+            '          python3 infra/scripts/openssl-vendor-fixed.py '
+            '--validate-custom-export "$openssl_backport_context"\n'
+            "          printf 'DCOMPANY_OPENSSL_BACKPORT_CONTEXT=%s\\n' "
+            '\"$openssl_backport_context\" >> \"$GITHUB_ENV\"\n'
+            "          docker buildx build --load --platform linux/amd64 --sbom=false \\\n",
+        )
+        image_suffix = "ci" if workflow == CI_WORKFLOW else "release-gate"
+        for service in ("backend", "frontend", "caddy", "postgres"):
+            anchor = (
+                f"            ${{{{ matrix.provenance }}}} -f infra/docker/{service}.Dockerfile "
+                f"-t erp-{service}:{image_suffix} \\\n"
+            )
+            expected = _replace_once(
+                expected,
+                anchor,
+                anchor + '            --build-context openssl_backport="$openssl_backport_context" \\\n',
+            )
         assert workflow.read_text(encoding="utf-8") == expected
 
     assert "go 1.26.9" in GO_MOD.read_text(encoding="utf-8")

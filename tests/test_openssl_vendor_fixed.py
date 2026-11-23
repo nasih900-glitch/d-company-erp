@@ -6,6 +6,8 @@ import hashlib
 import json
 from pathlib import Path
 from runpy import run_path
+import runpy
+import zlib
 
 import pytest
 
@@ -22,6 +24,16 @@ def write(path, value):
 def make_evidence(service, tmp_path):
     h = run_path(str(HELPER))
     review = h["reviewed"]()
+    # This fixture exercises the historical profile mechanics after the current
+    # Dockerfiles moved to the distinct custom-package profile. Keep the
+    # committed r1 review immutable while binding this synthetic unit fixture
+    # to the source files it executes against.
+    review = copy.deepcopy(review)
+    review["deployment_sources"] = {
+        name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
+        for name in review["deployment_sources"]
+    }
+    h["context"].__globals__["reviewed"] = lambda: review
     fixture = json.loads((ROOT / "tests/fixtures/openssl_alpine324_r1_vendor_matches.json").read_text())
     config = json.dumps({"os": "linux", "architecture": "amd64", "config": {"Env": []}}).encode()
     image = "sha256:" + hashlib.sha256(config).hexdigest()
@@ -34,7 +46,7 @@ def make_evidence(service, tmp_path):
     sbom = {"schema": h["COMMON"]["base"]()["SYFT_SCHEMA"], "descriptor": {"name": "syft", "version": "1.42.3"},
             "source": {"type": "image", "metadata": {"imageID": image, "config": base64.b64encode(config).decode()}},
             "artifacts": fixture["artifacts"], "files": [{"location": {"path": path}, "executable": {"format": "elf"},
-                "digests": digests} for path, digests in review["runtime_digests"].items()]}
+                "digests": copy.deepcopy(digests)} for path, digests in review["runtime_digests"].items()]}
     raw = {"descriptor": {"name": "grype", "version": "0.118.0", "configuration": {"fail-on-severity": "high"},
                           "db": {"status": {"valid": True, "built": "2026-11-18T18:19:44Z", "schemaVersion": "6.1.10"}}},
            "source": {"type": "image", "target": {"imageID": image, "tags": [product]}},
@@ -56,6 +68,19 @@ def evidence(request, tmp_path):
 @pytest.fixture
 def backend_evidence(tmp_path):
     return make_evidence("backend", tmp_path)
+
+
+def test_custom_apk_payload_binding_rejects_a_changed_control_or_data_member(tmp_path):
+    h = run_path(str(HELPER))
+    signature = zlib.compress(b"synthetic APK signature member", wbits=31)
+    payload = zlib.compress(b"control member", wbits=31) + zlib.compress(b"data member", wbits=31)
+    archive = tmp_path / "package.apk"
+    archive.write_bytes(signature + payload)
+    expected = hashlib.sha256(payload).hexdigest()
+    assert h["custom_apk_payload_sha256"](archive, expected) == expected
+    archive.write_bytes(signature + payload[:-1] + bytes([payload[-1] ^ 1]))
+    with pytest.raises(SystemExit, match="reproducible package payload changed"):
+        h["custom_apk_payload_sha256"](archive, expected)
 
 
 @pytest.mark.parametrize("defect", [None, "unknown-high", "extra-ignore", "missing-match", "duplicate", "package", "r0",
@@ -131,7 +156,9 @@ def test_caddy_cannot_enter_fixed_vendor_profile():
 
 
 @pytest.mark.parametrize("defect", [None, "missing-proof", "malformed-proof", "cross-image-python", "extra-statement", "missing-python-ignore", "extra-ignore"])
-def test_backend_final_requires_independent_genuine_hashlib_proof_and_exact_eight_plus_one(backend_evidence, defect):
+def test_backend_final_requires_independent_genuine_hashlib_proof_and_exact_eight_plus_one(
+    backend_evidence, monkeypatch, defect
+):
     h, service, directory, product, image, sbom, raw, runtime = backend_evidence
     fixture = json.loads((ROOT / "tests/fixtures/openssl_alpine324_r1_vendor_matches.json").read_text())
     python = fixture["backend_hashlib_match"]
@@ -148,6 +175,14 @@ def test_backend_final_requires_independent_genuine_hashlib_proof_and_exact_eigh
     elif defect == "malformed-proof":
         proof = fixture["backend_hashlib_proof"].copy(); proof["module_sha256"] = "0" * 64; write(proof_path, proof)
     b = h["COMMON"]["base"]()
+    original_run_path = runpy.run_path
+    monkeypatch.setattr(
+        runpy,
+        "run_path",
+        lambda path, *args, **kwargs: h
+        if Path(path).name == "openssl-vendor-fixed.py"
+        else original_run_path(path, *args, **kwargs),
+    )
     args = ["verifier", "--prove-fixed-hashlib", str(raw_path), product, image, str(proof_path),
             str(directory / "backend-hashlib-fixed.openvex.json"), "--openssl-vendor-fixed=" + str(directory / "backend.syft.json")]
     if defect in {"missing-proof", "malformed-proof"}:
@@ -216,7 +251,7 @@ def test_vendor_archives_use_exact_https_content_and_never_overwrite_existing_pa
     ("backend", ["--openssl-assessment=old.json", "--openssl-vendor-fixed=new.json"]),
     ("backend", ["--openssl-vendor-fixed=new.json", "--openssl-assessment=old.json"]),
     ("backend", ["--openssl-vendor-fixed=first.json", "--openssl-vendor-fixed=second.json"]),
-    ("caddy", ["--openssl-vendor-fixed=new.json"]),
+    ("caddy", ["--openssl-vendor-fixed=first.json", "--openssl-vendor-fixed=second.json"]),
 ])
 def test_final_admission_refuses_mixed_duplicate_or_caddy_vendor_flags_before_loading_proofs(service, flags, tmp_path):
     h = run_path(str(HELPER)); b = h["COMMON"]["base"]()

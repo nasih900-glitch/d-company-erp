@@ -253,19 +253,35 @@ jobs:
         run: |
           set -euo pipefail
           APP_VERSION=$(node -p "require('./frontend/package.json').version")
+          openssl_backport_root=$(mktemp -d "$RUNNER_TEMP/openssl-backport-${{ matrix.store }}.XXXXXX")
+          openssl_backport_context="$openssl_backport_root/artifact"
+          test ! -e "$openssl_backport_context"
+          docker buildx build --platform linux/amd64 --sbom=false \
+            --target artifact --output "type=local,dest=$openssl_backport_context" \
+            -f infra/docker/openssl/backport.Dockerfile .
+          test -d "$openssl_backport_context" && test ! -L "$openssl_backport_context"
+          test -f "$openssl_backport_context/provenance.json"
+          test -d "$openssl_backport_context/keys"
+          test -d "$openssl_backport_context/repository/x86_64"
+          python3 infra/scripts/openssl-vendor-fixed.py --validate-custom-export "$openssl_backport_context"
+          printf 'DCOMPANY_OPENSSL_BACKPORT_CONTEXT=%s\n' "$openssl_backport_context" >> "$GITHUB_ENV"
           docker buildx build --load --platform linux/amd64 --sbom=false \
             ${{ matrix.provenance }} -f infra/docker/backend.Dockerfile -t erp-backend:release-gate \
+            --build-context openssl_backport="$openssl_backport_context" \
             --build-arg APP_VERSION="$APP_VERSION" --build-arg APP_REVISION="$APP_REVISION" .
           docker buildx build --load --platform linux/amd64 --sbom=false \
             ${{ matrix.provenance }} -f infra/docker/frontend.Dockerfile -t erp-frontend:release-gate \
+            --build-context openssl_backport="$openssl_backport_context" \
             --build-arg VITE_API_URL=https://dcompany.duckdns.org/api/v1 \
             --build-arg VITE_APP_VERSION="$APP_VERSION" \
             --build-arg APP_VERSION="$APP_VERSION" --build-arg APP_REVISION="$APP_REVISION" .
           docker buildx build --load --platform linux/amd64 --sbom=false \
             ${{ matrix.provenance }} -f infra/docker/caddy.Dockerfile -t erp-caddy:release-gate \
+            --build-context openssl_backport="$openssl_backport_context" \
             --build-arg APP_VERSION="$APP_VERSION" --build-arg APP_REVISION="$APP_REVISION" .
           docker buildx build --load --platform linux/amd64 --sbom=false \
             ${{ matrix.provenance }} -f infra/docker/postgres.Dockerfile -t erp-postgres:release-gate \
+            --build-context openssl_backport="$openssl_backport_context" \
             --build-arg APP_VERSION="$APP_VERSION" --build-arg APP_REVISION="$APP_REVISION" .
           docker buildx build --load --platform linux/amd64 --sbom=false \
             ${{ matrix.provenance }} -f infra/docker/redis.Dockerfile -t erp-redis:release-gate \

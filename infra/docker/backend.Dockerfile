@@ -50,7 +50,9 @@ LABEL org.opencontainers.image.title="D Company ERP Backend" \
       com.dcompany.python.version="3.14.10" \
       com.dcompany.zlib.version="1.4-r0" \
       com.dcompany.zlib.provenance="signed-alpine-apk" \
-      com.dcompany.zlib.apk-port.commit="bdf501c870a92a05c097857401f69c48c4810384"
+      com.dcompany.zlib.apk-port.commit="bdf501c870a92a05c097857401f69c48c4810384" \
+      com.dcompany.openssl.version="3.5.9_p20261123-r0" \
+      com.dcompany.openssl.provenance="signed-local-backport-apks"
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 COPY infra/scripts/bootstrap-verified-pip.py /tmp/bootstrap-verified-pip.py
 COPY --from=zlib-probe-builder /tmp/dcompany-caddy-zlib-probe /usr/local/bin/dcompany-caddy-zlib-probe
@@ -79,13 +81,20 @@ RUN apk add --no-cache --upgrade \
     && printf '%s\n' "$installed_packages" | grep -Fx 'libuuid-2.42.3-r1' \
     && printf '%s\n' "$installed_packages" | grep -Fx 'ca-certificates-20261020-r0' \
     && printf '%s\n' "$installed_packages" | grep -Fx 'ca-certificates-bundle-20261020-r0' \
-    && update-ca-certificates \
-    && python -I -B /tmp/bootstrap-verified-pip.py --verify-system-ca \
-    && python -c 'import ssl; assert ssl.OPENSSL_VERSION_INFO == (3, 5, 0, 9, 0), (ssl.OPENSSL_VERSION_INFO, ssl.OPENSSL_VERSION)' \
     && test "$(python --version)" = 'Python 3.14.10' \
     && printf '%s\n' "$installed_packages" | grep -Fx 'zlib-1.4-r0' \
     && addgroup -S -g 1001 erp \
     && adduser -S -D -u 1001 -G erp -h /home/erp erp
+RUN --mount=type=bind,from=openssl_backport,source=/,target=/tmp/openssl-backport,ro \
+    --mount=type=bind,source=infra/docker/openssl/install-backport.sh,target=/tmp/install-openssl-backport.sh,ro \
+    sh /tmp/install-openssl-backport.sh backend /tmp/openssl-backport
+RUN set -eux; \
+    apk info -e 'libcrypto3=3.5.9_p20261123-r0'; \
+    apk info -e 'libssl3=3.5.9_p20261123-r0'; \
+    test -s /etc/dcompany/openssl-backport/provenance.json; \
+    update-ca-certificates; \
+    python -I -B /tmp/bootstrap-verified-pip.py --verify-system-ca; \
+    python -c 'import ssl; assert ssl.OPENSSL_VERSION_INFO == (3, 5, 0, 9, 0), (ssl.OPENSSL_VERSION_INFO, ssl.OPENSSL_VERSION)'
 RUN python -I -B /tmp/bootstrap-verified-pip.py && rm /tmp/bootstrap-verified-pip.py
 COPY infra/docker/prune-python-sqlite.sh /tmp/prune-python-sqlite.sh
 RUN sh /tmp/prune-python-sqlite.sh

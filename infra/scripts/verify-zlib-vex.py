@@ -687,7 +687,7 @@ def validate_fixed_mode(arguments: list[str], fixed_service: str) -> int:
                 hashlib_vex = Path(value)
             elif flag == "--openssl-assessment" and fixed_service in {"backend", "frontend", "caddy", "postgres"} and openssl_assessment is None and openssl_vendor_fixed is None:
                 openssl_assessment = Path(value)
-            elif flag == "--openssl-vendor-fixed" and fixed_service in {"backend", "frontend", "postgres"} and openssl_vendor_fixed is None and openssl_assessment is None:
+            elif flag == "--openssl-vendor-fixed" and fixed_service in {"backend", "frontend", "caddy", "postgres"} and openssl_vendor_fixed is None and openssl_assessment is None:
                 openssl_vendor_fixed = Path(value)
             else:
                 raise SystemExit(usage)

@@ -1,0 +1,95 @@
+{
+  "schema": 1,
+  "profile": "dcompany-backport",
+  "package_version": "3.5.9_p20261123-r0",
+  "services": {
+    "backend": "3.24.3",
+    "frontend": "3.24.1",
+    "caddy": "3.23.5",
+    "postgres": "3.24.4"
+  },
+  "source": {
+    "version": "3.5.9",
+    "archive_sha256": "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a",
+    "signature_sha256": "bdccf2057a7c4ae377b40e832cb8c632ae8b532d4fb64cc7b843066eee748f89",
+    "signing_fingerprint": "B146647E45A7B33947AB226B2A2C87D161692D40"
+  },
+  "alpine_aports_commit": "0f4c7e8d0f5f7cebbdc2156eca4391080b732bf2",
+  "source_evidence_sha256": {
+    "patch_inventory": "7654a729d37251a2747d0ca35eff99f8c1ee8841b4cbfadb1de4ef30f0c859d7",
+    "signature_status": "4a1c7c1826e8fbe9dc7e152a29672db2673780b42f508b50bc3596ad48e4400d"
+  },
+  "runtime_sha256": {
+    "/usr/lib/libcrypto.so.3": "b88149db0fcdc6affe71f9ecd859c089531b415616019774f066850a8f427ca7",
+    "/usr/lib/libssl.so.3": "6848bf35c1e45f15df04297aaa111b41582386da9ce7e9299130ec68f9a4ad9f"
+  },
+  "package_payload_sha256": {
+    "libcrypto3": "afa8ded7c167acdf000b3479d60bc078ec8f4b88bd0196c922c39a6fedc2f956",
+    "libssl3": "96514a7dadc049413d146e93797107db096f6d0547f3f56a46ba0e40a5182254"
+  },
+  "cves": [
+    "CVE-2026-107493",
+    "CVE-2026-107494",
+    "CVE-2026-107496",
+    "CVE-2026-121482",
+    "CVE-2026-124709",
+    "CVE-2026-84786",
+    "CVE-2026-88823",
+    "CVE-2026-95691",
+    "CVE-2026-95692"
+  ],
+  "service_cves": {
+    "backend": [
+      "CVE-2026-107493",
+      "CVE-2026-107494",
+      "CVE-2026-121482",
+      "CVE-2026-124709",
+      "CVE-2026-84786"
+    ],
+    "frontend": [
+      "CVE-2026-107493",
+      "CVE-2026-107494",
+      "CVE-2026-121482",
+      "CVE-2026-124709",
+      "CVE-2026-84786"
+    ],
+    "caddy": [
+      "CVE-2026-107493",
+      "CVE-2026-107494",
+      "CVE-2026-107496",
+      "CVE-2026-121482",
+      "CVE-2026-124709",
+      "CVE-2026-84786",
+      "CVE-2026-88823",
+      "CVE-2026-95691",
+      "CVE-2026-95692"
+    ],
+    "postgres": [
+      "CVE-2026-107493",
+      "CVE-2026-107494",
+      "CVE-2026-121482",
+      "CVE-2026-124709",
+      "CVE-2026-84786"
+    ]
+  },
+  "matches": {
+    "CVE-2026-107493/libcrypto3": "07df0a29bb3286267cb44e300cc8563724ba240fa5e1adacf79e91a495cbab4a",
+    "CVE-2026-107493/libssl3": "b33ff18d1b19b3d651638519bc3c8dad76e021cdcc8728802aed70d634e83ada",
+    "CVE-2026-107494/libcrypto3": "7aa37d4fc76fefcfef7dc34f433b6b8725f28e4ade77034c1a8ed82d3d3e050c",
+    "CVE-2026-107494/libssl3": "54f6ae656f4b21de868c18f24b1eaade7ccd90a56984fc94721836246b4cf131",
+    "CVE-2026-107496/libcrypto3": "d4a3838610c630dac3869d2dc28334ba1c5555eb9468702f1b2674a8b36666a9",
+    "CVE-2026-107496/libssl3": "04a94e56321197e169469855be00ccd97bcc96e7acc2fcb96807eb5e2ee5021c",
+    "CVE-2026-121482/libcrypto3": "1b0532f042a7b9c305e99ee9c39e71fcc43561a7fe624b4e9ce0bd8988277ba6",
+    "CVE-2026-121482/libssl3": "cb3601f34074d72e4ce47b496821220bbe2ab077552d4f9783ae7cabe3c9897b",
+    "CVE-2026-124709/libcrypto3": "d794729d88c466646d7898acf2de68132fd41c7d658d2edf76518e33acf2d521",
+    "CVE-2026-124709/libssl3": "3942dc58dd35728391327ab0ebba991d84402bc180e810ec9d02996929e52fd5",
+    "CVE-2026-84786/libcrypto3": "554adeba372209f2b687ecf2673df360f29e691ec02a60a624374535aaace792",
+    "CVE-2026-84786/libssl3": "0b3f1d3a9bc4c6ce3d7c4f6396bf5fa68fbeb0e9a6f2f35c1caa98f6e1baca40",
+    "CVE-2026-88823/libcrypto3": "09c37e78d155a65906e96ea01714a39ef5520773a963fc0cc5442968492e964a",
+    "CVE-2026-88823/libssl3": "f27e750f7049994b20a1f43955a1b25e0f2cdd2d594c6646b1a5fc05a82af600",
+    "CVE-2026-95691/libcrypto3": "1cf01e64a21d9ee1a02bdb1d2e21c12f0e1c769c2b3cf45ff4b66467aa5ed5a5",
+    "CVE-2026-95691/libssl3": "eeadcfe656402b95eb015b28967833a5f8201f1adb5e07711714ce52a8341056",
+    "CVE-2026-95692/libcrypto3": "09fa3280409bec96ddbc354e5bb27ace8aafdaf3bad0ddc65648612dc2337a17",
+    "CVE-2026-95692/libssl3": "9b7ac0ba27ef9f12b562fff1059015274b3b0a097b9f445e059c7cdff6cd4c4a"
+  }
+}

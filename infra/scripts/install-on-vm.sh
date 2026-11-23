@@ -294,6 +294,9 @@ if [ "$SCRIPT_SOURCE_ROOT" != "$CANDIDATE_BUILD_ROOT" ] || \
   exit 1
 fi
 RELEASE_COMPOSE_FILE="$CANDIDATE_BUILD_ROOT/docker-compose.prod.yml"
+OPENSSL_BACKPORT_DOCKERFILE="$CANDIDATE_BUILD_ROOT/infra/docker/openssl/backport.Dockerfile"
+OPENSSL_BACKPORT_INSTALLER="$CANDIDATE_BUILD_ROOT/infra/docker/openssl/install-backport.sh"
+OPENSSL_BACKPORT_ASSESSOR="$CANDIDATE_BUILD_ROOT/infra/scripts/openssl-vendor-fixed.py"
 CANDIDATE_PARITY_TOOL="$CANDIDATE_BUILD_ROOT/ops/runtime_release_parity.py"
 PREPARE_ENV_TOOL="$CANDIDATE_BUILD_ROOT/infra/scripts/prepare-production-env.sh"
 CAPACITY_CHECK_TOOL="$CANDIDATE_BUILD_ROOT/infra/scripts/check-upgrade-capacity.sh"
@@ -326,7 +329,9 @@ BUSINESS_QUIESCENCE_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-product
 BUSINESS_QUIESCENCE_SQL="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-production-business-quiescence.sql"
 CLEANUP_RUNNER="$REPO_DIR/infra/scripts/cleanup-code30-production-trial-data.sh"
 for release_input in \
-  "$RELEASE_COMPOSE_FILE" "$CANDIDATE_PARITY_TOOL" \
+  "$RELEASE_COMPOSE_FILE" "$OPENSSL_BACKPORT_DOCKERFILE" \
+  "$OPENSSL_BACKPORT_INSTALLER" "$OPENSSL_BACKPORT_ASSESSOR" \
+  "$CANDIDATE_PARITY_TOOL" \
   "$PREPARE_ENV_TOOL" "$CAPACITY_CHECK_TOOL" "$HARDENED_SCANNER_TOOL" \
   "$EMULATOR_QUARANTINE_VERIFIER" "$EMULATOR_QUARANTINE_EVIDENCE" \
   "$POST_CLEANUP_STATE_VERIFIER" "$POST_CLEANUP_STATE_SQL" \
@@ -1776,6 +1781,64 @@ echo "==> Building candidate images while the existing release remains live…"
 # verification tools all come from the same snapshot created before step 1.
 # This production host has limited memory. Build one image at a time; the Go
 # Dockerfiles also constrain compiler workers and memory internally.
+OPENSSL_BACKPORT_BUILD_ROOT=$(mktemp -d \
+  "$BUILD_SNAPSHOT_ROOT/${CURRENT_REVISION}.openssl-backport.XXXXXX")
+chmod 700 "$OPENSSL_BACKPORT_BUILD_ROOT"
+DCOMPANY_OPENSSL_BACKPORT_CONTEXT="$OPENSSL_BACKPORT_BUILD_ROOT/artifact"
+test ! -e "$DCOMPANY_OPENSSL_BACKPORT_CONTEXT"
+timeout --foreground --signal TERM --kill-after=60s 3600s \
+  docker buildx build --platform linux/amd64 --sbom=false \
+    --target artifact \
+    --output "type=local,dest=$DCOMPANY_OPENSSL_BACKPORT_CONTEXT" \
+    -f "$OPENSSL_BACKPORT_DOCKERFILE" "$CANDIDATE_BUILD_ROOT"
+if [ ! -d "$DCOMPANY_OPENSSL_BACKPORT_CONTEXT" ] || \
+   [ -L "$DCOMPANY_OPENSSL_BACKPORT_CONTEXT" ] || \
+   [ -n "$(find "$DCOMPANY_OPENSSL_BACKPORT_CONTEXT" -type l -print -quit)" ]; then
+  echo "OpenSSL backport artifact export is missing or linked." >&2
+  exit 1
+fi
+for openssl_backport_input in \
+  "$DCOMPANY_OPENSSL_BACKPORT_CONTEXT/provenance.json" \
+  "$DCOMPANY_OPENSSL_BACKPORT_CONTEXT/repository/x86_64/APKINDEX.tar.gz"; do
+  if [ ! -f "$openssl_backport_input" ] || [ -L "$openssl_backport_input" ]; then
+    echo "OpenSSL backport artifact export is incomplete or linked." >&2
+    exit 1
+  fi
+done
+if [ "$(find "$DCOMPANY_OPENSSL_BACKPORT_CONTEXT/keys" -maxdepth 1 \
+        -type f -name '*.rsa.pub' -printf . | wc -c)" -ne 1 ] || \
+   [ "$(find "$DCOMPANY_OPENSSL_BACKPORT_CONTEXT/repository/x86_64" -maxdepth 1 \
+        -type f -name '*.apk' -printf . | wc -c)" -ne 2 ] || \
+   [ -n "$(find "$DCOMPANY_OPENSSL_BACKPORT_CONTEXT" -type f -name '*.rsa' -print -quit)" ]; then
+  echo "OpenSSL backport artifact export has an unexpected package or key set." >&2
+  exit 1
+fi
+chown -R root:root "$OPENSSL_BACKPORT_BUILD_ROOT"
+find "$OPENSSL_BACKPORT_BUILD_ROOT" -type d -exec chmod 700 {} +
+find "$OPENSSL_BACKPORT_BUILD_ROOT" -type f -exec chmod 600 {} +
+(
+  cd "$DCOMPANY_OPENSSL_BACKPORT_CONTEXT"
+  find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
+) > "$OPENSSL_BACKPORT_BUILD_ROOT/artifact.sha256"
+chmod 400 "$OPENSSL_BACKPORT_BUILD_ROOT/artifact.sha256"
+if [ "$(stat -Lc '%u:%g:%a:%F' "$OPENSSL_BACKPORT_BUILD_ROOT")" \
+       != "0:0:700:directory" ] || \
+   [ "$(stat -Lc '%u:%g:%a:%F' "$DCOMPANY_OPENSSL_BACKPORT_CONTEXT")" \
+       != "0:0:700:directory" ] || \
+   [ -n "$(find "$OPENSSL_BACKPORT_BUILD_ROOT" \
+       \( ! -user root -o ! -group root \) -print -quit)" ] || \
+   [ -n "$(find "$OPENSSL_BACKPORT_BUILD_ROOT" -perm /077 -print -quit)" ]; then
+  echo "OpenSSL backport artifact is not root-private." >&2
+  exit 1
+fi
+(
+  cd "$DCOMPANY_OPENSSL_BACKPORT_CONTEXT"
+  sha256sum --strict -c "$OPENSSL_BACKPORT_BUILD_ROOT/artifact.sha256"
+) >/dev/null
+python3 "$OPENSSL_BACKPORT_ASSESSOR" --validate-custom-export \
+  "$DCOMPANY_OPENSSL_BACKPORT_CONTEXT"
+export DCOMPANY_OPENSSL_BACKPORT_CONTEXT
+echo "==> Signed OpenSSL runtime packages built once from the immutable candidate source."
 for candidate_service in caddy postgres redis backend frontend; do
   COMPOSE_PARALLEL_LIMIT=1 "${candidate_compose[@]}" \
     --env-file "$ENV_CANDIDATE" build "$candidate_service"

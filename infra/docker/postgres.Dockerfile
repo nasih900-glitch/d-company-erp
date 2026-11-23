@@ -53,7 +53,9 @@ LABEL org.opencontainers.image.title="D Company ERP PostgreSQL" \
       com.dcompany.gosu.revision="6456aaa0f3c854d199d0f037f068eb97515b7513" \
       com.dcompany.zlib.version="1.4-r0" \
       com.dcompany.zlib.provenance="signed-alpine-apk" \
-      com.dcompany.zlib.apk-port.commit="bdf501c870a92a05c097857401f69c48c4810384"
+      com.dcompany.zlib.apk-port.commit="bdf501c870a92a05c097857401f69c48c4810384" \
+      com.dcompany.openssl.version="3.5.9_p20261123-r0" \
+      com.dcompany.openssl.provenance="signed-local-backport-apks"
 
 COPY --from=zlib-probe-builder /tmp/dcompany-caddy-zlib-probe /usr/local/bin/dcompany-caddy-zlib-probe
 COPY infra/docker/caddy-zlib/verify-official-zlib.sh /usr/local/bin/verify-caddy-zlib
@@ -83,7 +85,16 @@ RUN set -eux; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libxslt-1.1.43-r4'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'krb5-libs-1.22.3-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libuuid-2.42.3-r1'; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'zlib-1.4-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'zlib-1.4-r0'
+
+RUN --mount=type=bind,from=openssl_backport,source=/,target=/tmp/openssl-backport,ro \
+    --mount=type=bind,source=infra/docker/openssl/install-backport.sh,target=/tmp/install-openssl-backport.sh,ro \
+    sh /tmp/install-openssl-backport.sh postgres /tmp/openssl-backport
+
+RUN set -eux; \
+    apk info -e 'libcrypto3=3.5.9_p20261123-r0'; \
+    apk info -e 'libssl3=3.5.9_p20261123-r0'; \
+    test -s /etc/dcompany/openssl-backport/provenance.json; \
     test "$(postgres --version)" = 'postgres (PostgreSQL) 16.16'
 
 COPY --from=gosu-builder /out/gosu /usr/local/bin/gosu

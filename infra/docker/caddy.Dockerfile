@@ -82,7 +82,9 @@ LABEL org.opencontainers.image.title="D Company ERP Caddy" \
       com.dcompany.upstream.version="v2.11.4" \
       com.dcompany.zlib.version="1.4-r0" \
       com.dcompany.zlib.provenance="signed-alpine-3.23-apk" \
-      com.dcompany.zlib.apk-port.commit="0436c6d655a04cbfd7987202a970f5aa7870a901"
+      com.dcompany.zlib.apk-port.commit="0436c6d655a04cbfd7987202a970f5aa7870a901" \
+      com.dcompany.openssl.version="3.5.9_p20261123-r0" \
+      com.dcompany.openssl.provenance="signed-local-backport-apks"
 
 COPY --from=caddy-builder /out/verify-caddy-system-ca /tmp/verify-caddy-system-ca
 
@@ -102,9 +104,6 @@ RUN set -eux; \
       'libssl3=3.5.9-r0' \
       'brotli-libs=1.2.1-r0' \
       'zlib=1.4-r0'; \
-    update-ca-certificates --fresh; \
-    /tmp/verify-caddy-system-ca; \
-    rm -f /tmp/verify-caddy-system-ca; \
     retained_apk_constraints="$(awk -F: '$1 == "P" { name = $2 } $1 == "V" && name != "curl" && name != "libcurl" { print name "=" $2 }' /lib/apk/db/installed | LC_ALL=C sort)"; \
     test -n "$retained_apk_constraints"; \
     apk add --no-network --repositories-file /dev/null $retained_apk_constraints; \
@@ -122,6 +121,18 @@ RUN set -eux; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'brotli-libs-1.2.1-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'zlib-1.4-r0'
+
+RUN --mount=type=bind,from=openssl_backport,source=/,target=/tmp/openssl-backport,ro \
+    --mount=type=bind,source=infra/docker/openssl/install-backport.sh,target=/tmp/install-openssl-backport.sh,ro \
+    sh /tmp/install-openssl-backport.sh caddy /tmp/openssl-backport
+
+RUN set -eux; \
+    apk info -e 'libcrypto3=3.5.9_p20261123-r0'; \
+    apk info -e 'libssl3=3.5.9_p20261123-r0'; \
+    test -s /etc/dcompany/openssl-backport/provenance.json; \
+    update-ca-certificates --fresh; \
+    /tmp/verify-caddy-system-ca; \
+    rm -f /tmp/verify-caddy-system-ca
 
 COPY --from=caddy-zlib-probe-builder /tmp/caddy-zlib-runtime-probe /usr/local/bin/dcompany-caddy-zlib-probe
 COPY infra/docker/caddy-zlib/verify-official-zlib.sh /usr/local/bin/verify-caddy-zlib

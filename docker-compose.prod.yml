@@ -25,6 +25,8 @@ services:
     build:
       context: .
       dockerfile: infra/docker/caddy.Dockerfile
+      additional_contexts:
+        openssl_backport: ${DCOMPANY_OPENSSL_BACKPORT_CONTEXT:-./infra/docker/openssl}
       args:
         APP_VERSION: ${APP_VERSION:-3.1.74}
         APP_REVISION: ${APP_REVISION:-unknown}
@@ -60,6 +62,8 @@ services:
     build:
       context: .
       dockerfile: infra/docker/postgres.Dockerfile
+      additional_contexts:
+        openssl_backport: ${DCOMPANY_OPENSSL_BACKPORT_CONTEXT:-./infra/docker/openssl}
       args:
         APP_VERSION: ${APP_VERSION:-3.1.74}
         APP_REVISION: ${APP_REVISION:-unknown}
@@ -126,6 +130,8 @@ services:
     build:
       context: .
       dockerfile: infra/docker/backend.Dockerfile
+      additional_contexts:
+        openssl_backport: ${DCOMPANY_OPENSSL_BACKPORT_CONTEXT:-./infra/docker/openssl}
       args:
         APP_VERSION: ${APP_VERSION:-3.1.74}
         APP_REVISION: ${APP_REVISION:-unknown}
@@ -219,6 +225,8 @@ services:
     build:
       context: .
       dockerfile: infra/docker/frontend.Dockerfile
+      additional_contexts:
+        openssl_backport: ${DCOMPANY_OPENSSL_BACKPORT_CONTEXT:-./infra/docker/openssl}
       args:
         VITE_API_URL: https://${DOMAIN}/api/v1
         VITE_APP_VERSION: ${APP_VERSION:-3.1.74}

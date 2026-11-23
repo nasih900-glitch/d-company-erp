@@ -485,7 +485,7 @@ def test_composite_gates_every_scanner_on_verified_connection_and_hardened_scan(
 
 def test_vendor_fixed_evidence_is_retained_and_selected_only_after_its_hash_checks():
     action = (ROOT / ".github/actions/scan-production-images/action.yml").read_text()
-    for service in ("backend", "frontend", "postgres"):
+    for service in ("backend", "frontend", "caddy", "postgres"):
         for suffix in ("grype-vendor-unfiltered.json", "openssl-vendor-runtime.raw.json",
                        "openssl-vendor-runtime.json", "openssl-vendor-fixed.openvex.json"):
             assert action.count(service + "-" + suffix) >= 2
@@ -495,6 +495,9 @@ def test_vendor_fixed_evidence_is_retained_and_selected_only_after_its_hash_chec
     assert 'backend_openssl_vendor_combined_vex_sha256=' in action
     assert 'openssl_vendor=("--openssl-vendor-fixed=$VERIFIED_VENDOR_BACKEND_VEX")' in action
     assert 'openssl_vendor=("--openssl-vendor-fixed=$service_vex")' in action
-    assert '[ "$service" != caddy ] && [ ! -e "$vex" ] && [ ! -L "$vex" ]' in action
+    assert '[ ! -e "$vex" ] && [ ! -L "$vex" ]' in action
+    assert '[ "$service" = caddy ] || [ "$service" = frontend ] || [ "$service" = postgres ]' in action
+    assert '"DCOMPANY_OPENSSL_BACKPORT_CONTEXT=$backport_scanner_context"' in action
+    assert 'openssl-backport-export' in action
     assert '"$archive" "$evidence_dir/$package-3.5.9-r1.apk"' in action
     assert 'sudo rmdir "$scanner_evidence/openssl-vendor-apks"' in action
