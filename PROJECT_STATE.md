@@ -1,24 +1,16 @@
 # D Company ERP — current project state
 
-## Local Build 83 fallback candidate
+## Local Build 84 release candidate
 
-Version 3.1.76 targets Android build 83, Room 58 and Alembic 0105. The
-[local fallback](docs/V3_1_76_RELEASE_CANDIDATE.md) preserves the scoped Android
-instrumentation synchronization fixes and coordinates only the release identity
-and exact admission guards. Product APK behavior, PostgreSQL 16.16, image/vendor
-safeguards, calendar and normal-close admission, retained queues and rollback
-requirements remain unchanged.
+Version 3.1.77 targets Android build 84, Room 58 and Alembic 0105. Its
+[release record](docs/V3_1_77_RELEASE_CANDIDATE.md) covers the post-handover
+cashier authority fix and the guarded installer's scanner script permissions.
 
-Build 82 / v3.1.75 remains immutable at its protected tag, but its hosted
-contract lane exposed brittle future-identity test fixtures. Build 83 is the
-narrow local successor that corrects those fixtures without changing product
-behavior or the reviewed server-security payload. All historical literal maps
-through Build 82 remain byte-identical. No Build 83 tag, pipeline, signing, production
-deployment or tablet offer has been performed by this preparation.
-
-The protected exact-source workflow, full repository/backend/frontend and
-Android checks, both image stores, independent reproduction, signed upgrade and
-actual production/tablet admission remain mandatory before signing/offering.
+Signed Build 83 / v3.1.76 remains immutable and withheld. Build 84 keeps the
+reviewed Build 71 direct-upgrade path, Redis and database preservation checks,
+runtime security thresholds, and compatibility defaults. Exact-source
+verification, signing, upgrade, deployment and the tablet offer remain separate
+release gates.
 
 ## Earlier checkpoints
 

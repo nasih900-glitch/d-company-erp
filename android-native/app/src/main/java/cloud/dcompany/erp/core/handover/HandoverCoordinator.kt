@@ -853,14 +853,22 @@ internal class HandoverCoordinator(private val store: HandoverIntentStore,
         mutable.value = mutable.value.copy(intent = next)
         return next
     }
-    suspend fun completeAccepted(expected: HandoverIntent, incomingIsCurrent: () -> Boolean) = mutex.withLock {
+    suspend fun completeAccepted(expected: HandoverIntent, incoming: HandoverAuthority,
+        incomingIsCurrent: () -> Boolean) = mutex.withLock {
         check(expected.stage == HandoverStage.ACCEPTED && !expected.priorMutationUncertainty &&
             mutable.value.intent == expected && !mutable.value.storageFault && !mutable.value.mutationUncertaintySticky &&
             workEmpty() && preparation == null && workspaceExit == null && incomingIsCurrent())
+        val receipt = requireNotNull(expected.receipt)
+        val active = checkNotNull(authority)
+        incoming.validate()
+        check(incoming.scope.sameWorkspace(expected.action.origin.scope) &&
+            incoming.scope.actorId in setOf(receipt.incomingUserId, receipt.initiatedBy) &&
+            (incoming == active || incoming.epoch > active.epoch))
         persisted {
             check(store.read() == expected && incomingIsCurrent())
             store.completeAccepted(expected)
         }
+        authority = incoming
         lifecycleVersion++
         mutable.value = mutable.value.copy(intent = null)
     }

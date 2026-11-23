@@ -241,6 +241,7 @@ CODE30_4_BUILD73_BASE = "8e650723f7e559c84819ef56fe933260fe3fbd94"
 CODE30_4_BUILD74_BASE = "272b8e5197fbf9c51939e87946e936e04cf312b3"
 CODE30_4_BUILD81_BASE = "0eaff836e8b0411ab21ccace04468f3d1cca613f"
 CODE30_4_BUILD82_BASE = "eb9dbbd99fd9d0e98fcf02cd1534c9720ad6e7a1"
+CODE30_4_BUILD83_BASE = "d1bf955cdea25726af2a6996fd1a331aea8c868d"
 CODE30_4_BUILD80_BASE = "66317203a6db380962824393293e21d4d59ed6a1"
 CODE30_4_BUILD79_BASE = "9cecce5b035d0341ad390d9818a9f8162edce2d6"
 CODE30_4_BUILD78_BASE = "91fd778cb56c1867eaca2eb6a4713607c92e36c8"
@@ -3841,6 +3842,42 @@ REVIEWED_CODE30_4_BUILD83_SHA256 = {
     'tests/verify_production_installer_lock_metadata.py': '0953a5a04871bf9992ebf00056afea64199b199113279d2dddf2ca34ddf0eda8',
 }
 
+REVIEWED_CODE30_4_BUILD84_SHA256 = {
+    '.env.production.example': 'bbf14f03bf7895e1ae0b8b5e24ee0fbf8327a2f2c4f805e6e30cdb7229a74cac',
+    'PROJECT_STATE.md': '8bfa47c4d6633f5d3770e2dc413d52713cc8f9b6149c950d63444a8f9eba1172',
+    'README.md': '87f638177a73aaa5a590a3e0d7364f85b23403e381b39969dd9d19d6db8c1043',
+    'android-native/app/build.gradle.kts': 'ff8dffd72f2ebe364692e8d004facfc6d914a61ca09ab573393b4a04d5705cc4',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/HandoverCoordinator.kt': 'c91de5f655ca4ff5d801fd0cf0d8f2395df940526d59a030dba841ff7b22510e',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/HandoverOperations.kt': '535fb5466aea0472a80b91e2cbd27b0710501bd6a57222da01bf4a9804e62392',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/SessionViewModel.kt': '2fdb73df8949dbd921815e5402da9f14fafbc5f843be7263caae8a80626046e7',
+    'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': 'c5ad6d80a57e74592bb50b40d35eb961f4d292cb366c54cbc8043668f060f8cf',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/HandoverOperationsTest.kt': '4f6ea1b0ae6ecfffb3031e573101d8b82dc34b30919fee1b687c5ffd5a548904',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/TillHandoverTransportTest.kt': '69a49ff16f450c0b74737a55112b3e384fdebdff279c72d9b40ca77284cd25a7',
+    'backend/app/__init__.py': '7f7cfaf8853a8203fc842b33a915e481554a3019f573c7071957245e80318e1c',
+    'backend/docs/POS_START_WORK.md': '679a388c0841d5200e6203be35c4a51c5a3607072ad619b62a1dcc9a7aa7b801',
+    'backend/pyproject.toml': '26cf27e453f62519976706c24fd25ff07dac19ac30e60feab71c1f5743e545d8',
+    'backend/tests/unit/test_release_contracts.py': '2f487f454afaacf0c269533158668aa3a46e65a06250a212d466293543b47fe9',
+    'backend/tests/unit/test_remote_assistance_contract.py': 'aabd222971d310fd1e1f40b48132f2bb1f004e67681ed6040c85c86c1b522628',
+    'docker-compose.prod.yml': '30079c69131c442a33fcb75ecd6d107eae2367b8b8124a12b4108b6ac8443961',
+    'docs/V3_1_77_RELEASE_CANDIDATE.md': '36063d5b52bda1271351c85342d64055ca307bf30a388115c369d2fe32909061',
+    'frontend/.env.example': '7458a0da607264bd32dbcdc777f52241753b524119c88207102ad30cbe6e5563',
+    'frontend/package-lock.json': '63b6b0d2f0e234c28697f6a25b4a1df03da5f6ad32a8ea60e2a03ec2c5648e4b',
+    'frontend/package.json': '90106538253377f8b80af65c810bbc904d0c715c6b4dcd2add4af1458f410fc3',
+    'infra/docker/verify-backend-runtime-profile.py': '0af3a18cf73d48b23320244d582a070d1108791f965df38a5ab9fe6c5d476ad4',
+    'infra/scripts/install-on-vm.sh': '288fe85f89a283d773406cfbea81e1d487d5407fa941ac4e47771d5686c99284',
+    'infra/scripts/verify-build72-transition.py': 'd94e6a77e30a99a7dfc89fcb8a794e70ddb63a21c624174f108f10c7fd3eded2',
+    'infra/scripts/verify-build72-upgrade-runtime.py': '3a27a7c5e298abbb7c3dd5fcca97190cc77e3365b9d9675caa7e78db1bfe2cb6',
+    'infra/scripts/verify-production-runtime-images.sh': '59a3af34ab258973372a4a5d6c025539129d128f15b6e03b5b4ec10264adfd1e',
+    'ops/stage_android_release.py': 'aadb2502fc6b8096977913575d43854da92be8cd509f5c35b2a72cd1ed85b38a',
+    'tests/test_android_release_staging.py': '1c23a15f9f1df2551493ad19192e9f1217e048647a3555fbb61b028eefb6be1b',
+    'tests/test_backend_runtime_profile.py': '565742d6c7015a6f65477ecb1675475e90506d8a93c71dc5b4accd6cb313dc33',
+    'tests/test_build72_readiness.py': 'cf53d9e366231791c6eac6d3f78ecf8f0fc9721721e7558722821c3b54f12be5',
+    'tests/test_code26_physical_audit_lane.py': '253fc2a38ee8a22d547db08b5a0fd93bb6d0f8fc84566e40d68589168c14e063',
+    'tests/test_unreviewed_build72_hold.py': '0621c62987592b7b1f11c40bee2f62e34adfd9ce4bc545966427f776920fca3d',
+    'tests/test_verified_pip_bootstrap.py': 'bfd042049c6ccb34c07033a45a201a486670fd558fc7284c24071cdf8dc8da67',
+    'tests/verify_production_installer_lock_metadata.py': 'b3b4805053341d09925e37311b4ab700e65ff83e4b04e895cbc7437fba34c691',
+}
+
 REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
     path
     for path in (
@@ -3889,13 +3926,14 @@ REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
         | REVIEWED_CODE30_4_BUILD81_SHA256
         | REVIEWED_CODE30_4_BUILD82_SHA256
         | REVIEWED_CODE30_4_BUILD83_SHA256
+        | REVIEWED_CODE30_4_BUILD84_SHA256
     )
     if path.startswith(("backend/app/", "frontend/src/", "android-native/app/src/main/"))
 )
 
 
 def _current_code30_4_sha256(path: str, fallback: str | None = None) -> str | None:
-    return REVIEWED_CODE30_4_BUILD83_SHA256.get(path) or REVIEWED_CODE30_4_BUILD82_SHA256.get(path) or REVIEWED_CODE30_4_BUILD81_SHA256.get(path) or REVIEWED_CODE30_4_BUILD80_SHA256.get(path) or REVIEWED_CODE30_4_BUILD79_SHA256.get(path) or REVIEWED_CODE30_4_BUILD78_SHA256.get(path) or REVIEWED_CODE30_4_BUILD77_SHA256.get(path) or REVIEWED_CODE30_4_BUILD76_SHA256.get(path) or REVIEWED_CODE30_4_BUILD75_SHA256.get(path) or REVIEWED_CODE30_4_BUILD74_SHA256.get(path) or REVIEWED_CODE30_4_BUILD73_SHA256.get(path) or REVIEWED_CODE30_4_BUILD72_SHA256.get(path) or REVIEWED_CODE30_4_BUILD71_SHA256.get(path) or REVIEWED_CODE30_4_BUILD70_SHA256.get(path) or REVIEWED_CODE30_4_BUILD69_SHA256.get(path) or REVIEWED_CODE30_4_BUILD68_SHA256.get(path) or REVIEWED_CODE30_4_BUILD67_SHA256.get(path) or REVIEWED_CODE30_4_BUILD66_SHA256.get(path) or REVIEWED_CODE30_4_BUILD65_SHA256.get(path) or REVIEWED_CODE30_4_BUILD64_SHA256.get(path) or REVIEWED_CODE30_4_BUILD63_SHA256.get(path) or REVIEWED_CODE30_4_BUILD62_SHA256.get(path) or REVIEWED_CODE30_4_BUILD61_SHA256.get(path) or REVIEWED_CODE30_4_BUILD60_SHA256.get(path) or REVIEWED_CODE30_4_BUILD59_SHA256.get(path) or REVIEWED_CODE30_4_BUILD58_SHA256.get(path) or REVIEWED_CODE30_4_BUILD57_SHA256.get(path) or REVIEWED_CODE30_4_BUILD56_SHA256.get(path) or REVIEWED_CODE30_4_BUILD55_SHA256.get(path) or REVIEWED_CODE30_4_BUILD54_SHA256.get(path) or REVIEWED_CODE30_4_BUILD53_SHA256.get(path) or REVIEWED_CODE30_4_BUILD52_SHA256.get(path) or REVIEWED_CODE30_4_BUILD51_SHA256.get(path) or REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
+    return REVIEWED_CODE30_4_BUILD84_SHA256.get(path) or REVIEWED_CODE30_4_BUILD83_SHA256.get(path) or REVIEWED_CODE30_4_BUILD82_SHA256.get(path) or REVIEWED_CODE30_4_BUILD81_SHA256.get(path) or REVIEWED_CODE30_4_BUILD80_SHA256.get(path) or REVIEWED_CODE30_4_BUILD79_SHA256.get(path) or REVIEWED_CODE30_4_BUILD78_SHA256.get(path) or REVIEWED_CODE30_4_BUILD77_SHA256.get(path) or REVIEWED_CODE30_4_BUILD76_SHA256.get(path) or REVIEWED_CODE30_4_BUILD75_SHA256.get(path) or REVIEWED_CODE30_4_BUILD74_SHA256.get(path) or REVIEWED_CODE30_4_BUILD73_SHA256.get(path) or REVIEWED_CODE30_4_BUILD72_SHA256.get(path) or REVIEWED_CODE30_4_BUILD71_SHA256.get(path) or REVIEWED_CODE30_4_BUILD70_SHA256.get(path) or REVIEWED_CODE30_4_BUILD69_SHA256.get(path) or REVIEWED_CODE30_4_BUILD68_SHA256.get(path) or REVIEWED_CODE30_4_BUILD67_SHA256.get(path) or REVIEWED_CODE30_4_BUILD66_SHA256.get(path) or REVIEWED_CODE30_4_BUILD65_SHA256.get(path) or REVIEWED_CODE30_4_BUILD64_SHA256.get(path) or REVIEWED_CODE30_4_BUILD63_SHA256.get(path) or REVIEWED_CODE30_4_BUILD62_SHA256.get(path) or REVIEWED_CODE30_4_BUILD61_SHA256.get(path) or REVIEWED_CODE30_4_BUILD60_SHA256.get(path) or REVIEWED_CODE30_4_BUILD59_SHA256.get(path) or REVIEWED_CODE30_4_BUILD58_SHA256.get(path) or REVIEWED_CODE30_4_BUILD57_SHA256.get(path) or REVIEWED_CODE30_4_BUILD56_SHA256.get(path) or REVIEWED_CODE30_4_BUILD55_SHA256.get(path) or REVIEWED_CODE30_4_BUILD54_SHA256.get(path) or REVIEWED_CODE30_4_BUILD53_SHA256.get(path) or REVIEWED_CODE30_4_BUILD52_SHA256.get(path) or REVIEWED_CODE30_4_BUILD51_SHA256.get(path) or REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
         path,
         REVIEWED_CODE30_4_BUILD41_SHA256.get(
             path,
@@ -4111,6 +4149,7 @@ def _normalise_release_identity(path: str, text: str) -> str:
     normalised = text
     for current, baseline in (
         ("3.1.76", "3.1.14"),
+        ("3.1.77", "3.1.14"),
         ("3.1.75", "3.1.14"),
         ("3.1.74", "3.1.14"),
         ("3.1.73", "3.1.14"),
@@ -4230,10 +4269,10 @@ def _normalise_release_identity(path: str, text: str) -> str:
     ):
         normalised = normalised.replace(current, baseline)
     normalised = re.sub(
-        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71|72|73|74|75|76|77|78|79|80|81|82|83)\b", "version_code=25", normalised
+        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71|72|73|74|75|76|77|78|79|80|81|82|83|84)\b", "version_code=25", normalised
     )
     normalised = re.sub(
-        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71|72|73|74|75|76|77|78|79|80|81|82|83),\s*BuildConfig\.VERSION_CODE\)",
+        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71|72|73|74|75|76|77|78|79|80|81|82|83|84),\s*BuildConfig\.VERSION_CODE\)",
         "assertEquals(25, BuildConfig.VERSION_CODE)",
         normalised,
     )
@@ -4545,8 +4584,8 @@ def _code30_4_build82_delta_paths(root: Path) -> set[str]:
     return {path for path in changed if path}
 
 
-def _code30_4_build83_delta_paths(root: Path) -> set[str]:
-    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD82_BASE).splitlines())
+def _code30_4_build84_delta_paths(root: Path) -> set[str]:
+    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD83_BASE).splitlines())
     changed.update(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
     return {path for path in changed if path}
 
@@ -5099,79 +5138,88 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
             errors.append(f"Code30.4 build-82 file differs from reviewed bytes: {path}")
 
-    if set(REVIEWED_CODE30_4_BUILD83_SHA256) & set(CODE30_4_FREEZE_CONTROL_PATHS):
-        errors.append("Code30.4 build-83 product overlay overlaps freeze controls")
-    expected_build83_paths = set(REVIEWED_CODE30_4_BUILD83_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
-    current_build83_paths = _code30_4_build83_delta_paths(root)
-    for path in sorted(expected_build83_paths - current_build83_paths):
-        errors.append(f"reviewed Code30.4 build-83 delta path disappeared: {path}")
-    for path in sorted(current_build83_paths - expected_build83_paths):
-        errors.append(f"unreviewed path entered the Code30.4 build-83 delta: {path}")
     for path, expected_sha256 in REVIEWED_CODE30_4_BUILD83_SHA256.items():
-        candidate = root / path
-        if not candidate.is_file() or candidate.is_symlink():
-            errors.append(f"Code30.4 build-83 file is absent or linked: {path}")
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD83_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-83 file absent from immutable base: {path}")
             continue
-        if hashlib.sha256(candidate.read_bytes()).hexdigest() != expected_sha256:
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
             errors.append(f"Code30.4 build-83 file differs from reviewed bytes: {path}")
 
-    if (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
+    if set(REVIEWED_CODE30_4_BUILD84_SHA256) & set(CODE30_4_FREEZE_CONTROL_PATHS):
+        errors.append("Code30.4 build-84 product overlay overlaps freeze controls")
+    expected_build84_paths = set(REVIEWED_CODE30_4_BUILD84_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build84_paths = _code30_4_build84_delta_paths(root)
+    for path in sorted(expected_build84_paths - current_build84_paths):
+        errors.append(f"reviewed Code30.4 build-84 delta path disappeared: {path}")
+    for path in sorted(current_build84_paths - expected_build84_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-84 delta: {path}")
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD84_SHA256.items():
+        candidate = root / path
+        if not candidate.is_file() or candidate.is_symlink():
+            errors.append(f"Code30.4 build-84 file is absent or linked: {path}")
+            continue
+        if hashlib.sha256(candidate.read_bytes()).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-84 file differs from reviewed bytes: {path}")
+
+    if (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | (set(REVIEWED_CODE30_4_BUILD83_SHA256) | set(REVIEWED_CODE30_4_BUILD84_SHA256)))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
         errors.append("Code30.4 build-81 product overlay overlaps freeze controls")
-    expected_build81_paths = (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    expected_build81_paths = (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | (set(REVIEWED_CODE30_4_BUILD83_SHA256) | set(REVIEWED_CODE30_4_BUILD84_SHA256)))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
     current_build81_paths = _code30_4_build81_delta_paths(root)
     for path in sorted(expected_build81_paths - current_build81_paths):
         errors.append(f"reviewed Code30.4 build-81 delta path disappeared: {path}")
     for path in sorted(current_build81_paths - expected_build81_paths):
         errors.append(f"unreviewed path entered the Code30.4 build-81 delta: {path}")
 
-    if (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256)))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
+    if (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | (set(REVIEWED_CODE30_4_BUILD83_SHA256) | set(REVIEWED_CODE30_4_BUILD84_SHA256))))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
         errors.append("Code30.4 build-80 product overlay overlaps freeze controls")
-    expected_build80_paths = (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256)))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    expected_build80_paths = (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | (set(REVIEWED_CODE30_4_BUILD83_SHA256) | set(REVIEWED_CODE30_4_BUILD84_SHA256))))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
     current_build80_paths = _code30_4_build80_delta_paths(root)
     for path in sorted(expected_build80_paths - current_build80_paths):
         errors.append(f"reviewed Code30.4 build-80 delta path disappeared: {path}")
     for path in sorted(current_build80_paths - expected_build80_paths):
         errors.append(f"unreviewed path entered the Code30.4 build-80 delta: {path}")
 
-    if (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256))))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
+    if (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | (set(REVIEWED_CODE30_4_BUILD83_SHA256) | set(REVIEWED_CODE30_4_BUILD84_SHA256)))))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
         errors.append("Code30.4 build-79 product overlay overlaps freeze controls")
-    expected_build79_paths = (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256))))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    expected_build79_paths = (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | (set(REVIEWED_CODE30_4_BUILD83_SHA256) | set(REVIEWED_CODE30_4_BUILD84_SHA256)))))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
     current_build79_paths = _code30_4_build79_delta_paths(root)
     for path in sorted(expected_build79_paths - current_build79_paths):
         errors.append(f"reviewed Code30.4 build-79 delta path disappeared: {path}")
     for path in sorted(current_build79_paths - expected_build79_paths):
         errors.append(f"unreviewed path entered the Code30.4 build-79 delta: {path}")
 
-    if (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256)))))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
+    if (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | (set(REVIEWED_CODE30_4_BUILD83_SHA256) | set(REVIEWED_CODE30_4_BUILD84_SHA256))))))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
         errors.append("Code30.4 build-78 product overlay overlaps freeze controls")
-    expected_build78_paths = (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256)))))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    expected_build78_paths = (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | (set(REVIEWED_CODE30_4_BUILD83_SHA256) | set(REVIEWED_CODE30_4_BUILD84_SHA256))))))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
     current_build78_paths = _code30_4_build78_delta_paths(root)
     for path in sorted(expected_build78_paths - current_build78_paths):
         errors.append(f"reviewed Code30.4 build-78 delta path disappeared: {path}")
     for path in sorted(current_build78_paths - expected_build78_paths):
         errors.append(f"unreviewed path entered the Code30.4 build-78 delta: {path}")
 
-    if (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256))))))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
+    if (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | (set(REVIEWED_CODE30_4_BUILD83_SHA256) | set(REVIEWED_CODE30_4_BUILD84_SHA256)))))))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
         errors.append("Code30.4 build-77 product overlay overlaps freeze controls")
-    expected_build77_paths = (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256))))))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    expected_build77_paths = (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | (set(REVIEWED_CODE30_4_BUILD83_SHA256) | set(REVIEWED_CODE30_4_BUILD84_SHA256)))))))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
     current_build77_paths = _code30_4_build77_delta_paths(root)
     for path in sorted(expected_build77_paths - current_build77_paths):
         errors.append(f"reviewed Code30.4 build-77 delta path disappeared: {path}")
     for path in sorted(current_build77_paths - expected_build77_paths):
         errors.append(f"unreviewed path entered the Code30.4 build-77 delta: {path}")
 
-    if (set(REVIEWED_CODE30_4_BUILD76_SHA256) | (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256)))))))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
+    if (set(REVIEWED_CODE30_4_BUILD76_SHA256) | (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | (set(REVIEWED_CODE30_4_BUILD83_SHA256) | set(REVIEWED_CODE30_4_BUILD84_SHA256))))))))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
         errors.append("Code30.4 build-76 product overlay overlaps freeze controls")
-    expected_build76_paths = (set(REVIEWED_CODE30_4_BUILD76_SHA256) | (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256)))))))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    expected_build76_paths = (set(REVIEWED_CODE30_4_BUILD76_SHA256) | (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | (set(REVIEWED_CODE30_4_BUILD83_SHA256) | set(REVIEWED_CODE30_4_BUILD84_SHA256))))))))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
     current_build76_paths = _code30_4_build76_delta_paths(root)
     for path in sorted(expected_build76_paths - current_build76_paths):
         errors.append(f"reviewed Code30.4 build-76 delta path disappeared: {path}")
     for path in sorted(current_build76_paths - expected_build76_paths):
         errors.append(f"unreviewed path entered the Code30.4 build-76 delta: {path}")
 
-    if (set(REVIEWED_CODE30_4_BUILD75_SHA256) | (set(REVIEWED_CODE30_4_BUILD76_SHA256) | (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256))))))))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
+    if (set(REVIEWED_CODE30_4_BUILD75_SHA256) | (set(REVIEWED_CODE30_4_BUILD76_SHA256) | (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | (set(REVIEWED_CODE30_4_BUILD83_SHA256) | set(REVIEWED_CODE30_4_BUILD84_SHA256)))))))))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
         errors.append("Code30.4 build-75 product overlay overlaps freeze controls")
-    expected_build75_paths = (set(REVIEWED_CODE30_4_BUILD75_SHA256) | (set(REVIEWED_CODE30_4_BUILD76_SHA256) | (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256))))))))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    expected_build75_paths = (set(REVIEWED_CODE30_4_BUILD75_SHA256) | (set(REVIEWED_CODE30_4_BUILD76_SHA256) | (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | (set(REVIEWED_CODE30_4_BUILD83_SHA256) | set(REVIEWED_CODE30_4_BUILD84_SHA256)))))))))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
     current_build75_paths = _code30_4_build75_delta_paths(root)
     for path in sorted(expected_build75_paths - current_build75_paths):
         errors.append(f"reviewed Code30.4 build-75 delta path disappeared: {path}")
@@ -5391,9 +5439,9 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         errors.append(f"unreviewed path entered the Code30.4 build-71 delta: {path}")
 
     _verify_public_checkout(root, errors)
-    if (set(REVIEWED_CODE30_4_BUILD72_SHA256) | (set(REVIEWED_CODE30_4_BUILD73_SHA256) | (set(REVIEWED_CODE30_4_BUILD74_SHA256) | (set(REVIEWED_CODE30_4_BUILD75_SHA256) | (set(REVIEWED_CODE30_4_BUILD76_SHA256) | (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256)))))))))))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
+    if (set(REVIEWED_CODE30_4_BUILD72_SHA256) | (set(REVIEWED_CODE30_4_BUILD73_SHA256) | (set(REVIEWED_CODE30_4_BUILD74_SHA256) | (set(REVIEWED_CODE30_4_BUILD75_SHA256) | (set(REVIEWED_CODE30_4_BUILD76_SHA256) | (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | (set(REVIEWED_CODE30_4_BUILD83_SHA256) | set(REVIEWED_CODE30_4_BUILD84_SHA256))))))))))))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
         errors.append("Code30.4 build-72 product overlay overlaps freeze controls")
-    expected_build72_paths = (set(REVIEWED_CODE30_4_BUILD72_SHA256) | (set(REVIEWED_CODE30_4_BUILD73_SHA256) | (set(REVIEWED_CODE30_4_BUILD74_SHA256) | (set(REVIEWED_CODE30_4_BUILD75_SHA256) | (set(REVIEWED_CODE30_4_BUILD76_SHA256) | (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256)))))))))))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    expected_build72_paths = (set(REVIEWED_CODE30_4_BUILD72_SHA256) | (set(REVIEWED_CODE30_4_BUILD73_SHA256) | (set(REVIEWED_CODE30_4_BUILD74_SHA256) | (set(REVIEWED_CODE30_4_BUILD75_SHA256) | (set(REVIEWED_CODE30_4_BUILD76_SHA256) | (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | (set(REVIEWED_CODE30_4_BUILD83_SHA256) | set(REVIEWED_CODE30_4_BUILD84_SHA256))))))))))))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
     current_build72_paths = _code30_4_build72_delta_paths(root)
     for path in sorted(expected_build72_paths - current_build72_paths):
         errors.append(f"reviewed Code30.4 build-72 delta path disappeared: {path}")
@@ -5409,7 +5457,7 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         REVIEWED_CODE30_4_BUILD41_SHA256
     ) | set(
         REVIEWED_CODE30_4_BUILD42_SHA256
-    ) | set(REVIEWED_CODE30_4_BUILD43_SHA256) | set(REVIEWED_CODE30_4_BUILD44_SHA256) | set(REVIEWED_CODE30_4_BUILD45_SHA256) | set(REVIEWED_CODE30_4_BUILD46_SHA256) | set(REVIEWED_CODE30_4_BUILD47_SHA256) | set(REVIEWED_CODE30_4_BUILD48_SHA256) | set(REVIEWED_CODE30_4_BUILD49_SHA256) | set(REVIEWED_CODE30_4_BUILD50_SHA256) | set(REVIEWED_CODE30_4_BUILD51_SHA256) | set(REVIEWED_CODE30_4_BUILD52_SHA256) | set(REVIEWED_CODE30_4_BUILD53_SHA256) | set(REVIEWED_CODE30_4_BUILD54_SHA256) | set(REVIEWED_CODE30_4_BUILD55_SHA256) | set(REVIEWED_CODE30_4_BUILD56_SHA256) | set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256) | set(REVIEWED_CODE30_4_BUILD70_SHA256) | set(REVIEWED_CODE30_4_BUILD71_SHA256) | (set(REVIEWED_CODE30_4_BUILD72_SHA256) | (set(REVIEWED_CODE30_4_BUILD73_SHA256) | (set(REVIEWED_CODE30_4_BUILD74_SHA256) | (set(REVIEWED_CODE30_4_BUILD75_SHA256) | (set(REVIEWED_CODE30_4_BUILD76_SHA256) | (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256))))))))))))
+    ) | set(REVIEWED_CODE30_4_BUILD43_SHA256) | set(REVIEWED_CODE30_4_BUILD44_SHA256) | set(REVIEWED_CODE30_4_BUILD45_SHA256) | set(REVIEWED_CODE30_4_BUILD46_SHA256) | set(REVIEWED_CODE30_4_BUILD47_SHA256) | set(REVIEWED_CODE30_4_BUILD48_SHA256) | set(REVIEWED_CODE30_4_BUILD49_SHA256) | set(REVIEWED_CODE30_4_BUILD50_SHA256) | set(REVIEWED_CODE30_4_BUILD51_SHA256) | set(REVIEWED_CODE30_4_BUILD52_SHA256) | set(REVIEWED_CODE30_4_BUILD53_SHA256) | set(REVIEWED_CODE30_4_BUILD54_SHA256) | set(REVIEWED_CODE30_4_BUILD55_SHA256) | set(REVIEWED_CODE30_4_BUILD56_SHA256) | set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256) | set(REVIEWED_CODE30_4_BUILD70_SHA256) | set(REVIEWED_CODE30_4_BUILD71_SHA256) | (set(REVIEWED_CODE30_4_BUILD72_SHA256) | (set(REVIEWED_CODE30_4_BUILD73_SHA256) | (set(REVIEWED_CODE30_4_BUILD74_SHA256) | (set(REVIEWED_CODE30_4_BUILD75_SHA256) | (set(REVIEWED_CODE30_4_BUILD76_SHA256) | (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | (set(REVIEWED_CODE30_4_BUILD83_SHA256) | set(REVIEWED_CODE30_4_BUILD84_SHA256)))))))))))))
     current_paths = _code30_4_delta_paths(root)
     for path in sorted(expected_paths - current_paths):
         errors.append(f"reviewed Code30.4 delta path disappeared: {path}")
@@ -5462,6 +5510,7 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         | REVIEWED_CODE30_4_BUILD81_SHA256
         | REVIEWED_CODE30_4_BUILD82_SHA256
         | REVIEWED_CODE30_4_BUILD83_SHA256
+        | REVIEWED_CODE30_4_BUILD84_SHA256
     )
     for path, expected_sha256 in current_hashes.items():
         # These files define the freeze itself and cannot carry a current-tree
@@ -5553,6 +5602,7 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD79_BASE}^{{commit}}")
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD80_BASE}^{{commit}}")
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD81_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD83_BASE}^{{commit}}")
     _verify_code30_2_exact_delta(root, errors)
     _verify_code30_3_exact_delta(root, errors)
     _verify_code30_4_exact_delta(root, errors)
@@ -5577,7 +5627,7 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
             path, candidate_normalised
         )
         reviewed_test_sha256 = (
-            REVIEWED_CODE30_4_BUILD83_SHA256.get(path) or REVIEWED_CODE30_4_BUILD82_SHA256.get(path) or REVIEWED_CODE30_4_BUILD81_SHA256.get(path) or REVIEWED_CODE30_4_BUILD80_SHA256.get(path) or REVIEWED_CODE30_4_BUILD79_SHA256.get(path) or REVIEWED_CODE30_4_BUILD78_SHA256.get(path) or REVIEWED_CODE30_4_BUILD77_SHA256.get(path) or REVIEWED_CODE30_4_BUILD76_SHA256.get(path) or REVIEWED_CODE30_4_BUILD75_SHA256.get(path) or REVIEWED_CODE30_4_BUILD74_SHA256.get(path)
+            REVIEWED_CODE30_4_BUILD84_SHA256.get(path) or REVIEWED_CODE30_4_BUILD83_SHA256.get(path) or REVIEWED_CODE30_4_BUILD82_SHA256.get(path) or REVIEWED_CODE30_4_BUILD81_SHA256.get(path) or REVIEWED_CODE30_4_BUILD80_SHA256.get(path) or REVIEWED_CODE30_4_BUILD79_SHA256.get(path) or REVIEWED_CODE30_4_BUILD78_SHA256.get(path) or REVIEWED_CODE30_4_BUILD77_SHA256.get(path) or REVIEWED_CODE30_4_BUILD76_SHA256.get(path) or REVIEWED_CODE30_4_BUILD75_SHA256.get(path) or REVIEWED_CODE30_4_BUILD74_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD73_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD72_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD71_SHA256.get(path)

@@ -147,24 +147,29 @@ internal class HandoverOperations(
         val permitted = if (recovery == null) status == HandoverStartupStatus.Open else
             status == HandoverStartupStatus.RecoveryRequired(recovery) && recovery.stage == recoveryStage
         if (profile == null || lease == null || !permitted) return@synchronized null
-        val session = currentSession() ?: return@synchronized null
-        if (expectedLoginLineage != null && session.session.lineage !== expectedLoginLineage) return@synchronized null
+        captureVerifiedBindingLocked(profile, lease, recovery?.action?.origin?.scope, expectedLoginLineage)
+    }
+
+    private fun captureVerifiedBindingLocked(profile: MeResponse, lease: CacheScopeLease,
+        expectedScope: HandoverScope?, expectedLoginLineage: Any?): OriginalOperationBinding? {
+        val session = currentSession() ?: return null
+        if (expectedLoginLineage != null && session.session.lineage !== expectedLoginLineage) return null
         if (currentCache() != lease || profile.userId != lease.scope.userId || profile.companyId != lease.scope.companyId ||
-            AccessTokenIdentityParser.parse(session.accessToken) != OutboxOwnerIdentity.from(profile)) return@synchronized null
-        val scope = runCatching { effectiveOperationScope(lease.scope, currentTerminal()) }.getOrNull() ?: return@synchronized null
-        if (profile.branchId != null && scope.branchId != profile.branchId) return@synchronized null
-        if (recovery != null && recovery.action.origin.scope != scope) return@synchronized null
+            AccessTokenIdentityParser.parse(session.accessToken) != OutboxOwnerIdentity.from(profile)) return null
+        val scope = runCatching { effectiveOperationScope(lease.scope, currentTerminal()) }.getOrNull() ?: return null
+        if (profile.branchId != null && scope.branchId != profile.branchId) return null
+        if (expectedScope != null && scope != expectedScope) return null
         val expectedSignature = signature(profile)
-        if (currentProfile()?.let(::signature) != expectedSignature) return@synchronized null
+        if (currentProfile()?.let(::signature) != expectedSignature) return null
         observed?.takeIf { it.cacheLease == lease && it.loginLease.session.lineage === session.session.lineage &&
-            it.authority.scope == scope && observedSignature == expectedSignature && it.isCurrent() }?.let { return@synchronized it }
+            it.authority.scope == scope && observedSignature == expectedSignature && it.isCurrent() }?.let { return it }
         val epoch = epochs.incrementAndGet(); check(epoch > 0)
         val binding = OriginalOperationBinding(HandoverAuthority(scope, epoch), lease, session) {
             currentCache() == lease && currentAccessFor(session) != null && currentProfile()?.let(::signature) == expectedSignature &&
                 runCatching { effectiveOperationScope(lease.scope, currentTerminal()) }.getOrNull() == scope
         }
         observed = binding; observedSignature = expectedSignature
-        binding
+        return binding
     }
     private suspend fun bind(binding: OriginalOperationBinding) = bindMutex.withLock { bindLocked(binding) }
 
@@ -242,14 +247,25 @@ internal class HandoverOperations(
             "The original operational profile changed."
         }
     }
-    suspend fun initializeAcceptedRecovery(expected: HandoverIntent, incomingAuthority: HandoverAuthority,
-        incomingIsCurrent: () -> Boolean) = bindMutex.withLock {
+    suspend fun completeAcceptedHandover(expected: HandoverIntent, profile: MeResponse,
+        lease: CacheScopeLease, loginLineage: Any, ownerReturned: Boolean, incomingIsCurrent: () -> Boolean) = bindMutex.withLock {
         check(status() == HandoverStartupStatus.RecoveryRequired(expected) && expected.stage == HandoverStage.ACCEPTED &&
             incomingIsCurrent())
-        if (!coordinator.state.value.initialized) {
-            coordinator.initialize(incomingAuthority)
-            boundAuthority = incomingAuthority
+        val receipt = requireNotNull(expected.receipt)
+        val cashier = if (ownerReturned) receipt.initiatedBy else receipt.incomingUserId
+        val expectedScope = HandoverScope(cashier, receipt.companyId, receipt.branchId, receipt.terminalId)
+        val incoming = synchronized(captures) {
+            checkNotNull(captureVerifiedBindingLocked(profile, lease, expectedScope, loginLineage)) {
+                "The incoming cashier's verified workspace changed."
+            }
         }
+        // Use the same binding that the first incoming screen and worker will capture.
+        // Its authority is installed before the durable handover fence opens.
+        if (!coordinator.state.value.initialized) {
+            coordinator.initialize(incoming.authority)
+        }
+        coordinator.completeAccepted(expected, incoming.authority) { incomingIsCurrent() && incoming.isCurrent() }
+        boundAuthority = incoming.authority
     }
 
     fun handoverBearer(binding: OriginalOperationBinding): String {

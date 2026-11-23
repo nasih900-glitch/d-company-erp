@@ -31,7 +31,6 @@ import cloud.dcompany.erp.core.auth.bestEffortAuthenticatedLogout
 import cloud.dcompany.erp.core.auth.resolveTerminalAssignment
 import cloud.dcompany.erp.core.handover.AcceptedTillReads
 import cloud.dcompany.erp.core.handover.HandoverAction
-import cloud.dcompany.erp.core.handover.HandoverAuthority
 import cloud.dcompany.erp.core.handover.HandoverCoordinator
 import cloud.dcompany.erp.core.handover.HandoverIntent
 import cloud.dcompany.erp.core.handover.HandoverStage
@@ -698,10 +697,8 @@ class SessionViewModel(app: Application) : AndroidViewModel(app) {
         val current = reads.till.state(receipt.shiftId).also(::verifyState)
         check(current.hasRunningGames == before.hasRunningGames && (canReadGaming || !current.hasRunningGames))
         check(inspectLocalHandoverWork(dCompanyApp).isClear)
-        val authority = HandoverAuthority(expected.action.origin.scope.copy(actorId = me.userId), 1)
-        handovers.initializeAcceptedRecovery(expected, authority, ::incomingIsCurrent)
         withContext(NonCancellable) {
-            handovers.coordinator.completeAccepted(expected, ::incomingIsCurrent)
+            handovers.completeAcceptedHandover(expected, me, lease, login.lineage, ownerReturned, ::incomingIsCurrent)
             check(cacheIsolation.commitIfCurrent(lease) {
                 check(tokens.isCurrent(login))
                 ApiClient.activateTerminalScope(receipt.terminalId)

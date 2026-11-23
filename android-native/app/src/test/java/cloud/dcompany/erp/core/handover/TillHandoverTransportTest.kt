@@ -438,11 +438,13 @@ class TillHandoverTransportTest {
             f.start(); f.me(); f.server.enqueue(json(f.receipt(), 201))
             val accepted = f.transport.submit(f.original, f.action, "pw", true)
             val stale = accepted.copy(receipt = requireNotNull(accepted.receipt).copy(receiptId = id()))
-            assertTrue(runCatching { f.operations.coordinator.completeAccepted(stale) { true } }.isFailure)
-            assertTrue(runCatching { f.operations.coordinator.completeAccepted(accepted) { false } }.isFailure)
+            val incoming = HandoverAuthority(f.action.origin.scope.copy(actorId = f.action.incomingUserId),
+                f.action.origin.epoch + 1)
+            assertTrue(runCatching { f.operations.coordinator.completeAccepted(stale, incoming) { true } }.isFailure)
+            assertTrue(runCatching { f.operations.coordinator.completeAccepted(accepted, incoming) { false } }.isFailure)
             assertEquals(accepted, f.store.value)
             assertTrue(f.operations.status() is HandoverStartupStatus.RecoveryRequired)
-            f.operations.coordinator.completeAccepted(accepted) { true }
+            f.operations.coordinator.completeAccepted(accepted, incoming) { true }
             assertNull(f.store.value)
             assertEquals(HandoverStartupStatus.Open, f.operations.status())
         }

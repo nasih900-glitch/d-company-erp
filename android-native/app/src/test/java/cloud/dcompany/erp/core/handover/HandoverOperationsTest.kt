@@ -28,10 +28,16 @@ class HandoverOperationsTest {
     private class Store : HandoverIntentStore {
         var value: HandoverIntent? = null
         var beforeRead: suspend () -> Unit = {}
+        var completionFailure: IOException? = null
         override suspend fun read(): HandoverIntent? { beforeRead(); return value }
         override suspend fun begin(intent: HandoverIntent) { check(value == null); value = intent }
         override suspend fun compareAndSet(expected: HandoverIntent, next: HandoverIntent) { check(value == expected); value = next }
         override suspend fun cancelNotSent(expected: HandoverIntent) { check(value == expected); value = null }
+        override suspend fun completeAccepted(expected: HandoverIntent) {
+            check(value == expected)
+            completionFailure?.let { throw it }
+            value = null
+        }
     }
     private class Fixture(branchless: Boolean = false) {
         val store = Store(); val startup = HandoverStartupFence(store)
@@ -116,6 +122,138 @@ class HandoverOperationsTest {
         var ran = false
         assertTrue(runCatching { f.manager.run(current) { ran = true; OperationResult(Unit, OperationOutcome.NO_WRITE_SENT) } }.isFailure)
         assertFalse(ran)
+    }
+
+    private fun HandoverAction.acceptedReceipt() = AcceptedHandover(id(), key, origin.scope.companyId,
+        requireNotNull(origin.scope.branchId), requireNotNull(origin.scope.terminalId), shiftId,
+        origin.scope.actorId, incomingUserId, expectedRevision, expectedRevision + 1)
+
+    private fun Fixture.installCashier(actor: String) {
+        profile = profile.copy(userId = actor)
+        cache = CacheScopeLease(cache.scope.copy(userId = actor), cache.generation + 1)
+        session = SessionRefreshLease(StoredSession(token(profile), "synthetic-incoming-login"), 2)
+    }
+
+    private suspend fun Fixture.acceptLiveHandover(outgoing: OriginalOperationBinding): HandoverIntent {
+        manager.run(outgoing) { OperationResult(Unit, OperationOutcome.NO_WRITE_SENT) }
+        val action = HandoverAction(id(), outgoing.authority, id(), id(), 0)
+        manager.coordinator.freeze(outgoing.authority, action)
+        manager.coordinator.markSentUnknown(outgoing.authority, action.key)
+        return manager.coordinator.accept(outgoing.authority, action.key, action.acceptedReceipt())
+    }
+
+    @Test fun liveAcceptedHandoverBindsFirstIncomingWorkerAndScreenWithoutReopeningStorage() = runBlocking {
+        val f = Fixture(); f.start()
+        f.terminal = ValidatedTerminalDisplay(id(), "Synthetic Till", requireNotNull(f.profile.branchId), "hybrid")
+        f.cache = f.cache.copy(scope = f.cache.scope.copy(terminalId = f.terminal?.terminalId))
+        val outgoing = requireNotNull(f.capture())
+        val outgoingScreen = f.manager.caller(f.profile, f.cache)
+        val accepted = f.acceptLiveHandover(outgoing)
+        val action = accepted.action
+        f.installCashier(action.incomingUserId)
+
+        var reads = 0
+        f.store.beforeRead = {
+            reads++
+            assertEquals(HandoverStartupStatus.RecoveryRequired(accepted), f.manager.status())
+            assertNull(f.capture())
+        }
+        f.manager.completeAcceptedHandover(accepted, f.profile, f.cache, f.session.session.lineage, ownerReturned = false) { true }
+        assertEquals(1, reads)
+        assertNull(f.store.value)
+        val incoming = requireNotNull(f.capture())
+        assertEquals(action.incomingUserId, incoming.authority.scope.actorId)
+        assertTrue(incoming.authority.epoch > outgoing.authority.epoch)
+        assertFalse(outgoing.isCurrent())
+
+        // An unnecessary first-worker bind would publish Unavailable during a new store read.
+        val workerEntered = CompletableDeferred<Unit>()
+        val releaseWorker = CompletableDeferred<Unit>()
+        val worker = async(start = CoroutineStart.UNDISPATCHED) {
+            f.manager.run(incoming) {
+                workerEntered.complete(Unit)
+                releaseWorker.await()
+                OperationResult(Unit, OperationOutcome.NO_WRITE_SENT)
+            }
+        }
+        try {
+            withTimeout(2_000) { workerEntered.await() }
+            assertEquals(HandoverStartupStatus.Open, f.manager.status())
+            assertSame(incoming, f.capture())
+            var incomingScreenRan = false
+            f.manager.caller(f.profile, f.cache).run { incomingScreenRan = true }
+            assertTrue(incomingScreenRan)
+            var outgoingScreenRan = false
+            assertTrue(runCatching { outgoingScreen.run { outgoingScreenRan = true } }.isFailure)
+            assertFalse(outgoingScreenRan)
+        } finally {
+            releaseWorker.complete(Unit)
+            worker.await()
+        }
+        assertEquals(1, reads)
+    }
+
+    @Test fun failedAcceptedCompletionRetainsTheHandoverAndFencesBothCashiers() = runBlocking {
+        val f = Fixture(); f.start()
+        val terminal = ValidatedTerminalDisplay(id(), "Synthetic Till", requireNotNull(f.profile.branchId), "hybrid")
+        f.terminal = terminal
+        f.cache = f.cache.copy(scope = f.cache.scope.copy(terminalId = terminal.terminalId))
+        val outgoing = requireNotNull(f.capture())
+        val outgoingScreen = f.manager.caller(f.profile, f.cache)
+        val accepted = f.acceptLiveHandover(outgoing)
+        f.installCashier(accepted.action.incomingUserId)
+        val diskFailure = IOException("Synthetic handover completion failure")
+        f.store.completionFailure = diskFailure
+
+        val attempt = runCatching {
+            f.manager.completeAcceptedHandover(accepted, f.profile, f.cache, f.session.session.lineage, ownerReturned = false) { true }
+        }
+        assertSame(diskFailure, attempt.exceptionOrNull())
+        assertEquals(accepted, f.store.value)
+        assertEquals(accepted, f.manager.coordinator.state.value.intent)
+        assertTrue(f.manager.coordinator.state.value.storageFault)
+        assertEquals(HandoverStartupStatus.Unavailable, f.manager.status())
+        assertNull(f.capture())
+        val incomingScreen = f.manager.caller(f.profile, f.cache)
+        var executed = 0
+        assertTrue(runCatching { incomingScreen.run { executed++ } }.isFailure)
+        assertTrue(runCatching { outgoingScreen.run { executed++ } }.isFailure)
+        assertEquals(0, executed)
+    }
+
+    @Test fun coldAcceptedHandoverRequiresExactVerifiedIncomingOrOwnerReturnLogin() = runBlocking {
+        for (ownerReturned in listOf(false, true)) {
+            val f = Fixture(branchless = ownerReturned)
+            val branch = f.profile.branchId ?: id()
+            val terminal = ValidatedTerminalDisplay(id(), "Synthetic Till", branch, "hybrid")
+            f.terminal = terminal
+            f.cache = f.cache.copy(scope = f.cache.scope.copy(terminalId = terminal.terminalId))
+            val startingScope = HandoverScope(f.profile.userId, f.profile.companyId, branch, terminal.terminalId)
+            val action = HandoverAction(id(), HandoverAuthority(startingScope, 27), id(), id(), 0)
+            val accepted = HandoverIntent(action, HandoverStage.ACCEPTED, action.acceptedReceipt(),
+                priorMutationUncertainty = false)
+            f.store.value = accepted
+            f.start()
+            f.installCashier(if (ownerReturned) startingScope.actorId else action.incomingUserId)
+            assertEquals(HandoverStartupStatus.RecoveryRequired(accepted), f.manager.status())
+            assertTrue(runCatching {
+                f.manager.completeAcceptedHandover(accepted, f.profile, f.cache, Any(), ownerReturned) { true }
+            }.isFailure)
+            assertTrue(runCatching {
+                f.manager.completeAcceptedHandover(accepted, f.profile, f.cache, f.session.session.lineage, !ownerReturned) { true }
+            }.isFailure)
+            assertEquals(accepted, f.store.value)
+            assertNull(f.capture())
+
+            f.manager.completeAcceptedHandover(accepted, f.profile, f.cache, f.session.session.lineage, ownerReturned) { true }
+            assertEquals(HandoverStartupStatus.Open, f.manager.status())
+            assertNull(f.store.value)
+            val incoming = requireNotNull(f.capture())
+            assertEquals(f.profile.userId, incoming.authority.scope.actorId)
+            assertEquals(branch, incoming.authority.scope.branchId)
+            f.store.beforeRead = { error("First incoming operation must use the installed authority") }
+            f.manager.run(incoming) { OperationResult(Unit, OperationOutcome.NO_WRITE_SENT) }
+        }
     }
     @Test fun nestedAContinuationCanFinishAfterFreezeWithoutAdmittingANewOrdinaryIntent() = runBlocking {
         val f = Fixture(); f.start()
