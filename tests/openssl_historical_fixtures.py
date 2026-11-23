@@ -9,12 +9,13 @@ import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD77 = "f3178f70b4994c46fd0d2e48af76bbb7606c941b"
+PRE_BACKPORT = "4d1e323ffb0ac7d6c37d6e17667e5d0511c4cb45"
 
 
-def historical_source_root(directory: Path, review: dict) -> Path:
-    root = directory / "historical-build77-source"
+def historical_source_root(directory: Path, review: dict, revision: str = BUILD77) -> Path:
+    root = directory / f"historical-{revision[:8]}-source"
     for name, expected in review["deployment_sources"].items():
-        raw = subprocess.check_output(["git", "show", f"{BUILD77}:{name}"], cwd=ROOT)
+        raw = subprocess.check_output(["git", "show", f"{revision}:{name}"], cwd=ROOT)
         assert hashlib.sha256(raw).hexdigest() == expected, name
         target = root / name
         target.parent.mkdir(parents=True, exist_ok=True)

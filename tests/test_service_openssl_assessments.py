@@ -11,10 +11,12 @@ import pytest
 
 from postgres16_security_fixtures import reviewed_postgres1616_recipe
 
-from openssl_historical_fixtures import BUILD77, historical_source_root
+from openssl_historical_fixtures import BUILD77, PRE_BACKPORT, historical_source_root
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "infra/scripts/service-openssl-assessments.py"
+BUILD80 = "66317203a6db380962824393293e21d4d59ed6a1"
+BUILD81 = "0eaff836e8b0411ab21ccace04468f3d1cca613f"
 
 
 def write(path, value):
@@ -26,9 +28,9 @@ def evidence(request, tmp_path, monkeypatch):
     service = request.param
     h = run_path(str(HELPER))
     review = h["reviewed"](service)
-    if service != "caddy":
-        historical = historical_source_root(tmp_path, review)
-        monkeypatch.setitem(h["validate_context"].__globals__, "HERE", historical / "infra/scripts")
+    revision = PRE_BACKPORT if service == "caddy" else BUILD77
+    historical = historical_source_root(tmp_path, review, revision)
+    monkeypatch.setitem(h["validate_context"].__globals__, "HERE", historical / "infra/scripts")
     fixture = json.loads((ROOT / f"tests/fixtures/{service}_openssl_reviewed_matches.json").read_text())
     config_bytes = json.dumps({"os": "linux", "architecture": "amd64", "config": review["image_startup"]}).encode()
     image_id = "sha256:" + hashlib.sha256(config_bytes).hexdigest()
@@ -190,16 +192,12 @@ def test_collector_cannot_report_empty_crypto_environment_when_env_fails(tmp_pat
     assert "CRYPTOENV" not in result.stdout
 
 
-def test_historical_r0_service_proof_cannot_admit_current_r1_source(evidence, monkeypatch):
+def test_historical_service_proof_cannot_admit_current_custom_backport_source(evidence, monkeypatch):
     h, service, directory, product, image_id, *_ = evidence
-    if service == "caddy":
-        # Its unchanged Alpine3.23 runtime remains a current reviewed r0 path.
+    monkeypatch.setitem(h["validate_context"].__globals__, "HERE", ROOT / "infra/scripts")
+    with pytest.raises(SystemExit, match="deployment source changed"):
         h["main"]([str(HELPER), "--prove", service, str(directory), str(directory / f"{service}.syft.json"), product, image_id])
-    else:
-        monkeypatch.setitem(h["validate_context"].__globals__, "HERE", ROOT / "infra/scripts")
-        with pytest.raises(SystemExit, match="deployment source changed"):
-            h["main"]([str(HELPER), "--prove", service, str(directory), str(directory / f"{service}.syft.json"), product, image_id])
-        assert not (directory / f"{service}-openssl-reviewed.openvex.json").exists()
+    assert not (directory / f"{service}-openssl-reviewed.openvex.json").exists()
 
 
 def test_vendor_r1_refresh_changes_only_three_exact_openssl_recipe_pins():
@@ -208,16 +206,25 @@ def test_vendor_r1_refresh_changes_only_three_exact_openssl_recipe_pins():
     for service in ("backend", "frontend", "postgres", "caddy"):
         name = f"infra/docker/{service}.Dockerfile"
         old = subprocess.check_output(["git", "show", f"{BUILD77}:{name}"], cwd=ROOT, text=True)
+        build80 = subprocess.check_output(["git", "show", f"{BUILD80}:{name}"], cwd=ROOT, text=True)
+        build81 = subprocess.check_output(["git", "show", f"{BUILD81}:{name}"], cwd=ROOT, text=True)
         current = (ROOT / name).read_text()
         expected = old if service == "caddy" else old.replace("3.5.9-r0", "3.5.9-r1")
         if service == "postgres":
             expected = reviewed_postgres1616_recipe(expected)
-        assert current == expected, service
+        assert build80 == expected, service
+        assert current == build81, service
         if service != "caddy":
-            assert "'libcrypto3=3.5.9-r1'" in current
-            assert "'libssl3=3.5.9-r1'" in current
-            assert "'libcrypto3-3.5.9-r1'" in current
-            assert "'libssl3-3.5.9-r1'" in current
-            assert "3.5.9-r0" not in current
+            assert "'libcrypto3=3.5.9-r1'" in build80
+            assert "'libssl3=3.5.9-r1'" in build80
+            assert "'libcrypto3-3.5.9-r1'" in build80
+            assert "'libssl3-3.5.9-r1'" in build80
+            assert "3.5.9-r0" not in build80
         if service == "backend":
-            assert "'openssl-dev=3.5.9-r1'" in current
+            assert "'openssl-dev=3.5.9-r1'" in build80
+        if service in {"backend", "frontend", "postgres", "caddy"}:
+            assert current.count("from=openssl_backport") == 1
+            assert current.count("sh /tmp/install-openssl-backport.sh") == 1
+            assert "'libcrypto3=3.5.9_p20261123-r0'" in current
+            assert "'libssl3=3.5.9_p20261123-r0'" in current
+            assert "test -s /etc/dcompany/openssl-backport/provenance.json" in current

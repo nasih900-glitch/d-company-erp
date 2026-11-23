@@ -28,7 +28,7 @@ services:
       additional_contexts:
         openssl_backport: ${DCOMPANY_OPENSSL_BACKPORT_CONTEXT:-./infra/docker/openssl}
       args:
-        APP_VERSION: ${APP_VERSION:-3.1.74}
+        APP_VERSION: ${APP_VERSION:-3.1.75}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
@@ -65,7 +65,7 @@ services:
       additional_contexts:
         openssl_backport: ${DCOMPANY_OPENSSL_BACKPORT_CONTEXT:-./infra/docker/openssl}
       args:
-        APP_VERSION: ${APP_VERSION:-3.1.74}
+        APP_VERSION: ${APP_VERSION:-3.1.75}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
@@ -97,7 +97,7 @@ services:
       context: .
       dockerfile: infra/docker/redis.Dockerfile
       args:
-        APP_VERSION: ${APP_VERSION:-3.1.74}
+        APP_VERSION: ${APP_VERSION:-3.1.75}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
@@ -133,14 +133,14 @@ services:
       additional_contexts:
         openssl_backport: ${DCOMPANY_OPENSSL_BACKPORT_CONTEXT:-./infra/docker/openssl}
       args:
-        APP_VERSION: ${APP_VERSION:-3.1.74}
+        APP_VERSION: ${APP_VERSION:-3.1.75}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
     environment:
       ENV: prod
       # Runtime declarations are checked against the independently baked file.
-      APP_VERSION: ${APP_VERSION:-3.1.74}
+      APP_VERSION: ${APP_VERSION:-3.1.75}
       APP_REVISION: ${APP_REVISION:-unknown}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: json
@@ -229,8 +229,8 @@ services:
         openssl_backport: ${DCOMPANY_OPENSSL_BACKPORT_CONTEXT:-./infra/docker/openssl}
       args:
         VITE_API_URL: https://${DOMAIN}/api/v1
-        VITE_APP_VERSION: ${APP_VERSION:-3.1.74}
-        APP_VERSION: ${APP_VERSION:-3.1.74}
+        VITE_APP_VERSION: ${APP_VERSION:-3.1.75}
+        APP_VERSION: ${APP_VERSION:-3.1.75}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging

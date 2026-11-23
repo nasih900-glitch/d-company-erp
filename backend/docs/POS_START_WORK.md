@@ -51,7 +51,7 @@ provenance and mutually exclusive outcomes, and refuses downgrade while evidence
 exists. No broad queue clearing, cache fabrication, or business-row deletion is a
 recovery mechanism.
 
-Build81 / v3.1.74 requires schema0105. Android performs the exact shift read,
+Build82 / v3.1.75 requires schema0105. Android performs the exact shift read,
 provenance/lease validation and transactional cache publication under the shared
 SyncEngine shift refresh serialiser, preventing concurrent snapshots from
 interleaving with recovery hydration.

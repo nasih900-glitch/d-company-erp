@@ -1,19 +1,20 @@
 # D Company ERP — current project state
 
-## Local Build 81 fallback candidate
+## Local Build 82 fallback candidate
 
-Version 3.1.74 targets Android build 81, Room 58 and Alembic 0105. The
-[local fallback](docs/V3_1_74_RELEASE_CANDIDATE.md) preserves the scoped Android
+Version 3.1.75 targets Android build 82, Room 58 and Alembic 0105. The
+[local fallback](docs/V3_1_75_RELEASE_CANDIDATE.md) preserves the scoped Android
 instrumentation synchronization fixes and coordinates only the release identity
 and exact admission guards. Product APK behavior, PostgreSQL 16.16, image/vendor
 safeguards, calendar and normal-close admission, retained queues and rollback
 requirements remain unchanged.
 
-Build 80 remains eligible under its immutable source and protected workflow,
-which is still being checked. Build 81 is local and unshipped; if Build 80 passes,
-this fallback need not be launched. All 53 historical literal maps remain
-byte-identical. No Build 81 tag, pipeline, signing or production/tablet offer has
-been performed as part of this preparation.
+Build 81 / v3.1.74 remains immutable at its protected tag, but its hosted
+contract lane rejected stale release assertions. Build 82 is the narrow local
+successor that corrects those contracts without changing product behavior or
+the reviewed server-security payload. All historical literal maps through
+Build 81 remain byte-identical. No Build 82 tag, pipeline, signing, production
+deployment or tablet offer has been performed by this preparation.
 
 The protected exact-source workflow, full repository/backend/frontend and
 Android checks, both image stores, independent reproduction, signed upgrade and

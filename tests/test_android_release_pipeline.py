@@ -812,8 +812,11 @@ class AndroidReleasePipelineTest(unittest.TestCase):
                 self.assertIn("--provenance=false", image_job)
                 self.assertIn("--provenance=mode=min", image_job)
                 self.assertEqual(5, image_job.count("docker buildx build --load"))
-                self.assertEqual(5, image_job.count("--platform linux/amd64"))
+                self.assertEqual(6, image_job.count("--platform linux/amd64"))
                 self.assertEqual(5, image_job.count("${{ matrix.provenance }}"))
+                self.assertEqual(1, image_job.count("--target artifact"))
+                self.assertEqual(1, image_job.count('--output "type=local,dest=$openssl_backport_context"'))
+                self.assertEqual(1, image_job.count("-f infra/docker/openssl/backport.Dockerfile ."))
                 for service in ("backend", "frontend", "caddy", "postgres", "redis"):
                     with self.subTest(workflow=workflow_path.name, service=service):
                         self.assertEqual(
