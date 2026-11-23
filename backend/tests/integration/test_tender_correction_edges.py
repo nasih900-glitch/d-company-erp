@@ -773,13 +773,19 @@ def test_all_collection_source_tables_have_guard_and_fingerprint_coverage():
                 "t.tgenabled='O'"
             )
         }
-        assert covered == set(migration.TABLES)
+        assert covered == set(migration.TABLES) | {"pos_receipt_corrections"}
         function = db.execute(
             "SELECT "
             "pg_get_functiondef('dcompany_collection_fingerprint(uuid,uuid,date,text)'::regprocedure)"
         ).fetchone()[0]
+        assert "FROM pos_receipt_corrections" in function
+        assert "dcompany_collection_fingerprint_before_pos_correction" in function
+        base_function = db.execute(
+            "SELECT pg_get_functiondef("
+            "'dcompany_collection_fingerprint_before_pos_correction(uuid,uuid,date,text)'::regprocedure)"
+        ).fetchone()[0]
         for table in migration.TABLES:
-            assert "FROM " + table + " t WHERE" in function
+            assert "FROM " + table + " t WHERE" in base_function
         config = db.execute(
             "SELECT pg_get_functiondef('dcompany_tender_config_fence()'::regprocedure)"
         ).fetchone()[0]

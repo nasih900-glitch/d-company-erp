@@ -29,7 +29,13 @@ import cloud.dcompany.erp.core.diagnostics.DiagnosticsRuntime
 import cloud.dcompany.erp.core.diagnostics.PersistedDiagnosticStartupIdentity
 import cloud.dcompany.erp.core.diagnostics.PersistedDiagnosticStartupIdentityCapture
 import cloud.dcompany.erp.core.diagnostics.SyncHealthSample
+import cloud.dcompany.erp.core.handover.AtomicHandoverIntentStore
+import cloud.dcompany.erp.core.handover.HandoverStartupFence
+import cloud.dcompany.erp.core.handover.HandoverIntentStore
+import cloud.dcompany.erp.core.handover.HandoverOperations
+import cloud.dcompany.erp.core.handover.persistedStartupWithHandoverFence
 import cloud.dcompany.erp.core.net.ApiClient
+import cloud.dcompany.erp.core.net.ForegroundCompatibilityPoller
 import cloud.dcompany.erp.core.net.ClientCompatibilityGate
 import cloud.dcompany.erp.core.net.ConnectivityObserver
 import cloud.dcompany.erp.core.net.ClientCompatibilityState
@@ -239,6 +245,43 @@ class DCompanyApp : Application() {
         private set
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    internal lateinit var handoverOperations: HandoverOperations
+        private set
+    internal val idleCheckoutClaims = cloud.dcompany.erp.core.handover.IdleCheckoutClaims()
+    internal val handoverDomains by lazy {
+        cloud.dcompany.erp.core.handover.OriginalHandoverDomains(handoverOperations, idleCheckoutClaims,
+            inspectLocal = { cloud.dcompany.erp.core.handover.inspectLocalHandoverWork(this) },
+            apiFor = { original ->
+                val bearer = tokens.currentAccessFor(original.loginLease)
+                    ?: throw java.io.IOException("The original till login is unavailable.")
+                ApiClient.createEphemeralAuthorityApi<cloud.dcompany.erp.core.handover.HandoverStateApi>(
+                    accessToken = bearer, terminalId = original.authority.scope.terminalId, singleAttempt = true,
+                    beforeDispatch = {
+                        if (!original.isCurrent() || !connectivity.online.value) {
+                            throw java.io.IOException("The original till workspace is unavailable.")
+                        }
+                    })
+            }, awaitWorkers = { original, cap -> sync.awaitOriginalSessionWorkers(original, cap) })
+    }
+    internal val tillHandoverTransport by lazy {
+        cloud.dcompany.erp.core.handover.TillHandoverTransport(handoverOperations, handoverDomains) { original, bearer ->
+            val client = ApiClient.ephemeralAuthorityClient(
+                accessToken = bearer,
+                terminalId = original.authority.scope.terminalId,
+                singleAttempt = true,
+                beforeDispatch = {
+                    if (!original.isCurrent() || tokens.currentAccessFor(original.loginLease) != bearer ||
+                        !connectivity.online.value) {
+                        throw java.io.IOException("The original till workspace is unavailable.")
+                    }
+                },
+            )
+            cloud.dcompany.erp.core.handover.buildTillHandoverApi(client, boundRead = original)
+        }
+    }
+    private lateinit var handoverIntentStore: HandoverIntentStore
+    internal lateinit var handoverStartupFence: HandoverStartupFence
+        private set
     private lateinit var persistedStartupState: PersistedStartupStateRestorer
     private val persistedDiagnosticStartupIdentity = PersistedDiagnosticStartupIdentityCapture()
     private val operationalAlarmReconciliationGeneration = MutableStateFlow(0L)
@@ -248,6 +291,7 @@ class DCompanyApp : Application() {
     private val foregroundLock = Any()
     private val foregroundActivities = ForegroundActivityTracker()
     private var foregroundMaintenanceJob: Job? = null
+    private lateinit var foregroundCompatibilityPoller: ForegroundCompatibilityPoller
     private var foregroundDiagnosticJob: Job? = null
     private val compatibilityRecheckCallbacks = object : Application.ActivityLifecycleCallbacks {
         override fun onActivityResumed(activity: Activity) {
@@ -258,6 +302,7 @@ class DCompanyApp : Application() {
             synchronized(foregroundLock) {
                 if (foregroundActivities.onStarted()) {
                     remoteAssistance.onAppForegrounded()
+                    foregroundCompatibilityPoller.start()
                     startForegroundMaintenanceLocked()
                     startForegroundDiagnosticSamplingLocked()
                 }
@@ -268,6 +313,7 @@ class DCompanyApp : Application() {
             synchronized(foregroundLock) {
                 if (foregroundActivities.onStopped()) {
                     remoteAssistance.onAppBackgrounded()
+                    foregroundCompatibilityPoller.stop()
                     foregroundMaintenanceJob?.cancel()
                     foregroundMaintenanceJob = null
                     foregroundDiagnosticJob?.cancel()
@@ -284,10 +330,19 @@ class DCompanyApp : Application() {
         instance = this
         notificationRoutes = OperationalNotificationRouteStore(this)
 
+        handoverIntentStore = AtomicHandoverIntentStore(java.io.File(noBackupFilesDir.canonicalFile, "till-handover-intent-v1"))
+        handoverStartupFence = HandoverStartupFence(handoverIntentStore)
         tokens = TokenStore(this)
         shiftCache = ShiftCache(this)
         terminalStore = TerminalStore(this)
         outboxOwnerStore = OutboxOwnerStore(this)
+        handoverOperations = HandoverOperations(
+            store = handoverIntentStore, startupFence = handoverStartupFence,
+            startupResult = { if (::persistedStartupState.isInitialized) persistedStartupState.completedResult() else null },
+            currentSession = tokens::refreshLease, currentAccessFor = tokens::currentAccessFor,
+            currentCache = { if (::cacheIsolation.isInitialized) cacheIsolation.currentLease() else null },
+            currentProfile = { shiftCache.profile.value }, currentTerminal = { terminalStore.activeValidatedTerminal.value },
+        )
         persistedStartupState = PersistedStartupStateRestorer(
             scope = appScope,
             timeoutMillis = STARTUP_STATE_TIMEOUT_MILLIS,
@@ -301,10 +356,14 @@ class DCompanyApp : Application() {
                 shiftCache::loadProfile,
                 terminalStore::load,
                 outboxOwnerStore::load,
+                handoverStartupFence::load,
             ),
         )
         startPersistedStartupStateRestoration()
-        ApiClient.init(tokens, terminalStore)
+        ApiClient.init(tokens, terminalStore, handoverOperations.dispatchGate) {
+            handoverOperations.captureOriginal(shiftCache.profile.value,
+                if (::cacheIsolation.isInitialized) cacheIsolation.currentLease() else null)
+        }
         val updateRequirementStore = ClientUpdateRequirementStore(
             context = this,
             installedVersionCode = BuildConfig.VERSION_CODE,
@@ -326,6 +385,17 @@ class DCompanyApp : Application() {
                 }
             },
             clearRequiredNotice = updateRequirementStore::clearIfPolicyRevision,
+            initialPolicyAuthority = updateRequirementStore.restoreAuthority(),
+            persistPolicyDecision = { authority, notice ->
+                updateRequirementStore.persistDecision(authority, notice).also { saved ->
+                    if (!saved) Log.e("DCompanyUpdate", "Could not persist update policy authority.")
+                }
+            },
+        )
+        foregroundCompatibilityPoller = ForegroundCompatibilityPoller(
+            scope = appScope,
+            online = { ::connectivity.isInitialized && connectivity.online.value },
+            check = clientCompatibility::recheckNonBlocking,
         )
         ApiClient.onUpdateRequired = clientCompatibility::requireUpdate
 
@@ -410,7 +480,8 @@ class DCompanyApp : Application() {
                 if (tokens.hasSession() && cacheIsolation.isReady()) {
                     sync.requestSync()
                     realtime.connect()
-                    appScope.launch { updateTelemetry.heartbeat() }
+                    val telemetryOrigin = handoverOperations.captureOriginal(shiftCache.profile.value, cacheIsolation.currentLease())
+                    appScope.launch { updateTelemetry.heartbeat(telemetryOrigin) }
                 }
             },
         )
@@ -488,7 +559,9 @@ class DCompanyApp : Application() {
     /** Awaited by every entry point before it reads authentication or scope. */
     internal suspend fun awaitPersistedStartupState(
         retryFailed: Boolean = false,
-    ): PersistedStartupStateResult = persistedStartupState.await(retryFailed).also { result ->
+    ): PersistedStartupStateResult = persistedStartupWithHandoverFence(
+        persistedStartupState.await(retryFailed), handoverOperations.status(),
+    ).also { result ->
         importPersistedDiagnosticHistoryIfReady(
             result = result,
             identity = persistedDiagnosticStartupIdentity.current(),
@@ -564,13 +637,14 @@ class DCompanyApp : Application() {
     }
 
     private suspend fun runForegroundMaintenance() {
+        val telemetryOrigin = handoverOperations.captureOriginal(shiftCache.profile.value, cacheIsolation.currentLease())
         if (!connectivity.online.value) return
         val now = SystemClock.elapsedRealtime()
         if (compatibilityRecheckThrottle.claimIfDue(now, COMPATIBILITY_RECHECK_INTERVAL_MILLIS)) {
             clientCompatibility.recheckNonBlocking()
         }
         if (tokens.hasSession() && cacheIsolation.isReady()) {
-            updateTelemetry.heartbeat()
+            updateTelemetry.heartbeat(telemetryOrigin)
         }
     }
 
@@ -599,15 +673,18 @@ class DCompanyApp : Application() {
 
     /** Invoked only after cache ownership and the authenticated outbox owner agree. */
     internal fun onVerifiedScopeAvailable() {
+        val telemetryOrigin = handoverOperations.captureOriginal(shiftCache.profile.value, cacheIsolation.currentLease())
         DiagnosticsRuntime.onVerifiedScopeAvailable()
         remoteAssistance.onVerifiedScopeAvailable()
         requestOperationalAlarmReconciliation()
         appScope.launch {
+            if (telemetryOrigin?.isCurrent() != true) return@launch
             recordCurrentDiagnosticSyncHealth()
+            if (!telemetryOrigin.isCurrent()) return@launch
             recordCompatibilityOfferIfScoped(clientCompatibility.state.value)
             updateTelemetry.promotePendingUpgrade()
             updateTelemetry.reconcileInstallerReturn()
-            if (connectivity.online.value) updateTelemetry.heartbeat()
+            if (connectivity.online.value) updateTelemetry.heartbeat(telemetryOrigin)
         }
     }
 

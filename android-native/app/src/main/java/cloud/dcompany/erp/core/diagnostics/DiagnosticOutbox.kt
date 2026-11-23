@@ -372,7 +372,24 @@ class DiagnosticSyncWorker(
         ) {
             return Result.retry()
         }
-        val token = app.tokens.accessToken() ?: return Result.success()
+        val original = app.handoverOperations.captureOriginal(app.shiftCache.profile.value, app.cacheIsolation.currentLease())
+            ?: return Result.retry()
+        var result: Result = Result.retry()
+        return try {
+            cloud.dcompany.erp.core.handover.CallerOperations(app.handoverOperations, original).run {
+                result = deliverOriginal(app, original)
+                // Existing scoped durable retry/rejection/acknowledgement handling completed.
+                reconciled()
+            }
+            result
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { Result.retry() }
+    }
+
+    private suspend fun deliverOriginal(app: DCompanyApp,
+        original: cloud.dcompany.erp.core.handover.OriginalOperationBinding): Result {
+        check(original.isCurrent())
+        val token = app.tokens.currentAccessFor(original.loginLease) ?: return Result.retry()
         val identity = AccessTokenIdentityParser.parse(token) ?: return Result.success()
         val scopeHash = diagnosticScopeHash(identity.companyId, identity.userId, identity.branchId)
         val installationId = InstallationIdentityStore(applicationContext).installationId()
@@ -380,15 +397,19 @@ class DiagnosticSyncWorker(
         val dao = DiagnosticDatabaseProvider.get(applicationContext).outboxDao()
         // Rows captured by an older Code 15 candidate without a proven scope
         // must never become attributable merely because somebody later logs in.
+        check(original.isCurrent())
         dao.quarantineUnboundPending()
         val api = ApiClient.createEphemeralAuthorityApi<ClientDiagnosticApi>(
             accessToken = token,
             // Diagnostics describe the client, not a till mutation. The server
             // derives company/user from JWT and accepts a missing till scope.
             terminalId = null,
+            beforeDispatch = { check(original.isCurrent()) },
+            singleAttempt = true,
         )
 
         repeat(MAX_BATCHES_PER_WORKER_RUN) {
+            check(original.isCurrent())
             val rows = dao.pendingForScope(scopeHash)
             if (rows.isEmpty()) return Result.success()
             val nowMillis = System.currentTimeMillis()
@@ -400,7 +421,7 @@ class DiagnosticSyncWorker(
             }
             val invalidIds = rows.mapTo(linkedSetOf()) { it.clientEventId } -
                 prepared.mapTo(linkedSetOf()) { it.clientEventId }
-            if (invalidIds.isNotEmpty()) dao.markRejected(invalidIds, nowMillis)
+            if (invalidIds.isNotEmpty()) { check(original.isCurrent()); dao.markRejected(invalidIds, nowMillis) }
             if (prepared.isEmpty()) return@repeat
             val ids = prepared.mapTo(linkedSetOf()) { it.clientEventId }
             val response = try {
@@ -413,6 +434,7 @@ class DiagnosticSyncWorker(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
+                check(original.isCurrent())
                 val attemptedAt = System.currentTimeMillis()
                 return when (diagnosticDeliveryFailureDisposition(error)) {
                     DiagnosticDeliveryFailureDisposition.RETRY -> {
@@ -442,6 +464,7 @@ class DiagnosticSyncWorker(
                 }
             }
 
+            check(original.isCurrent())
             val acknowledgement = validateDiagnosticResponse(installationId, ids, response)
             if (!acknowledgement.responseValid) {
                 dao.noteRetry(ids, System.currentTimeMillis())

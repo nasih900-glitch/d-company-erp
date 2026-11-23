@@ -1,6 +1,47 @@
 # D Company ERP — current project state
 
-## Current quality candidate (updated 2026-10-11)
+## Local Build 83 fallback candidate
+
+Version 3.1.76 targets Android build 83, Room 58 and Alembic 0105. The
+[local fallback](docs/V3_1_76_RELEASE_CANDIDATE.md) preserves the scoped Android
+instrumentation synchronization fixes and coordinates only the release identity
+and exact admission guards. Product APK behavior, PostgreSQL 16.16, image/vendor
+safeguards, calendar and normal-close admission, retained queues and rollback
+requirements remain unchanged.
+
+Build 82 / v3.1.75 remains immutable at its protected tag, but its hosted
+contract lane exposed brittle future-identity test fixtures. Build 83 is the
+narrow local successor that corrects those fixtures without changing product
+behavior or the reviewed server-security payload. All historical literal maps
+through Build 82 remain byte-identical. No Build 83 tag, pipeline, signing, production
+deployment or tablet offer has been performed by this preparation.
+
+The protected exact-source workflow, full repository/backend/frontend and
+Android checks, both image stores, independent reproduction, signed upgrade and
+actual production/tablet admission remain mandatory before signing/offering.
+
+## Earlier checkpoints
+
+## Current local candidate (updated 2026-10-30)
+
+The owner approved the corrected local emulator workflows and appearance.
+The coordinated candidate is **v3.1.47 / Android build 55**, documented in
+[`docs/V3_1_47_RELEASE_CANDIDATE.md`](docs/V3_1_47_RELEASE_CANDIDATE.md).
+Room is `58` and Alembic head is `0093`. The transition adds the protected update-policy
+and immutable Gaming Void/served-addon evidence while preserving legacy financial
+history and tablet queues. Android follows the approved transparent liquid-glass
+workspace, one shared selectable 4K workspace background and the original Web logo.
+Login/Splash retain their approved 1672 × 941 artwork. Gaming Void permits a blank
+reason below 30 minutes, requires one at or above 30 minutes and retains served add-ons
+as payable evidence; POS-linked void operations remain Owner-only.
+The deployment controller's global
+Optional/Required control is in the existing Devices & Updates workspace.
+Final release identity/CI, guarded compatibility, signing, signed upgrade and
+download checks, deployment and update offer remain separate gates. This local
+checkpoint is not a live-server or physical-tablet status claim. Read current
+source and release evidence before acting; do not reuse older freeze receipts.
+
+## Historical quality candidate (updated 2026-10-11)
 
 ### Latest completion checkpoint
 

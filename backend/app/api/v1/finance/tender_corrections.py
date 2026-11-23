@@ -52,6 +52,11 @@ from app.services.realtime import manager as realtime_manager
 
 
 class TenderRoute(APIRoute):
+    source_conflict_message = (
+        "The tender source or saved action no longer matches. "
+        "Refresh and review its receipt before retrying."
+    )
+
     def get_route_handler(self):
         original = super().get_route_handler()
 
@@ -77,8 +82,7 @@ class TenderRoute(APIRoute):
                     )
                     if state in {"23514", "23505"}:
                         raise ConflictError(
-                            "The tender source or saved action no longer matches. "
-                            "Refresh and review its receipt before retrying."
+                            self.source_conflict_message
                         ) from exc
                     if state not in {"40P01", "40001"} or not request.url.path.endswith("/commit"):
                         raise
@@ -113,7 +117,7 @@ class StrictModel(BaseModel):
 
 class Unlock(StrictModel):
     branch_id: UUID
-    scope: Literal["payment", "daily", "history"]
+    scope: Literal["payment", "daily", "history", "receipt_stock"]
     password: SecretStr
 
 
@@ -261,7 +265,12 @@ async def require_confirmation(session, tenant, token, *, branch_id, scope):
         raise AuthError("Owner confirmation expired or belongs to another action/branch.")
 
 
-async def require_protected_owner(session, tenant):
+async def require_protected_owner(
+    session,
+    tenant,
+    *,
+    denied_message="Only the designated protected owner may correct tenders.",
+):
     # Signed legacy access flags must not turn an ordinary owner into the
     # designated owner. Check current role assignment in addition to claims.
     permitted = await session.scalar(
@@ -275,7 +284,7 @@ async def require_protected_owner(session, tenant):
         )
     )
     if not tenant.audit_access or not permitted:
-        raise ForbiddenError("Only the designated protected owner may correct tenders.")
+        raise ForbiddenError(denied_message)
 
 
 async def payment_context(session, tenant, payment_id, *, lock=False):
@@ -307,6 +316,17 @@ async def payment_context(session, tenant, payment_id, *, lock=False):
 
 
 async def payment_eligible(session, payment, order, shift):
+    from app.services.pos.receipt_correction_projection import require_uncorrected_receipt
+
+    from app.models import PaidBillAmendmentIntent
+    if await session.scalar(select(PaidBillAmendmentIntent.id).where(
+        PaidBillAmendmentIntent.company_id == order.company_id,
+        PaidBillAmendmentIntent.order_id == order.id,
+    ).limit(1)):
+        raise BusinessRuleError("This bill has paid-bill amendment history. Use its current Owner change-bill flow.")
+    await require_uncorrected_receipt(
+        session, company_id=order.company_id, order_id=order.id,
+    )
     if (
         payment.method != "cash"
         or shift.status != "closed"

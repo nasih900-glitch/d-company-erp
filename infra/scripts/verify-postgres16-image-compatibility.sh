@@ -73,10 +73,25 @@ start_postgres() {
   wait_ready "$container"
 }
 
+verify_fixture() {
+  local container=$1
+  test "$(docker exec "$container" psql -X -U erp -d erp -At -v ON_ERROR_STOP=1 -c \
+    "SELECT (SELECT (payload).id || '|' || (payload).note FROM compatibility_typed WHERE id=1)
+      || '|' || (SELECT count(*) FROM compatibility_exclusion WHERE station=1)
+      || '|' || (length(digest('compatibility', 'sha256'))=32 AND gen_random_uuid() IS NOT NULL)::text
+      || '|' || (SELECT string_agg(extname || ':' || extversion, ',' ORDER BY extname)
+                FROM pg_extension WHERE extname IN ('pgcrypto','btree_gist'));")" \
+    = '1|typed-original|1|true|btree_gist:1.7,pgcrypto:1.3'
+  # This no-op update exercises the preserved composite trigger after each
+  # startup and logical restore, instead of merely checking catalog names.
+  docker exec "$container" psql -X -U erp -d erp -v ON_ERROR_STOP=1 -c \
+    'UPDATE compatibility_typed SET payload=payload WHERE id=1' >/dev/null
+}
+
 docker image inspect "$HARDENED_IMAGE" >/dev/null
 test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$HARDENED_IMAGE")" = "$EXPECTED_VERSION"
 test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$HARDENED_IMAGE")" = "$EXPECTED_REVISION"
-test "$(docker run --rm "$HARDENED_IMAGE" postgres --version)" = 'postgres (PostgreSQL) 16.15'
+test "$(docker run --rm "$HARDENED_IMAGE" postgres --version)" = 'postgres (PostgreSQL) 16.16'
 docker run --rm "$HARDENED_IMAGE" gosu --version | grep -F '1.19 (go1.26.9 on linux/'
 docker run --rm --entrypoint sh "$HARDENED_IMAGE" -ceu \
   'test "$(sha256sum /usr/local/bin/gosu | cut -d" " -f1)" = ffd70d9dcf141b9f13ae293ec5a6c48cf8d04f56bddc80cf244c62398b24f2ea; gosu nobody true; su-exec nobody true'
@@ -84,25 +99,31 @@ docker run --rm --entrypoint sh "$HARDENED_IMAGE" -ceu \
 docker pull "$ORIGINAL_IMAGE" >/dev/null
 docker volume create "$compat_volume" >/dev/null
 start_postgres "$original_container" "$ORIGINAL_IMAGE" "$compat_volume"
-docker exec "$original_container" psql -U erp -d erp -v ON_ERROR_STOP=1 -c \
-  "CREATE TABLE compatibility_probe(id integer PRIMARY KEY, note text NOT NULL); INSERT INTO compatibility_probe VALUES (1, 'original');" \
-  >/dev/null
-docker rm -f "$original_container" >/dev/null
+docker exec -i "$original_container" psql -X -U erp -d erp -v ON_ERROR_STOP=1 \
+  < "$(dirname "${BASH_SOURCE[0]}")/postgres16-compatibility-fixture.sql" >/dev/null
+verify_fixture "$original_container"
+docker stop --time 60 "$original_container" >/dev/null
+docker rm "$original_container" >/dev/null
 
 start_postgres "$hardened_container" "$HARDENED_IMAGE" "$compat_volume"
+test "$(docker exec "$hardened_container" psql -X -U erp -d erp -Atc 'SHOW composite_type_mismatch')" = error
+verify_fixture "$hardened_container"
 test "$(docker exec "$hardened_container" psql -U erp -d erp -Atc \
   "SELECT id || '|' || note FROM compatibility_probe ORDER BY id")" = '1|original'
 docker exec "$hardened_container" psql -U erp -d erp -v ON_ERROR_STOP=1 -c \
   "INSERT INTO compatibility_probe VALUES (2, 'hardened');" >/dev/null
 docker exec "$hardened_container" pg_dump -U erp -d erp --format=custom > "$dump_file"
 test -s "$dump_file"
-docker rm -f "$hardened_container" >/dev/null
+docker stop --time 60 "$hardened_container" >/dev/null
+docker rm "$hardened_container" >/dev/null
 
 # An immediate rollback to the exact prior 16.15 image must retain both rows.
 start_postgres "$rollback_container" "$ORIGINAL_IMAGE" "$compat_volume"
+verify_fixture "$rollback_container"
 test "$(docker exec "$rollback_container" psql -U erp -d erp -Atc \
   "SELECT id || '|' || note FROM compatibility_probe ORDER BY id")" = $'1|original\n2|hardened'
-docker rm -f "$rollback_container" >/dev/null
+docker stop --time 60 "$rollback_container" >/dev/null
+docker rm "$rollback_container" >/dev/null
 
 # A new hardened container must initialize an empty volume and accept a full
 # logical restore of data written before and after the image transition.
@@ -112,6 +133,8 @@ docker exec "$restore_container" dropdb -U erp --if-exists erp >/dev/null
 docker exec "$restore_container" createdb -U erp -T template0 erp >/dev/null
 docker exec -i "$restore_container" pg_restore -U erp -d erp \
   --exit-on-error --no-owner < "$dump_file" >/dev/null
+verify_fixture "$restore_container"
+test "$(docker exec "$restore_container" psql -X -U erp -d erp -Atc 'SHOW composite_type_mismatch')" = error
 test "$(docker exec "$restore_container" psql -U erp -d erp -Atc \
   "SELECT id || '|' || note FROM compatibility_probe ORDER BY id")" = $'1|original\n2|hardened'
 

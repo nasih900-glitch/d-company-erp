@@ -24,9 +24,12 @@ documentation. Code30.4 adds reviewed PS5 friend participation and 60-to-30
 package amendment at Alembic 0083-0085 and Room 53, paid non-PS5 extensions,
 local app-health capture and a bounded Gaming refresh. Build 42 adds the
 reviewed Android control-deck polish and coordinated release identity.
-The immutable Code30.2 through Code30.4 build-41 bytes are read from their
-release commits; the current working tree is checked against a separate
-build-42 map. No release layer
+The immutable Code30.2 through Code30.4 build-57 bytes are read from their
+release commits. The current build-58 overlay pins only scroll-helper regression
+coverage, bounded test diagnostics/cleanup and coordinated identity; it preserves
+the earlier application, policy and guarded preservation maps.
+Source admission does not assert signing, deployment or tablet acceptance.
+No release layer
 may delete, disable, reorder, or rewrite an existing test
 outside the exact fixture-only normalization or exact reviewed-test hashes below.
 The sole reviewed audit-reader locator migration below preserves every
@@ -211,6 +214,39 @@ CODE30_4_BUILD51_BASE = "a44397d53d94fb4c83b3fc9ffe696dbf4dce3168"
 CODE30_4_BUILD52_BASE = "f78d567b2093671992be289133af22637e6d7b0d"
 # Signed Build53 deployment refused before migration; immutable predecessor source.
 CODE30_4_BUILD53_BASE = "8506c7abdf15c92029226849f42b1b71fd6878d6"
+# Signed/deployed v3.1.46 / build54; immutable predecessor for build55.
+CODE30_4_BUILD54_BASE = "5ad146ae076f5178acc2c8e4cb840ecbb0d0343a"
+# Signed but unoffered build55; its failed-deployment source remains immutable.
+CODE30_4_BUILD55_BASE = "f1be9f9ed62e535cf845eb9bbf678ddfe61b0e56"
+CODE30_4_BUILD56_BASE = "b5a61d774f0eb232db8765322450fb3987fd7e56"
+CODE30_4_BUILD57_BASE = "dae7dc09911e6d0c724b235f0e6fcb5419c244c7"
+CODE30_4_BUILD58_BASE = "6eb61bf097afb7d6e306f3878a64f266adf451a1"
+# Signed, unoffered Build 59 is immutable; Build 60 uses a separate scoped overlay.
+CODE30_4_BUILD59_BASE = "226f1dc3e29d6a521153338cda9fc67f31b2087d"
+CODE30_4_BUILD60_BASE = "3401d1fb985f272c5cef568421cf3638c2c2e528"
+CODE30_4_BUILD61_BASE = "21b162e39737fca27f85176523c717c798ca8ac1"
+CODE30_4_BUILD62_BASE = "c0a81380fa104f843f7857d0c95d1b705b1f1d1d"
+CODE30_4_BUILD63_BASE = "83cfea900df093f2af3406ca93eb179c0da29390"
+CODE30_4_BUILD64_BASE = "6e783ababf508cac7758de1f7411b47dedd5d66e"
+CODE30_4_BUILD65_BASE = "9e31d0daaa5fbf8b46647a213f6e7beab1ca087a"
+CODE30_4_BUILD66_BASE = "77356ad775df549ee526f667483f9c456fe3406f"
+CODE30_4_BUILD67_BASE = "6224fccac9be7f32c0119ef73b8ed66f9c1aec3c"
+CODE30_4_BUILD68_BASE = "a207fc4df01d021c2f447fe31d2aaac550311946"
+CODE30_4_BUILD69_BASE = "0b15b6a87516125b4ef2628b7b89b84853f3058b"
+CODE30_4_BUILD70_BASE = "ab5db9dab901cab31a97899ac8a6789ad4819c89"
+# Immutable deployed Build 71; Build 72 overlays the complete new source delta.
+CODE30_4_BUILD71_BASE = "b9b19bd2462e0f417922849a455e12116e8207e2"
+CODE30_4_BUILD72_BASE = "c6a1697dd5a2dfa52c23225e49535dd69a02ef51"
+CODE30_4_BUILD73_BASE = "8e650723f7e559c84819ef56fe933260fe3fbd94"
+CODE30_4_BUILD74_BASE = "272b8e5197fbf9c51939e87946e936e04cf312b3"
+CODE30_4_BUILD81_BASE = "0eaff836e8b0411ab21ccace04468f3d1cca613f"
+CODE30_4_BUILD82_BASE = "eb9dbbd99fd9d0e98fcf02cd1534c9720ad6e7a1"
+CODE30_4_BUILD80_BASE = "66317203a6db380962824393293e21d4d59ed6a1"
+CODE30_4_BUILD79_BASE = "9cecce5b035d0341ad390d9818a9f8162edce2d6"
+CODE30_4_BUILD78_BASE = "91fd778cb56c1867eaca2eb6a4713607c92e36c8"
+CODE30_4_BUILD77_BASE = "f3178f70b4994c46fd0d2e48af76bbb7606c941b"
+CODE30_4_BUILD76_BASE = "2c9f3e779de4c24078aecb6d351b468e545aabcc"
+CODE30_4_BUILD75_BASE = "b2a53816213399a614a24d4ef507d7512ef18060"
 CODE30_2_FREEZE_CONTROL_PATHS = frozenset({
     "scripts/verify_code26_regression_freeze.py",
     "tests/test_code26_regression_freeze.py",
@@ -1696,6 +1732,2115 @@ REVIEWED_CODE30_4_BUILD54_SHA256 = {
  'tests/test_code26_physical_audit_lane.py': '65998d03ee6f60e6744f2d1ec719cfe951864a0c2a32cd86c99b06fc40ef5665',
 }
 
+# Build55 is a separate reviewed candidate overlay. This does not admit a
+# deployment or replace any historical map/signing/physical-tablet evidence.
+REVIEWED_CODE30_4_BUILD55_SHA256 = {
+    ".env.production.example": "f4a716d5f496fedbf73214fce73572ea69cc6248e3b59988299f61b2c87cdae4",
+    ".github/actions/scan-production-images/action.yml": "8677c8a4a1d5b7bce9b1a45ee8203b08ab3250be03e3b689c4d81ddb93d71d5e",
+    ".github/workflows/ci.yml": "676e61b5517244c213f4f2a417a836ec407914caffc84bc075e6eb7ef7db369e",
+    ".github/workflows/release.yml": "99a47201d5cde2a54336576f749ff802844ad7c3b9bdd0890beb49d26fe2845c",
+    "PROJECT_STATE.md": "db534e40a5ee8a37167276de58be318a238ac9a536307705d6dee5b344b6b187",
+    "README.md": "117706e935cf3b14659b6752afd0938d13c6289cc8343e5c64f416823e3334ea",
+    "android-native/app/build.gradle.kts": "52f95621fc5468fda4fbcee437985874ba8e8f3989f6950528a5976658f3aeea",
+    "android-native/app/gradle.lockfile": "bf4beeeb542ad8891382a13ea9c2b9d536549fdbfe3a96c6965487ef04a86748",
+    "android-native/app/schemas/cloud.dcompany.erp.core.db.ErpDatabase/57.json": "c83214f809c28b4cf8283519e7c7b0fd39c4b172ec4f6ed70a8a5b0c142af4a7",
+    "android-native/app/schemas/cloud.dcompany.erp.core.db.ErpDatabase/58.json": "16644028f4002e37960c32ddfbb383e99cf7a494f27004fe5d37930b698cbba8",
+    "android-native/app/src/androidTest/AndroidManifest.xml": "d85e51ca070f153a67a7ec8205990cb7ff11abdc4135e8d9bb4b5c550e0908f3",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/core/db/GamingSessionAddonDaoTest.kt": "f31f845f8f8136da4efc50fdae0aecbc06380eb687b7ec66f3243dded2b785ec",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/core/db/HomeReportSnapshotDaoTest.kt": "cb8e680949536780021628ae0f7ad74c65acb2db8297e835936fd94efffce621",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/core/db/MigrationTest.kt": "ed90bccc4b03a78c8278af0cec45c98c2394b38f6c3f297ca1636784d2d86d0c",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/core/db/ShiftCloseSafetyDaoTest.kt": "3817213d1be5f1b070049ed040f10db6477b5661a669009a48d20a4f1a0335c1",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/core/net/ClientPolicyPersistenceTest.kt": "72943cb3f42f9b70ffcc15281e16bfd0c584820a7ab38bfb5e09cec9315c314a",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/core/sync/RealtimeAuthRecoveryTest.kt": "f1a956fa871f566814f1fefd321927dfdf1eadd69769678b82b9b8a0c46ac13e",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/GamingCentreNavigationUiTest.kt": "8bc092dd3200e51c459fd00aac62aaed8c038f99a7ce2803559d923f364dea27",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/OptionalUpdateBannerUiTest.kt": "9152e694860c9b887c65fee69a7e25fef7acc85f56fced40d0c8dee64602eae2",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/WorkspaceScaffoldUiTest.kt": "f1fc663043969387299cdec35235b21854c48d15ec8f1027f435526b4f0199c4",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/components/LiquidSharedComponentsUiTest.kt": "e555a20c921ff83df3dc5c9f6d3fa817f66523f02ec271ad36bfd72cc5c1c2fe",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/ControlDeckFullShellScreenshotsUiTest.kt": "c9686809be74083884d2a9fbfe6fba61033cca02aa703fe3a1a38bbfcecd5be4",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/ExecutiveEntryPresentationUiTest.kt": "965bacfe33a565590ac75d1e7d42e11167a5fa1a6b0a8dfe318106e4968b1e8e",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/LoginNativeResponsivenessUiTest.kt": "8678f44cfb28782fc2c348dfff77d0ec9ed47784638ac8f7d7fa4fb51d436e1d",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/LoginWorkspaceUiTest.kt": "e963b10a89b23108a13437c35cf964fa0c09069ce671e8f3337200dcd8e22736",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosEmptyCatalogueUiTest.kt": "92d12606f9d2e18f4a4ba2335ecbbabf66ea2276131db0bcc772ffd8d5b67550",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosGlassUiTest.kt": "f0a65d58333e4dc5b4b5aa031c0f17569cea4e22399fcd0b4470c079e5f06574",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/TerminalSelectionUiTest.kt": "fbdf91c65034865d21e1a51d71b51a5785f42ff48c9c8883c45bed57edef7736",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingBoardUiTest.kt": "327466b3822f0994bba96f4e93365bac91e491308df4356ddabc32a35aa1144f",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt": "0adfd4cc01bbbec0933871896f5546465df757ca4492f18481e3213a7418bf60",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDraftRecreationUiTest.kt": "365cd259c10874022a8b5a083f5f15ee6854646b2d554454b713099fc05af135",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingGlassUiTest.kt": "7815d3327bc8efc056b0fd5723bd5ee5f28b78ae4fec5d391daa355dbd509f4f",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingInlineShiftWorkspaceUiTest.kt": "875dd7dc566fea0a1590105ab2e15148c41478a504332dac2c0cff95f991eeba",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingRejectedSessionAttentionUiTest.kt": "d5ada9ee7af16b5b0f805e8189d0c6de60f64bf046dc7fe65139a115b618878d",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingVoidImeUiTest.kt": "11352b51d5cc485b2896365d99cb2600b7b7b4d562c7aa0bc5a744d1c5542247",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/home/ExecutiveHomePresentationUiTest.kt": "8080e0553bacc75ca17cdf122fe50b85ec5e391a3c53c811896bb442ff8e029a",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewExportUiTest.kt": "a5578e8119153ed7cd13deeaa670aa6dcc2a0af7931b09c722985eb87d7a9730",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewUiTest.kt": "d91e93adc8757facf80cc230bc9a9b8a34510a33536939afc945e58a761b15fa",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/settings/SettingsAccountScrollUiTest.kt": "17502762c7e35bee163d09b53c399ee10d55a4cb26b74bf0e9e4dfc2fdb5556c",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/shift/ShiftOverviewUiTest.kt": "f7537b87185f6aae42a7a9356ab01fbcc20608a812b5b3029babb49edd33ae19",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundFixtureProvider.java": "381bc667d379023f3df80f2b5bd10dcaa1e074d1755df271cbc7df4dec0c8fad",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundFixtureProvider.kt": "00df3d93ecbbfc96eaa61f8c31a012057ca580c72f6bacafc0c4b0297de5b69e",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundPersistenceUiTest.kt": "958b9072a2b1d426ce1250dce7d066c0734ebcfea246a39960e4a81682e7a715",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundUiTest.kt": "368443e49e142856ae388b964a0735a0c27f24838af02a02611cfa57ed8dd874",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceGlassUiTest.kt": "20fa42bbe5110854ae7b908ea3d3cb48944bea57d9331fef92b08af46be56880",
+    "android-native/app/src/executiveReview/AndroidManifest.xml": "bca75ab0123193a75c3941b643631e4e90813f4cbebe0507814b44c4de39a5a6",
+    "android-native/app/src/executiveReview/java/cloud/dcompany/erp/review/ExecutiveReviewActivity.kt": "bbfdcfaa3fd2cac30c909e923c35932d12f679accbb48c904ac628c31064762a",
+    "android-native/app/src/executiveReview/java/cloud/dcompany/erp/review/ExecutiveReviewApplication.kt": "35c356c67eaefc5bd799c86b89c31dc94c0847eafbe27cec978e85478f1badd8",
+    "android-native/app/src/main/java/cloud/dcompany/erp/DCompanyApp.kt": "cf983855629ef350fd595a8eb43be7b8c6cecef94ab3f0caaa416936eac0a238",
+    "android-native/app/src/main/java/cloud/dcompany/erp/MainActivity.kt": "6ab5ae0b7d1344fc9edf1df5ec36124cb31359022b1614af51065094d8720ae1",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/auth/CacheScope.kt": "7311f86f24dd56f7cc7b15c4f237bba4401dcf1cd0d8415a9c80a92d834988a8",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/auth/EffectivePermissions.kt": "584d8ade8c614b72af95077776295d44f8bbccf63862648b8bec004ab53c12e5",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/Dao.kt": "af71d22d237f23efc7571cd3224d92e07fa137cad99f73eabd8534d68fbd7e4c",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/GamingDao.kt": "f466ab3ccffe9c30fd5d2c695e0c84bcccf943f1db674983876d90936a3f26b7",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/GamingEntities.kt": "3f7ba21840a7bac05cf1e86783f4118109ccea8cf2cd7f7b44653b922fa36372",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/HeldOrderDao.kt": "5529fd1e01f4d7354fdc447ccb001a3af958eb9625d05fedda9636086ca251ab",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/Migrations.kt": "825b5bd176edf366afb91652b27797bde09d956d4a966cb920b5b7728c9aca5b",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/ReportSnapshots.kt": "d585d0323a2d07725e8764b5dea72f1574c9dd71e54d5eb76801c5ec5111ed83",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/db/ShiftCloseSafetyDao.kt": "fcc97e2daef5249c2406765ce4128a1543933ea54687c24c0ed0fa5b5d4e5e87",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/net/ApiClient.kt": "99f9b83a5fb2f011db282fa890e522c3bf194ce567bdf960da969f1f911dc7c7",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/net/ClientCompatibility.kt": "4be5aece9d7c4871be27b38cb6479147f30ff390e93e095f0b8feb2fce8727ac",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/net/ClientUpdateRequirementStore.kt": "bac6e8db48564d844ced608074578aec7ee937fd8cff31be29dcd1704eefa5a6",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/net/Dtos.kt": "7a464d2baf20453e137abcc3e931f5312d53b7ebbced3b94c1b7a4f118663bb0",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/net/ForegroundCompatibilityPoller.kt": "89ce867d330ff7aa64f5b31f588590c88276d8f473180c37d47f2e6449383ffa",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/net/ManualBackendRequestAdmission.kt": "7e46a56024fb6addec0cd23ea138fc5d09e6ce20d0ab6c446b023d36cc197d75",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/net/Models.kt": "7f20f16f753ee807cf6f56029a6d8ef91800804e4994db9f324f69c2edd112cd",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/sync/RealtimeClient.kt": "e933aa75d51c47ee5283d029770ede11b574b49ec834687ad0fcf8d5ea76c816",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/sync/SyncEngine.kt": "300ee9281debed9a15275bd7cbdcb1be1756b788e233593d762f2f21f8e37a69",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/sync/SyncResourceAccess.kt": "4c46e3526d0ab8f57336c0e3da7fcd1ca8a062e24256c43ff88fdff927f9a5c9",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/ExecutiveRailScrub.kt": "0147f62c30763c9f975c90c316d28cb1fa6c4c313817e1f67ad94605f0cb261d",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/ExecutiveRailVisibility.kt": "57b0ebca8e058e8c7b406fbcd1058cbd82f5ed4476b77008f7e86abe8d58eecc",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/FreshLoginHandoff.kt": "1e7399a85e2bfc350e78908516088d053fef95aee9eb85190feeab022406f066",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/Nav.kt": "4efd9373aedf540bb6750671bcc57d5cf9ec9d9d622ea503e53455352e356c53",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/NavigationAccess.kt": "68c8994184a3c07f4a176107f749b72671a406b91aef32fbb625736bd5f7e2f6",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/SessionAuthorityRefresh.kt": "1ac53a27dca6fe64954223f36fa1fd50ddd1405d22b440f7befbb3ae2b4adc04",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/SessionViewModel.kt": "5c01ed7f421f11cc501844643e588d35a311f453c9aa8bb86ad525734abac159",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/WorkspaceRouteAuthority.kt": "6f737a74a8571a71d4d90167054b23189687f86231a58b4b3d056783fae4173a",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/AppearanceControl.kt": "744b6869a82947b825feb9bdc565afa2351213d5f99704f378d3fda37e333f0e",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/LiquidDialogs.kt": "120a5682abbbc822751a10447e9b50b80057239245f0b5d94283dd404ae15f47",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/LiquidDropdownMenu.kt": "7d25985015389743249909521bd2f83dc168e02df7b500e8ab241d846133ecdf",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/LiquidSurfaces.kt": "9a11226406806a9ebff7e5ce3460787d2270c9c7ea65716b9e9235b10dd5f394",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/OperationalComponents.kt": "6bcfe0b34606c355c7d1d29acbeae7675250924a6c6279b6ca24969721399946",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/PremiumComponents.kt": "9d832b9b72930e932c827cf76b954c2f8378812e32e1a9a680f20ffe2ac2c9ba",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/PricingUnlockDialog.kt": "741ba34da3ef40d57997788149eb8a21bd2e01b7f3dfb91f56ed7a8640e9a597",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/Primitives.kt": "9d37dfa47853c48e63d62541e8f982bb91923a7feb56c98c217a294c454c8aa6",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/components/VoidReasonInput.kt": "2a0725084004131b32d08bbffbb94eef97473920b077ba8a8326de64de79d374",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/remote/RemoteAssistanceUi.kt": "715727a9c3330339be8dfc9c30f8356c4d3093323b70c28ea68f4f2d7735dfa8",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/CanonicalReceiptHistoryDialog.kt": "98a1b50d68ad5b9fbb2ade656743a5e8d929cee03d17251cf8eec5352ba4ca5c",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/ExecutiveEntryPresentation.kt": "385142686490a2f4530a9241935367075881cdcbb86e7f73be057de8251d662f",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/LoginScreen.kt": "8e3b5fadd55cece4767808285fa437370e6cf30a7e6f3f486febabf158d5d97b",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PasswordRecoveryDialog.kt": "ed297d746b2b328b41ce9ea375b55cad2cf693dde09cd7698d9affe7435da3e9",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosScreen.kt": "0bae2a5511ab6e87b5ca9656336bd55d447fe13fe23043ae608add16e0b0831d",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/ReceiptFilterControls.kt": "944db7ddd45ab4d1b5ddea5a0ad7a7a847a2c3ad6f13ef5b5eb1d24b79619eda",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/TerminalSelectionScreen.kt": "9919aca9f2af314190af57292150287c9122d5176d22896b8ad6ec8ddd50f872",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/accesscontrol/AccessControlScreen.kt": "d8ed4f0ca04cf85b2b17c7d2aadc2de27ad25e2db3ba0c26a2f9580c8579d596",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/analytics/AnalyticsScreen.kt": "06064684f719c495da92cada5971d75e769d5d74edeedadb7cbfadb631a46401",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/analytics/AnalyticsViewModel.kt": "c5c47b791a30730ddc7c6f35a7c673ed0dbc565dedf659d464aa403273c79c43",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/audit/AuditLogPresentation.kt": "0b0610cdbeabc42c1f00f135e5d079b34ac483c1ba96e11eb00ea7f85df9e353",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/audit/AuditLogScreen.kt": "9785d205b57e49457cc6c22e8ae272ead29031497c86a8d7c31812690b8a0ae1",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/customers/CustomersScreen.kt": "66d826dfb4dc07ad2fc3703d6a98ebc5b44ec47f4752b75c9d1e520ed245f5f6",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/events/EventsScreen.kt": "aad8fe6996f74098c51053f71d232330915d281019f60392b9d6d79101afd05b",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/FinanceScreen.kt": "8cebcdbb171eb511367d590f8760546ef9e25509bde4600e8ba00e64724009d5",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingAlarmPermissionCard.kt": "de591895301f034c3536778b20ba08d0e2bc8c2198308e6ac34651e7e82f8f05",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingApi.kt": "a7fbb38183d928c97ca13120067ffa2677cc91d71967e3d04db0aadf3f8d7dd2",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingDurationDial.kt": "6c46e9fa71d17d9875e663ca86b6faaf4e33613bb70e54f9e367495205f40ec8",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingPausePolicy.kt": "098d44a46ecfe50c4d24f556729e1ac7fc6f40413846ec20ce14f4b061f97fa4",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt": "c626b41b4d162d5269a5bea3642d3d952b7044ff867c0f3c34a18843947a09d9",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt": "f5e342c8f1e0ac6c4b64592d42dbf21cd6944d18b077e2d262718ac898f493d1",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/PauseSessionDialog.kt": "8b7009a22baa2fa00fa8e4f345a59b420c3aa726332e3093f46915add416b36e",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/home/ExecutiveHomeFinish.kt": "7d83cb1b4854a31d82598b61d437ee19bb005b80239f85d75889ca3c368154d7",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/home/ExecutiveHomeScreen.kt": "78d091dc0a802dc5410f48b34f0ea9047cdd702cbd48319c9cd0754a885a47a3",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/home/HomeApi.kt": "b3b8bac9c560b350e680a15243ec94b063252f5a668639763150108fbda4dbba",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/home/HomeRepository.kt": "33f283ad40e58fa17954271b5c22a131ef3ec45541e4a9862e80ea5ef451160f",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/home/HomeViewModel.kt": "2daef8418b2e94920b2e90965971f20ac8d90c7b71b9f1b937a01d7f123820d4",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/inventory/InventoryScreen.kt": "355548f33b376c80875d63601496d9e8180a63a4823a014d91cd6fa6a13e2a74",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/kitchen/KitchenScreen.kt": "d487b148fd2906e0e73795ef37022f480ad4750fd9775427eab56e75c757075d",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/memberships/MembershipsScreen.kt": "48da5ef646da03a753e55d9837697472a44804bf0dc3bf4d8d3ac9f44e5e9e24",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/menu/MenuScreen.kt": "d86cc4957fa38e8289503a9f5eafe89e75016af9aa6c558e902d87307fe7492c",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/refunds/RefundsScreen.kt": "a6a6d9299bead9cd89cf701e6cd4bc103466ffc7c1e547a9e7623686feb4a06c",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsApi.kt": "552b2ca96c7f6b22339e6a88ad46fcf8ddaf78e304382dd997334a173f288070",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsCsvDocumentPicker.kt": "49a36e411f2b513e6b53a072b553d3a9de040cc1e26affe5c8eb5d8f98c041ec",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsInventoryModels.kt": "63822f9fa995807defb4f361f469384f0e64b0a5b9b0ddf4019f3fae97229945",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsLoadExecutor.kt": "e3fb9ef65f90913cf6d22e738fbf3524386f62f92a0933b1a416ca5c0c3704db",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsOperationalContent.kt": "c1e45595117695cd0696b66cca111f770c73b0d6b2913ccd79a78b45b00fc80d",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsOperationalTabs.kt": "1e10227b24dc846967c94c41057571ca611872e26a92a3ba148343597b58edcb",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewContent.kt": "5edd1faf13fa11aff8d2235220886b8d974d761b93ca42fb4b9af386e7052b73",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewExport.kt": "30f51d53d80ef9bce01377e44e46bc10378ee5c8e2cf005355fd5e70435f90ca",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewModels.kt": "bc96d45015ac60004b7e4db2fe30e97c85d783d6423c5a09872169d93b190f88",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsRepository.kt": "5e33581dd89a10297d6202a19f024ee7dbbe8fad39faafcf8d0652dfe6a852f0",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsScreen.kt": "787c69b21b6f971154a6b3b2c7d8c4c5bb9aea51509ff592ba4107729d5df195",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsViewModel.kt": "3a581445d84a43cd62db169cb7e00623c14e82be660b42a6a63284e6aa169f0b",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reservations/ReservationsScreen.kt": "a8280bfa166f30417a55079803ae266a4f58f4d6246ae65595aa83ef67f27c67",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/AndroidUpdatePolicy.kt": "d2bf5a4fc449146579272791b87170445d642b757f2db4c8a3db86d921339ab2",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/BugReportDialog.kt": "e4f144735fae954b5235528cc80f7f4fb99c3f680c6042ad78a53b9de4a8943f",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/DeviceHealthPanel.kt": "8efb513d8de5e18ff404b59e370d0c8583d25065040e669e27f08a37fc574130",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/HelpScreen.kt": "091835cc42f8a40dc87feafbaa83c4cdd1381090b04c47a4319bf0328db4e867",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/SettingsScreen.kt": "b8eafec5ec5fa41fdb1278cb613de6b32551f6163a0d9d16eddf773588aded48",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/SettingsViewModel.kt": "ecf88a98cfc5e7feafe5ef72a9b00a60e1a593fde5cc49a8fcc0003cbec55e87",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/SupportInboxScreen.kt": "7106cf743d0a746107934e880cd2da8635b98c8283461d222092cdbc202c69b3",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/WorkspaceBackgroundPresetPreview.kt": "68e4a930c1f5bbbef2d904aee82d1cce513fc2227ed5b1f5e225bab20f2f5497",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/WorkspaceBackgroundSettingsCard.kt": "190708827851455d0203970c77db636f5529af26dda3caf3abdfc1bb2d0f9c04",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/InlineShiftOpeningWorkspace.kt": "6d5e324d5173f3a64371bbefa392be23e3e5f80d775d7d93f71b4fa834a67472",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftCloseReviewPresentation.kt": "aa9eb9353b4094c63e38ef1cb9640b75cac0ae330ff7823fdbe567f4dabedd25",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftScreen.kt": "5caace45f75cc5c11a0df7e5d90ee4f927098e491f534c3018c7258c6489cd01",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftViewModel.kt": "f4548849e626b493bb0658485d465a2fb689b4b9e2ef6ae3ec60cd7864a26a5d",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/StaffScreen.kt": "e375c5a66e728869c4af99c521ffe6e76708bcd0916cf4f4055651acb854b4da",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/tables/TablesScreen.kt": "66050a2a8aa5b67dae89ec69f9012aa923b2f863b915b70e9aa6a7cebdbc4017",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/AppearanceStore.kt": "32addad3f7355292f18cf5b75a5eca4a61fc2675a9e6a4e193b8fb4715409c18",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/Theme.kt": "9cfc1f4d6e4301bbfbd6da75c95f42ca1cfa2e6d094ad22ffb40fcd3af69f1c1",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/WorkspaceBackground.kt": "58ae8212ead1169c465815cc8cce857e70ebb268caa9a6fdb4727da528cd3eb2",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundPresets.kt": "185e51e3afe035653e435e7a4a71f8537d79c5d282315b6279278c98af6f7ac2",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundRenderer.kt": "d320caa03094530c4004d8c7dec0e7dac2dd77fee3632af8a37e1e17d7eaee19",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/WorkspaceGlass.kt": "b4b639b29bb01a46644368b13a83050bb8fab59256dd6bef940b4936aab8422b",
+    "android-native/app/src/main/res/drawable-nodpi/authorized_lounge_original.png": "3a87906eca80feba8a22f051e383d3aa582dd6e34586e32d5cb7e2320c56a572",
+    "android-native/app/src/main/res/drawable-nodpi/gaming_lounge_hd_r1.png": "c58000ae2596a31fb2e4b230d08e3dd67e4305dcef26ae1680198f385f269d8e",
+    "android-native/app/src/main/res/drawable-nodpi/home_lounge_hd_r1.png": "b1dfa002e84fe40756636921ad0e10f353b74037e749dbe8082b8865fc965f38",
+    "android-native/app/src/main/res/drawable-nodpi/login_reference_original.png": "679707186d15f553b719ec0313a906f3ce2ce49303ea3ddf2b9a19a59930d49a",
+    "android-native/app/src/main/res/drawable-nodpi/login_scene_hd_r1.png": "13aa59b3860110f143b0b0a0bba6e84a6847667bacc2e01ae0b3b5990cef2844",
+    "android-native/app/src/main/res/drawable-nodpi/splash_lounge_hd_r1.png": "1a27f92dd5d921b290c9c430e8a1a100cc0a49a5fe4e7cd9bd56d62da0177684",
+    "android-native/app/src/main/res/drawable-nodpi/workspace_home_default.jpg": "ce0f12e8b46011eaa69161c031d23d10e545f9b89f2f49a6effb11f34640dcfe",
+    "android-native/app/src/main/res/drawable-nodpi/workspace_preset_assassins_creed.jpg": "96564ae5a3b0add567a06e9f319c13e4754e02613fdc1ad8846453f67dd50790",
+    "android-native/app/src/main/res/drawable-nodpi/workspace_preset_call_of_duty.jpg": "9ae6c50c9097a0e48c1c7850a029cddad1bedaa1f42b97851d0cb92508315ef3",
+    "android-native/app/src/main/res/drawable-nodpi/workspace_preset_fc27.jpg": "ab51cde3444c1081e615a84a4305cdb56104d7cbd7d0422389f5bd363036cdd1",
+    "android-native/app/src/main/res/drawable-nodpi/workspace_preset_ghost_of_tsushima.png": "6ae5b41dfdd4ab381f9a4bd69f5fc121116819552c5561bbfe48d43ea3751bc7",
+    "android-native/app/src/main/res/drawable-nodpi/workspace_preset_wukong.jpg": "464620be4c5f5a50a69ef9261666d2c1e1ae274c50863da76a7caddbc539455e",
+    "android-native/app/src/main/res/drawable-nodpi/workspace_shared_default.jpg": "1cb71c65397fb9337887a052ae3b8ca513878d67157bf911941f586ab8288b60",
+    "android-native/app/src/main/res/drawable/login_logo_d.xml": "94adb2de76f0b76ba72684718bf88d87890f79ef9f7ce6e14900525ee4bc4148",
+    "android-native/app/src/main/res/values-night/colors.xml": "6a4b32e78987397b8ec48948a6ee8552e5d142f3633ffb0d1e339c327a7b6c78",
+    "android-native/app/src/main/res/values-v31/launch_themes.xml": "d79de1778c7c0872d360a4287b231ff14954e12e2839846225e1c48974373127",
+    "android-native/app/src/main/res/values/colors.xml": "69b8d2499e49710410e33ee358cf07ae5a30c94f31a22972a087d80dc9c9fc2b",
+    "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt": "0a4b14467ee9371814bdc67c061b8e6cb6c46a34505b8282caebb67ac8a190c1",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/auth/BackgroundCacheAdoptionContractTest.kt": "fa6290de602a5435c1330760c6054642a1eef4734b199906b232e6170e309cb0",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/auth/CacheScopeTest.kt": "c3d493dbeedfadfb2657c00df73ac4c3cdd9be68583cdb48592ce6821ceec6f8",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/auth/GamingCashierAccessTest.kt": "b85e01395bda215f56b0f3175460f32455cc06b90416ac7188df1476017002fc",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/auth/OperationalAccessTest.kt": "142d0ac4426f6f5c14cdba4f4b2e2f7e17e50df5316e5dfefff0a136627b69fe",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/net/ClientCompatibilityTest.kt": "a7197144e4c0fddc500b195ae8c657b4eb9b32b60d6f0eef654f6a19d290ab20",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/net/ClientPolicyMonotonicTest.kt": "d820f1ad1d362c9a6e75fff1070d590e490ee8b6fa84d4b8030f9cebcf4c1033",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/net/ForegroundCompatibilityPollerTest.kt": "a47f7e9aec7cb7309fa85959527e3f7913d787136a05cfe23fb62b65c84dbf66",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/net/ManualBackendRequestAdmissionTest.kt": "88d5510fff40337d5e1c7f9be38a5b6bdc3fab3169117346958d2ad4cac32e26",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteAssistanceSecurityContractTest.kt": "4a2c91b62915b7204bc76939bd3c159e9ac3fffc1cf0ca62fa0dba2e14ae037b",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/sync/GamingSessionAddonReplayPolicyTest.kt": "7518b1f9c53dbaf73593c1b231864dc4470b36493792007706e024efc6ec6f8e",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/AndroidPerformanceOwnershipContractTest.kt": "c07e0a4d33394059fca4b02465f10a9b7a130e5f47509074dc778d9180572954",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/ExecutiveRailScrubTest.kt": "96e4e82b9f50bb0eaa03e1995801eb16233d6f1000afca5c062d1e09729986ba",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/ExecutiveRailVisibilityTest.kt": "5990ac4f60fb42eb16b487e5f36124e222a380ca049a56d1a5914227c71acf27",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/FreshLoginHandoffTest.kt": "64e3da40ef5267e24499e116e9b58f06a84d0a329f82ec1e8022590f8ff62db8",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/GamingCentreFeatureProfileTest.kt": "a2785fad3b125525d0b9f6b9df2e03e661013a076bd7bb3321fd3b503d3e9648",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/OptionalUpdateInteractionContractTest.kt": "e4b0e5ff19a86b5602ae81163fd28b33d37928b5110e8f697e650be610544fe8",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/PremiumFoundationContractTest.kt": "9441e8d68bb7b7414b9be3084d5668305fada2e2fab68e0959ec7e04c7484751",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/SessionAuthorityRefreshTest.kt": "58c2720510a2a163823ae8355ff5363b7482b78deb7cf3bf999c2bfe13c68ed2",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/WorkspaceLeaseFeedbackContractTest.kt": "d8dcd7bc9597b8b99a8f17ddb1f03b13c1f9c5b7714f33c78076ad43b482af4e",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/WorkspaceRouteAuthorityTest.kt": "699277e644a594cba66eebe850af41eb0623e6b4aa3263a45f1729f609dd96f3",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/WorkspaceShellPolicyTest.kt": "4219999b7ad581003e1c9fd9a3fc6990e6b7b1ed0c76bdb4e603138b38892423",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/ExecutiveEntryPresentationTest.kt": "664be5b31d038e40aebe87476d4e28454e377daf70d560fa852a03f86f6f69a0",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/PosReceiptPrintTest.kt": "e331836b2effdf4e151240d34d0c18e115bdb72aa7189672bc27b427fe503056",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/PosViewportPolicyTest.kt": "54f853712f03e7a9da25a7a82e804652bf69c2c8fd3d692c923823232bc58a4f",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/analytics/AnalyticsPresentationPolicyTest.kt": "6dc8ddee2532759bad87d8f7a723eafa6620e51d84edec174ce953961af52d0f",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/audit/SemanticAuditPresentationTest.kt": "35ff2d4af1853af9f870bbafb23cda5fdcdd58144f6d7a9d76c58f325f2062da",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingApiContractTest.kt": "a50004187b3cd31ea23669f4a2d75e43dd93d5c6613dc6c00142b7116cfb5a74",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingDurationDialHitTest.kt": "814398f6e1dd49e878359ba94c1f1327b5481a7b54dfe59c088433440391862d",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingParticipantAmendmentPolicyTest.kt": "05516bae8d1c686d3876a3b3c58f052701ab437c8950122938bdc7c31864d14d",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingPausePolicyTest.kt": "52761a33729b9d201a2541fad71fc44499174c3243a5ddc7419b27adaafbd59b",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingRejectedSessionAttentionTest.kt": "466a92c620d4063c029fa95f92a210b935c31199decbf024514149219bf93739",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingStationPresentationTest.kt": "23e8f6b3533edb03f7685c022c2da41dfb7e6fa2434eef2fa26696b4107805d5",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModelRecoveryTest.kt": "7e13b6c700b4e40d5ab618c9cf6720257ac243b0594797cb69b85a0a9f21fd76",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingVoidV2ContractTest.kt": "14c5b81d3be40a099d223d27471f5b4b047d7e09c57c14d103911a3880807091",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/LegacyRecoveryDialogGeometryTest.kt": "19c50da7bebf8ada1c161f0be86110ee895c6a2206601473d83f018042c1adc0",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/home/ExecutiveHomePresentationTest.kt": "451c29d66091a4d65eb7d8f48c86d7dd0969b17f550b4fa13414e6d0b1c74693",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/home/HomeRepositoryTest.kt": "18ea35327e83571103415ce67e947e51210bdfd10171e9581f7c11cc424b26ca",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/reports/ReportsOperationalTabsTest.kt": "882ef90c312f9d9bb91d38c2541120d9ed662d9691607dd1ef1cf42c195a2ebd",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewContractTest.kt": "68faed549957b15f7f779581701c88bb06710f2f813de35e2ddb40d83f2f8068",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewExportTest.kt": "d91c681670c05fc1e689a9f848c92b000bb401213739f227666778775cfde0c6",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/settings/AndroidUpdatePolicyViewModelTest.kt": "a6ab543eb40183b47a90e9f556687dd9b2084c635a632757346edc62132196e1",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/settings/SettingsPresentationPolicyTest.kt": "ae0a58199da2f0711bddc2745e47f310be51ab0a957caf8a03268f5942abd5c2",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/shift/ShiftCloseReviewPresentationTest.kt": "a62bbda88daa9f7f39352fe45e23f3e2f3513c3bc485267c7230e17fe42af9dc",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/theme/AppearancePreferenceTest.kt": "7697cab7a3e555deded182d2bd306ed9c261770fd2bf16095ec72018d5b6bffd",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/theme/LaunchAppearanceTest.kt": "f2afaa43ce823c448dff9b2552d66cc83c49d1e178d5f9da733153538820234a",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/theme/ThemeContrastTest.kt": "91081058ce50418dbbcdf1b1ef244a6f67706e27b4fdb2b00375fc79073b34a8",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundPolicyTest.kt": "c52afc8a09c23f20444bc6b4644487f50de96f4f382af643bdb4bb692d10d561",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/theme/WorkspaceGlassPolicyTest.kt": "ab9d0fdf78fe9e7b6307f3b01f48f20c9082a4ad12f0efc19b2cb8b8111790f0",
+    "backend/alembic/versions/0092_android_update_policy.py": "788375ba2354f1f4ad5c9cacfe696022e7ffb7e2e7b7ca9e31cd41e48e7ae477",
+    "backend/alembic/versions/0093_gaming_void_retained_addons.py": "cfc55577f34e57973f6fe47c82869a5752ca4330d96dcee9c8c6f5ecc334955a",
+    "backend/app/__init__.py": "1ceb956d9c4de03b8ec6ea332c3123dacf5e77596c214a9402674aa9f9fd7f6a",
+    "backend/app/api/v1/analytics/router.py": "bcfdf507a724a1772294e1c794a345cc0a0c1a5cb2862b4aa041cb98351f2f53",
+    "backend/app/api/v1/client_updates/router.py": "ef875b833be5af3a7a8726518a4fb78cac15bcad4dd46a9a53168ec7189ac721",
+    "backend/app/api/v1/gaming/router.py": "7d9400b8166dafcccf34b7e08879d8f7d0d40ca574768e6b33d1370c7970b7d2",
+    "backend/app/api/v1/pos/router.py": "f1f7032d57e711cdb5eeade0909a45615004b535f30b0e9441c1f7d386fa496c",
+    "backend/app/api/v1/public/router.py": "af2331e48f7ab202140579d71921519d72e72f6a3734467f3863a90b6916cbd8",
+    "backend/app/api/v1/reports/router.py": "e302269357a51972eeadea0c44333eff636f6b3bc65326b9890a712c98a11230",
+    "backend/app/core/middleware.py": "945ba916e341be6f6bfe4814c48ae0d816191e9070c4f3d60d9b66629bf9255e",
+    "backend/app/core/permissions.py": "d6dcaf86c8427411901456d9ce87dafb8ff79e4fea1ff284804a9042615058d5",
+    "backend/app/core/roles.py": "d4b2d0ebc193f946dbf5e696bec5de038fc99f5101162665a9d212d3aeead49c",
+    "backend/app/main.py": "9f72611cf14ffe149de53493f61f1140d58ed0b4a9db427d327df70fa91f9fa2",
+    "backend/app/models/__init__.py": "8e6df2a9bd03083bef5787abc77d7d64f95b81631e145ef99d32d152daee1da1",
+    "backend/app/models/client_update.py": "30e4dc949f33261b3d097834db7a6a0fc6cc13d1e8d015a1d5175ce936082c0a",
+    "backend/app/models/gaming.py": "281e1b8ed1d3a219fd719c08e435b4f595f7e74511fbbbfd9abcc6ac21eaac70",
+    "backend/app/services/analytics/home_read_model.py": "b541a4b251ac1eb22c5ea916faa88263f8720e3c426c8d39120f23656e30e069",
+    "backend/app/services/audit/catalogue.py": "47d6685342ace7f64f5eba1d72702593daac2bea8ae9a2a9c792ad01af9f0e3d",
+    "backend/app/services/client_updates/policy.py": "0862e7f44a6c04f70af5078093ce8e85a05a62e7f18dfe835cce86f51cf4fdb2",
+    "backend/app/services/gaming/void.py": "47732d5b847647d1defeee3ce11074185ea012c702c3cf8a8e28d1ffef3ec86d",
+    "backend/app/services/pos/pricing.py": "d0c725b61121426e32213deed5c7eeabfc3111d74ca18af150de6eea935de4ca",
+    "backend/app/services/reports/overview.py": "b5174fe60bb57562052301b89577cc8e64176c67531fccf1287bb037712bfb76",
+    "backend/app/services/reports/overview_csv.py": "9200e259c6650358d7e0cce803bb2090274794985e170a8d56839b52beade2cc",
+    "backend/pyproject.toml": "64413b202733c8e2efa2329ab98cc66b92d35e6e95b2151d124ff6e01dab5a0d",
+    "backend/requirements-ci.in": "c9196bc6f6f1d7c4ca3503237a64aa056687302d75e9c1bdeaad69e8656c6344",
+    "backend/requirements-ci.lock": "1e68ec022c3964049c0da8762c9d5ece92bd5f07e79cf06f90278f89bc6469ca",
+    "backend/requirements.lock": "795f13e253df5673170f51c633afa2d4c4c01b3a2a4016f9b432bdb91fc851e0",
+    "backend/requirements.txt": "63cbe880344f5fca993c195cdb62035ed1f32c5e172c61c4e1055f51fc8d62a5",
+    "backend/scripts/ensure_roles.py": "dc2c9ff87fbca68107eacdb7deefdf677854d788e40ce8aa1e5a78717ea67d9e",
+    "backend/scripts/seed.py": "e33dc10f1961b079df12b6055fab7358272ecd73267dbf23fff6ff4225010b75",
+    "backend/tests/conftest.py": "2119595f2c9db051b6c5cf93f180eed949e0567d0bd3baf03c7543fd7ba2bac4",
+    "backend/tests/integration/test_analytics_dashboard_permissions.py": "afc7598a9f61f917bad420cd83b0dc92608c92acbfc77b8e8e247ecbc96c1ac9",
+    "backend/tests/integration/test_android_update_policy.py": "fe4cc44ddad198ebfacbb848b8d230f0f209ffe8417291bcebb707043065e3e2",
+    "backend/tests/integration/test_android_update_policy_migration.py": "127429bbfd0138246024d8bcd06f75662d906e7d4b533ce757a8ececd75d039c",
+    "backend/tests/integration/test_audit_business_events.py": "5724ada0510314695d0c844e81ee7748118487f1a696154c3a968fc5ebc23a09",
+    "backend/tests/integration/test_auth_otp.py": "ed4e04aa323e78860572c5b31e7c2d119fa4ff4bd3fcf125d807b0520dc63071",
+    "backend/tests/integration/test_build51_history_bridge.py": "97c504d3eae07ee7e457b68eccc5bf309b9c5cbe5b672ce66e133d2b3d9e7b73",
+    "backend/tests/integration/test_build52_transition_state_query.py": "8ed39e673fb07bde740fc579b33c5bc8a60682e0d6a0f08d1b1cf2cd76ec5c6b",
+    "backend/tests/integration/test_build55_transition_state_query.py": "3be69a6449efd44f6234e8f8d5a26623b7168af9c42ef1673230f968e2bbaf59",
+    "backend/tests/integration/test_gaming_cashier_provisioning.py": "74afeb98a25a56b93289bf7578ef2e90b161510b16dc459b1d63b6ea081b29f3",
+    "backend/tests/integration/test_gaming_package_amendments.py": "ff7fa250e16269098cd4dea13bafd95434eeee0c3f94a6bc98a41ea35a1363a0",
+    "backend/tests/integration/test_gaming_participant_void.py": "d21e9960bbcaa7ca6779d5ebfaff199d406d3a99ecedac7e3de2134f6eee2e0a",
+    "backend/tests/integration/test_gaming_pause_lifecycle.py": "5ded7c5bfb1167d604ea59c19f5378dae23fa17e6a01d3ef9d14e90d799b2ada",
+    "backend/tests/integration/test_gaming_phase2_contracts.py": "99e8a21c6dc5152b68993c90b53d8c0986e6c05b0a48562878169a724901ea3b",
+    "backend/tests/integration/test_gaming_session_addons.py": "4b16ebdf617e37affa4a9b4fffd48411ecef3e63bafa318c108922b2dd4ab324",
+    "backend/tests/integration/test_gaming_session_participants.py": "a97e8f4f9c5f71f13f656c8df75bb00444542346110d4ad841e930bf900f70c9",
+    "backend/tests/integration/test_gaming_void_retention_migration.py": "7c8ba45cd2f91dc506992c249b05942def3ee99d06ab5ca1edd47eaf642275e9",
+    "backend/tests/integration/test_home_analytics.py": "652867c560d8a2e94871917206eb06b5ceb8a15f50a269514937463add0a5de7",
+    "backend/tests/integration/test_image_encoder_upgrade_replay.py": "9c2859c203e498631f8c1d5bea3cb341fd5704a02b93bfe0182987fadb15bf71",
+    "backend/tests/integration/test_remote_assistance.py": "f1330deb387a4aef042c6a5dfaabe387041848e27591603da7a76a8cc9729838",
+    "backend/tests/integration/test_reports_overview.py": "898286178be6cb746796965240055e869c1786ab314887da88dd33784c8409e6",
+    "backend/tests/integration/test_tender_correction_migration.py": "3568620720787d92e71455daef2ac22879c6f51600b6fa8e88b8f06124aeb3ee",
+    "backend/tests/unit/test_android_update_policy.py": "0d9c0ca03789e6e1efc333c31f3e755d0721e154419bfa6f57bebef46f171fc0",
+    "backend/tests/unit/test_audit_business_catalogue.py": "9b93d156415ad44f1a49aba0a900ff4f3e1f95f73d5e2d3483e3ad0276021a94",
+    "backend/tests/unit/test_client_compatibility.py": "9710b9136c58bf962814a9b2f7b03b53ab596bb888104844eff686379eeca70c",
+    "backend/tests/unit/test_gaming_cashier_access.py": "93bdb5bfbec7041edc295720320bfb4b1121ddbe4f66700487f84a843e53722a",
+    "backend/tests/unit/test_gaming_reconciliation.py": "8c9689204dddcc36118a3d021fd5bba171ad0258b8c0f85876beb3c19b6b6d03",
+    "backend/tests/unit/test_gaming_void_policy.py": "7bfd02627ec7a7ca515d21c27e69026e1187cdba5de8b4b158b38ca7fc95786c",
+    "backend/tests/unit/test_gaming_void_retention.py": "822bfa3d692824bf155e2eac6d878f4b3f4dcdd97f7e8ab58d83e784c8493fe6",
+    "backend/tests/unit/test_home_analytics_policy.py": "168fbc48f21c23c4002d95d683dbe4b19dbf4e9f3b5b32af3f4261612b099a4e",
+    "backend/tests/unit/test_operational_route_integrity.py": "1b2e2a18a2f899bf283990736204c0c78b10fc9d322ab0e7caa65a4f169e26bc",
+    "backend/tests/unit/test_release_contracts.py": "cbf16a64ed815c40ba5bc8731464a43e73511e889d8e4f71f363e3f47456de13",
+    "backend/tests/unit/test_remote_assistance_contract.py": "99ef8628a1c1496d8322f3293de6878a63af9c686acf91d8aa866d7a17f4c7dc",
+    "backend/tests/unit/test_runtime_release_parity.py": "dce44ab147f28bd95da7fe2ba8380abef9214c3340a07190acbc2dbaaf866e28",
+    "docker-compose.prod.yml": "54d8ac6fee14d7b4c74b8009522f1a7c88ada59d32c2b6b4e478cfb4bd15659f",
+    "docs/BUILD55_ACCEPTANCE.md": "7f67b167c32bbb60c6ffc71ef79756c09a97befd383cf11a340249d308e3525e",
+    "docs/BUILD55_GUARDED_DEPLOYMENT.md": "dac3857d695e39689966d9fc458faccd7fa2fbc28596a49f921bbd1c3af5e08d",
+    "docs/SERVER_DRIVEN_ANDROID_UPDATES.md": "fdb3e3c577d2e687a9f72bc1a9b306a529937b21e5c6bea8e089a596a777fa17",
+    "docs/V3_1_47_RELEASE_CANDIDATE.md": "d616a15e70d11a202d5c2bc68820f53bf4f016875491a936beee4831520a6248",
+    "docs/V3_1_48_RELEASE_CANDIDATE.md": "76412192087746d4dbbea1f3ed584e2dc5b2cdc9611257aae16bf12aaf7cf487",
+    "frontend/.env.example": "fcab37dfd26f9ee11c7e2d6e62db226b8b129a4c461716247db698a1f1c4e0e4",
+    "frontend/ios/App/App/DCompanyNativeApp.swift": "1ff860f07a89a29d144a9dc31a5e40bb3bb1277858a445c42d507447ebd95bae",
+    "frontend/package-lock.json": "82c5fa6633648b4c298a57f1102b2629da6d139a6b09d326712f36583ae855ff",
+    "frontend/package.json": "3d9a84f1381984f73ace5ec0d36f4d70beb36209df61a2f8beb7ae94f9ae13ba",
+    "frontend/pnpm-lock.yaml": "86b358b24ec59cab658312690edc280a85e571a44aa4f2edf5d95bacaf69660c",
+    "frontend/src/lib/erp-api-gaming.test.ts": "e2a872ffa7362c054145c4e07b4b9bfc2ac96f31d7fb3c2494ad4c3a63c69749",
+    "frontend/src/lib/erp-api.ts": "517de5bafc4edb2bfff7f7ce56e6dcc853b9f9220482255b22fadac70ee7a6c8",
+    "frontend/src/lib/ios-financial-admission-contract.test.ts": "cf37db1be2628bba2d1c7e1dd51ad019d57b6bd19fb75a2210ed7abcb5877a5f",
+    "frontend/src/lib/roles.test.ts": "cb5baa397b2162135ab144a7e569df291bf8e5fff5646fb356794095dadd323e",
+    "frontend/src/lib/roles.ts": "0e3e1bac3add03e0acdb0995f58711070fbc6863162c1a816c1bb5c9aee42ba9",
+    "frontend/src/modules/analytics/AnalyticsScreen.test.tsx": "3a2b8104bdf045a6a449aef684a6b7af9067dc763c8a7f57c5aaed2edef89c08",
+    "frontend/src/modules/analytics/AnalyticsScreen.tsx": "2bff86a5b12d0035a967a677c3c0ab0993cd1bc51187782f87b126a5fd173fff",
+    "frontend/src/modules/audit/audit-presentation.test.ts": "4066609b294c7535b63e6e76e335ad5f7b8b317c4618b86fe8c8506c7c9133de",
+    "frontend/src/modules/audit/audit-presentation.ts": "a77f388154268f1e863aa1e94b3fdbcf9b897ca78ff4a0fae64e13886fb75918",
+    "frontend/src/modules/gaming/GamingCancellation.test.ts": "c21fbb4836d6a27d68c94c86893d552ad37570363960c0a7204f014196d9b5bd",
+    "frontend/src/modules/gaming/GamingCancellation.ts": "76aa33118a5b5a4b60ff0446a6860d52b3d17154afd4a72be63b58ad54f9a3bc",
+    "frontend/src/modules/gaming/GamingInlineShift.test.tsx": "21a5febd46209e70a2a16ba60a171592b78e57d326e64e50f7c841e401a0cd6c",
+    "frontend/src/modules/gaming/GamingScreen.tsx": "e41ee4a9bdcf832100994b5eecceb0b4c6b4fff6f654e5cd6132d121854e0841",
+    "frontend/src/modules/settings/tabs/AndroidUpdatePolicyPanel.test.tsx": "4e030444b5bd4e9db67a0b57216a6b6a6dfc83fa29c160ac8e6138b9e7fed20f",
+    "frontend/src/modules/settings/tabs/AndroidUpdatePolicyPanel.tsx": "f8270db937469511028c3e3de05eca5dbb45a7416b38f770baa65a8ed49882bc",
+    "frontend/src/modules/settings/tabs/DevicesUpdatesTab.tsx": "3219df29ac30de2ae5fdf18fe1b073d20b3e2ad4a25e271ba8190c0dbbd3f547",
+    "frontend/src/modules/staff/StaffScreen.tsx": "693b8b8f27374fb015366294303fb42ebad45630bdb9e6e7c7144ea8d6c7c345",
+    "frontend/src/modules/staff/staff-edit-policy.test.ts": "483517575b79a732daf445394806e37ed8d6ae03c7e59a3cb01f9f9c0cf9bfd5",
+    "infra/docker/backend.Dockerfile": "af9d733cee2845755427b9922238f74c219b1496a501db142c00cc16cbaec5e4",
+    "infra/docker/caddy-build/go.mod": "d778f1fefe2c1064f272e7eb9ec10c18bdf23d1fe3b802283e9e7effe1e3dcdf",
+    "infra/docker/caddy-build/go.sum": "e9250556e367ef6323b8b4af354aad558d358bf6537c6eb8423b0f40f9ec9e0b",
+    "infra/docker/caddy-build/verify-system-ca/main.go": "1c95c147abc496e15ac6b64820e14272f2e4a6d4eedb6f9b6071bec67a59025a",
+    "infra/docker/caddy-build/verify-system-ca/main_test.go": "6bceeb70512ce5c5604463d438c0ab447e64861a04e59937b3c2f459e5d5f9a1",
+    "infra/docker/caddy.Dockerfile": "3c7c485bb564c1e70e017e655c77e7f7fe74c5d00e4d35cd91e6a5fffb933f7b",
+    "infra/docker/frontend.Dockerfile": "b9041a5ca722ebd21ba9046f3607534ff536e5c735b4258896097856d7f4d18b",
+    "infra/docker/zlib/build-patched-zlib.sh": "351149e34f3a202e3ac9bbc1c8abae50cf596f42d6599b6ae1b5e046388a66cf",
+    "infra/scripts/bootstrap-verified-pip.py": "f38c2113bb2d7c35eea49d55585d60f01b43f2662dc28a6a22fbce2037984dc2",
+    "infra/scripts/capture-build55-runtime.py": "0dd1b4474229b5a57ab640a8399f9231bc0ff90f03cb6780823e61016e07a00a",
+    "infra/scripts/install-on-vm.sh": "edf75a002c0846797b77371f014d8b1c49c1396e68ba681611c3417ade05f6d0",
+    "infra/scripts/install-operations-monitor.sh": "278c106ee30f34cfabf7209d20827b893a309fb251b0d6dded8c4afc6d50281c",
+    "infra/scripts/run-hardened-image-scanners.sh": "b2333526501fe5987ec839f193ce8c6bc56c6ef6935fe40343e19c8480096e3c",
+    "infra/scripts/select-ci-postgres16-client.sh": "df7ac8dfe2fbb70e2936587b610b75bcbc1debc16b81a9e6ee6f4fa6b14d02cd",
+    "infra/scripts/verify-build55-authenticated-acceptance.py": "f4d59c7f967b6cc7cc4176bf3f6729fbd70f321007185697dd9fcea84401b417",
+    "infra/scripts/verify-build55-pending-compatibility.py": "1027469d8b7ac505e9b6d393fe6a962bb227c409a56860419dbda0e4a1649131",
+    "infra/scripts/verify-build55-transition-state.sql": "7658c7f07cd64994530b892a2902b83e243236a7eb0a89ff63ac7a4c5a6fc844",
+    "infra/scripts/verify-production-runtime-images.sh": "11febaf10f77c05677d61ac773ca68d9b3de7ec7f18b68d335fcc0a98004e144",
+    "infra/scripts/verify-zlib-vex.py": "a1f06247ad91cc0744c5a4a4a470e49b2fb2460b437f425c3afb835c6b20f41f",
+    "ops/stage_android_release.py": "46c3988f28bf66cd8291202ea4f48de2ac9753a1b60be9370bf93e0a933e1938",
+    "scripts/android_instrumentation_provenance.py": "18e39e9635ad073c543776fa672ce485610cbfa40676e59daf1c8c63b8f0892d",
+    "scripts/configure_ci_android_avd.py": "7522cff72722b6c50cfb237fa8a5aeb4927be2bd999b4af3ec217061126beb85",
+    "scripts/run_android_instrumentation_ci.sh": "f99fc33cbc5d8f5948d2037628a60ac47d74fa73feb594c301caeba5029ba6cb",
+    "scripts/verify_android_instrumentation_shards.py": "18222ddf59ea929c7efd2db5f323e3226768685b7a0dd2814d5d9911dee9fd9f",
+    "tests/test_android_instrumentation_provenance.py": "cd2f217862729f1fa55b3287d4fdd773aa8d58afb6f82aad31f3971784abd43b",
+    "tests/test_android_instrumentation_shards.py": "25254c7a8520691fb6445e0c89031748088c4cf463a18a69a20968c888a7a53b",
+    "tests/test_android_release_pipeline.py": "3bd31d872696efb891b0cd617b25d0288ed34650d2548b8a737ea062009ff516",
+    "tests/test_android_release_staging.py": "27fe32342178c02084d0a692db69307309d272411d47e9ea938f322ed84593b7",
+    "tests/test_build53_pending_compatibility.py": "68301cf1e8eafe8b3c3258f956c41022a53edf00296f169d98c5383d438e182f",
+    "tests/test_build54_pending_compatibility.py": "7e80fa9dc3d27f9975af59856b33bfce944f88720fb2e9661384cdf6ba45cab2",
+    "tests/test_build55_authenticated_acceptance.py": "8d8e8239ac42d019e9b2c9b919dfae20ebb77e14c89a4952fa4134837f824923",
+    "tests/test_build55_pending_compatibility.py": "64bdbeef60510a3eec593c2d6d6131aa9a25562aca190b97ba98da02b36b5306",
+    "tests/test_caddy_dependency_security.py": "42419a9f82d17342fb9996aa29a24c4ed278001915bcf2eb2a4ee5163ca0e898",
+    "tests/test_ci_docker_connection.py": "413146841877d130bafebde5bce31102a9cf92bf269e9e24f1a576c7a9705929",
+    "tests/test_ci_postgres16_client.py": "88f11dd7e3252381f220b3aa93512cbbe0b20448f13823e21a304b581fe86378",
+    "tests/test_code26_physical_audit_lane.py": "d810f3c0df97e33ce32c93f4bc42552fd0d8d23b0e9ff1b61164e6285b647329",
+    "tests/test_docker_context_safety.py": "0c5c7fb5e5e7e4ff9ad69a1f6c7eb8ce2f9a41ba35730a436a2717b9a596a05c",
+    "tests/test_hardened_scanner_runtime.py": "8b5621586135358f4d9e9f8ddd975c0643bad4d849f2a0e18ef8ab0926fb288f",
+    "tests/test_verified_pip_bootstrap.py": "d2f7cd4755f9a40fd16a828f22fa04dcde85882164176d87239fc6ea5ec57ced",
+    "tests/test_zlib_security_remediation.py": "02ae9d5fe1126918a94547c808765e3328807fa2db7bd2ced218cd478991dab1"
+}
+
+# Successor overlay only; historical signed maps above must never be rewritten.
+REVIEWED_CODE30_4_BUILD56_SHA256 = {
+    ".env.production.example": "e679e92d4ab668480adef9bc03bf7744bd0989dae702fb9ca6f3f0bd6815d863",
+    "README.md": "294c5cdfb799b64f8299521b28d4e0be3ad0133aab793a90a6156019aa8c1b86",
+    "android-native/app/build.gradle.kts": "22e602f20d841350ec11ed8a4069858f803575f3a28e990a4b2f1956b2b8adae",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/components/LiquidSharedComponentsUiTest.kt": "1148d214436d6df34d9c6d75ccd57abfa633a313d6a45c29b9118fe238e699f0",
+    "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt": "1dfa7eedbccc49b2d4b40ea989001a18692c3d27d9c607d261cd8fa7a7d88d67",
+    "backend/app/__init__.py": "177a13493124885cf3ff5b25b88e0e68e893a5faa69141501aaef7cf63102947",
+    "backend/pyproject.toml": "a9a24126537d809bc88aafdf734806e80367ec9586d053c0759e62be72cea8b5",
+    "backend/tests/integration/test_build55_transition_state_query.py": "c335981f073254fb7c3c73f6e342bb077763fe9dd72da09aef519f94a0cfc3a2",
+    "backend/tests/unit/test_release_contracts.py": "a50b0e1e63811631d4a0115b5b991bd3479458f32f59800307b4b6b43a39b075",
+    "backend/tests/unit/test_remote_assistance_contract.py": "e6ceb12b4144153737ad870acfec96a3195f9cb7def617b8c6906b72425039e8",
+    "docker-compose.prod.yml": "fc962514155b11b84acfc7d81f0b8a1f92618e3884c88f06a4b2746a40b105a4",
+    "docs/BUILD56_GUARDED_DEPLOYMENT.md": "757f1e97c411f46d54ea0e55e8f568be8731f34a355cfa1c1e8c68da197eb426",
+    "docs/V3_1_49_RELEASE_CANDIDATE.md": "696eabdf8eb7151b4da0b3869c75465e39cecfdf5d7ec9bded777433b94b70e4",
+    "frontend/.env.example": "1e083eda3e904f51af8d4d1fb680ac1dac02245e2a00fd32f91df4a3db0000d5",
+    "frontend/package-lock.json": "822ed772e128a325e08f5a436399b661642134734e4a0f2e6b6e5b667b5ad83a",
+    "frontend/package.json": "4dce90b088fb33dc0dfc2da94942ac14b69f353779c438e30a35d1e5859eee88",
+    "infra/scripts/install-on-vm.sh": "df21bf0e602b55dfef3af0e46f77ae30ddd7960693210a925624223cf4dc2b5b",
+    "infra/scripts/verify-build55-pending-compatibility.py": "818ad5d8243a309efa36383f29c77e7eda08f3058f275d3b85e8f3907cd48bc3",
+    "infra/scripts/verify-build55-transition-state.sql": "ad748be879ab2814c7f7326679f74b1aefe1d0ad72446e612894ba6c59231ac6",
+    "infra/scripts/verify-production-runtime-images.sh": "814ff6f4d2c866faad45d4eb1fc25eb76f4a4452a80a3d0763bec340e2864241",
+    "tests/test_android_release_staging.py": "fe0c2162ceb0cddbb6187e5f1ff6a0fcf7b9e23978e6be9448bb260592ed47bd",
+    "tests/test_build55_pending_compatibility.py": "ca791c1939cbde2a438203a8538dc8d5c7f336fabd25552a82b1f0169fa0c82e",
+    "tests/test_code26_physical_audit_lane.py": "7f108a6e4083e2b25fbb416622282dd0145e87688ac75b8cacfd8b960433252b",
+    "tests/test_verified_pip_bootstrap.py": "367fee9da14cbc8ba5bac99a778d3823440be6dd7c38716387ee2832bc641dd1",
+}
+
+REVIEWED_CODE30_4_BUILD57_SHA256 = {
+    ".env.production.example": "b06155c1969cf687492b1e05d2a20c630465347a5d8675de98a00d7b17317ef2",
+    "README.md": "a9de3403538e198c80470265370458f749e6b8099773c8e2a9bf40c4e26d02a9",
+    "android-native/app/build.gradle.kts": "0d323fc104b0094f9b2753c976b8f2e683aa504dfe0565abc3d98c610411df2a",
+    "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt": "39ab9053e0968951e7b630f034dcdb6050e99ac9e56304aebaa728ad5511f2c2",
+    "backend/app/__init__.py": "929ecc7e1bf65f96947410d9f3c05536753fdb553ddf99346df84b30e361ebba",
+    "backend/pyproject.toml": "1d5551429d60f626bbd285fb56afdd792419e1eabd38e5a1373d0a24fc68ef68",
+    "backend/tests/unit/test_release_contracts.py": "0e22b79462965ed7ae721bd010db1b9990522e0e669b74598554348ad887aa5c",
+    "backend/tests/unit/test_remote_assistance_contract.py": "77126fc1b6ad7accc61e6deae1b899c545a7f63b201c5b25619745829a4eda29",
+    "docker-compose.prod.yml": "1f8a62c37af8054ff76c654239424fd6f15eb5e2b6913c88c0b00dfd16bec4e7",
+    "docs/BUILD57_GUARDED_DEPLOYMENT.md": "890676760b98246a8f8e9d92cda20a36a8e2c7dabd5401a00ac1953da08229c5",
+    "docs/V3_1_50_RELEASE_CANDIDATE.md": "15d677fd45ed5fc70de64b8439bdcb971ba9dd4b8437f205d5848a6cab218b6a",
+    "frontend/.env.example": "4d532a350ba3fcaae00b0bbc13418aae523d5912d16dabb31fe7c347a88119d4",
+    "frontend/package-lock.json": "a03f077642dc47d2bbab94fc1e28b7fda2f5c309b43f17866134ea45ca09c608",
+    "frontend/package.json": "431a59f83aeb4aa9ca06ca43d428538fe6be46b3415b0383db49e4c15a24c01c",
+    "infra/scripts/install-on-vm.sh": "0b3a711321c277daa7cbabd33ebb26e3d42442bd5fca8ebae591df0858683b0e",
+    "infra/scripts/verify-build55-pending-compatibility.py": "8ef16103b1d963f973ed16f15eb39a5f7b73105b3ca40191df1bf1d343188739",
+    "infra/scripts/verify-production-runtime-images.sh": "ac7e9f5e81c335e1f930883dd1863b178c42bc4297daf01fcd7ed4342e74dd95",
+    "tests/fixtures/build57-compose-daemon-oracle.json": "fa1632f334bc3c7625289da0c71fefcf2129e392029bdaab29c8497ff8c4c1bd",
+    "tests/test_build55_pending_compatibility.py": "cab2213c6bd1bb6102bf4001abdeafaaa22e3de9b284e06b6f4bcf8c4a017fe8",
+    "tests/test_code26_physical_audit_lane.py": "34976e31992d5738dc18e38e75a7e965e9c1155246a5336a5d80277f9057e7cb",
+    "tests/test_verified_pip_bootstrap.py": "960bfe4739913d2bc7d233169e8b8fa4a3cf4f6585156e3f93923d7f7dcc1dc9",
+}
+
+REVIEWED_CODE30_4_BUILD58_SHA256 = {
+    ".env.production.example": "2ba9585c39e27c2bda81c76b24894ec0af4388b9dc15b5a9c96df14ef4692251",
+    "README.md": "8d419d268b55abc615d28f302ab396427a48ced8c1bcfdbdacd6a5275f66ff64",
+    "android-native/app/build.gradle.kts": "8327d7f3b76b49ad92c52100b06568e5feb8369354951554a4a2e1cda90dcdd1",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingInlineShiftWorkspaceUiTest.kt": "478717d983159132a7f2527dea60fe5c1cfeed8a2c6059c51181ada2990888ab",
+    "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt": "f5b8d13035e38bd4969ba04d719ca109a513304755ae7a2088a0c527af5ed184",
+    "backend/app/__init__.py": "a4e09c9bf09d826c3f6c46b184216b973975a94dc116befdf49ea237fb679924",
+    "backend/pyproject.toml": "fd02645af81eee1e44b61b2e3ad7901b06abb001e8c8918a439a948fd56ef748",
+    "backend/tests/integration/test_remote_assistance.py": "6064ac3c1b0452e5eaa2fb0fc36e621d50deb8e4e3ddb0db2d8da5a01932aad3",
+    "backend/tests/unit/test_release_contracts.py": "3619b049c63a00a45782a389d8644252cd7ad14c3f573f5411b515c5b45265f8",
+    "backend/tests/unit/test_remote_assistance_contract.py": "760c4c521f7bd601acf33140bbd975ae8e6407df9dcf6fb96adef9c4e9e7549b",
+    "docker-compose.prod.yml": "4ca0abcf1b22fe35d7569b4b4cc1553ba1b3620c0bcd6b2a586da9d4897f7c5f",
+    "docs/BUILD58_GUARDED_DEPLOYMENT.md": "0b511f02e347a519cf6221f749a39873afd67f656777a8f3809382caea47711d",
+    "docs/V3_1_51_RELEASE_CANDIDATE.md": "705f2990bf448ee17e4345136557e07f5ccfbb1928d1ecaf06db735051b033ce",
+    "frontend/.env.example": "30495317e42cebc2e526b14c376e00c410d67ad170bb79c73443613349ce0856",
+    "frontend/package-lock.json": "59f2b43e2301571922be32b5323ccfdfc684476767c7d0426efa52df23ec3b37",
+    "frontend/package.json": "e275f51d02a04ab9a38701f4154a5f7f1eabc6ebdb416e5ced3eb9d9355c4851",
+    "infra/scripts/install-on-vm.sh": "5383cc3f948cd1c502270cf18659901d0db6afe865a04b7795d7a24043992943",
+    "infra/scripts/verify-build55-pending-compatibility.py": "99e752d4f1e8edf4be81b4732dd6878ff48874c5d8e6613c2c67d86f5dfdb34f",
+    "infra/scripts/verify-production-runtime-images.sh": "f5aa615f0d5e120329861aeb28f899858e7acf61075f5ce9283bcb1f7673687a",
+    "tests/test_build55_pending_compatibility.py": "7625446959c00226c595e4494288e2f2aa112f4393685088758595571f1fd5d6",
+    "tests/test_code26_physical_audit_lane.py": "a7d3264f68ccb6cf539d21f522693495ec4b26902c4b66f0f9acf503327c77c5",
+    "tests/test_verified_pip_bootstrap.py": "cfd3f795a326741af78267c26a9f4f890e6539b7e04601b5896c6c79db3176c7",
+}
+
+REVIEWED_CODE30_4_BUILD59_SHA256 = {
+    ".env.production.example": "29545376d7fac111145bf232e8c5bbfbc11b4392af405e6faf510edc30a467a5",
+    "README.md": "853cf05a030fc66d551e010e862eadba0310ed696b04085e9fc026c221cf2314",
+    "android-native/app/build.gradle.kts": "eeaaa64fd3618a31f9c85c57667774ededa196561725d81fe0a59b85c7a8b832",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/WorkspaceScaffoldUiTest.kt": "8d0e97a84740f0c05a04d28305130d94797155ebe5a9bb086ab005406656ebaf",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/ExecutiveEntryPresentationUiTest.kt": "3d9cff76ed6ba838c3f09bdd1e2d6f396082435e2eae7c6add0f855556fe2f5a",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/LoginWorkspaceUiTest.kt": "21274943121a6a4b7e66ff85af01a3954e72254dd561bc9f498b0c7bdef96928",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/LoginZeroViewportFocusUiTest.kt": "4e2921fdd72c08807a6eaa9653682d89f682d963a9d06c493178cca0cdecc161",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosEmptyCatalogueUiTest.kt": "e26ec825d56c05f2c0ac8acf2a0d75a9d47fc49494350e895d123aebd6444619",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosGlassUiTest.kt": "121634069bf61376b4ad7435bafd03522878b4ed60df5a5b52371ed2359d0b6c",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingBoardUiTest.kt": "c97d96f53e4f8d4538f4ed9b75fc2fae3e7c93bfe0695c0e13509fd1c2e84c46",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt": "f7bc846135345194f936a94deaef05fde78590961f5861a5a9611199f0af055e",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDraftRecreationUiTest.kt": "56746cf1952ba2f05b3f39b4e6b1bc7a0cee4c0ce1a341771b95d140c0aa6ac0",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingInlineShiftWorkspaceUiTest.kt": "a595b6dea736b4c619a9bb567bef2a1e6e1dacfa667b5274214b282ea63155fb",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingNextActionUiTest.kt": "d6fb6edfc77672bde0836f49b0134e72a018937d74b71409c804104173a3b7bd",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/home/ExecutiveHomePresentationUiTest.kt": "cfcbfab5ecad2b06f051e6a3170122433f05ea5956acdff73bf8aebf5e89ee6c",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/inventory/InventoryLoadedWorkspaceUiTest.kt": "6029620681c945fc3d20d54b67560c836aa898f188a2a441a2f21fad08c6801f",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewUiTest.kt": "f5d303849abb95a7d2204aa813775d297d364b94897805f28e84bb0292d9a8ef",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/shift/InlineShiftOpeningUiTest.kt": "e018894a753ccff1f7ef43ec95a6ace526ac0b7646b44b2cdc13abbfef1fbb2d",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/shift/ShiftCompactUiTest.kt": "284fe5be36101f799b1245ffcc6c106dcc48dfad0050e82fb1bae840c4974d67",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/shift/ShiftOverviewUiTest.kt": "e105f3e8f103de39af708788e1837974e5a0c6b3828ee9212e1e9b7ccf9d4927",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimePendingStoreUiTest.kt": "2adcb3029b6753a8a7a4d866bd4cc2e7cbddfe10a0f6408f8e84e0e408833f8e",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeScreenUiTest.kt": "7e9a57bb2ae0d80438ebf0b3fce2b0a426b233773e1f7ad19c534fb95bff8af7",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundFixtureProvider.java": "9b2e6e62106928ee26dee007208797001737359e7aa369b4789fee86f20d376c",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundFixtureProvider.kt": "52eef493e0d1c020a4cc87347ba0d098a885752de8a410e92252b714a08ffb4d",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundUiTest.kt": "5384f58ff8c832bda83f6310225882b695025bda39d02ed4929cb779e4f197a0",
+    "android-native/app/src/main/java/cloud/dcompany/erp/MainActivity.kt": "847c88122681af5dbb2a5b56b2037db59c9e0d8d6064dfc5d02e15ef306e6091",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/auth/EffectivePermissions.kt": "51168531dbca3a140f6fe68e9dd9ff61efd9c0741da3dcb32f239918e1215eaa",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/checkout/SplitPaymentPlan.kt": "9ec1490e6f9cbb65ef1097742f5e5e0b4087db970b7af7b13ad7acc5fd3c7529",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/net/ApiClient.kt": "da4cf2a5a71b0652bcf934af84b1a8e73e48fc67562f790dd0ceac60c9e81625",
+    "android-native/app/src/main/java/cloud/dcompany/erp/core/net/Models.kt": "dccb275b5d538fcba5730ea3f39adb32c1dd3c7bc224a6d0bd2ca2b99d8ebb3e",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/Nav.kt": "92ff625378b84fb84d01fc8189fc4e8e0a4fc9ae52bcddd29994fac5ae4ac435",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/NavigationAccess.kt": "48f2415595e4ea0c39c90a405ea7e13316320aa2f72d53d6c274012391f7ac0e",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/LoginScreen.kt": "05d996fd4661896aa443eb179706afd5318c1f1b8d5e0678894e945257f6ccb1",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosScreen.kt": "551bc9c62d064199d912dedac90de8bf8f7242e0f94986c4f8d628834173a232",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosViewModel.kt": "86abc0162c3880beb3be12957510eb2ca196b084ef0b6fe2edbdc699775d6d7c",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/ReceiptFilterControls.kt": "b1e7584049297c6dea3966e075621bcaac01c134a0e50a76dbc1af46c7d7c403",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/events/EventsScreen.kt": "87654526304fb698e0fd80ec32c2786ca0a8c6a74472869c33c92f1e8c0a94a0",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/FinanceScreen.kt": "4949e5c7a4ed270abacebd62203fce15d236712a018d4a1ce7f7490e88625eb4",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/FinanceViewModel.kt": "69c55ff756d5447e495d2ce9278719179e73f7dcb3a39e93ad6906e17692170e",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt": "0101e0d2dbb475968f9f669b62964dc83acc78ca274043570488043b16328457",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt": "83f417c21294476d5355579e12249def15b370c1a5a1d04075ced3c9b429b1a5",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/home/ExecutiveHomeScreen.kt": "3e4a1f76167607caac9243cff99c8b66b5155dc5b542e5b994f080a9afaa7f33",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/inventory/InventoryScreen.kt": "248e4e6092cfbe11ac3f819b50fd3576068838e15489df15b81c03272e213386",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/menu/MenuScreen.kt": "5c09123d237c0b950d40cf183efcf612377f210ceb3d087bb9f2c17bdfc3a7bc",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/refunds/RefundsScreen.kt": "07051f6c776776b63f3c8cafdf3552b5aba219631aa3ecc94b4ce2c60d2960e1",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/refunds/RefundsViewModel.kt": "1e69d2c98b723ea47acc191bb1106ef07f7f1b9b1f211461762d28522d548f21",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewContent.kt": "8c3ec88ec92ff91c535c6cc79af11e6675c77796eafdd502be3234c214e393d4",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reports/ReportsScreen.kt": "3c68e38fe53cdf543bb27e19ea77af17c6d2f0f9c6954259079023d3e5d91351",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reservations/ReservationsScreen.kt": "82379677af9df1e0018f9049daaae35dd7f5d0d6ade1c404631ee79190df899a",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/SettingsScreen.kt": "0de92e8569010a11733ae0a3b65e404da347d1bb9ab874b146e25b561e46c2d8",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/SettingsViewModel.kt": "d3aad2b852c2eb48295ffb6ea27674e03bf079bf9dc4f169e7298661e081e510",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftScreen.kt": "63e05d28c3e8974362b7a78a1d0e9d081990625ecc198ef14d21c7a608ceb9b8",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/StaffScreen.kt": "b27150a37c753e17fda4cb9d1655a1304c46bf93a2b14297826ee3dbbce609cc",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeApi.kt": "004e7de2f476b7509f2fb7d10dc957796b578572df603009263f63b4b6caa5a3",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeController.kt": "62674568a6c7beaa2b9b09250cd8a6f454ab67fec9797e070b20751e3d9acea4",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimePendingStore.kt": "c1b93d19afa2a1681420f1092ad348234269450b2a5ede843086bcd32896ed76",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimePolicy.kt": "a67f38f6b91254b0b3751b0829a442cf47674ae44ea0d6a0864c5d55345a3d72",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeScreen.kt": "c205c786441a1569d84f055679544d96d668e828561573873858860c0b00d991",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeViewModel.kt": "692334dc520b4919a942fe2e5b45e1bec313ab41c2f25f3d1735fad29b99b3f6",
+    "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt": "bbc80ede8a6c33c8ed5c30220d9f887365c692c7f699a737d8614b6a616de9a5",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/checkout/SplitPaymentPlanTest.kt": "687628c7606b1fd7d607c1f015331b67d32355e3b0ec8eef2d21f0f86c1f3b46",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/money/MoneyDisplayTest.kt": "bc1fa52c335152721f1a940601f70048bc87ee562ffc87e4cdc133a380399fcf",
+    "android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteAssistanceSecurityContractTest.kt": "f92e8e67ea90680e0dfdec35fa54cbcfd1d0f4bd2f24cb9213de434a79ef9b20",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/OptionalUpdateInteractionContractTest.kt": "dc50d2eea3074b6de9b4ec1b040eb5535152ca0674c901d404a656cb7cac8840",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/ExecutiveEntryPresentationTest.kt": "324eaad5edfa13820ed8faad83ca7b4fc8af7fb986e972ffb495a80c1ae7e810",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/HeldPaymentFeedbackTest.kt": "cbc4721d78821c08d18bec5d26d164900dfd07bb0588f45e6a097159933f16c0",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/LoyaltyProgramContractTest.kt": "1a81937f4ec7113f6bf73eec9fe829ae2194f4299c9ab470c6e237917cec31ec",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/PosDirectSaleFeedbackTest.kt": "96cadb154a93d9fb9547e220cc6a4ec5657de61d483cb71b4bd8ac66a6d1c07e",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/PosReceiptPrintTest.kt": "38d2a4891673fa994de4d4b7534e9675116baa3a6354bdb3e201049b98284df8",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/audit/AuditLogPresentationTest.kt": "a54d8527edbfe8fcf79ed728a1d8c42a26e2253b4df81ac51d7058d6f1616b4f",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/audit/SemanticAuditPresentationTest.kt": "1b2340f7616fbe235e64b8048351fff208bd39c2be9aa2ed916dcbc03d4bc86f",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/finance/FinancePresentationPolicyTest.kt": "461dec29c196971a8afcf8d9ecb8a8853c76110c4e4c470c4a306a0bb531f62a",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingStationPresentationTest.kt": "661b825da9b62311d7e32abca5d819f9a62be1594789c4715e654f909a1b5812",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/home/ExecutiveHomePresentationTest.kt": "745b4c5123ec8a806a4370b2bf7748e4518b3ae6ece26831d7e20be976077eac",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewContractTest.kt": "4ad96efec1dcfc5e800246860917cfa874971dfa1a89a8f85997576a55f8ff82",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/shift/ShiftClosePresentationTest.kt": "0d92172173e6891714afa6584ae8a7928f71a0f18b75df67a76f828acd51145b",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/shift/ShiftResultContextTest.kt": "f9b0df81f4a7912ffc4b70a5d44a2bce54a9761a85c10fee65c0db2120158bbc",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeControllerTest.kt": "77bc1362b524b702efd06b6ee5ddc36dd717e1241d8f85503100d1c4fbe6004c",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeNavigationTest.kt": "c125152e4f813b34571ba7e47f2759ea805648cc8dc80d6b4c2c439f694e940a",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimePolicyTest.kt": "39281ff6fdbf79e126761c4262262f624bf1fc91e1341888d00b458ad0766bf7",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeWireFenceTest.kt": "9c092c26b6bc197e5cb254e7ac160ce2d1181b503a028ff4dde20f0a3202e057",
+    "backend/alembic/versions/0094_staff_work_policy.py": "a3de0175e70f3924ff39c6a9f26b4e581e4c6f17bb364404e1aa3de80765c55a",
+    "backend/app/__init__.py": "9ab646a6a4ecda2668b7b67feb325cd71f553751ca4764edaf9ea92f2c624908",
+    "backend/app/api/v1/finance/router.py": "9b5b4bf25d654ecc3da216f42478cabbb1789a9476b4a2a89c33c156f29c3b5f",
+    "backend/app/api/v1/pos/router.py": "efe21a02cb34da692b88c24f3159e73bc6c38a97739d3ec9e722a90ca885920b",
+    "backend/app/api/v1/reports/router.py": "790ef6e4e0e97acaff316f3dce6a8b4647fe5a040a6d6e40461ad631265f11de",
+    "backend/app/api/v1/router.py": "ebb07d7d529c663e02c9655c67936cd8d178d720ff9f934f2dc48a43a4428703",
+    "backend/app/api/v1/settings/google_sheets.py": "962b7cebab11af3b6250f4be12882d946fc65a4d5aefa0d9235da8c5aaaa62d7",
+    "backend/app/api/v1/staff/router.py": "550502f0f5dce86b7d65babfc76636e538c66e66d22bbe63565590d3231b176a",
+    "backend/app/api/v1/staff/work_time.py": "e83187eb7ef27a245567301f814acf53ce40f5ce037ce28395bcefa95fc106ba",
+    "backend/app/core/db.py": "f1aab1f800e4c617d11d1b96beeab16ef011137420ece2efb057f18ad7237531",
+    "backend/app/models/__init__.py": "2e9fc366ccf221bfadcbf93a4be212426742b9266c212043f043053f23527a3c",
+    "backend/app/models/staff_work.py": "ec531b2fc6be03ab574f0e3254f83c1ca4f8691795ad7459dcb3bfb52557fdec",
+    "backend/app/services/alerts/business.py": "b6eaf59eba9da3ce18ce1527d28c74913110536be3887a7ea4e71071979db7f1",
+    "backend/app/services/audit/catalogue.py": "fc7b152d456d6360c74dd210e7832931df2c6ff4da5b8256bcf251fdefb7013f",
+    "backend/app/services/audit/recorder.py": "f1c534436cf14a5dc1cb4a496c0803a2ddc54f5fa58ff328eefd09dd77fc6844",
+    "backend/app/services/client_updates/policy.py": "84e2393c2f390dee483a890c3c71aa511378763ee710157c6de14b3c33a564f3",
+    "backend/app/services/email/mailer.py": "803b99e95dbb2913d90b4560f77e330bcc93f4e8ac2c79f203b07bd8efc7101c",
+    "backend/app/services/integrations/google_sheets_mirror.py": "a14a263a0e9f39a359788f06e26b25326317089c8e3fec2da1ac25e9e622d778",
+    "backend/app/services/integrations/google_sheets_staff.py": "0752bd58eaede5b1ba1345eb1744b28328a53d15f5e8bf90af4a2e7a2561f4e5",
+    "backend/app/services/pos/points.py": "b276c915bb9a48b0a37a04f8aa86357a5dfcf5661fdbf8a8a0d715d583974eb7",
+    "backend/app/services/staff_time.py": "64bae035799a240d6793b3f0518f887c7ee15839bfcd4bfe5a9583cd250a0ebc",
+    "backend/pyproject.toml": "5e9c1abe47d6accd8dc2b3b8842c4333050884304b987a201b8da55b7928b1aa",
+    "backend/tests/integration/test_build55_transition_state_query.py": "63e986bd01b6fbbed54144836f313030ca435fd790276e440edd5160014c556c",
+    "backend/tests/integration/test_google_sheets_staff.py": "98b8ba225603f7d74026e37d03aefb3f7516b49cce0b4962d01247a0d998e030",
+    "backend/tests/integration/test_remote_assistance.py": "3f1522efd8665df9f6fcdf4428ee607a2bac94a44371af2f8204d5344d665d98",
+    "backend/tests/integration/test_staff_work_policy_migration.py": "a78d76729a6afb1bc6bf153688d77018ed877d11fc7e9924d2793620d9bcc4ff",
+    "backend/tests/integration/test_staff_work_time_api.py": "78cb8525adccf2cd6763ce79f28f718d3f5114ca4c8e7bcc44fe5d1a45a80d9c",
+    "backend/tests/unit/test_android_update_policy.py": "cc35097a007ce43bd25a97b718d5fb922adaaf8899c4e5a1d09970e795a37a95",
+    "backend/tests/unit/test_attendance.py": "b5b38940fc8d6e35636729e07c57072ed15da8612e91807fabdf902d47f2552c",
+    "backend/tests/unit/test_google_sheets_staff.py": "384dbe26cdd975d0c45b86894b4e0408f3dde1bcc83a25fc7e39ee317131c12f",
+    "backend/tests/unit/test_release_contracts.py": "773c6e6b6772781b777a2b958f85e7e8c4b3dbfcb2e2561673dba0f871d66c3b",
+    "backend/tests/unit/test_remote_assistance_contract.py": "48fb5a2307afd82c107120227098f4aab223e951a7e88d4c452caaba0430dca1",
+    "backend/tests/unit/test_staff_time.py": "ef37aef0339c75c9c97a689f57e0817dcce158a043c565694d06c68958292765",
+    "docker-compose.prod.yml": "cde41d3d45e1f6480d14beee8a9f7175398966d3b329ffadde6032fac85f7875",
+    "docs/BUILD59_GUARDED_DEPLOYMENT.md": "8febc660ed4d47e4fb3b25d88287bd14603e10ad0d07035d7e597c54674b79f7",
+    "docs/GOOGLE_SHEETS.md": "3099d89cfa1068d1bbc6591192178231fc3e93b1569bc652e2b6b2241d0d0139",
+    "docs/STAFF_HOURS_SHEETS.md": "d56c92392863cf8e9717edef440418053133175378e12102c69b062507408504",
+    "docs/V3_1_52_RELEASE_CANDIDATE.md": "2fe2ff825badae8134498997a8f9a9bf45a7d3384b687fdd0678203d72cfbf34",
+    "frontend/.env.example": "6879a952ba1f25992c7217f89c94e58829bef18a1dbf64074c2c91e5c3619ed1",
+    "frontend/package-lock.json": "0287b883666ac731f0784d3917b05866ea6360860b7d6978b71c81253d64dcee",
+    "frontend/package.json": "dbed7030cba26bc48f5bc4ef92708330541fd008bbca0fd82a8a932813ee6d6e",
+    "frontend/src/app/App.tsx": "799320fcc8b7185aa017e38d2c0b33a50cd76c00e75f638280d6c221003a2963",
+    "frontend/src/app/staff-time-route.test.tsx": "a6164b20d2d9c0f75f445f14ec38d867cb4f2ad45b19948b664a0e90815325f0",
+    "frontend/src/components/layout/AppShell.tsx": "bc9ab88984d7c0547029950c7e44c1213125c134dbbbe88898f298d261d76a09",
+    "frontend/src/lib/demo-data.ts": "6bdd5aac3639877eb38e1863e6b7fe888056cd5ab8faa0911223e4e2e41086d3",
+    "frontend/src/lib/google-sheets-daily-receiver.test.ts": "af65b3e4eaad74084400a945d04648e83f4864a9a42b0c3e58ad7819799de375",
+    "frontend/src/lib/inr.test.ts": "a54acc2be5773e1bca1f3d9422a3570ae5036077aea464cca15c51aadee47275",
+    "frontend/src/lib/inr.ts": "f863e75ce3a543d110318b489146b5ef3166ff4a3e6aaf96632ef6ff96ee24ab",
+    "frontend/src/lib/product-profile.ts": "419e6650f10ba501280e20553d8afd8b88502817bad8c524c9c8ec4ba73fd331",
+    "frontend/src/lib/staff-time-api.test.ts": "8bc0ee2cf73084f8c2e059a419e18a9d819e73e15ed35d209ade8fb10174cb14",
+    "frontend/src/lib/staff-time-api.ts": "2aed802ddf6c192624d148a515065bb900a84f7d3906aedc7224c4d41e37d133",
+    "frontend/src/modules/analytics/AnalyticsScreen.tsx": "fd0a570cfe321a2381a5d0ce0320905648ba30c215578c71492a4f62d255a4f9",
+    "frontend/src/modules/audit/AuditScreen.test.tsx": "f7ae9e86e08c8fd43312ce7c119438d36260a0ab7f254d03cbfa4e864db2c675",
+    "frontend/src/modules/audit/audit-presentation.test.ts": "cfee5f2525dd6b5ef4febaf34696c726c7b202bbca783e13910a6b3e8b9b0c51",
+    "frontend/src/modules/customers/customer-points-program.test.ts": "b57c06489683ee30c30bedaf8a084150cc6d3ed5439c9cde1506c91da86c3591",
+    "frontend/src/modules/events/EventsScreen.tsx": "d5cfdd0a98b1cef7c4e529e9ab5ccb90fe2aa74a7fa4d77724e58a81e2c02c2b",
+    "frontend/src/modules/finance/AssetsTab.tsx": "925d3e63c8090fa4be905ef1f423e47e197514a0740aa32f225c756822fd4652",
+    "frontend/src/modules/finance/FinanceScreen.tsx": "c925a3fc6963fd6594c179cce729af81c2e606d1cd4d75896047eec1eeb465e5",
+    "frontend/src/modules/finance/ManualCollectionsTab.tsx": "9891eb5ffa7be15c6f74153b236b5f8af2dc741b2aefc083e92891e32f9025b1",
+    "frontend/src/modules/finance/TenderCorrections.test.tsx": "7cee6fd321bfb11aa3a5e59a6b4995ce068847f1df6d385ab446029a499934a9",
+    "frontend/src/modules/finance/TenderCorrections.tsx": "6ce333ce518b4b6da06f5e69d8d01d49fa37e59f77d38254bf645b1ace83e701",
+    "frontend/src/modules/finance/TipPayoutsTab.tsx": "6b059aacf720781b5b277b847ee18bfb520bd23aec7cc272ce6351a5d295478d",
+    "frontend/src/modules/gaming/GamingAddonControls.test.tsx": "da3db2f396b8b4b7919bc0b78310c837cba0d548bcd73f5fa5d541ca2bd2e6ed",
+    "frontend/src/modules/gaming/GamingCleanupRecoveryPanel.test.ts": "2126e50a6931d6a424c24ca9bdc3c51e09a1f1274876588a60dead9e861b334c",
+    "frontend/src/modules/gaming/GamingInlineShift.test.tsx": "bf026f1fe9a04584e772b43d8d2f70a07f247a022a5edbd0c821da5776a6eb67",
+    "frontend/src/modules/gaming/GamingScreen.tsx": "97eb91ee73c72393e87826a4dc404823ccbabea40e47acd35d829f6c22123de6",
+    "frontend/src/modules/gaming/GamingStopConfirmation.test.tsx": "e219b257b5b87f645c952d7c5984dcfcfb293eda6dd37ed0b8c5221390f55a97",
+    "frontend/src/modules/insights/InsightsScreen.tsx": "0cf0b058a62bb92547e5e6549c1853bff72c5930d90a22b97622c10f27fc3633",
+    "frontend/src/modules/inventory/InventoryScreen.tsx": "534971088f559797d0f24b4a49b590fb450a6f5edc886f82b4430ef5e062f2db",
+    "frontend/src/modules/menu/MenuScreen.tsx": "eaa816cf38f9496175d64aeac7b612c6f51519eea0d02dc97782a32410269f99",
+    "frontend/src/modules/pos/CloseShiftWorkspace.test.tsx": "f54817402b59487be04a4a9b838ae6c9e9103dac15f2cc0cf111ea1ea4f77538",
+    "frontend/src/modules/pos/LivePOSScreen.tsx": "75ff26bfa258a76f23f03c73b76b40bd6e33b6d5f0a82b0883c82f1dce713cf9",
+    "frontend/src/modules/pos/LiveReceipt.test.tsx": "e238e60aa58143ec1aa2cad9f35507ab9ad64a30202e42b8c1facfed226fb460",
+    "frontend/src/modules/pos/OrdersAndShiftsScreen.test.tsx": "34d436aeabcd3f108fe8b0621e91153b3ca1b474ac0156f8b6ff1820f9d13e12",
+    "frontend/src/modules/pos/OrdersAndShiftsScreen.tsx": "df9cdcff3eff6aa73915e06ddca03bbc1ae13285c0172fbd2cbaa7a6c44f490a",
+    "frontend/src/modules/pos/ShiftAmbiguity.test.tsx": "f20e51b079830d194fb0ae726cb63d97f1a9a80547fffc261b8191577137fe4c",
+    "frontend/src/modules/pos/ShiftRecoveryCandidates.test.tsx": "e669f5dca66e6c497485be4a4710c5bb21609770ff350b5035fbab1d337d09a4",
+    "frontend/src/modules/refunds/RefundsScreen.tsx": "5c68b504031e6cd24b19bbab39fd2d7945289672ba4356e15b6349caca687180",
+    "frontend/src/modules/reservations/ReservationsScreen.tsx": "bd3f680d1021bc333671d61e012e35977bc615047b31d98ad492af1393ef92c1",
+    "frontend/src/modules/settings/apps-script.txt": "66696e81a71d714621023e4ed614ad8ead73fcba0c9999011664a8b060800130",
+    "frontend/src/modules/settings/tabs/LoyaltyProgramTab.test.ts": "ea89249403b80c47c4140c180c411c0074f11668533d6e8c89a5f7a59fffa1fe",
+    "frontend/src/modules/settings/tabs/LoyaltyProgramTab.tsx": "a631bf9916e5f796b36f8009baceece9c66d6b937b3f0c823d2424eb5a0a0408",
+    "frontend/src/modules/settings/tabs/MembershipsTab.tsx": "5a2e15d2b92fc252fc82d9ada98fab839296dee7b9a64a56301bba5264fef5ae",
+    "frontend/src/modules/settings/tabs/SheetsTab.test.tsx": "067ecb31ce9eaa121ce29689dc0f22c798e45a3aba75f5c4b036fdb2444290d1",
+    "frontend/src/modules/settings/tabs/SheetsTab.tsx": "8d6e0ea53912fe6ffb8d1f689a0413ad7ee9818c49fe4500d9e60b1c31916fa5",
+    "frontend/src/modules/settings/tabs/build51-evidence.test.tsx": "f1e0839ce4fd7c343d4116363288de61a6f2d43d229b88a4cb2e628bcd5e1ba5",
+    "frontend/src/modules/staff/StaffScreen.tsx": "b8a511efac8ce5472c83489cf96eca20e9350350d26d54efe8b56671ec734771",
+    "frontend/src/modules/staff/StaffTimeScreen.test.tsx": "5c65c6ddd809db28af5dd8f2daf6c334eca73d06f96877488c0964d56da47c3b",
+    "frontend/src/modules/staff/StaffTimeScreen.tsx": "4c95e5911ffb79c351ba3e645963b6d87037f5a4c47a9dc8ac331cb61040287b",
+    "frontend/src/modules/staff/staff-time-policy.test.ts": "cea7403e73f1a02e4f30fc3588ea0a57ca02e9d6be07ff5ff84f7d1341bb9061",
+    "frontend/src/modules/staff/staff-time-policy.ts": "545cd2b24e08f99bf72b0f38c8657f6ec6be7b61f385891c6ba0ccc018609f57",
+    "frontend/src/modules/staff/staff-time.css": "a4f56b026f7c1f9f278ee3c7044f1fdbc3c53a47027e5df6e01759060220ff1d",
+    "infra/scripts/install-on-vm.sh": "5358fe8a9b97818712ddaf42f730671713b43529f5b0fccaf82a15f6c0e64f64",
+    "infra/scripts/verify-build55-pending-compatibility.py": "fb563655ab2348c1754b6e68c9e655f61c3128051306f8911734634a32602684",
+    "infra/scripts/verify-production-runtime-images.sh": "bc3d7f0fef1d356e5822520035f86018bc2698aba8357a98ef1f0e7e5f1789fa",
+    "integrations/google-sheets/Code.gs": "66696e81a71d714621023e4ed614ad8ead73fcba0c9999011664a8b060800130",
+    "tests/fixtures/build59-nginx-metadata-transition.json": "dc120b9abe8ada390c2a7f1f14bb1c14676eb5744a2dec3a44032a1f8778ffcc",
+    "tests/test_build55_pending_compatibility.py": "5d028bfb9660fb916a5c802d3234835752b58bc9cf534b461c659bde9f04307c",
+    "tests/test_code26_physical_audit_lane.py": "fef48da96b69c7ecc5206c8b50c19118a1ce2151a54ec93fb40af706260a4ee4",
+    "tests/test_verified_pip_bootstrap.py": "45f425f81317a05f105d7ea9d5bbaefbde2e14ad527e87240ac0aebc73ce109b"
+}
+
+REVIEWED_CODE30_4_BUILD60_SHA256 = {
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/components/LiquidSharedComponentsUiTest.kt": "6349d071eb6ce9d04046187112edd32134bbcc9d92c7a5ecf4e515bb73c1fa2b",
+    ".env.production.example": "f17ba6ff32762be37c803c205dce2ba9a09b2a5cd54698cb865ce1c9c30b516b",
+    "README.md": "95c06b3a142ca8cef6a4d550305dc62485b39b630b379333ddbb1b7c9dd55b43",
+    "android-native/app/build.gradle.kts": "262b6ba7b3036637c01cb82b1cb17b88b0a20e2c8d619682c8c102eb205d911d",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeScreenUiTest.kt": "b2729a0907bf163c540cc3a4dd5affd4e10021c5f632b0b81d50a4ed3c659340",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffPayEstimateCard.kt": "655df4910954f7f062db0f82f1943702a664e3782a16cd1439073c12b9d44445",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeApi.kt": "5b9211dbfa7384c280117d6b245bed9a0150b6dc72c61d1c043f5516f4d995ff",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeController.kt": "fb481988d2c9641c354ce3dd27f3a0b35561b687588a62e757524393ee0b3629",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimePolicy.kt": "504016420c2063ca3214a17ea5248564b356b0c5b60fdefaba42f0c1532b9046",
+    "android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeScreen.kt": "2fbb6af2a35ad96478a38068790ef08ead9e2435c86a03608ffa6c78dcc42845",
+    "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt": "203dd442e9422fda19c6fd450d134326406cbdf780bde0f2a589f1f94e1dacf4",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/StaffPayEstimatePolicyTest.kt": "c3b7ff18defa04a73f2128cea68ad98cc22260c844eae4041e82933a92e367aa",
+    "android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeControllerTest.kt": "5fa4360527afd605cc9eebb6e260b1510ea13715b6118129b531d29ee7b5e159",
+    "backend/app/__init__.py": "e7fda6ca2e1e5a65ac190f99021e44df22bfa6d381bd54fa818401e4ce3605e8",
+    "backend/app/api/v1/staff/work_time.py": "71a94acec7580c8b679fa415745060bb6866d2838bfc95958c77625ca8566154",
+    "backend/app/services/staff_pay_estimate.py": "f1ad52132192fc9499b3a096809f05a09c65f98aa9e2e1361a99dbd5aae15921",
+    "backend/pyproject.toml": "4ebbd0df5ff7d122e6f349603e630f319ef81a83135b5331a893ff5f98fed0ac",
+    "backend/tests/integration/test_staff_work_time_api.py": "a0c98e77f6a4b7230d190502a1020c631adb3b5755c3808d86c6bb53e7b43b7d",
+    "backend/tests/unit/test_release_contracts.py": "b440cbeb383382db1d9c18d6beae5a7346a892fd14d9c00d27d63ac6d677ee6a",
+    "backend/tests/unit/test_remote_assistance_contract.py": "a6c990f3057b1d5091789d8b1999253f257dbe089d4bf9c71470c5c6a477d2e5",
+    "backend/tests/unit/test_runtime_release_parity.py": "27a0dc21ca0877d31909c694e1403b0e6d03bd124ea0aa954d6094982f51c0d6",
+    "backend/tests/unit/test_staff_pay_estimate.py": "bda7aaac69bc00807d9d720dd4ae09c04a612e7fd09cd3918c8270418f0128c0",
+    "docker-compose.prod.yml": "4285ae89a1b589fffa920bf2d96b1ded373af3f2267c4e1e3d9a909f439b49d2",
+    "docs/BUILD60_GUARDED_DEPLOYMENT.md": "dd21787351934deabc0588c243cc27e64056a5465a4dba50d3b462d0fd1bcfad",
+    "docs/V3_1_53_RELEASE_CANDIDATE.md": "05e68f9c182f35ab0316434ae214e0a28569502cdf8b76f292a62885d140066b",
+    "docs/modules/staff.md": "bc0cba25e8fbae198f65a8cb9bfad4bf6ee826c6632873b25f3bf1db32faf889",
+    "frontend/.env.example": "2bb40ede827f9d9b064a5626e31c23c914963ba925f91be48e780cc9bfb66fdd",
+    "frontend/package-lock.json": "9341b5e501da753157a16375dfc250d2710642a8edfdab3f949041068aee9759",
+    "frontend/package.json": "1a0ac33d942dca0cd969f1f17dcbe22b4d09c7977e3e99dd4b86152a9e747600",
+    "frontend/src/lib/staff-time-api.ts": "c4f9c324638bd5ab60f56bd9f1f1bb99368b00bde54f6a5d2fbbee25779947ac",
+    "frontend/src/modules/staff/StaffPayEstimateCard.tsx": "2eaad7b0964ce0e5b25072029b63c189429fdff8db080a1cddebbc7663d43b36",
+    "frontend/src/modules/staff/StaffTimeScreen.test.tsx": "779cb50685a88a34f5e8900480b9081bdb3a00e62226ffe1bdb9cb828dd9d3d5",
+    "frontend/src/modules/staff/StaffTimeScreen.tsx": "0239cdab6b96e76cc9a8ff811791eaafc525df8ebdeeea4111bde1438d2c58fc",
+    "frontend/src/modules/staff/staff-pay-estimate.test.ts": "310f7f1bdbccb54b39c76184578024af03b31aacbfc14a050ed3dbe96ac1c80a",
+    "frontend/src/modules/staff/staff-pay-estimate.ts": "6ed2905c2ce110c9b7ba175456e5b8e624938632a1367f01129e707c1191fe98",
+    "infra/scripts/install-on-vm.sh": "908a87a3b4f5b6023e856306ffa185d0d74f562c3a47d42c87ff142d32d3ef55",
+    "infra/scripts/verify-build55-pending-compatibility.py": "70b6d16e2c2aafc128cba62ced8daf8489fd5625b3ce05a87cd7e61b41223ee0",
+    "infra/scripts/verify-production-runtime-images.sh": "b67e5f8f535cf100ac457aa2fb2d873a6c37f6c582bb93041821a69aedc92f21",
+    "tests/test_build55_pending_compatibility.py": "387390bc82f19a9bad95f824e93cd8b0880cc36083089db13c3c1950227c0186",
+    "tests/test_code26_physical_audit_lane.py": "ae08428f1b8764f483ef5d0d0bdbcc1b6880d60055b992b79c91f7ef36a7e278",
+    "tests/test_verified_pip_bootstrap.py": "10f0a1642c1699e9ce730d0548f3f9c5164add1273c27462f90bc2a512882de4"
+}
+
+# Successor 61: only this reviewed overlay may override immutable build 60.
+REVIEWED_CODE30_4_BUILD61_SHA256 = {
+    '.env.production.example': '359e9577894dd1a9505093e1046d4a5991b5e50d0c5a6753721fcb2b2ec9cb2d',
+    '.github/workflows/ci.yml': 'd77d0d8afc1f438883eae9599f3019a51b7cc1b8fc81bc07c2275cc2b4d0e59e',
+    '.github/workflows/release.yml': '314eded306683a6dfe21a370e4559e1f3d4b0d99184b687b394277ebfe970c67',
+    'README.md': '8bd8f3d1517ce09240419aa300120fae096f98abb7fbf47641e8a99d92b2c223',
+    'android-native/app/build.gradle.kts': '4dc9e3577aa7e18f093d36de302f4e7892fb1580cc1fe5adb8d87b8bc47f9db1',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/LoginZeroViewportFocusUiTest.kt': '72fb41acc963a0b32c5ec9c68982253f2ba98d27526c7152da19f5b4b17a0263',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt': 'c05b58d81ce31c8fa76102257d871d8c24b3dd660f939021aac459378e30a89d',
+    'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': '0566beb8ef34ca92b272962fd9292df1c33fbf75fd2a154b35b0d7a9007b6a22',
+    'backend/app/__init__.py': '28d25afbc88456150f4ba6f51aa6613de638419303d4c880ba6d69328566f043',
+    'backend/pyproject.toml': 'f34518b5848d30cce5817e74b8ad647eb6496a84beae9d9a0fb1709a3fbe0556',
+    'backend/tests/unit/test_release_contracts.py': '8bd6b94817940835ad5be1d39734476ba42658d995824c02efb21fcd6f7febf8',
+    'backend/tests/unit/test_remote_assistance_contract.py': '52b0565c368c850482b97587354200a8e42973f448f531f57620f5f07794b5f5',
+    'docker-compose.prod.yml': '5564c4dbbb47ba76ff3f4c6fc89283bb33e57e3e4c23fac790c22b623d8754a9',
+    'docs/BUILD61_GUARDED_DEPLOYMENT.md': '68f77a6fd13eb0d7ff712c91b098c63b788b8364a7f32385575e4f440d44f437',
+    'docs/V3_1_54_RELEASE_CANDIDATE.md': '6fb0d532230e9317ca67b987cc9eb612773209022b9f746739aa7150e8df8d70',
+    'frontend/.env.example': '5d228826536c760a48a2a961f5b08e2289475d040e7573f9272a47514257cf5e',
+    'frontend/package-lock.json': '5f6325ca5a1d1a73b48d9ad735a6cce02d559100a360d3852ce7eae644d83c32',
+    'frontend/package.json': '5a1cc1581bbcbed377d2632475a66fcebe8e131c1ab30bd7ecd8e8280ecbbb89',
+    'infra/scripts/install-on-vm.sh': 'cdf3615601d066f729a01698be508da313e30ae1b613d4f34672318623e5a91b',
+    'infra/scripts/verify-build55-pending-compatibility.py': '54349fd4df7003c0fd00d51876a1b72d994b989b4dc320bb329afc1029d16aa9',
+    'infra/scripts/verify-production-runtime-images.sh': '309d0572c4b7f863b0dba1c59beeafe7c438d98c09aa99fbdc69538018334f78',
+    'tests/test_android_release_pipeline.py': '44bed8e77bb8923618c17c3e95fd66167f7f512e3d1f13a68337017cb864f36b',
+    'tests/test_build55_pending_compatibility.py': 'a66f0f5867d76e4bc110fcd3ce0fe66bcaa9cb4d16f1fe4ec1626ee97222ff54',
+    'tests/test_code26_physical_audit_lane.py': '1fa260cade99a8cfecc48a94dfa74213e90bc77a32e5e818f3b9b778900455b0',
+    'tests/test_verified_pip_bootstrap.py': '5a08079df51791900f786de1e0d1edb4aa89fad528b08b51f1ce2a695e45acac',
+}
+
+# Successor 62: packaging correction; inherited literal maps remain immutable.
+REVIEWED_CODE30_4_BUILD62_SHA256 = {
+    '.env.production.example': '909ae6138bc35acdbdd0a42f5ee2ea3872e81ef6dc12ce5746df9285e5b879da',
+    '.github/workflows/ci.yml': 'a4af1e5d36896e2748e972fcdb95a1359e2c9e09eebcbc350bb2ae7503b5ac67',
+    '.github/workflows/release.yml': '89546de637934250caa883e75c5d929d0b5c60d17eeacfaa5cd731746ffd90ec',
+    'README.md': '5494c4dfa8843b68a95ec97aec2cbd8d6233b31d7f97f21ee12604ed81e7a207',
+    'android-native/app/build.gradle.kts': 'a08e7c5817540c5618d96ac89010c74f083caa8b14fea6e45c159ccf5d837cba',
+    'android-native/app/gradle.lockfile': 'a342609acd330e0127f28b2d3db762b396b354a848a15ff5618300a4d94ea880',
+    'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': '441503c7fe7c1d40b69c699b1be41f910d3b964c50731bd2a3ead7c962fcf832',
+    'android-native/buildSrc/build.gradle.kts': '1fd148e0fb55839265d42d613747a0a7d5cc3f2120b9e7817e8964e844350f68',
+    'android-native/buildSrc/gradle.lockfile': '1aea8f04aac1d387f673aaf9ae1cbf46d577bf93bbb8beaa62dd08c6bd37932c',
+    'android-native/buildSrc/src/main/java/cloud/dcompany/packaging/CanonicalBundle.java': '71a7034cb82712f62d6f9529542e2de0d5a955ed797016d5d06cdf31d9739038',
+    'android-native/buildSrc/src/main/java/cloud/dcompany/packaging/CanonicalBundleTask.java': 'd756d9e2a5cbe4e77fa673afb89b0432e92096c49cd80f19c90aece1bd0fa5d1',
+    'android-native/buildSrc/src/main/java/cloud/dcompany/packaging/CanonicalBundleWork.java': '95e8f2a6c8d10ef6df43451c98a5d37ce1825978a0730ffa52e56ce0b01001d5',
+    'android-native/buildSrc/src/test/java/cloud/dcompany/packaging/CanonicalBundleTest.java': 'b0214275fa3f19f48330cb54632764dba5ad35db0bc445cb7bd4360e4abb792b',
+    'android-native/gradle/verification-metadata.xml': '9f457be4d5e499f8b5e80be16277645d989a3c1380df0ae504c21bbf54a0d593',
+    'backend/app/__init__.py': 'd6a80c779fb9e6d055d07d837ab22b2de1fa53571e64ce92046fd2cbff7510b1',
+    'backend/pyproject.toml': 'b2c260408ebbbb8c6475efc27ecd7a5a6a0f48bfbeb1c736fe4518ca79cb9e86',
+    'backend/tests/unit/test_release_contracts.py': '00156a078dbb110f652e53f7eae78e837daa0cd955c2c8b7547bf4b33f58b663',
+    'backend/tests/unit/test_remote_assistance_contract.py': 'c225ae5fe523a08e46df14108d9efd3c9e8d0e045cba21a0bfa051d1fd1ee8e5',
+    'docker-compose.prod.yml': '39cd2d8f4bce03213059c989e135677dd1d803e0d4c91e12603079b9c328ea36',
+    'docs/BUILD62_GUARDED_DEPLOYMENT.md': 'b735720e0a23ef30d004cecd92be68c2576595d3b46194fb0a9db22535c5f839',
+    'docs/V3_1_55_RELEASE_CANDIDATE.md': 'dbcbdb8174457ef3c0f976327949aa69d4d06dc79e1a4ec18e6a6fc8d35d0d7b',
+    'frontend/.env.example': '83f3225c1795f19ef015dcffe3f05893d5f45de34268cf963054e8e3cf2cf5a1',
+    'frontend/package-lock.json': '24732e3874569e42b1d10683be1225e58f77548e65fdf6c841cc14149eeb1801',
+    'frontend/package.json': 'e3c094f7445358b59cc43fdc4e2ce4e34f7bab77649437057a51fcd9c6acbe0b',
+    'infra/scripts/install-on-vm.sh': 'ab2db438e0961639389e30a98ffa8cb28330eaf4a3f537b137d224523199fbe3',
+    'infra/scripts/verify-build55-pending-compatibility.py': '94a5298fb053dc230d5489d34f5989a5b7e781e005c1d2c26ecb5ade772a9249',
+    'infra/scripts/verify-production-runtime-images.sh': '5f10606264b2a13b71cfcddd8d399a6904ad89050da5bbbda854e92342213a02',
+    'scripts/collect_android_unsigned_evidence.py': 'd0dd9f41bd6b4425253f3e98a5016828bbb1707783fcbbf8d6f8d4ace223e998',
+    'tests/test_android_release_pipeline.py': 'd2fc8b6de708e21efe46a55fbc8de813a7ee7bbea15e1c6eea998e2ea678340a',
+    'tests/test_android_unsigned_evidence.py': '77f0ff1040e2f379cae6f954c7367c3af3819d98680e315dbe6e810004209949',
+    'tests/test_build55_pending_compatibility.py': '7357c5c1daceeecdf24ff70926dcaf9204a47b243a9e6d2142649e166eca9426',
+    'tests/test_code26_physical_audit_lane.py': '15444a1479937fd1999309a9f42ceae104220fa8d81b5113d40df72359e1b249',
+    'tests/test_verified_pip_bootstrap.py': '806742c2cf5c844b660379e084478981716322a5fb7bf77136bca68c1114921e',
+}
+
+# Successor 63: bounded coordinated-gate job budget and release identity only.
+REVIEWED_CODE30_4_BUILD63_SHA256 = {
+    '.env.production.example': '515bc099e1abba6ee8221007972397432a4fbafbb41e3dc2fb71a89d2f1b9a15',
+    '.github/workflows/release.yml': 'd96513382fc932b4bc4798ae70d2d455ea8af035211cbc12406762134adbe9b5',
+    'README.md': '88079b4e749571925a1de9534ed2d798a80e73c143652595a87ad127cbc5a2db',
+    'android-native/app/build.gradle.kts': 'c9b88a01edd87a82964d8ed6c6ef0922aa22c9cf7e2ac025afdb7d8707d9a6db',
+    'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': '2d9d3387b4ff666fc4f0075d866c03f0cb39610001cfdc4c72958d8955007351',
+    'backend/app/__init__.py': '0e3fb3a003705051b19bb837a5be069e1e3a95c92c244cfc005b25303350b99d',
+    'backend/pyproject.toml': '824f2982140c08eae23fc83cbe456745f3c8e1e47abee11cf0b219953ec90339',
+    'backend/tests/unit/test_release_contracts.py': '602a0706c07137b6975e5c5140cac6a2c167f975c8e4df43a824813c6c92b020',
+    'backend/tests/unit/test_remote_assistance_contract.py': 'f95c381a3619be92ce36e12e990fc043956479424e4b79bf97fac82ea81a0adb',
+    'docker-compose.prod.yml': 'd328c676a235b04d9ed3499d988fb07466174fc8aa75e9f0a184fe17283e2cf3',
+    'docs/BUILD63_GUARDED_DEPLOYMENT.md': 'b64d19d2be48e88e317cd2d728c4bb45916460679db8e6beb5bc77616929dc51',
+    'docs/V3_1_56_RELEASE_CANDIDATE.md': '4aceccc44253a6cc387fc6781df4c9c4bd5c29cd7c872b5c50cef6ea03cd2a40',
+    'frontend/.env.example': 'b7423cba6c496aea1f220aa98fae7548be89adceae78df72545e1bc7fd3015f0',
+    'frontend/package-lock.json': 'defbab24ec2ce63a90a412029e70d2a4b0fc5047e0c556da4559ff8a03df6496',
+    'frontend/package.json': '648ef385a2c2b49aa5866e98df4b8857c60ee7692940a93b699d33db6e5e611c',
+    'infra/scripts/install-on-vm.sh': '655100855a443c0c495dd9ec88d4501fff4c98aecea320c48b7573b0f06395c0',
+    'infra/scripts/verify-build55-pending-compatibility.py': 'b1d828736f4d3d0f1ecc58859f5fc2bf42815f14e0cfd18c055d574a452c681d',
+    'infra/scripts/verify-production-runtime-images.sh': '79ec1e5d057d110c3b17cfd5193b41968f253c0fa3b7d647a071209187eeb624',
+    'tests/test_android_release_pipeline.py': 'be592d4fc6cab80cdaf8d3cbe53155b83ebe8a1cd30623f2ade4d052e68df88f',
+    'tests/test_build55_pending_compatibility.py': '340fe7957d53c3d2c9a57873ef6f478afb7f11d983dd8ed9ad0bb38ae6576de5',
+    'tests/test_code26_physical_audit_lane.py': '288a076f9f9a409dd4a420612ee648f98e20d836afb33bafdcb453dae783a40b',
+    'tests/test_verified_pip_bootstrap.py': '7e1d1356f0ffd2568f327335b2984dfe9c0717008c2bb57901f9730a3de6ffc0',
+}
+
+# Successor64: reviewed SQLite-free runtime, idempotent firewall and identity.
+REVIEWED_CODE30_4_BUILD64_SHA256 = {
+    '.env.production.example': 'acf284e2cd501c1ba2ec50828b2a8f28bdd97ca957fa7aa300334d742b8d51e8',
+    'README.md': 'c423677470872bd9c58679d326410810d8b952c85e58be3b25f020c59f378d3f',
+    'android-native/app/build.gradle.kts': 'f044bc10191c85068ee66fc4d4e4abc385e0f0ceac4db707e60c2058a47777e2',
+    'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': '538ae9c64ce222925ec358c9692bf504c388d083e13477cbad7643e140ba8554',
+    'backend/app/__init__.py': '51805bdaa4bb23d845212839c1a4a3b0a465401c55bd2bd0cf4217d26d2dbce4',
+    'backend/pyproject.toml': '05bfe1be00ab7d3e8bc75c82476223f85ac8f058d52e8d74d5281225e1691950',
+    'backend/tests/unit/test_release_contracts.py': '690c197e5d07a22aae067b27eba0dce06a38a8f5e347731a3668e71f59079206',
+    'backend/tests/unit/test_remote_assistance_contract.py': '3229f9cc90a3e4e520d2e928c5e2a006046bcdc476b3916225a86f4b4ba2e303',
+    'docker-compose.prod.yml': 'cb04762472af0a11f18ab4af133f2fc7b22a7870fce4f4aeded48791b2d2ce6a',
+    'docs/BUILD64_GUARDED_DEPLOYMENT.md': '20b3dff7bd21ae5cf39749ca97fd89592dc1aac12b4ac8fa51b5a5d77f1f8eb9',
+    'docs/V3_1_57_RELEASE_CANDIDATE.md': 'e47946d81bb94149f28ec50cedbe1244bc6624d3b6513c33b560427f3b717a0d',
+    'frontend/.env.example': '7a72a00a44b2e0698004ec12c5c8d5554c8a5ae4e742e3ce5becc0542b52b101',
+    'frontend/package-lock.json': '2aedcf67917b76d8b9d7fbeec16675486dd2828e03eb764b6f100260d09e4d02',
+    'frontend/package.json': '374a8a8477c351cdef81329798f2f45a637a5537365d1c7539b698b643cb3c05',
+    'infra/docker/backend.Dockerfile': '424d1b25f3a63e0e84e0e9822712abc2eeb0858c3406ba51d3b5e99ddf37d0b7',
+    'infra/docker/prune-python-sqlite.sh': 'aae6e01db626a8eb12b91ef495a208180530d52558f13879d3b7783633c865bf',
+    'infra/docker/verify-backend-runtime-profile.py': '18e55979aa80b67180550391c0a6527645486ece725a0df5f0ec8ffb6d9ff724',
+    'infra/scripts/install-on-vm.sh': 'c3e5af88026689eafab1560c44b6ef4fecc6e641186892cf2a86b030b2ebafd8',
+    'infra/scripts/verify-build55-pending-compatibility.py': '5278bf25710306115061ca71b05a4c22e188d021b98531685ddb00565b99acf2',
+    'infra/scripts/verify-production-runtime-images.sh': 'ade81cf237c77d235d35d7e42541c72da4c3fd9ab786c78f4c51e0e1e2265641',
+    'tests/test_backend_runtime_profile.py': '84557ed9e243f6b394fbd359096b84102b4692c8cfc0cd72b957f6d8f2f7ccf6',
+    'tests/test_build55_pending_compatibility.py': 'ef3ca4c6f43249d0d90a0708b2c28f7fb3a9836440866b39c897141e2c1668b2',
+    'tests/test_caddy_dependency_security.py': '1ec5a240fc6c9c1d91ed31d9cf527d413711b32eb378492744806efc3b2c119a',
+    'tests/test_code26_physical_audit_lane.py': 'b99066ef391441f8a9d8064e03f2bc8c6902c293752d0489a87cc08d02bc558f',
+    'tests/test_installer_firewall_idempotence.py': '429bcc1553a166dee0ad4e7c419e08de250ec66f2924317587a7f3bbb7e2deae',
+    'tests/test_verified_pip_bootstrap.py': 'ba90e83ca4f27a4c0dc12f16cc6006121ec2484f91eb0c8afe1ae7b1f18aec3f',
+}
+
+REVIEWED_CODE30_4_BUILD65_SHA256 = {
+    '.env.production.example': 'feb5b22176d5e260304c8f939c414d42dc9b41e7c7b60bf7b75c03fa90fd39c6',
+    'README.md': 'cea41c8c4868b73997593bfad4546ad6d4a1586ac8b0138cb7e8820e5617b05c',
+    'android-native/app/build.gradle.kts': 'e8c2f2f05261a0b9c75a2a3cd44b7b57ed93e1bf2935e64eac9f2b8e85e6f584',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/WorkspaceScaffoldUiTest.kt': '8314a925e888c4673ce941c935a6866fc695d1cadbe83d35c3b3426cde60b9ff',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingBoardUiTest.kt': 'b964a19959d06ac0102106f829d9434e7106affb55565666192e49ab7f42cd41',
+    'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': 'd4c5f55df9c428caea241b62d77bba32ac962b519a383c1a8e1d6d4a80841178',
+    'backend/app/__init__.py': '026437ab96ed99c5ef02f972fbdd034f4fbde1fe91c8972edf25ec6ebc4d7bd4',
+    'backend/pyproject.toml': 'c81912dacff92b95a83a142a799df6314c6fc13e54a98c5c4e13c4a33156c2ac',
+    'backend/tests/unit/test_release_contracts.py': 'fd884988b55e1e00e41d7eec156bc2b713a3d04963af8c2fb98bf21dd025a646',
+    'backend/tests/unit/test_remote_assistance_contract.py': '7eff4116fd6aa8224a152ff469f7bcd356c42f7e51cb50c29476a72ca75c9277',
+    'docker-compose.prod.yml': '91a4cf647a33bf8987e9fbd949ba66b31a8639a1466bad73b8c7bf352c8641b7',
+    'docs/BUILD65_GUARDED_DEPLOYMENT.md': '01318148bee7debbbaecf0fdebbe7adeea3c1dc0615c1e1f5e5483b64f4387b3',
+    'docs/V3_1_58_RELEASE_CANDIDATE.md': 'b626ade4f3a15fc38d94422df8caff5c65e6b41ae12dbe03bd19ad95bf743c80',
+    'frontend/.env.example': 'ea16954f71d80f859b9841fb9918962625f843c9284dd1651933c6b2e3992822',
+    'frontend/package-lock.json': '191a410e5f8ab189329228408596390b27409c8f34c2b16748c5b962ae0572fc',
+    'frontend/package.json': '6a4a296bd71a9e5f634aa35ec9aab7a91e4031537cb4ef0525faaf065aa76d51',
+    'infra/scripts/install-on-vm.sh': '24cbcac553f66490b9798c80470837247f12277aa189e45239b34298e7f96aaa',
+    'infra/scripts/verify-build55-pending-compatibility.py': 'c4a3a6e26e45761f8af9c8be22e8370ac509e3441e02bc08daf91f0ae1fc1486',
+    'infra/scripts/verify-production-runtime-images.sh': 'fcc3907ade8bb47b90ef522e5f8c7d03580e34ac148d179d5749093b224c0b5b',
+    'tests/test_backend_runtime_profile.py': 'f71a022739a6c1eb2b314cec21aac546d50c4558a7f76f3abb4487d0d87f857e',
+    'tests/test_build55_pending_compatibility.py': '86a67d3cb7f8cb399c971d8291ab9cb6b62dee0d99b7b55c339d6d336625d093',
+    'tests/test_code26_physical_audit_lane.py': 'cf718862c3cc04d76978421913c084df2638bbbe6581f88327f6c6b2caf3ec63',
+    'tests/test_verified_pip_bootstrap.py': 'f2ba21264516e14dea3bb7ce7408d88d74ad1581d2739cf344420957db8f8351',
+}
+
+REVIEWED_CODE30_4_BUILD66_SHA256 = {
+    '.env.production.example': '1c4504d2c9464612b8bd4baea84b426b99dc6e9f3a79233201f317ed46a0f5ee',
+    'README.md': '2b21b89c3741b7d2d8b18a13dd64c7297b2a2eae5c02decbce0832e9b1c2f08e',
+    'android-native/app/build.gradle.kts': '09337e2d2831b5c446283e366670d28e2cd496e6be23272bb0d3ace9a399a55f',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/core/auth/WorkspaceLogoutStoreUiTest.kt': 'baef9f4060946479837fc71ec9ea366e72ddbd205999513c500fd48585232945',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/core/handover/AtomicHandoverIntentStoreUiTest.kt': 'da9404ab6d82556205a8030e85fe5f7e9292dbf845cc1f4bfc4287616fe92bd9',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/core/remote/RemoteAssistanceStoreDeviceTest.kt': '7d6946ca89055d84d58b160a7f755c1a87853e234e195cb20a252cc6a5101056',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/core/remote/RemoteDeviceIdentityStoreDeviceTest.kt': '16b3f727884ae2e08b216c47fab03400ef884d2e9aae29082dfee07ab2ce84ec',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/core/remote/RemotePendingCheckpointDeviceTest.kt': '3cdaee61fe6429073bea1a5f9135ef5fc7ef7c6af680f25d099c084a6f299b71',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/remote/RemoteAssistanceDeviceUiTest.kt': 'cbebb0b0d2e83cce78980eefe4cccb5b24951e961cc60d452c55eb12ff153cce',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/finance/FinanceRecoveryStoreUiTest.kt': '33f5eb9e4c9a9614746a0615b5665defb7c44e6a25322ba863a14515ffc0ef4f',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/settings/BugReportDeliveryRunnerTest.kt': '56cf41d2ab19b29c1f81cd47c730324dd45f360c9de6353100b3b64331e29e42',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/staff/time/SharedAttendanceUiTest.kt': '47de41df9853a40242445edbe72bf9ef6bdf61e98259aa6ef421be5c477bafca',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimePendingStoreUiTest.kt': '383ca6f921c512df3d09212d747065a85cd6c4d36e68bff9ee46089d18a52d70',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeScreenUiTest.kt': '20f37d2b6ec06d5a599773616d057cb966ccf59fea45a20ef94b547c75eeab18',
+    'android-native/app/src/main/java/cloud/dcompany/erp/DCompanyApp.kt': 'c05342ead71207edbc55b3445f64ece050d921f5a9f625e175873b3b6af99c2e',
+    'android-native/app/src/main/java/cloud/dcompany/erp/MainActivity.kt': '3f548a704f28c6c0403929d58fd294c383ed7d63154cdff70affbbea04722574',
+    'android-native/app/src/main/java/cloud/dcompany/erp/PersistedStartupState.kt': '66ecc0b6e48f475f9526b6d94976ebc03ee72aa8bc81791922f18d091e16c112',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/auth/CacheScope.kt': '0067da564bff7ba3cfcd8f023d7fcc7c8f4beec00c89abbf84ada436e4c37992',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/auth/ShiftCache.kt': 'b4cad088957245d96db6e62f6e257cb9de4d1b6b62bfa170d13c41a2ea9aa184',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/auth/TokenStore.kt': '3889901a4f7dcf2aa6256c4599cedab43531915e7b52073c5a92c4fab97a1f2f',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/diagnostics/DiagnosticOutbox.kt': 'ec35bb8a11356929116f672378d353ab227eb1460c25ecfab673b888f7e0e347',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/AcceptedTillReads.kt': '0449957ebf2f94d41dd0f361b11e440c8f2efdc7944fd3301972141651bc33a7',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/AtomicHandoverIntentStore.kt': '1694195f43a0349ead3db4c77d8ee99bf4a526711c776d67d7348006539f6f45',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/CallerOperations.kt': '64bfccfb46d4facd89afc589d72fd3ca053c9bf240d5046748aeeb0fc2ea5207',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/HandoverCoordinator.kt': '1943c478db0479728e72165ad08e7a526b6e88cd4125c72d7e3097596838c435',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/HandoverIntent.kt': 'c3aa73be24936c622c0adbe7feba2e4c9fcb9c6b6c76ec4963a0580df307375b',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/HandoverOperations.kt': '1f181d3dd959d1cbb4914b3b617c7ad7cac19bce6e5c9e22efc8f2163abe3712',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/HandoverStartupFence.kt': '3fa24f3f3a11649979f131f35836e5156828fbff1ede8e10d165efd2ed09235e',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/HandoverStateApi.kt': 'e533ac1095ade8992f49e456a1d3ea17c8f0ad120fc0899670aeecbfcdaadb11',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/IdleCheckoutClaims.kt': 'fdd51f79d8a587c8bb05101288c1119705a845f41d6ee3ea0898a4492b22b94f',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/KnownJournalAttempt.kt': 'a5572cafc7c20a677916c8192f71b30d24b3ed217d78a2777a84c62992a972a9',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/LocalHandoverWork.kt': '274727cdc2e3fff02b19b933ba046494b22c44155c1bf82e2ac38955baee9922',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/OperationDispatch.kt': 'c589ec4129bf0e7609d2697df1994e02113baac81cb89aa29608f49c8f7f8267',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/OriginalHandoverDomains.kt': '4c5b4531a6b0943bbe46d20e250752414ea1a9237094c7d6648a27f0a53f26dd',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/OriginalOperationBinding.kt': 'e2813b36fc6d9999ed5ff9dbc51c1aa747bd581f2d6a408917542a103b1a3e30',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/OwnerSupportDelivery.kt': '65cc6ca9d0c6a2b38db66b1fc7fd8a58dda8a2f4763e47ba33d55ed03757d927',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/TillHandoverTransport.kt': '2868877370859db2d875e2476351569edad44f7f6a0e5cb2a8b2d5cfc6b44043',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/TillPreparationTrace.kt': '6686d5cd12bdd5f02f44dc66dd0e61602322a8a243e812bb85d49a0665a2b35a',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/WorkspaceExit.kt': 'cb184d5d4da0018071e7ed3913b5f9ee595205a1f9a952d81ecfcb8212861ba4',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/WorkspaceSelector.kt': 'e72aac715fbd6003c0a50a9188949282506747b94ef6b3e1e70b9fd54caa10c2',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/net/AnonymousPasswordRecoveryApi.kt': 'ebff0d879dc556a7df3011035b5c0d04506dd6593e6c8c3261502abff2badd41',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/net/ApiClient.kt': '39568a2dd804ff76dbfa35f34bdb2c2a123815adbaaf6bf475e9d56fcb2c5bb4',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemoteActionTargets.kt': '795927d5156a3251ae3dab73ea2e58fa0de0493e46dada9f4d08e80a0080746c',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemoteAssistanceApi.kt': '81ce325a18ff84671c46d1b01c0de772dff098048999f8383fa9a77e42a53605',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemoteAssistanceCoordinator.kt': '7d999982607ea157412ceaf554aec230e254a5e7c1a0a696d03fe8ef4ba9be5e',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemoteAssistanceNotification.kt': '5f264de8bd7df83cebbbfdb6dc26defca6034d5992b872d8ea50f42c8cda6cd8',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemoteAssistanceStore.kt': '8ddab8d5d618f609a29b5d2bf5e5fe21a6681a24b7729ec6fb0a25dd6a3af710',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemoteDeviceIdentityStore.kt': '064afb0de2aeec8fe021a7b495fcb5b168e72679a1e13750487a7217fc609fb0',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemoteEnrollmentAttempt.kt': '2e49c42a30fbce8b6dea3ff5c5af455212a05e8bcae3c203b24ac39566e02b13',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemoteJobSlot.kt': 'e5d67388a231b7ac2fca98f4b2417315aa89d602a06533a3f828f3bb567656c3',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemoteLocalSharingGuard.kt': '99fc66e1ada0307357c507ca1f0f0289a643b9c5e1dab902f68f8e29883942a0',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemoteOriginalCommit.kt': 'ec2a39cefaa16bbe902afe54d9e8db0d0f82391ed149e6293dfc8339ad240185',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemotePendingRecovery.kt': '674821c8441d9113207b7b0b8383d2b1ddfe54fec5dc9be800c81361c5229677',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/remote/RemoteUiCommandGateway.kt': 'cc2fa6ada0c76533270cd488bbeb96e3b86285ea0bd242e4e1f35db984219b8c',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/sync/OriginalSyncWorkerJoin.kt': '515652a8def7a7b679c1a89e9a739b5880e1f3a4732e585797dd038d1caeee41',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/sync/RealtimeClient.kt': '3b705267db067e1af80db63e287a4fa44e0545a8053ac21e41c0f889f5aba34d',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/sync/SyncEngine.kt': 'cdedad5de53e2a7135a6e9c4307cf283f43e9c32dbc121f7a2fc9a97cb70b834',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/update/UpdateTelemetry.kt': 'e59996b0a0106a5b0c183fdfb5b5b71a6f685f3b44c3247b672bef70c100736b',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/Nav.kt': '5faf312bb1f1d58cc5a8d1d05914a99c6b26ddd881e971acda780c8467fadd23',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/SessionViewModel.kt': '57b1f81aa7e674572031c70a68b337c0f1e630a2decbf19557324fccec6a0973',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/TerminalReassignmentPolicy.kt': '28cfc2fec8da1848a9d6152d1c8fe2e7af1bfb9c62d20dd3bf6a7701b70c9675',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/TillTakeoverUi.kt': '5e12d726506ed2c74e2571b7abb7934a423c4e74f7c4ea8e9cc0d3ab164b5431',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/components/PricingUnlockDialog.kt': '1beffba23fa20aa44cde043c204285bc930d19e9a1cf51aa25446ee8eabf084b',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/remote/RemoteAssistanceUi.kt': '5e4ff235f8b4824d8391c329eaef6c31503b81dd8d34018d48b05dda3d189a20',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PasswordRecoveryViewModel.kt': '5879434b1d9f9147494aa3ef42c231fcedc64ff3d1984bf167cf58dcc933a48e',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosViewModel.kt': '6f18f1b2d6efc7bfaf24acb4402d7e9dbc22610d0a013f83cfec6da2ac64bd3c',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/accesscontrol/AccessControlViewModel.kt': '751d3213594c39ac0fa1ba14c3aeeeef95ee0905cd1e5cf85d4987941805b7a0',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/audit/AuditLogViewModel.kt': 'ff1f9019fcc46ac017cf63047d7509978473447d0c5f0d357d199c4bc5bc5a52',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/customers/CustomersViewModel.kt': 'f495b93c569cb8bcaa3a408e8b0e5262af06bdaf11ab558d607c029ff3b3b73a',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/events/EventsViewModel.kt': 'b09ebaacc1e764cc2162d6645450b314a85b1a22f4e402ef18f1a4d7dd28d643',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/FinanceOnlineWrites.kt': '6672325de5d73045f79540ac1a49879c99792e872baa8b39029f6c29b0f2db02',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/FinanceViewModel.kt': 'f070c6d3019a5702dfbed7d2bc7ab2bc6f109accd276e064cf69ce64e9b4c362',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/TenderWorkspaceViewModel.kt': 'ef06e6620e60005eee48721478b80cd0b9c1c4027eb50f1f590054c252cf0105',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt': '55048a1d9171f7c8f2b78ffe532f005404356d44a41a4566abb97e66cbf2f3b7',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/inventory/InventoryViewModel.kt': 'c1ee9eadb71053edab6e517fa73e75bffee86578b663cfa6665b8d6f9b1d52a7',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/kitchen/KitchenViewModel.kt': '430fd2c408f67a94a4f1e1fc81c1b0e35846facec16f268847964efd41f238e0',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/memberships/MembershipsViewModel.kt': '5be4f667c8398937bb99c72facc318089c69b07780e791a9cbf4ca67a5cea50c',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/menu/MenuViewModel.kt': 'cbd8c2456590fd5a7f5ff440a998d1582cf662c358d9adb21fbb73efed05ffab',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/reservations/ReservationsViewModel.kt': 'ed395c7692bd5fcc433a196a4a09440768e8e07e91251236661a2425ecd6bdf1',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/AndroidUpdatePolicy.kt': '4edaf36e854a6383c265a48dbc0a6928eaa6d48f173882c40ff7334b0da9abc7',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/BugReportDialog.kt': '5e51ec8656c539fd3443f3093473e4f24b845fd4e95dbe4ccec34a196ec69f8d',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/BugReportOutbox.kt': '9bba7f93ad46735ef1672d9c828ecb3f37a5f0172b2aba4c9f770587fa53c6fb',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/BugReportOwnerHistory.kt': '69e4821198025c620247fabaef832ac6c8aecdb6b40321fe7a677233fbddd12d',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/BugReportViewModel.kt': 'df65549378e974cee09051541fbb135c5bedb39e515ed410832b7488d99a7041',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/settings/SettingsViewModel.kt': 'e0739ca6300878e2b03cdc962665c89a44c9ec48c7d39c043ed133c660c8a8e8',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftScreen.kt': 'da40e5b25f0655e29fc2235fdc716350b3edf314a85ca7711c2a8f825b9a998f',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftViewModel.kt': 'a7d1e33f9bdf739b884750bccd2090f2c4fe072047cc665bd1659986b232b0ba',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/StaffScreen.kt': '13d1c5aa395f40c15bd94b34bdbf636643bc7ba08b0494d8d50299f5d605156e',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/StaffViewModel.kt': 'b7b31a992c54f9ef08927d6fa88af9b1fef49c49e0ab5d08ee48b91a0ddf848f',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/AttendanceCards.kt': 'ac6074d8425c19fee00776282abf2fd5d0eb25ed9226ea8270df618dd9adc74c',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/SharedAttendanceApi.kt': 'ca67148e29ae87385708a1b26d8631fe59aa24ec1be22fff9ec17365a3b08aba',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/SharedAttendanceCard.kt': '6532863fce55b4c8b29c525756b29867f75c46b66c9dee8ddf9121a530e2004f',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/SharedAttendanceController.kt': '2168d097959f5f447323d517374999ce83acdf16746e3db254eefa21f8ba5105',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeApi.kt': '898e2ae309f4e5ce8a638b34e8362cf0481a3d5e41fdfc565f7e211409884eea',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeController.kt': '44bf281afcfa4d9e1f9ad0a5e4bb004bdf696becdba4c7a7e5b29942cbce8b4e',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimePendingStore.kt': '09fdd326c30994d105fb7efd3f96efb3488fc751eb2e6b38358f6979d9a07f99',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimePolicy.kt': 'f3e9db6700e22440187ce6396bf81549c9a87e5aacb15d3f93924343683d2851',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeScreen.kt': '965d8307dac57f86a77d93fc69badd49a243cf8a0c516fd5d7ff8185b3a336cf',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeViewModel.kt': '7615b431f0a4042dda9cfcfa8da39b3898197a7da055e153044f4d9f61c56f58',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/tables/TablesViewModel.kt': 'c401ac6a32a108ede2673d4faabea9c770ebc47e5d020e317e3841b1d1d1cf97',
+    'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': 'e0aadef5e25811e2daa880c5918066fc17aac2e93c5685afcf38824b0d2a5b85',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/auth/CacheScopeTest.kt': '3004e76a94ed6fe2b90a3e61796fb16fac1f93724da8dfc0827413c1097048d4',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/CallerOperationsTest.kt': 'c1d75935bd3683471833001cd432993caab3e4f161968b1ea1f6d36be4f7ee44',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/HandoverAttemptLinkageTest.kt': '3dbb3a93dd36a7e7c8fb688d59bdbede14c0e814bb00a00cbd65a90cb28ec5ac',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/HandoverCoordinatorTest.kt': 'f33b7fefa8e1e7970b8c4abc3f7c193f9796c52b49445bb89e2155b2a74a8f33',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/HandoverObservationTest.kt': 'dea8467cedd82a08401eb1e07ccbd5c594104f51cf526fbe3f3ada918420397c',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/HandoverOperationsTest.kt': '3964b0a5e89fd135e703097e740c24911b9673a8edf910b55e1062ff3461959e',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/HandoverPreparationTest.kt': 'ba0f2538f20255187a77a39ae6f2957580f90ae5f6fdb1f37e451601c46a6476',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/HandoverStartupFenceTest.kt': '5f21325f695e354469f1ed59e7f431f9e2119b2fb78f58bd751b7b6f8fe6164b',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/KnownJournalAttemptTest.kt': 'a4448f6f3419742dbe08fec1281587df27eb3294ff1076f69f84d7a5d6910c48',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/OperationDispatchTest.kt': 'dc2e6c00fafa40a5273798949d295e19e0d31bded3a6053972c4a90973388757',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/OperationScopeTest.kt': '28a66547ef266395fa872b1cfabb5e4bb3ea8cfc4e1e0639a610440db002a8a3',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/OriginalHandoverDomainsTest.kt': '0b8b0a7e26a7987fe3d086fef5f5b1fc0d946f3c08d44be05b631e5140e5b06d',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/OriginalOperationRoomFenceTest.kt': '41094f31c38310edad00ef678fe47b34a3f39a6f964ed1a954f1fec1b244c5e5',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/OwnerSupportDeliveryTest.kt': '05c5105c829e1ca70d0c9425bc2089179a40cad6357094e48a83e1518044445b',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/PriorMutationUncertaintyTest.kt': 'b99c737d0994dd979e72cc25a1c0c4a1b47bd620435852d7b3d5a6e3e78b8c69',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/RemoteHeartbeatLifetimeTest.kt': '6d6d7d55ff3ed39804230708cf0e8e5febfca5adcfd811491549b7a52ec875aa',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/StandaloneOperationCaller.kt': 'e7cef037d40e3efcb5c9ac3840e8031a7dd2d9b60bd73d96e1781d3c0f56db0e',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/TillHandoverTransportTest.kt': '4eb88297644d74149a919a23f4f9fdb19cd60537e3f59c1fbf6871a470eec75b',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/WorkspaceExitTest.kt': '0b18666d4a3bf2f3b56b118b1d321a15a8e3662b45f11af1f4f4317f6f2ab4f5',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/WorkspaceSelectorTest.kt': 'ed17e58a2118a54bc612a9cabd89c5efd8988bc49ffb5f89020f28742e0ff67d',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteActionTargetsTest.kt': '52f6b66dbeea9ff01d2af60acca11f2bfb1bf9c0e536081f6d54d777300377e3',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteAssistanceApiContractTest.kt': 'bba6b2d4c69c3448dc524c343a9af53dadbc9860fccc5e44b1d552a04757e4f7',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteAssistanceSecurityContractTest.kt': 'aff84f8358e9d9baa709a1c51f1a68a8238f161ce3b0d7bc37e5fa9d4acdf7e2',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteEnrollmentAttemptTest.kt': '09f4add322221680df1a19207f214afa930861b77936c9560685d5cb2e692840',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteEnrollmentTransportTest.kt': 'c17397f5903597cac6712302fe3fb30427f6472119c1df7b6277a31dbf3f7048',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteHandoverReadinessTest.kt': '18f5827d622ad105ac8f673c3cf27bc24465ad2abc054b5f7d5cb9fb3ec1b115',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteIdentityCheckpointTest.kt': '4d971e167cfe1dcfe60b6b9b20c219ad0a06ad54fa44e8d068cee5c6464db233',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteJobSlotTest.kt': '1a86f712ef4db42fb044ef3481e2e66e446ad14b5a77d1682c8d673a4862f8c5',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteLocalSharingGuardTest.kt': '3c114a95f4f9a6c59c2a75d6612090ce3fc3ae83de202ab646578662b2969a8f',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemotePendingRecoveryTest.kt': '890a2256a06e1d685904dd07842f549a484fb8ebcb85f666b408bca97cb535d4',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemotePendingStoreDurabilityTest.kt': '478551e7bf570f3d61c854014e16d18674177bb2041c838aaf40d17449a71fea',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteSharingLockOrderTest.kt': '464b4a946a82a3c114780fff4aeced5fc1575e660352778e21297219bf0e373b',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/remote/RemoteUiCommandGatewayTest.kt': '7188f6c2a1438778df91a7c8e861fa3ef6346f73f0a39b9d78f9bee8899e7f07',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/sync/OriginalSyncWorkerJoinTest.kt': 'e4aabde85ee777eea52b4327fd4e3006ebab9792af7abd03d585297324c50bfd',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/sync/RegisteredSessionWorkerTest.kt': 'd63da79ebae979893d4d1fa0d85bb77264b7663ab4efae489a133eff488b2e86',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/sync/SyncWorkerAdmissionTest.kt': '9b36ca5af058b3e7a21b65b22dabb63f9eb02038f3321037516c029293c89ca0',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/StaffNavigationCaptionTest.kt': '2070c507620a960d8757dc34455ffa0add723feca7361a3f938de7043279e7e7',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/TerminalReassignmentPolicyTest.kt': '5b8290e034d640916d9095a0484a58ec61156c653ff5dfb67d2cf9ccf9585d25',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/TerminalReassignmentResumeTest.kt': '8f44b83d687dc2c483cae84a31039c108bc1d818067640a7fc18855ef5a6f52f',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/audit/AuditSnapshotStateTest.kt': '4ff4afbd6758111631a59e8f61e354171980d0f078c86192f4ef5a0d74e69d3f',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/finance/FinanceRetainedExecutorTest.kt': 'ca59668fcc3f6268ad3a2e5b56c28f56ce0fd097083cb1a134869184221dfd83',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/finance/FinanceSingleAttemptTransportTest.kt': '94fe52e1681caddc11a0abf97132e655d91b7d5cc3c0a50a903eae2448085ebf',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/finance/TenderWorkspaceStateTest.kt': 'a821fe2c152e8581cf9a17714cb5dbf999860d51b7fe1de5b4e81f04f7355ce3',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/settings/AndroidUpdatePolicyViewModelTest.kt': '781fea51e5e2197958f74d431a945c9937e1ff09436e695a48f4e6d83d5b8fc3',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/settings/BugReportOwnerHistoryTest.kt': 'ce17c82cfa79b32efd7a801d480e5f32ed4ed786e3fd5f93ff5a5b27916b512f',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/settings/BugReportViewModelTest.kt': '61588f548e7a3b7d08cc4039d36a6e92e6f4e64435394635fa11224d93dc187e',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/AttendanceCardsApiTest.kt': '90ca328b963d381f9760a820123959487b07d3437bc1934bd9754ebb4e87cbb5',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/AttendanceCardsTest.kt': 'd64702e598e7d8a2e4725f37ff3ffd6e39f640306aa1fe9f69175d78764c5206',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/SharedAttendanceApiTest.kt': '6f04f17893ae0668a2fdf413e4d3cd0d89b153232506760336c2e56ebed81c30',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/SharedAttendanceControllerTest.kt': 'a4e6610fbc19d6a7499ff139ca689a3e4e8a9fa34e73eee885438a427fcef2fe',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeControllerTest.kt': '39f568148c04e2be141be171af2234ff39c9e4414b2bc733b7f4e875294f5a7a',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeHistoryReadinessTest.kt': 'd6b5c687945ce004c65c087c4af1a740cee58957ce19368d1e79d77d7ddeb494',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeWireFenceTest.kt': 'b362d287f561f6083b91ee91dc92159217582e3f1df1fdd6a4c55d225ffc7049',
+    'backend/alembic/versions/0095_shift_operator_handovers.py': '80c40a150a23969c04814c89344908a143f9480bffe73db24d7b93b699a85fee',
+    'backend/app/__init__.py': '80889895a3a3283e8d27d2f85ea3d6d3d49ae2ea8649578fe6152f213be722d0',
+    'backend/app/api/v1/auth/router.py': '5e900e44875044d54cd7401715ea238ca6321f4a7ce5141e2a987fa64b075be5',
+    'backend/app/api/v1/gaming/router.py': '4ab18b60c82d8f13f32cca6ee4c28cebd2eb0cf9b9a618a09682ad2b46e7d86e',
+    'backend/app/api/v1/pos/operator_handover.py': '72a0e54a1c5ff621ddb7fff0b04e54e8b682525f31bf10fcfc881b4860f5c8c1',
+    'backend/app/api/v1/remote_assistance/router.py': '3054e440d724b4e2cd72416fbc12e72358200d2e46fa771d5c2a3bd424f209d6',
+    'backend/app/api/v1/router.py': '0ca0f560481fc5e154a99149b4412ede88f27a5bfca67606da157c575da9d22d',
+    'backend/app/api/v1/staff/attendance_cards.py': '8802295970e93b914cdb5c089f833b5f2d2b51f8217bc5d9af076df4833fba23',
+    'backend/app/api/v1/staff/shared_attendance.py': 'f34bd4dd59f42827b6c7bd830d312672c87911f79a0ccdfeecd23052acf6ad44',
+    'backend/app/api/v1/staff/work_time.py': '0d0f42154a86cffbdab13827e1ea13eb1434c5cd4165460c59a05eeae7f24843',
+    'backend/app/core/permissions.py': '308e96834345901f3850bd751af62e739dccea4908848b7dfa157b103c601301',
+    'backend/app/models/__init__.py': '7f12ddfa88660a132737707adc90690655f6f72d707a99e65d153359b4ed73d8',
+    'backend/app/models/pos.py': '3e16648ef94530fc589d2696c2682dd9d45b8f2262f795e9412613fa99f77486',
+    'backend/app/models/shift_operator.py': 'f845e3d578cfc63712255c214441bc54fcb834d8b4ca7e45602ddc6fffa06b9b',
+    'backend/app/services/audit/recorder.py': '7cb58ace507e41428fb18e04794f439fb62a6a7b03d31ab2f6960dce3b725c32',
+    'backend/app/services/auth/credentials.py': '74088a392a3c2a47e4abbb2b9a381f4bedaa8f3409b8567b1ee57f61eaf905ba',
+    'backend/pyproject.toml': '7bc8936065d76484ea426ebe8e2e991bdd9b41ae0716d8424decce9743806769',
+    'backend/tests/integration/test_build51_history_bridge.py': 'a04a4f279b405e900bb47610d1d9469338842e54d22cecb4b513820ff6c36fdd',
+    'backend/tests/integration/test_build55_transition_state_query.py': '2afb1ac02a5238f6659687c00055e42ede54f1d787c3338d193f8125fa212d57',
+    'backend/tests/integration/test_gaming_handover_void.py': '00299bd7cf3cb542a5a7a7e42f02c43f43f7cb5c024a3c82e787fd19cffcdb56',
+    'backend/tests/integration/test_gaming_pause_lifecycle.py': '105b794e268d7c99a3f58432b62b4ddd7e5a60d6a1fbf1a09ccbb002bd2e995d',
+    'backend/tests/integration/test_gaming_session_addons.py': '2b5544211f1afe50dde1f2c7a3b271b728e981aa2e639858fdb521b9aaea8d93',
+    'backend/tests/integration/test_remote_device_terminal_status.py': 'b9bd10d263c77e3f28107db2cc1a985fac37fe38b2159fc96f439e136e9bceaf',
+    'backend/tests/integration/test_shared_terminal_attendance.py': 'e69e7d161f2f672a06a89be5ee35cccaeb7f0897e86e37c6e8c781d0ff471590',
+    'backend/tests/integration/test_shift_operator_handover.py': '61da2fc2b8578594a31246dca599d09501025a565b49153be03803e8dc73913a',
+    'backend/tests/integration/test_staff_attendance_cards.py': 'f5c70c680dd783fe007ca9281e0986cdeac69fcb1c0f3c98767acdd971cd1d48',
+    'backend/tests/integration/test_staff_work_time_api.py': '230d25adfd68c70d8fb3aac13e42f791bb3551aee459bc8d024b265305037f38',
+    'backend/tests/unit/test_gaming_reconciliation.py': 'fcdbe7549cadea48bbf7f4911661c5dbf20d77956708e85c5fbafcf1e9a39e0f',
+    'backend/tests/unit/test_gaming_void_policy.py': '9b23ce8a8e750e991c3f9c9073b29d6bf9208aec88b0b6cee26f39c6054fc0eb',
+    'backend/tests/unit/test_operational_route_integrity.py': 'df15c2a72faae374e256939387fc6fb4ad936f40f113097a1864e3f695340d57',
+    'backend/tests/unit/test_operator_recovery_permissions.py': 'ee9fe13712a9dd3f3f2c057850fdfca228cbd88ffb24dabe3e632b6c07bd5868',
+    'backend/tests/unit/test_permissions.py': '5f17462503e4233eab090bdbbf9748f32e4955e51094c4b1daf6e1ca3f12ef2b',
+    'backend/tests/unit/test_release_contracts.py': '0390f4967d49d4469d1022745490e128efe71593c2f7ae64378d6c5382c5978f',
+    'backend/tests/unit/test_remote_assistance_contract.py': '85e9dbd816d22c193d9d836f8ff8dadf718e930f721be2831303f13e189dd51d',
+    'backend/tests/unit/test_shared_attendance.py': 'ada2ca29fff4313fbb87b57598948832522f679b8441243e3ad1dc04d7c4d444',
+    'docker-compose.prod.yml': '310f2b72f00a16f5988b364728e96b1d8cd394ab0477365be296a82ade2d2b9e',
+    'docs/BUILD66_GUARDED_DEPLOYMENT.md': '48284ad96a9386b1d4fca935981e526828be2e6f7488bf10527e51b9aaa7968d',
+    'docs/V3_1_59_RELEASE_CANDIDATE.md': 'd38d1308711d42a559d8e23bb020165f78f526c48c728b9fa0f7a0f3a49aeb6f',
+    'frontend/.env.example': 'ac22b23cd782c1cffa6d7d962ea29d04ddbb00b57a7b66c628c1c4ecc0a8a4a1',
+    'frontend/package-lock.json': '7135f2ec2e98824dfd0cfdeeecf3241d3e6e1cc9a630652356635bfbdcaee365',
+    'frontend/package.json': 'fe208bd05e3dd7d847e4a9c58324c14b4bc70c3b26b7ce1a8368bab66dc7f3e6',
+    'frontend/src/app/App.tsx': 'c5f07ee359bbaf9f253ebdd83a664e26c804e3340bb346e1dda62d1c8dd4b952',
+    'frontend/src/lib/operator-recovery-api.test.ts': 'd79da6830aa5bb7c787f87848c3406e202924a0be8b0156576c5de7b07e1c0c8',
+    'frontend/src/lib/operator-recovery-api.ts': 'a2617662d5ce975299613c7ddbaf7681d6345a6bd593e3c7dd356fcec3138361',
+    'frontend/src/lib/staff-time-api.test.ts': '9b77472c1315501c9f77ed45515755cc32000a4adea1a16e6598e6e6c1894053',
+    'frontend/src/lib/staff-time-api.ts': '32eaf8ab8fa6bad42339146cba66235e842b02e030d2df9b58ee50d77f2f84ac',
+    'frontend/src/modules/pos/OperatorRecoveryScreen.tsx': '367544f39747ead46b9eed039f6bc0c8925f1efc121d1b414e391aa812de1d9a',
+    'frontend/src/modules/pos/OrdersAndShiftsScreen.tsx': '2f3a0720a608c655fd8d69e99a82e80326d6d93c33a85da739d5b7907990a35e',
+    'frontend/src/modules/staff/StaffTimeScreen.test.tsx': '9fab693cd1c2851f46c0e82d7b6ccc64626c42fd65b035896a9f8499de3f8443',
+    'frontend/src/modules/staff/StaffTimeScreen.tsx': '84b0660dcc2df55a5be0850477b2c07a7dbb212d0daa7e7dbcc998119f52f79b',
+    'frontend/src/modules/staff/attendance-cards.test.ts': '40cb84b4833b611e5c8243859d670cd246ffdc8f80d2aedd4ec693528536e927',
+    'frontend/src/modules/staff/attendance-cards.ts': '0da3cd8e23b8fca876453c2c3c7a500839f263557577ebc3e2295f8e3cf8ff1b',
+    'infra/docker/verify-backend-runtime-profile.py': '161be5940e67050007ebfe6e5185f9d53adea8139d580bbee4f2914ae63adc6a',
+    'infra/scripts/install-on-vm.sh': 'd4a54cc02e479b2609d6693cdb1d6afdcb9e8876e34909ad5676c027610c259c',
+    'infra/scripts/verify-build55-authenticated-acceptance.py': '5dc03888d4cf5884d857ff0ed5aeeb6b237bdcaf8225a8443aa1e45d35df8901',
+    'infra/scripts/verify-build66-shift-projection.sql': 'f0e71e1dc557df740d1ae06aa1b9ba40eea63038c82ba54787fd44b10c9fc4f7',
+    'infra/scripts/verify-build66-transition.py': '141296169f0a15886b45195f62af85eab0b55e54119b29dde5d2f26c8a214d87',
+    'infra/scripts/verify-production-runtime-images.sh': 'c8857bb365176c2ded6c0b4ec01f415eab078ded8f5a16a49e72da6b02af4912',
+    'tests/test_backend_runtime_profile.py': 'e9dd8cc91e7c32a8e55b70a4a060b3873292d589835313d106ab700d58ef945f',
+    'tests/test_build55_authenticated_acceptance.py': '4cbb38e154cd085cdf656ca7ac50bf9c4dfc6b574492fa2ef2b1cc76c356ba6c',
+    'tests/test_build55_pending_compatibility.py': '0eb973ad6ff93cb66d85ccfe3e9b665f0cfbff6fba6d7299a5746c4032f5a5c9',
+    'tests/test_build66_transition.py': 'edd7fe9eed360d8f106f9d75a99fc0a128d81fa2228b12bda364d8cf14ec4c0f',
+    'tests/test_code26_physical_audit_lane.py': 'c1b74fa137b580a6fcbfc1de9adf9ccaf743213d128cb9f17a4155ee1607ee51',
+    'tests/test_verified_pip_bootstrap.py': '34ba32ba469521f3f699ed24bb80f8c7340751f73bcdc3900e727be55262761f',
+}
+
+REVIEWED_CODE30_4_BUILD67_SHA256 = {
+    '.env.production.example': '5c750d09f3b93a891349eb4bf20146faa0194ea128a2c74e0d89e7ece0c12edd',
+    'README.md': 'e5a1187196bfbc4e6f6e26f5715ab9333e0ba3d038c0f611d7507619bcb9dbcd',
+    'android-native/app/build.gradle.kts': 'bd7ae7ac707316cd2c77aee7ab4b1757eb533ff6c940bb3aa30a675ec17d964a',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosEmptyCatalogueUiTest.kt': '14e80fa61310e4c4458220494d40ac9dad2188ac661e4a00e3c580d41cbd9695',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/HandoverOperations.kt': '7ebaca5be33b388e425d9a25875574fe870ae85c218ce0f49400f7621021fe6e',
+    'android-native/app/src/main/java/cloud/dcompany/erp/core/sync/SyncEngine.kt': '09279a1a87969c587d01d921bb963e09c5599598c5077914aa04039c17804fb1',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/SessionViewModel.kt': '9bb9cd228c24af1361a217f1f8e6b796ce2238bc53a74bf364e3a75e1521709b',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosScreen.kt': '70f02b9413d5f624b32d790e3d2dc33a9660720620bdf581eb0fb0d2f9bbc4cc',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosViewModel.kt': '36982a758554c910155e974a8ff3de822e550cc9cbde2bbc8194ce3af37dba5c',
+    'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': '0f8722f5bb13e2b1c1c6adad913890381b66ac314f470c6e3d74e6b1f1e52822',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/HandoverOperationsTest.kt': 'f0b2ead734eefad5787ab8f0e2c248540c6f257b985274dd4eee71099ea2503e',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/sync/SyncResourceLockCoverageTest.kt': '28c5ece7a6afcc2764445f35318f277f9168c3c8bcab12fbf23e6107c88dc293',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/SessionLoginErrorTest.kt': '79d3b3914eba36b70d222ec7e7aea5aed93e0199cae22c180c07f6aed3cd7956',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/WorkspaceLeaseFeedbackContractTest.kt': '40663bac363aed43a7db69baf78291e80e8e9961f03f2014424d221730574999',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/PosHeldOrderReviewTest.kt': '5fc1466020a49e05a6a4f836ed688eccd0a9d45bd8cef54bb35c194e7419fd73',
+    'backend/app/__init__.py': 'd752e77b85e4c20d9483c50588dfc3fc70602a84ca53e9ad7816a8b2eb1201a2',
+    'backend/pyproject.toml': 'cfba5e18456685e723557e69eb48d6f0ec1c61b91d7d3341375ab26b4b7c2f6e',
+    'backend/tests/unit/test_release_contracts.py': '8ade6bf4c57c28320fe56d1e60338f308d9ce91d6687b0484d8d18b6fc775024',
+    'backend/tests/unit/test_remote_assistance_contract.py': '599ac18f9d480f5749f23aef9c05b3803328d2250bd2820ecd3f9d15b05c023e',
+    'docker-compose.prod.yml': '4eaade44e457a3e476ef28917e8e446c4061e9dfbf16744096f86fce9f49ddf5',
+    'docs/V3_1_60_RELEASE_CANDIDATE.md': '9b7e0b7914d54a88302aaf266de1bf6d342c55914da9e2a125fbecee311e9aad',
+    'frontend/.env.example': 'e787a35dd0efc72230ed260a82d1fc254a9c0e2827526b6f4a0dc7fd13bdd178',
+    'frontend/package-lock.json': 'eb2fa1f69ea592f71a36ad5dbebcc0968f5f65b09ec9bf7587907afbc275694b',
+    'frontend/package.json': 'fb2a46203d92a3497e4d0b344e09f01db3aefcf50675ac5e8ec92ed24cb565c8',
+    'infra/docker/verify-backend-runtime-profile.py': '53361397e862cdb1a206b9528e3a3acff4515985b19cf2c5aadf9a5c65bb6103',
+    'infra/scripts/install-on-vm.sh': '8c01a41abca6630ff98b3abc15f68f7494ac46a78e64a2dea00af98052ffdea4',
+    'infra/scripts/verify-build66-transition.py': '76089264e4a6435426333186d835f0fadd639f587964dfa68ebdc17459cd5831',
+    'infra/scripts/verify-production-runtime-images.sh': 'fa4e8f74bcd78c1465aef3b4907eb770e08b3839bcbb47b7c539745c15e265b3',
+    'tests/test_backend_runtime_profile.py': '3c89b8ce57e6bfc391ed8934f2c06f0496653db0398df8c543aff38ca699fae1',
+    'tests/test_build55_pending_compatibility.py': '788697148b89780714da0481fc7cce134f18180d95da7dd882e75a9dd2f172a9',
+    'tests/test_build66_transition.py': '94f30752ee36905df6017a61cef37af3ab1b37a0422a9067a7a00de41a438f56',
+    'tests/test_code26_physical_audit_lane.py': '30b58c02a13dbdfb45029d573294a5df731284db309504bf7475170b8031fcfb',
+    'tests/test_code26_shared_refresh_wiring.py': 'a7777c18de5e5004c64841e521df3f57b7b7230220a49741fe24f1d8f1e172d3',
+    'tests/test_verified_pip_bootstrap.py': 'a440e057875a8e3f61ab06eb7650d39567bc72376364c1a98b0f2db62e8c839e',
+}
+
+REVIEWED_CODE30_4_BUILD68_SHA256 = {
+    '.env.production.example': 'd486aa7c9528978291bb874a8aefc663550cfe4d246a2ad03cf914f33c66c0cd',
+    '.github/workflows/ci.yml': '8c1491c9a09af72bd89bd740153d06d158af580a183551c8788fdee0532d1132',
+    '.github/workflows/release.yml': 'a59669ae08ebd1f227fbff6b0cc12ea7db2a305a8b69cbb70468eb1368b30b85',
+    'README.md': 'f35f7a184258d33fdfa28caa504d8cf58aea68f5350b444c8bbc4cfd92a44668',
+    'android-native/app/build.gradle.kts': '70612fe0bc43d65c6c71dd2be58897f208ae0ae557da462630f4133ef458aa87',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/WorkspaceScaffoldUiTest.kt': '82479ca778ab062ccc30e3aad62857a8e9619b902e10cf5fb0fdd090e422514f',
+    'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': '393a4804d5fa766f3997b778f19232faf74de759f2d3e0d8544b83d922292090',
+    'android-native/app/src/test/java/cloud/dcompany/erp/core/checkout/DirectOrderPublishContractTest.kt': 'a167188c514123c6c120862f9905cf70126de58785ad62edd93be3f816df2aa5',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/FreshLoginHandoffTest.kt': 'a799e4f6b7159dbba4819dc23bec0a8b37c02b6d6db7ead15f5de543e364792b',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/WorkspaceLeaseFeedbackContractTest.kt': '2a36c79e3b9d047115efab6c4ea527549ea396dc82365e382107b4316d206f4d',
+    'backend/app/__init__.py': 'b765b6ce1a30aa323547b91c260cf51e6c74941a8b8c998f9751c8ee6219c8cd',
+    'backend/pyproject.toml': '46efc0118ca251dd70d3242444c13f5588459e0a36308ee60d2efe81637ffed5',
+    'backend/tests/unit/test_release_contracts.py': 'be1566c320b2da140cab40cfc0b41366d1473a86bb68b3361cebb538563d0e5d',
+    'backend/tests/unit/test_remote_assistance_contract.py': '371062286d28fda55ce978101f856ddc4efb260d6d8c890c9b72200b041dea1d',
+    'docker-compose.prod.yml': 'a34b74d1fc9b11cadadd2673aa11dfbe52823a95fa7cc1d357a774c2178b7dc1',
+    'docs/V3_1_61_RELEASE_CANDIDATE.md': '40fc24de8bb3eaa9dc19d95ea2b5ab8dd3c428916a9acf92dd555ce39ffb867b',
+    'frontend/.env.example': '1b4a2741ac17b6d83ec7fded366bbe2105a9343ee0fc491a21d0ba217e4965ff',
+    'frontend/package-lock.json': '04069f3bcd505a126892989cbe51eef00a6cef782444f07690d0a084cba175e9',
+    'frontend/package.json': '13bc4355baea0fb7780f5309c59d596d06aad244b77bdf32fe5f9d85af036522',
+    'infra/docker/caddy-build/go.mod': '56e9e63be818a205bb4a80f8513a43a8c516588519e67a44a7fa35ede87ee13e',
+    'infra/docker/caddy-build/go.sum': '90b4209652f489837d88c617ec110e4a214d60c3f875693fa840be38929b03f1',
+    'infra/docker/caddy.Dockerfile': '1be4f2d0b587300467846c3d17be3050066c2eb7d75d74bc861050eafa9aba49',
+    'infra/docker/verify-backend-runtime-profile.py': 'fba8d33340e736abd76dfc97c3a92adbdc83cca4a426bccd60fe35b36d8f3e7b',
+    'infra/scripts/install-on-vm.sh': '89c3df6a4db8dcfc4e6fe7b33a9983ebdd32522e64f75349f3ab2186f2ffd7ad',
+    'infra/scripts/verify-build66-transition.py': '7fe31b43f69c8186f048badfd724620e00458b17bdd9769b6f1d95f2ed2f6522',
+    'infra/scripts/verify-production-runtime-images.sh': '0222002c3c89b6afaf1545175e6e94af95e12a807b82cd192f44be51150d7ed2',
+    'tests/test_backend_runtime_profile.py': '690ea1cd8b75d872ccc7f4b18db2e9efec74ebda9784bd91c72d76e29b29ce3c',
+    'tests/test_build55_pending_compatibility.py': '97995f079cee10588d6b18978120b1e1d9f2a01fbdf7c16796b12a786d4db48b',
+    'tests/test_build66_transition.py': '3db046912d3cdd30789b87ac724f5de835dc85840c257ad7814530b837b2dfc9',
+    'tests/test_caddy_dependency_security.py': '51648f7ed169d816a87108cd89cdd7a0d651c00c574b3a0a82b3a40ff387c916',
+    'tests/test_code26_physical_audit_lane.py': '8d5bde8becf17b6ec639dd7018cd96e684f7825db147b9d562b3a0ec6c3618b2',
+    'tests/test_verified_pip_bootstrap.py': 'c274148e026c0b86eaad4bbf333c838921b9e66b971c307604039b0d442faa91',
+}
+
+REVIEWED_CODE30_4_BUILD69_SHA256 = {
+    '.env.production.example': '336cfa94d5c971f66604f6828c5488accb14ed36a6f8c15f9126d4f80776ad69',
+    'README.md': 'a1ffd8a9dc8a7560e2ecb8ebcc5133e6d8b529c00392440047f5f66556b5c2d8',
+    'android-native/app/build.gradle.kts': '8c330d208233a73ee0efbfec6ec2d4ab4de6898a7c115c460966fec6e41907a3',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/home/ExecutiveHomePresentationUiTest.kt': '8d8a5571ef7eb4b1d80df09a1f6059ba384ae7850e2342294e2cd5afdc6678e4',
+    'android-native/app/src/main/java/cloud/dcompany/erp/MainActivity.kt': 'c759fa504bd2474328dd445977a2e8ea5d63bbc98f7414a1685c5929a026eb45',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/NavigationAccess.kt': 'b543461dd05c1db7f1497b9882101817fce5a78e893fc68fbe48ef94c567bdbd',
+    'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/home/ExecutiveHomeScreen.kt': 'a84632edbbcc76455c9a844fc3803ad51c255ab538a14bdd08f147cf1af6f1cb',
+    'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': '33b0a9a58e99d65dca90d961a3eface21e8110720461a4731c6babe527304a18',
+    'android-native/app/src/test/java/cloud/dcompany/erp/ui/NavigationAccessTest.kt': '6c0015c3c934891975a721057cf9da5cc61e5f85c7def976c726c4f67936a77d',
+    'backend/app/__init__.py': 'c658f09126617dbbea4f2b9c533b883ac181ce3e0f2cb45156ecd151842c27c3',
+    'backend/pyproject.toml': '406c288c5214589ed8c9189cac4c35fe7f74cab503fd3dc1fa93dfa9ec011dc7',
+    'backend/tests/unit/test_release_contracts.py': 'acc6416be1ba5da51181f036887b0e31e045f7aa8792189d734ad3529493a725',
+    'backend/tests/unit/test_remote_assistance_contract.py': 'c63b56e6b5b141d88ce26a69a59b59f4e38ca083cf151df1a41e9956ecb00dc2',
+    'docker-compose.prod.yml': 'cd35bf747dbcf03e0018694196871150ffcac9608911ad011c43a280a885e52a',
+    'docs/V3_1_62_RELEASE_CANDIDATE.md': '496a1acd8150fe6f1987dd948c7ba536fc14fd40787fa1476af9f5b35a592acb',
+    'frontend/.env.example': '25766258629ad4e9e92fb0ae10aaf18832ec907fa50b8c06f735f65956eed861',
+    'frontend/package-lock.json': '5cc71e199a7729de223c3188f27e06d236e4518cdc02e19ad6c416645ac83174',
+    'frontend/package.json': '7c37ea3953d841cf0538d15fc305a2f15f88b555a519a8044d87a17851da7067',
+    'infra/docker/verify-backend-runtime-profile.py': 'fc7163e52c09f4c943c1c7a6cd3911c8cc0a4e9f13a8b8c36bbff85e9565e749',
+    'infra/scripts/install-on-vm.sh': 'b9b9192c8eb37560f5f41d800eb5bbf554ea45b03fb7aeffbd54890afa74e3f7',
+    'infra/scripts/verify-build66-transition.py': 'cdeeed1477e24beec5d0807c348bc045a4025b083f6917dd218ec01c35ee98f8',
+    'infra/scripts/verify-production-runtime-images.sh': '0364cbacb25c1303a0b1bede17e9f273e32cfe4175b00491c74b6be5f0bf35fd',
+    'tests/test_backend_runtime_profile.py': '20e56af4c31ac2d2144460a853e865361e8169f67b256bccd51eac23900e4404',
+    'tests/test_build55_pending_compatibility.py': 'fba7882d7e4181071312947ba0b9ae9fa9ac00eaf530cf77097fcbe4fa4b415c',
+    'tests/test_build66_transition.py': '65ca4986ddb3e0b817c2107205d4a00d697ea12c9535e99c5a4b08e388692762',
+    'tests/test_code26_physical_audit_lane.py': 'cc04b30a111d0f39b9ef04d022f52138541bcec1fdfb722a6fa51201e73fd861',
+    'tests/test_verified_pip_bootstrap.py': '3d058c3c9fabff4b45b00a54911b21c6b86da6dd07322bdb1c1d30fca6af22ce',
+}
+
+REVIEWED_CODE30_4_BUILD70_SHA256 = {
+    ".env.production.example": "1cd3285ced57c9f80646d22340832017e20ac473e5c4a1f12f7a3b39d3e58fe6",
+    ".github/workflows/ci.yml": "d735a63b10fb83ad3c70891990084ef11da4e5fc89a99d099ba847c44323c863",
+    ".github/workflows/release.yml": "55cacb663ebe186e5ea43e0f0668016c57248571a81c54e70eba7b01660187aa",
+    "README.md": "f59e851057b7df25aa06979cb7c7ef49b1d0ef4f69f947702abe62eec994b0ae",
+    "android-native/app/build.gradle.kts": "6589c45fd29fdb609119b91b149831781b78f7c67ec68a79fbcaaf04e680c11a",
+    "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt": "7e0fe706950c06ebe47257c41defd0c0d10b0ec9d967df75df29ce5c47e5c0ed",
+    "backend/app/__init__.py": "d02f5839958d727d98e9c3516c7bc1b33dac4bcffff65e45352c16062b7ce33c",
+    "backend/pyproject.toml": "60a4bcb652a678f064e7fb1874f389e9603444f661b1b9cbb46e58424dab545d",
+    "backend/tests/unit/test_release_contracts.py": "1658cfb3b630591cb21b1524ea34fedf1334cf9bf35289d1adc60803ce5c9c18",
+    "backend/tests/unit/test_remote_assistance_contract.py": "746ec3f8f10e23263c0cb26e7d637acea75acd9ce07379f39e62c5966ebf1742",
+    "docker-compose.prod.yml": "55b2db4bccd047714e70eb81d34e6bcd75e2c258c6356adede816ae2a0d3415b",
+    "docs/V3_1_63_RELEASE_CANDIDATE.md": "61674a3bf33ef0eff3c3dc7d51d10d4f2d4eceeb7ec32b8a851d3bde1ca5dcb8",
+    "frontend/.env.example": "b96cf2728125ed7a3ed983cbbc991eab439262e43fbdbe6dd5b2a8b7e96d730d",
+    "frontend/package-lock.json": "b9b499f4aaf28c1cac4de8f4908ec06207701449590b492c0ff8c93c57dc0d9a",
+    "frontend/package.json": "61631b3116c87ccf7ddd5568a48c294b836156c2a8a4263f610698e826c41110",
+    "infra/docker/caddy-build/go.mod": "672bef1f67a2d8b616bbb6000a1ca591a81a2f220a1c961c7c4673bb16a007cf",
+    "infra/docker/caddy-build/go.sum": "20ad2dbec847df1fb9c2bcaf1963089230850fe14d2301ff9bf41573cd15e16b",
+    "infra/docker/caddy.Dockerfile": "358cc22ba543511b40e1b98f52df1a9d912d2c67003fe95784c8b13eb271f0e1",
+    "infra/docker/frontend.Dockerfile": "1be0170e2f0a4b6d96f0de0c0e98f33489c623fcb6b78d597af91cccd1236066",
+    "infra/docker/install-pinned-musl-utils.sh": "4bc177bb4d85dbeb202a49a16fb9edf689551760eb03c8468411f76c86bd7888",
+    "infra/docker/postgres.Dockerfile": "7e1860c58553f7e7f2da4fa5111a2c716207724255e0d4f7e2d6a56b4ac3e07e",
+    "infra/docker/redis.Dockerfile": "1ca1f05b9e97b4790bf297beca5f15117a6fb3e7890b572c3e3cec06df1c98b4",
+    "infra/docker/verify-backend-runtime-profile.py": "53bb2f66e4bc55d8c89d48cd01937f88f4121b5b5ea73c07d50b73fbf94edb5f",
+    "infra/scripts/install-on-vm.sh": "e92aa668f70229725dd30e55721547e3542b387d13a31be62f13028a424995c4",
+    "infra/scripts/verify-build66-transition.py": "2496be0e041f05feac08ce6169ac340b01303398c277507fe9e741dc71100266",
+    "infra/scripts/verify-production-runtime-images.sh": "57923b8b4c7140574d78344a66f43b8a5e7d34672f5a8e7519b03fd744617fba",
+    "tests/test_backend_runtime_profile.py": "8bd8df334ee348965ba46e75efcccc442e6ab5789a2e0f9640d404117454227a",
+    "tests/test_build55_pending_compatibility.py": "df98c5d1b24f679ca95b3794fe7b30925e3b72899438298a916db57de29f4f18",
+    "tests/test_build66_transition.py": "3e8a515d435c509da993c9f8c37acd363c3a714b2cad4c3cd766f2939bbf5789",
+    "tests/test_caddy_dependency_security.py": "eb28550ee90812c417ff26c8fdd7e83eeac9677075ca149c1ee4304e53eb2ff2",
+    "tests/test_code26_physical_audit_lane.py": "eb2cad0b44fcf4c971ba8ba9367a6feca888c3e411df16f8bbd7072c298a55b4",
+    "tests/test_musl_utils_security.py": "2906dbf86335471a32138b067deea9f4273a97a4c652467e720b115beabe5c99",
+    "tests/test_verified_pip_bootstrap.py": "c43b2559104cfbb85efd793635ce4197aa09a304b295a04d4ef136f1d77610a1",
+}
+
+REVIEWED_CODE30_4_BUILD71_SHA256 = {
+    ".env.production.example": "830d5a54975cb15063144a31caf03facf6974735609e643743466fbc55f9f410",
+    "README.md": "a34159372e7aafcb18be309fad1b6dc27db6cd5674d1f5167ef5c4c091da861e",
+    "android-native/app/build.gradle.kts": "0b9fd3457526e7a60f801f578cff1de0ec0b6ef8a3b6a9dec7947e62c3482681",
+    "android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingGlassUiTest.kt": "b9b5d6177ec37367f319d43b3a72d815c409b5a3c8bc94ee85e143728757842b",
+    "android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt": "4946e22973336aeef66a549c2bedc547def101a1daa58284f066ae7a1fd5d7b7",
+    "backend/app/__init__.py": "ecf6f65fce8213a6dd9d404f30d1345b8a57bb34af967ae704aef1994fc936b0",
+    "backend/pyproject.toml": "1bdb3e62ad777f287307934ceb1c78c22f1a04cda778ef852155c73f9f07748c",
+    "backend/tests/unit/test_release_contracts.py": "6ab3eb65f063702437382875306396ba503bf27880594df20f80082643469560",
+    "backend/tests/unit/test_remote_assistance_contract.py": "f4310df8524c8e2defca03484e264dab4cf4f8b88a3b4b97daded980316ba97d",
+    "docker-compose.prod.yml": "62807188f1b23953bc85d8458aa5358c414f39b8acae0a8d894f48401eb6eb54",
+    "docs/V3_1_64_RELEASE_CANDIDATE.md": "1561c9443b73cf625330a553d7d260f29e45bcd58263847d4a15df588cb20051",
+    "frontend/.env.example": "04bb0271a35f08839540a6071b92c921475fcf040819d18cb74b848bdfeb6c74",
+    "frontend/package-lock.json": "cf3e92be59d3158e0089be807df3473179d216605f723d404a96070105e68d4d",
+    "frontend/package.json": "582fd053c9e2b72b73b04de555302cf316e2b13bd2e3601e168d15e2813b8208",
+    "infra/docker/verify-backend-runtime-profile.py": "612f5a1018024b4b20bd9b495062e1cf2574cb5349652a027c704acc5570523a",
+    "infra/scripts/install-on-vm.sh": "d7d5cc2139fed3ef7b53a34f8aa3a96165e620c5aa60723c82753fb619f600d4",
+    "infra/scripts/verify-build66-transition.py": "8fb619becc16682aaf5a4c76012ef2738b58de633e1f3d593328e5c650079373",
+    "infra/scripts/verify-production-runtime-images.sh": "942ffa4526467ab26764e050cd690c66fd5f25411486408ccd6fb5df81b11570",
+    "tests/test_backend_runtime_profile.py": "12599fb41def0f75b67d288bef487cfb015c194aa05fb6373c4a99b5824b1366",
+    "tests/test_build55_pending_compatibility.py": "c7fac4cd4f9bfa74d685673fdeeb39e41d8995bd4b1efaf4605060b8301c55ef",
+    "tests/test_build66_transition.py": "a3fef178046156ef76937bf17dcdc6fbf22dcb389c60007e8b502f68e560183f",
+    "tests/test_code26_physical_audit_lane.py": "7aa5b7ab5751bf90d29fd2e2843deb0270a4308b39b0a54e755122a2f880bd94",
+    "tests/test_verified_pip_bootstrap.py": "336a8bc8ee7971220e84acdbd0c2becebb17e67817d200dbb75b3a26bee89062",
+}
+
+REVIEWED_CODE30_4_BUILD72_SHA256 = {'.env.production.example': '3d2da9400f5b233d04d486bade4430ecb5fc29c2349dcbd343f9286d32847ac9',
+ '.github/actions/scan-production-images/action.yml': 'b06684cd4c848591487b91a9585c0d78d94d94bf3f49dc6af13020358a7fea54',
+ '.github/workflows/ci.yml': 'bd0f6cd9da4b1c373a3ab04e5c0ea9266d22830563e3bf36f8b0863165a51730',
+ '.github/workflows/release.yml': 'cab7376d95f46a66cec39ac0317925d7f38b84444219b52bf1b1bcdfcb40846a',
+ 'PROJECT_STATE.md': '58349b18c1ef790b197745ab9c14b3e50c938708696d385730cd781d9f67d46d',
+ 'README.md': '7ec678e641494d4d11ae95a175369f12b8f49443c7945c3d1af6b29a14a2b9e5',
+ 'android-native/app/build.gradle.kts': 'e61c7cc3c9ff9d4d7d1bfb43ae3ba7d4c41f3cf6b7cc9a94f47a13319b0ebd2e',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/CaptureFailureDiagnostics.kt': '55efc382ec1e59862fdbda7262f0d78231cd33e470eea2a04eb6d3ef32a89c0e',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/PhysicalSmoothnessUiTest.kt': '5829ccc4e3386a4c9ad4e5bf7dc728a3090908bb61b4bc33ba7aa9eba66421e6',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/TillTakeoverBlockerUiTest.kt': 'b9aecb3417460e043248a3835767eff26428c8d5770713b3cbeb3ec5c8a3b67a',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/WorkspaceScaffoldUiTest.kt': '382d4b91e3190bc11bb76a97538e8f718374aa5ed3e176607d0f824388526d11',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/WorkspaceScreenshotCapture.kt': '3708a0124b4ebf933763493b71eab3c262556bf2788e7e2bbfb61ba10a55b194',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/ControlDeckFullShellScreenshotsUiTest.kt': '1a0c98a2ec95e718f9aa0d74579f49db5e89f9a78f423e943c85614b799780d9',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/EntryBackFailureObservation.kt': '68be18b97303a28b7458014db6a1b0bdf3c6efc48ad9adbc08665edb5ab14def',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/ExecutiveEntryPresentationUiTest.kt': '6c80d568f2f8a1cc9214430002e6bd38b8411f9d157f2c78ba7eccdbf62a56a7',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/LoginWorkspaceUiTest.kt': '4c6aa4550a64230861c26e7b07c8a88a48b4183a3743cd2e226a3e289a4375b9',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosEmptyCatalogueUiTest.kt': '480b05dc2ff808bfffaa7d3626d0d1ecd44a7cd492bf18c9f0ba3ef70857797b',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/PosGlassUiTest.kt': '73d164cf76f022c8ff26add0f1e0df80e45899a7d63a2278e56103464e38258c',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/ReceiptCorrectionUiTest.kt': 'affc4fe7abb352d3b7e5b4eda9dfe69e09a41eb1de1b919a9f29e050ff388f1b',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingBoardUiTest.kt': '88b58692121dff27ce812c916186bb283140a8f14186bf23bb9c66bb708bfb3a',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDraftRecreationUiTest.kt': '6791f824974fd82471b469c6b67f9553a1980da24e57a231b2173c9694dc1757',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingGlassUiTest.kt': '0cf2d5ac19b85835891fe5ec9de289c93ea8ea53a410dba1307b92b1ac6f41ae',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingInlineShiftWorkspaceUiTest.kt': 'fc580f643a68f6d38dab681a1366423b4c3d8410c924df8b9920fb46a95fe27d',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingVoidImeUiTest.kt': '9df7770b4071ff88336c54e12b6fcd839515128b6f9bff57f0bdbaa9ce88d338',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/home/StaffHomeTillUiTest.kt': 'a8bcd8a1d6d327e3a86a7f5333fd020c6e6a7fba62e3f00b44e51e30ab55d7c4',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/shift/DailyWorkHubUiTest.kt': '8b44173a8fc9fc656cd64a6d7f29055a178649830f502e812cb7467bbd4d2682',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/shift/ShiftOverviewUiTest.kt': 'c81a1ddac80d8d2f8d2d66a1837455a684698d7f7d096cf204cac6d1c1dd7673',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/shift/work/AtomicStartWorkStoreTest.kt': 'a9dfabbd8089ec3cfd06ec51e92e82700c023524fc4ddcd0fec7d1c0fd0e8803',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/BackgroundLifecycleTraceRule.kt': '546efbcd285f8a2e75c322924444125f98b052992c59d9730f1da57ff1021b64',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundUiTest.kt': 'efddf3bebaf6d79e26a8a6f4a12edd9e422be0d98a2ffaf572226b3a56659946',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceGlassUiTest.kt': 'e328adcec1a6b4b0d2d0f7edd70d672767c037932ad010cb79834872551ef222',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/MainActivity.kt': '2065dd2b089feb076c892792088c58d90f669d0e61acb73c9d1fd2b8966283a6',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/auth/EffectivePermissions.kt': '5f9a71ffff0f92e29a8c1955e77562a37e8d816a50b364f1156054053a29d41b',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/auth/RolePresentation.kt': 'f36d3097a1849ad7500e3d33d5e82636611ba7dd94050e7f0fac5317fe049526',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/auth/TerminalStore.kt': 'f61157906972d468d8009988278cb959c14e044f138b22e8e093209ae7eb2310',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/checkout/HeldOrderClaimPolicy.kt': '912b60e74899eedcb1bfa2580833b4a35830acbc7bdbacd3dfd99b19aec308c0',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/db/ShiftDao.kt': '4535cc8421de86506e4567f8f8d96ab25f0cb0b7e32028131e405452b494b20c',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/HandoverCoordinator.kt': '9216182904b63733160956d7acdf277aa2268c6a8989017c467a1a5b1b35f0f2',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/HandoverOperations.kt': '19d311952c123bf8bd05b7d03146d64a9c16501a8f46070f98bfb93a595cf9c8',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/KnownJournalAttempt.kt': '609f30737cb723db71528817fc9b8e416b49c3e0835d9a13286f15a3dfacb3b6',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/LocalHandoverWork.kt': 'cc60144c3d17253db616b2405b76f094c3c505cd31e6da3348124b0fe7654dfa',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/OperationDispatch.kt': '19732a4f41e18005d9c1e1a3e244c1bb00e829c255627f8264fe27b891bdd12a',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/StartWorkReview.kt': '589bdb7dc85049a7a14381c1aae2100f7c20e6c5825338cf178cc5c816e5d20d',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/handover/TillPreparationTrace.kt': 'da85b27dccbb3d5bd7420f688be9ccdcefa1336349ff830fecee29532ed2946a',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/net/ApiClient.kt': 'b74838c6a18f9a7aa4065228e11c46503dc086ffcf812f9d009608686a05a16c',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/net/ErpApi.kt': '48cef3674be9c7996330955eb72e61a1d9fc4fd616afd6835977fb8a357be3a7',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/net/Models.kt': 'e202912e942ddfca9ed63a15475ea80da7144ab15d80619a340234d126aff05a',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/net/ReceiptHistoryModels.kt': '8018e54270b112f31bdbb2d3310d9a569c200fb12290c0849b67b03d46b8f0f5',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/net/ReceiptMistakeModels.kt': '2f6c32a7bcc642d675ad0356a21f9715c6f4bb52084879ca8e1673aa9520f922',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/sync/ShiftMapping.kt': '7f2888bed226fc644a54fc63f575a55629db2e756508a2f5bd4e94ee94bb811c',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/core/sync/SyncEngine.kt': '403ca60fdd48e484e591ee4ea01847654c4f9e3fe567ef8224020d097dad74b8',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/CashierSignOutGuard.kt': '280dd07f1349587d307d849c7ed44d84380a7d3f1bf4a2a3d9d3382257f303d4',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/ExecutiveRailScrub.kt': '42682d2ec949ccd8d7990248c35a8e72e5500489dca5d65d7f8546009137669c',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/ExecutiveRailVisibility.kt': '56f494a8d085463df20708a7be394a15bd2f1a2759034bd5d5de0476e6fd407e',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/Nav.kt': '471bf007cfc66337bf09faca632dec31a4a268f4cac2df04b9299c014cea304c',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/NavigationAccess.kt': '250257923e94f671232997fdcde9b58626d38ebf9f236486549382db31dbe6a2',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/SessionViewModel.kt': '4edbc7e9883550395aa051e2fb3131291c7ab2ae9febe294cfae64e926f147f1',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/TillCompletionNotice.kt': 'fae4d395dccc8ca7803d54fe1e3f233c72f09ebdd7b1bdf61004d0b5c4a0e3d8',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/TillOperatorDisplay.kt': 'ae2b718a18b4b4e0a8f0c7d0fe69b09c0143bfebb2c85705d9772572c56683f2',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/TillTakeoverUi.kt': '7470839e8b8dab6de6c3295cdc360d72c6aa9da6705b8814b43d72f7b94cc57f',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/components/VoidReasonInput.kt': '8529da9c8a0fc5555173b3c69b91af2d28e53e0845ed6ec02add3e16520d3389',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/CanonicalReceiptHistoryDialog.kt': 'bac0422cb882111414b1c1d52a4368e85db0f8405e4458c02dac8be18a38a73c',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosFavourites.kt': 'c8df5deee35979860f446f0f4027e3500037a758bf3ed62538cc1aae8efe1122',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosScreen.kt': '6597c377567900541b3665ba0cd62829643d7012f8f9971b80e52a02fe1af17b',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosViewModel.kt': '7b025f00cb2638079a366705d069b395b6bd03f0e2641c4b64cce00c269feda3',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/ReceiptMistakeJournal.kt': 'cde635c73b946036e81bdbe8be172930c208b0dcaaf3943a3d3da841c9509cc1',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/ReceiptMistakeReports.kt': '278285814af04fe8cbdb65ea52b6f1e0b5d8ab9d27e5d33444e96c3d011df9f1',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/accesscontrol/AccessControlApi.kt': '92111bbbfeba3a00cd920abd3a7acdfd45e1982d7282cfbe7af17501bc480f55',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/accesscontrol/AccessControlScreen.kt': '88edbb7d0b7f18dddb844f47719f64faf9dea3eb6ee6927aed80080e1e15d7db',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/accesscontrol/AccessControlViewModel.kt': '864d6aa5025f910a8769d2fc47266b319c3f4e07b93722021ec319d7ca5f3e4f',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/finance/FileTenderJournalStorage.kt': '35c8e2b5f60886caa137452718686896c0be22d4dcae4a5a2199947e0314a85c',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogBodyFit.kt': 'd5aa083cced6c7d52e9614458ba4d34c7f4eb0e5ff3392bde5ffee2c14320910',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt': '65f1cade7a81616839fd9ff11ed1ef989c40915a8f641744e55032624cb273f0',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingViewModel.kt': '7bf1d9bba56e2239328bc2d1b6b2693abe58e66fe16cc00c224cf5000c067bc0',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/home/ExecutiveHomeScreen.kt': '2000e066b4aae2f211878d9453bf15f40148083b403895b5648642bebb4e4b22',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/InlineShiftOpeningWorkspace.kt': 'c8501a7e08922fb9383fcbb868b01e7c2e866c6f2aab6335199c1ebcff37081f',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftApi.kt': '883c481c3d43223a830589a1b4fe35125a8984471f67f8234198f39aeb899f76',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftScreen.kt': '2207824cc0c81f09bfbdad193b9eda397ce85ce610ce0c6e780808d410374fea',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/ShiftViewModel.kt': '934d332bd3ca274d31160c16d4b9a114755aabba557a9bbfb7214838a0396973',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/StartWorkRecovery.kt': '54c9d9bd2fe8f79185c837a07b06a33bc34e2c18404c318062f44972439782cb',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/work/AndroidStartWorkRuntime.kt': 'd2de993be44a839da932ff0b03f3b390ccdebce7e5705a333074393339431bfb',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/work/SavedStartWorkRecovery.kt': '454536a954c092c4c205324bfbf6b799aa1398b257d264a2ce502348b05eb2cb',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/work/StartWorkApi.kt': 'ae91f0be38f4d89956f2831dc1f15893f04eec5e3b9e10ec35e1868cda0b2adc',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/work/StartWorkController.kt': '64a2fe75c4dccdc54e40d80175805691f9e8fac95a99c5a92dfd8e8f85d24166',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/work/StartWorkPolicy.kt': '1dfe55a9ff2e2b12b79e5dad21365bd80f3923a0664a8516503c78d828512fe9',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/shift/work/StartWorkStore.kt': 'a8ed0aeba63808d8b4ed63201b2091cfedd29dbf488bdf975d560cd58ce111cc',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/StaffApi.kt': 'ee5f11549c657faa18e738a644cf1946bad140b755e9911a201e0c6d9d136f24',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/StaffRolePolicy.kt': '058198cc3f739f99b1fc72d4aebe872090914537bab9b7f6d6b519f8eb59c2ba',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/StaffScreen.kt': 'e23f7fcbf6db33e40c562d14a3c715a550f5602d12b3af086ac635f354906fe0',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/StaffViewModel.kt': 'fc6aa02c0356038484784053d24a548342ce4d5b5f702e68429cd3ba8e383438',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/SharedAttendanceCard.kt': 'ba67cf2d29cfb7a71a530ccc39bc53a333ae9f52d332a9e5943ad645bce9f003',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/SharedStaffTimeWorkspace.kt': 'c15fa1e3f37ff8be8e12ce92f48e6e483cb415e04308c4dc500eb5d757be1af1',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimePolicy.kt': '4d1979b8a0368b8c0ca40b6ecf946f4824ae10bb25ae8e4fcd7dcdd81d999a20',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeScreen.kt': '3a8c8a4c3e933be6e89f69412833dfbf48feac2dd16ba398012f12789f790bb5',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundPresets.kt': '3b9f4221ff6fb31884ab55712199563a561cfee8216be43436937416a838dfae',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundRenderer.kt': 'de08426faf8eed9ed0abc6398627c2a1526a2c037cb529ef006d3c3e3f5e3c94',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/WorkspaceGlass.kt': '7cd6a7c2aa58c45109ccde4c624408866b632dd9c915255e79d44259419890e4',
+ 'android-native/app/src/main/res/drawable-nodpi/workspace_preset_violet_glass.jpg': '4bbb18c70b040b4657c1395de6db3c43196c1c71161e96088925c3724a30cb99',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': '5a9d8d880defa28ebc45ce852121234d1ea1deb44b003448f3472af9a09dda85',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/checkout/DirectOrderPublishContractTest.kt': '18028a0f71201c1c9a09b61c41d7827c570b9941d2c38b0cfb3844e7b919f424',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/checkout/HeldOrderClaimPolicyTest.kt': '893f024c24622a6aa83097d5682cb2175675c3e1633f3503474d8b22b7fa0cac',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/db/CanonicalReceiptMappingTest.kt': '6751b1348a4928ff6052d702759f0a0e34a802f29925390cd4e26abe64d76332',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/OperationDispatchTest.kt': 'e70ece039a0d9da12540254ac6a640eee84f38574e2febe6b30a0b906df6f928',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/StartWorkReviewTest.kt': 'b00fcadc0a7a0e26aa04527904fba0bd4b412b08ebc5e4198e662de1ddca8ca2',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/handover/TillPreparationBlockerTest.kt': '80c0bae82b2743147d4058b894393731170515825441f5dfab5bae1053b87ae1',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/net/PaymentBundleApiContractTest.kt': 'b1a6c82b0fd588de74a3f0c08a2ea7f438815f68ad6576eac848b38ee2743a5d',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/sync/ShiftAccountingContractTest.kt': '664c587b3b9cf8f8dd4c46bbb6dbd504ecdbc8e0597479d41ba212fb9ef1a0ec',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/sync/SyncResourceLockCoverageTest.kt': '1250ca7337b6d48bc0fb3d7be804436f35ccca772f80b369879c3dd3f05d9b9d',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/CaptureFailureProbeTest.kt': 'bdf84ad15c4d2ac4eee4a88cf8433b84c604cb0d9e2873ec0100f26e5daf7cfe',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/CashierSignOutGuardTest.kt': '19b4c9ffe8b1b22e564ca7ee44698b5226406ed4290a69743d39808c5aa545a0',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/ExecutiveRailScrubTest.kt': 'a7b65d3bc22eae508e89c6aee55ff71a4005e0ed4a19b823f7cce4199a127c1d',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/FiniteEntryAcknowledgementWaitTest.kt': '41776acbebc6088f179b7616f8fead637178a3582281483f9d73dd040215c4c9',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/GamingCentreFeatureProfileTest.kt': '4eefae8d1818a094a744a804b5ff79630cbdac5a4695d623dff810eea795b217',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/NavigationAccessTest.kt': '6051ecffc0b5c5101f9311cf06d23bbac4c8de249693259c2f5ee8351f609957',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/StoreStaffNavigationTest.kt': 'e2119dcb208f379f9bdd30e2eec52cb556c2fd3349f01dd11d831a40de9f77a8',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/TillCompletionNoticeTest.kt': '5358cf79c7b1802af6855a1a928088eab3eabeff77d652660e69a2a2f21ad30b',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/TillOperatorDisplayTest.kt': 'cc8d03994798af641f2b2a71d9c6e6229bfdfeb826f3a663376b5ec12406392e',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/TillTakeoverPresentationTest.kt': 'b91fde4fdf31d185966ce1b921837b40a17f7a1493b6e65e3d13e16ff1a34450',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/WallPacedRailWaitTest.kt': '6a49cba0cee41cbc9e0218c57cf27c89f426d38f855de58c7dfe48d8bc6c3d0f',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/WorkspaceLeaseFeedbackContractTest.kt': '931b5130f63308cbad1c54af7b1b9ce3f0e214ea0830167f307f5f63cb05a456',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/WorkspaceRouteAuthorityTest.kt': '0298d41192e5197cd4bddc3c2a05690af9da522b6924a8c69186ac92f1b68f78',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/components/VoidReasonInputTest.kt': '8934a81fcf4264716f249559d033fe326cb453123e79134abb28eb96af1da396',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/PosPresentationPolicyTest.kt': '038bd0d17849d8a165cd9412340be42c675faf80efdd6f63577052f236adf023',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/PosRetainedMistakeContractTest.kt': 'bf5a4e00a1d307f8084ccf2386497474a266c92e7f2e2785cfbf2232115e7ecb',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/ReceiptMistakeReportsTest.kt': '569a31480eea16c278704328b373d3c2b2f7510fdf617124b15035f4b445e325',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/accesscontrol/AccessControlContractTest.kt': 'adb5941232863ee70b0187767a32d47ffef6f822bd9a80346729c9ed63c4a771',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialGeometryContractTest.kt': '4b8314a43f51929090ea1b31defedb3e40ba6719adacaefda73a56210dba2102',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogBodyFitTest.kt': '56255f6b8b4a80e40e1c00375e4ace94d8d72857d28af3834341a32c5337cee4',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/gaming/GamingVoidV2ContractTest.kt': '96ec1b4e147337d6b7b3b82558526713d610b620bdfe8cec8c1fe0c8dfccb285',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/home/StaffHomeTillPolicyTest.kt': '5f2701b5daf2af4603dc462a4cd377cd40be41808602ce1f88b3fe9d0cd68905',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/shift/work/StartWorkControllerTest.kt': '308f3b25e16efe8d8ce558e95cbceaa6a0b1b043ab3b06d476241dc4f51b0c48',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/StaffRolePolicyTest.kt': '45aa5ed82c771412632c1f49257ee6efee1efab4c0aa21f46fe3c22a7723425d',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimeNavigationTest.kt': '4ad630638ced96512605743ab40818c3e21548dd15abd81e2d9a80c920ade89a',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/StaffTimePolicyTest.kt': 'b56013727a2e9404da90286faddf083ebfede7aed44d6f5b1c1d645b29621841',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/theme/BackgroundLifecycleTraceTest.kt': '2d46e72f0950f9204f999dd52092b076a0b69ceca57f4dc78c3e5d73e649875a',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundPolicyTest.kt': '953c3834acbd6399bf1a7594fa3d7375dd44672f92d902b6baedca681a3f48f6',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/theme/WorkspaceGlassPolicyTest.kt': '54e8311d3f7c74843dfd359a468a794c38ab3f4b2ba987162fea11703d135678',
+ 'android-native/app/src/testShared/java/cloud/dcompany/erp/ui/CaptureFailureProbe.kt': 'a66ea926302467179607f909e8e7ba5fb24cd1d5026236f903d8048fa390bf0d',
+ 'android-native/app/src/testShared/java/cloud/dcompany/erp/ui/FiniteEntryAcknowledgementWait.kt': '445b9ee7b07c100d290e1c142c4e854f6dcdbf480573e68bef3dab59f1acdc74',
+ 'android-native/app/src/testShared/java/cloud/dcompany/erp/ui/WallPacedRailWait.kt': 'f2bd0d4d7c98a0b53bd58cfa29557c5e899ea8e8f250ae72ae380808c4086898',
+ 'android-native/app/src/testShared/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialGeometryContract.kt': 'bce9736f14f7e700b5a758e490e1527b7e1101a72bf618dc5734af49fb669433',
+ 'android-native/app/src/testShared/java/cloud/dcompany/erp/ui/theme/BackgroundLifecycleTrace.kt': '02a248863ddfd03f24ac58656ac57f2ffe5b77509d93bbbd808cf44a33773e49',
+ 'backend/alembic/versions/0096_gaming_retained_bill_corrections.py': '1d1022487147f55657eda2297cb6499fbf306159afc11621a7222330775e8c5c',
+ 'backend/alembic/versions/0097_pos_receipt_corrections.py': '945a984b9bbe94b24ed1a1c232782b69e7c7f1fb2208d56204742ffa22f8f9bc',
+ 'backend/alembic/versions/0098_pos_receipt_stock_restoration.py': '1c2b136129d3b8e535d8b0754b033c08c51e6a9ee2535bd6729f36b1ce5040eb',
+ 'backend/alembic/versions/0099_shift_start_work.py': 'b2787243c08ded6cb85facde933d0902e04d59c9e51cc0ff57e1e3c3e89792a0',
+ 'backend/alembic/versions/0100_paid_bill_amendment_intents.py': 'e9eff2b66a954472ee8208802dcbe8b6578930092546dd0c0fdf55eaf7b3686b',
+ 'backend/alembic/versions/0101_paid_bill_action_decisions.py': '565b468eeed2d25b8bd54c6b4e76a96f2a2e6d47d5ee9be0fc4e8a360b2d1a48',
+ 'backend/alembic/versions/0102_paid_bill_recovery_sessions.py': '2d3485e39add2dffc873236c6c7fc29d45b94bd937fd656669803fca76f8528c',
+ 'backend/alembic/versions/0103_grn_durable_commands.py': '0308772fb704ef2d3e25800d07c627839b63d855ef3897831c93d05dcb07e432',
+ 'backend/alembic/versions/0104_receipt_stock_timezone.py': 'c5cc094de62be34d6e93903612ed26aeef00d3d5533d59baaccae1884589f63e',
+ 'backend/alembic/versions/0105_pos_receipt_mistake_reports.py': '1c20e477853a2660303da6a03a0be2b4e986b310a6f8d7d842d50fe83e59b0fa',
+ 'backend/app/__init__.py': '8476f7cfa95cc62280e1a08641e03c9c2107e3736780bbed789e355751ca691a',
+ 'backend/app/api/v1/admin/router.py': 'dd134423e15fc8664f3eef258ec5e1563a198cc5c05dc9e45d0a8b427dbfa232',
+ 'backend/app/api/v1/analytics/router.py': 'f66ab1aebb25aa9e438ac03a06c20574f9fc3eac304e2a0ed52f7c39bc07bcf4',
+ 'backend/app/api/v1/finance/tender_corrections.py': '7214dcaa98715fa23d33cb755f1dc9316642e07efa20511811b9e089f9ed7044',
+ 'backend/app/api/v1/insights/router.py': '1cfe484747554d3f640ba1a91c60dd2ac4abe18de5b8ac4eaad922bb2166ef0e',
+ 'backend/app/api/v1/inventory/grn_commands.py': '20d111ac6e431ea6bcd44752b64ac767b55b335239d1a9c5fea076f4767a65c4',
+ 'backend/app/api/v1/inventory/router.py': 'c784b9f57ccb9d3394c2e2c9fc09f8e4e561ba540aebab2db6eebe4a4bef1cf4',
+ 'backend/app/api/v1/pos/paid_bill_amendments.py': '6f9c522828360f741488baca870d604489546acd666ad3ac7b8483c5782bf3b7',
+ 'backend/app/api/v1/pos/paid_bill_decision_route.py': '20a5f54bd4b84195bc5fd787d188ddd10688f32389d200b0c2b7c788e48e4af9',
+ 'backend/app/api/v1/pos/paid_bill_recovery.py': 'ab479f8911ecf3e4172c823a33d2873e749ccc3172ddd792dcee82150e7d1849',
+ 'backend/app/api/v1/pos/receipt_corrections.py': '13267f942ae13fc3f6aca0d58ccacf5fa7ba06cc06f7821cc6e2e376a924b2a0',
+ 'backend/app/api/v1/pos/receipt_mistake_reports.py': '754da4b164a8a581ae875589bb9816873570a776250b7bb867a59daf67e7fb0d',
+ 'backend/app/api/v1/pos/router.py': 'a880e274457d61292b633d7fd424c7feb9519259ff3f1064efda8b552888f7ee',
+ 'backend/app/api/v1/pos/start_work.py': '90bea5aa650106791a5fac22e761b01b51097d483793037a49f0c5300250e6a9',
+ 'backend/app/api/v1/reports/router.py': 'df8977513c25c1e8f95bdcc343393d0ca468ffa8696b0c67c21e2dc6f1876605',
+ 'backend/app/api/v1/router.py': '924e8a6705e9d0092fa501233f5d45a62dbc5b8ef11e19de74bcecf64a7e38ad',
+ 'backend/app/api/v1/settings/router.py': 'e7b4cd84db2332dc1982881a6ffa1648a4ad06b1198d14e4ba64da1b28d5ca73',
+ 'backend/app/api/v1/staff/router.py': '250d963e7a41923765e8f7c75f44b8645bea4b2527e0ee0b3ab62ff9cbbfde8d',
+ 'backend/app/core/middleware.py': '67e2c1b72daaa4502b84b6ac5ce3a789499bf9362b8a73103f1eb2f11047928c',
+ 'backend/app/core/permissions.py': '707140c0516af174fdf98d31499e1cbded856ff53af1737d100b3936e252eafd',
+ 'backend/app/core/roles.py': '77f568ac3335c2b304b4c537b3dbeece1b01a92fc1ff2e77ba902b43a0dcd977',
+ 'backend/app/core/security.py': 'a4db954015a66157111f4cbdd83d0db114c8d7cec32628bad9203772aba9c3a5',
+ 'backend/app/models/__init__.py': '0f62525ec04c52dcdb53ba2e151ce27df1f2b2c2d83c3a8b4b2bdf23b17df3f4',
+ 'backend/app/models/gaming.py': 'a7ec8e23ac44f767a224a1fd723ad7fe5264ff7ee69650e3908d3e54bfa1bc87',
+ 'backend/app/models/grn_commands.py': '05e70b80bf1485e66548beadfe2ef7bc39acf85d412f2beca250b7cf7c496699',
+ 'backend/app/models/paid_bill_action_decision.py': 'c9858a0ea4b0c273ca149c0289ec58fc8f51fe9b4641895610300baca1fa7c5a',
+ 'backend/app/models/paid_bill_amendment.py': '3942e1076b6c57785f82108f0ac03a58ff637484c35ec15c44fb2cd05198ffab',
+ 'backend/app/models/paid_bill_recovery_session.py': '1ed22d731e2a5db5fd749f5224ec04c8123edea89c73717bf619ca2856c63a9c',
+ 'backend/app/models/pos_receipt_correction.py': 'b302019079746ad1618b9f52d1c442c7a81b68af82a4b5af30cb0bec91ac4a6e',
+ 'backend/app/models/pos_receipt_mistake_report.py': 'fa9dff84d7df586183ddc3668adb24a1be6b67a6a6b4c896cf9ffde2aa0936d1',
+ 'backend/app/models/shift_start_work.py': 'fe0b89bcf1b19e40b1bc1a1703e501d7615b4c251bfa0e2387013c391dee2fec',
+ 'backend/app/schemas/grn_commands.py': '5b8b6a81a8f7988974625d3432be50cb4d064e41ccdf5413f2806d9743bc2fa4',
+ 'backend/app/schemas/paid_bill_action_decision.py': '9e5e9cd52a0db616b2961ed658b3b0c8bd17ca62d10ea18a9604e41aeab653c8',
+ 'backend/app/schemas/paid_bill_amendment.py': 'd8e39ef161d03d1cf463a00b14f831e148bc714814aab955c607b32a77877d42',
+ 'backend/app/schemas/paid_bill_recovery.py': 'b1a4314575974a694175e1d4db27ccf343bf43c1d66e7cd142eb702beb2e0848',
+ 'backend/app/services/accounting/ledger.py': '8b60a90bac21ae506d0bc0c35c3ad525b03e0c3d119e528f02f8890f847341f2',
+ 'backend/app/services/analytics/home_read_model.py': '4c3d029ea2228c95a90c4f8c36dbce53afc9a41b7c73493575d9425da4db6775',
+ 'backend/app/services/audit/catalogue.py': '9a72ec0cd91e83f027d4f6749a0b9879efdb07d7eca58d1120b7a564a7bae2ce',
+ 'backend/app/services/audit/recorder.py': '6eda31d8b6aaefb695ffd21d09999526c8c6d51a4c7c97bb870d332db036ad0e',
+ 'backend/app/services/integrations/google_sheets_collections.py': 'd37a33992f6253bbe5e389501d75738832f58fb8a1a02e2e247125f75e8fee05',
+ 'backend/app/services/inventory/accounting.py': '26ae4b9e3fbb0f175cf7478c62feec7e1f05ddd40c51b962df600c0e79284f53',
+ 'backend/app/services/inventory/deduction.py': '5f2ce99b7e91c90cfe69e642ef05ce830df1126a26a4523c3709627de7a398fe',
+ 'backend/app/services/inventory/grn_commands.py': '453b04d30be848886804a12e319fe556679719b60444c5870fcebafad0db0854',
+ 'backend/app/services/inventory/grn_recovery.py': 'c8fbe1558a0f1f063b1fc14cb90fd040045a1f94ab461ef3ea3f619d8945f01a',
+ 'backend/app/services/inventory/receipt_cache.py': '726bc570f173ebe58c1a3c9ee465e63c7def86c0a2e919a1b73f6a206ed901cd',
+ 'backend/app/services/pos/paid_bill_action_decisions.py': 'b451dd462a1f541feaca775072d9efeaffe03c44b2402ae4d67a33e1a56ff874',
+ 'backend/app/services/pos/paid_bill_amendments.py': '46761c9841e6377779d17ebd20675fe43994170d5ed10bf52d4be4065d7db67b',
+ 'backend/app/services/pos/paid_bill_projection.py': '075ea46e28e0ccf0f2dfee168cd4d21184bf63dedb65ab1d13f2df05c1abc268',
+ 'backend/app/services/pos/paid_bill_recovery.py': '9de840612f6f287701acbd2bba357177f3e4ea2fe54aed32a132f2b61776d2ec',
+ 'backend/app/services/pos/receipt_correction_projection.py': '814ec4d3cd8f83e6b87a47cedf4dab5809064c15e56f1c618786d5f91836b587',
+ 'backend/app/services/pos/receipt_corrections.py': '299d5bca64ae3227f7ac1ac143cfca51910f3947a18544665fd19385427e99c7',
+ 'backend/app/services/pos/receipt_stock.py': 'f37e4b2b2c8e53cb838a64af59d4f98d21cc60c51a5654afe186ea11f3d049d1',
+ 'backend/app/services/pos/refund_requests.py': '0e75e207caf3d2c15cd35075b8451bbd9690e420a9fb29cc2fe10aae6681b95f',
+ 'backend/app/services/pos/retained_bill_corrections.py': '19e4a7cb3c84a565696f92b1fc0e78bbad42bdf6a5d77fa21cde248d7511ffc4',
+ 'backend/app/services/reports/aggregator.py': 'c39bfcf66eb0b34e15bbd3e0a6151a819eac016719e5266d851858d40f4f62fd',
+ 'backend/app/services/reports/overview.py': '70904d094cc2fe35e7a355ebd05bda67459cceab042380728c4580a21372b16c',
+ 'backend/app/services/reports/overview_csv.py': '8f0880247b604eb6135979167ec3994a6d6936dbfb314eeda6bb745244452fc1',
+ 'backend/docs/POS_START_WORK.md': '8972fc3f7a14401a5ae3bdf8bf5d531030f8ec0414fc2cf40f3f06445092dfe7',
+ 'backend/docs/TENDER_CORRECTIONS_API.md': '0b8f37774a4520787f87074c187f59dbaddc04dfcd8afb71843d6cb4ebb8d53b',
+ 'backend/pyproject.toml': 'a523328d7e54cb1bead60cc6163e4b3592a0b990d313d34b41438b333c6cbe6f',
+ 'backend/requirements-ci.lock': '00d2bcd11933a3183035c276830b5c4e8bc71f4ea13c577b03e6939d6daf26f1',
+ 'backend/requirements.lock': '83ace6c37e8158251a544f023d48fd55e99c5bd5a1010715f9f24ad1fbd01150',
+ 'backend/scripts/physical_audit_fixture.py': 'db40691a92fefa4557ea374d51619609a47850e36a1d04c9306c6009f8b57f26',
+ 'backend/scripts/seed.py': '5bd0e5afa2f15f642448fc6bebca5a689a921cf3b6ea8c6057626e969b1c6f20',
+ 'backend/tests/integration/fixtures/build71_pg16_restore_catalogue_pairs.json': '6c8b261567343f1db58d7a6a0356e8d76795c665034283362c861567461b4df2',
+ 'backend/tests/integration/historical_tender_producer.py': '1c62b087a4f51e48b39dad38e86e2463b710d98aae01154ec8b2dbbc2952ec81',
+ 'backend/tests/integration/test_audit_business_events.py': 'f3b4d14205b1209f0758b880d96261c7cb8fe32dbefe74ba275cad322b2f1b35',
+ 'backend/tests/integration/test_build51_history_bridge.py': 'b939d01ad148660c1d8eabca65ca827ac138ed5f7ab157ae7975374f93c32bf2',
+ 'backend/tests/integration/test_build55_transition_state_query.py': '2d44b6dd9e1c13223c2451f6a1e9b57d271368892a8f8a817f4e874132f6f98f',
+ 'backend/tests/integration/test_build71_candidate_migration.py': '4bb2ed47452cc255ae222e742330ad83068235a4f06db483fb383779fed23a90',
+ 'backend/tests/integration/test_checkout_claim_contention.py': 'bfc8d81aa277b230672ecc5540f4403a32f7bd5fe03c9067bda50fdddb4a2314',
+ 'backend/tests/integration/test_gaming_cashier_provisioning.py': '8afd4c7b7f970e49c540239f6544794b730240116817c5c2cecee1911ace9bb0',
+ 'backend/tests/integration/test_grn_command_migration.py': '0289ef7bdee88233ef0e7f8ebe55a294a0b5604002445e81126976196fe6fc87',
+ 'backend/tests/integration/test_grn_command_races.py': 'd378b7d2cde9459e0c7feb2ce3d69b8764b24ba1704932c4aa2e5ea9bbebbcc7',
+ 'backend/tests/integration/test_grn_command_recovery.py': '79611a891ebbe36878eb66f283e2f3178d335f567d34d8df9c1b27bcc4a21831',
+ 'backend/tests/integration/test_paid_bill_action_decisions.py': 'f9cf4a5122c6c35fe77b9122c38bc2b238c8402d334df8610c52eb2c790e1ced',
+ 'backend/tests/integration/test_paid_bill_amendments.py': 'dcec6904effd6c2d1f79aafebbb120fcca3095ab75be1b48bec7acf82c6442ab',
+ 'backend/tests/integration/test_paid_bill_historical_recovery.py': '096a6a3c0b14ea81dccd0aebb1cea3c22a4462fdecde5bd09685d29964561e62',
+ 'backend/tests/integration/test_paid_bill_historical_recovery_migration.py': 'aa0fe8e383db7e06c259d18b6e2a14feb146bc30932138886b0ba7f61fa63fef',
+ 'backend/tests/integration/test_pos_receipt_correction_http.py': 'e25bae362e581dc2deb9df01fee0dbb2b985ddf5029ec1d5f5dd78ca4f93cbd3',
+ 'backend/tests/integration/test_pos_receipt_correction_preview.py': 'ea73ce88e421c4deb100c94271b7392d84e05642941ba2c723e34f377f9dd7c5',
+ 'backend/tests/integration/test_pos_receipt_corrections.py': '38e4f75b8ee09a3babf22b18f06b9afdca2eb4addaf5803285aa9cf3c57fb1cb',
+ 'backend/tests/integration/test_pos_receipt_mistake_reports.py': 'ef903365a3a246518846b26fa5c221702327db0554f200ace7ed9b4a2cb9ad12',
+ 'backend/tests/integration/test_pos_receipt_stock_corrections.py': '0055e5b299b3866c7c4798f2d6ddb0c262421f61ea39d79f1cea2bd82b8b1dd9',
+ 'backend/tests/integration/test_pos_receipt_stock_lock_order.py': '9f2afacfcf165566bd112ad6f80d636401fed27756e855bccfa4d740ffcca96c',
+ 'backend/tests/integration/test_pos_refund_settlement.py': 'ea91437bc3307ce0657ca944b77b839b3ee9f8d531f3a38276971fe40d4f6913',
+ 'backend/tests/integration/test_production_redis_acl.py': '3ecb5ba11de5f61035008f16145e2713c33c12391241796cf604cf83ca5bb15d',
+ 'backend/tests/integration/test_receipt_stock_timezone_migration.py': 'da28ec9866a86bb0e9279d9ea2e5c81c2fd970e6e80d93ad39a7f7346da68cfd',
+ 'backend/tests/integration/test_reports_overview.py': '325fef58f4bad0c602c097b568c668690be30017c258ba63d5d8b918c6e5b4bb',
+ 'backend/tests/integration/test_retained_bill_correction_migration.py': '36f3ed20665f4458c2d510daa7fa12b9139fc7c791ab09cf4a90a2fc5549b4d5',
+ 'backend/tests/integration/test_retained_bill_mistake_correction.py': '64ab6ef8292a64e13bbde6c16d76bb529ff09587d9ea09e408f80e8864ea18e4',
+ 'backend/tests/integration/test_shift_start_work.py': '9e268192c5c64a6e4eb1d051ff0ddb7da99e1fa81991340169909a992a3f6a9a',
+ 'backend/tests/integration/test_tender_correction_edges.py': 'c67a2e8c15d4455c74321f55f2e78fe93b9ad5c1af37159a5d0b3764251ea93b',
+ 'backend/tests/integration/test_tender_corrections.py': 'a6c6b5e86bb8c3bbafe4c5f37c3c049dbacd15a577c4eeeb9b8228f18bee62a5',
+ 'backend/tests/unit/test_access_control_owner_presentation.py': '78a0f51dada51fea99d4b15d8a9f44b12f0f5f5cc46994f0dcf83ad192b9bfeb',
+ 'backend/tests/unit/test_accounting_provenance.py': '88d1702bb47f75464a1d89fca615fd417d4dd7c70b87fb1845ab9f2257c857b0',
+ 'backend/tests/unit/test_audit_business_catalogue.py': 'a70a7d7336b91ecab7f0438cf7fdf241fab838dfb7d5eeb5a2f80e96c7af3067',
+ 'backend/tests/unit/test_cafe_active_line_consumers.py': '9aab35e9135c77d083185908c295c01b263a721213864e640493d763a5a47b5d',
+ 'backend/tests/unit/test_cleanup_replay_fence.py': 'b4f0b64db26a56f8913202ef395697949ab4efc1b0a5420ddcc6586985b9508e',
+ 'backend/tests/unit/test_depreciation.py': 'ca418f6b688484d6358efcc871c6011433de4ed9eecf316e816199e133344d87',
+ 'backend/tests/unit/test_event_ticket_report_integrity.py': 'cc4d9881edc1da7865f8005fb8afdbb4b73c6e81e113e452b3c228e737b7b7cf',
+ 'backend/tests/unit/test_gaming_cashier_access.py': 'cafac9ef5b9f79cc2e6d5a82ebe30bae2694dd68e94abfdff333519a2dd1a6a1',
+ 'backend/tests/unit/test_grn_command_contract.py': '6369981fc1d51a4e28bd4430b0c593c85a0d6a9acea948779922a7f3cc0daf3e',
+ 'backend/tests/unit/test_inventory_router_idempotency.py': 'f888121177e41e44920b96229d037d7ee11514722d5b67feb8e0537e15df4f10',
+ 'backend/tests/unit/test_manual_collections.py': 'f1d5656532c343066afb83bc1e6bd2217d10d40a5bc6df545883a948227ee6eb',
+ 'backend/tests/unit/test_membership_benefits.py': '83b1c963172ebdc9dc7ffd09ca80f2c91d7eba0191df85536b8d9858f56e7c7c',
+ 'backend/tests/unit/test_operational_route_integrity.py': 'ff074e97fde11f1d49d704eb057a11a207e35696922841704bf45d90677eaeaa',
+ 'backend/tests/unit/test_paid_bill_action_decision_contract.py': '04801072e9a7999e86b18acd69c53367f0f2a696318d11acf4b3c161ea1b490a',
+ 'backend/tests/unit/test_paid_bill_amendment_contract.py': '96acb0535c06592f932b173f4508aa0efefda41daa5028d37df28fba66157b45',
+ 'backend/tests/unit/test_paid_bill_historical_recovery_contract.py': '6873fe6d01f812bc007dc6a2197bd73338bb9246c67e7fc626653aedff4fd4d2',
+ 'backend/tests/unit/test_permissions.py': '1d7ca5ecee1c310aa8c602f1b87d1dbcce99444eee8ec101f55e4af2619a26b0',
+ 'backend/tests/unit/test_pos_receipt_corrections.py': '16b4ae912f4e3609714488c6a35f6476bb16b9834bc05d443473f4bb190d6117',
+ 'backend/tests/unit/test_pos_receipt_stock_review.py': 'a67f605299c587ddda489d086fe675cd7a320edd6b122d574ac911585bdacf5b',
+ 'backend/tests/unit/test_release_contracts.py': '6e5ff113ce031bf3e47344269b33e1c05a247821c927cc517cb28507f788936d',
+ 'backend/tests/unit/test_remote_assistance_contract.py': '76c704b15848949129e72121765f937daeae30e562692902bede2af713f754c2',
+ 'backend/tests/unit/test_report_defaults.py': '36089fa651f3e6f4b9ad9f155bad6e4b9df0e39586dec66fc8040623332998a7',
+ 'backend/tests/unit/test_report_roundoff_reconciliation.py': '76030cd80aee4846a2e9d3a4597b52fe7e906cc4891722a3041ca9f585388c31',
+ 'backend/tests/unit/test_retained_bill_correction_contract.py': '5a947f8ad87a44a488d10b0159265e71aed30bf472dca7abcc18573983fc5876',
+ 'backend/tests/unit/test_staff_discount_access.py': 'a244e41a725d6e7e1ec3d582f6b79ba9857e4b480ca8544d6a75b49d6f6acc07',
+ 'backend/tests/unit/test_staff_role_security.py': '9648479c3dad74c86982719b5e76eb406433fee266a587be98729dd324e827d7',
+ 'backend/tests/unit/test_store_staff_access.py': 'dd34974fcd09f3512ec4971d503c6a6b40f23eabe43f4c607826b8d92eeee0b1',
+ 'backend/tests/unit/test_tip_payouts.py': '8c2f04e3459a899c3ffab66f87da9616114fb746cc0fe2b904fec9cd7b8a3832',
+ 'backend/tests/unit/test_tip_refund_ledger.py': '9483678f26cbbc724f4699fb8003cade7da18ce21686b87a5fad0d1e7073cef1',
+ 'backend/tests/unit/test_versioned_cleanup_replay_fence.py': 'ba72a4f85af7f8991108bdb4e3a55a7344f52fd2fea9dc10d9c3757aee0d12dd',
+ 'docker-compose.prod.yml': '496947fef06bd5dc20d4e07321504a919b8ffec1a583fdd80c0a078eb38b8792',
+ 'docs/V3_1_65_RELEASE_CANDIDATE.md': '221b171d72a4f7ae599c84a350d64d210aa001d6ed863e66d4f7874fb32aeb9e',
+ 'frontend/.env.example': '163b2dc23bc840126d3fcf156b1e293553f5779e082d947e047a3241156f4e61',
+ 'frontend/package-lock.json': '657e5d1de6ef9ddc510c0cabb60b601b97fcb9cfb555d8c98b1b23720e0e2a8f',
+ 'frontend/package.json': '942d0cd69d7c13033cf1b983b84d73a2a773966d22e093d7276dfd30c8fa2b53',
+ 'frontend/src/app/App.tsx': '6ebfc58e507bbb5625eda53b08db25cf14f62595e35bbf888331be0b0ce75ce8',
+ 'frontend/src/app/OrdinaryApplication.tsx': 'c6bad6c19476beb1f4cc6389a2a00614b68b2020700b876877273f9de8098a2b',
+ 'frontend/src/app/RootRecoveryGate.tsx': 'e12ca573fb4739eb0ffa985d052f6b57163c45e686389a0c919468f0e1c69864',
+ 'frontend/src/app/cold-recovery-boot.test.tsx': 'a8ce55503873e564ba0eab6de4b713653564b54ea2800337bc57504949a6e816',
+ 'frontend/src/app/staff-time-route.test.tsx': 'a69304134d614766cb5ea1365d7b3ef6e69ddd424841462e6104be025ad7bdbe',
+ 'frontend/src/components/layout/AppShell.tsx': 'ebac23e0f3c53905a156581ade6f7f1f3cfd9d1355f5ec92ac66180d10f9c0f8',
+ 'frontend/src/components/ui/PaidBillWorkNotice.tsx': 'b982a4695e523a4060ab01d24a4b77aca307699f9fa761ef1fc23a71b5a14e9f',
+ 'frontend/src/components/ui/SavedOwnerRecoveryLink.tsx': 'b758f1bfeb90571bad797b085b1f422abab21f527e67944fe37122247d050bba',
+ 'frontend/src/lib/api.ts': '8dd9ed8c059344bacea990dba86ae690751879ae1bd6b7819f31f2b53800c5ea',
+ 'frontend/src/lib/configured-api-base.ts': '96cd7917744f65fded3e3111cb6a08878f9576ce87b6823ffcfab77db4b2fbec',
+ 'frontend/src/lib/effective-permissions.test.ts': '0dc3a92e052ce4c32fe6371913b8558529abfbdc25a582b37c0e8194f1a5eeb2',
+ 'frontend/src/lib/effective-permissions.ts': 'eef55880a00601b9b7aade6b570e4d10004ecaf6f2c509662006678a92b81414',
+ 'frontend/src/lib/erp-api.ts': '2e0af17b0b61334ca2a5aa03caa5998e62e8f2e3c73c8929309c9b7b168e4af1',
+ 'frontend/src/lib/operational-context.ts': '68eca76c2c1a8eab09c2b4cb4677a4d6894796dfb16000bfbf78c70982645137',
+ 'frontend/src/lib/owner-workspace.ts': '021b1efe8f67bb5f42717ea3576a45016e1c0f38e6734feeaab4e66c04a10313',
+ 'frontend/src/lib/paid-bill-admission.test.ts': '41791322b8452f6c40e3c52a4b9d4fab2304354c1bd7d256799e4d78b2bb117b',
+ 'frontend/src/lib/paid-bill-admission.ts': '9424bd172fdb0b8484a3285ac11815ac888f0e1fd3e7fef1fe6ce472333bd6b1',
+ 'frontend/src/lib/paid-bill-api.test.ts': '2e04d15f87fac94644df393bc64935f9258eb5f7cf8e399ec12040fd00768653',
+ 'frontend/src/lib/paid-bill-api.ts': 'b163c3c446ac638ae2ff080362f8034232b1e7b63757b4168a40fdf4fe928cce',
+ 'frontend/src/lib/paid-bill-context.test.ts': 'd144b4e141bfa14816b3948aa5212adfa59796809f291dd8e3e608bc549e9076',
+ 'frontend/src/lib/paid-bill-context.ts': '34a45a5e5f0ec53da23517cf36091f8def0697bdc05f42843af028d4e5101e16',
+ 'frontend/src/lib/paid-bill-contract.test.ts': 'ee11000bd7b58a78e3624266a6e87d367a8c13604fe38e1c742673c222afec80',
+ 'frontend/src/lib/paid-bill-contract.ts': '324d89f555250525c6a4fef652eef711f5161bc3d70c40e4d26db8a2d71e6e2b',
+ 'frontend/src/lib/paid-bill-historical-api.test.ts': '70ba8d40607872a3e904e038776df78b0a946b012947bc525f02f52c92943531',
+ 'frontend/src/lib/paid-bill-historical-api.ts': '99391feb33b5b4e04a0f6faa6157751c57087c1caef7aa1f275e197588d1ff75',
+ 'frontend/src/lib/paid-bill-historical-controller.test.ts': '089602550e3f309523d32ca07868fc286e4df2a46ad95477f75994b9bdc0a733',
+ 'frontend/src/lib/paid-bill-historical-controller.ts': '95000b021bbcdffb5a825347de678ade60258bfe3fda27f2ee373c6045279930',
+ 'frontend/src/lib/paid-bill-historical-lease.test.ts': '4b27debc3213aaf78942247aac865d67f3e3117bc1db9911ba6b79be164a776b',
+ 'frontend/src/lib/paid-bill-historical-lease.ts': 'feb8bbd58eddbdfca2c157ba7df4939bc2836cd37509f1f258abf368d64ebc0c',
+ 'frontend/src/lib/paid-bill-journal.test.ts': '91e3a2fe92ed1c4a85c19ce03907053c09860501497b528b62864e9da5985fd1',
+ 'frontend/src/lib/paid-bill-journal.ts': '84e0d736fc48b00cf9fa84e2871e673ecc637a2d8b151085ca057e60fa626a1b',
+ 'frontend/src/lib/product-profile.test.ts': '0db34b8c415f5f7c9d3604ec7c457c5d9a33a3bbb9009a82678a2039302a37fd',
+ 'frontend/src/lib/product-profile.ts': '879bb4adcbe207d23dc3b26cf22422f090dffb96e64f8a0648303d648d7f912a',
+ 'frontend/src/lib/roles.test.ts': '24c1c8c9561931dc66c99c998a09353c803c4aced370ebddac8edb2c2b5d26c2',
+ 'frontend/src/lib/roles.ts': 'b2a9d9fa8e0cdc17ea09ad6349f005034cc0876db9f1332448307799eb5bf22f',
+ 'frontend/src/lib/root-workspace-epoch.ts': 'aaf0101d61e9f6ed0807ea7e6edab638ba2b336e93acb5675d25ffa30dec8b7f',
+ 'frontend/src/lib/start-work.test.ts': '173b48e38d9a97288884527842c0100f684e18d91551d4cfb9c3a17c76c4620d',
+ 'frontend/src/lib/start-work.ts': 'f385319a9c31fd8cc514f6dfd05dc065add0abde788d9121f976b0799e320583',
+ 'frontend/src/lib/use-inline-workspace-focus.test.tsx': 'eb333e7b44522ba7806b50ba8bd4a3c00f6d53b25f4189a1d0ce293032060117',
+ 'frontend/src/lib/use-inline-workspace-focus.ts': '566cb20997ab6d11d06cd60efe0f1b9d33da2d38ce365b474ef715d26de0dfaa',
+ 'frontend/src/main.tsx': '9b12df42e2445776e4dc5d3ed8e10c13be2bfb79d3662d32ab41ecdc728353a3',
+ 'frontend/src/modules/auth/AuthContext.tsx': 'b237400c2f107187f8643ada9b469ea8fcaaab05d4f642b9024c8723a04db9b9',
+ 'frontend/src/modules/auth/Login.tsx': 'b5a7e1edd76a3a50ba3c666ab6fcc3d0b7b2fb6db73b1d66753678cf90983356',
+ 'frontend/src/modules/customers/CustomersScreen.focus.test.tsx': '736a4e48f6522082149f2ec928660fdd5dd0cdd552cfe590c62ef5b7aa73bf41',
+ 'frontend/src/modules/customers/CustomersScreen.tsx': '9c55f71848622e2e63a07e55e5c19daf72543c23e7dc919aba60bef2233d8779',
+ 'frontend/src/modules/finance/AssetsTab.tsx': '273e7a55717ad76c74464756ae5eba2c37916cb4e0bcfa229a83740c960b6c1b',
+ 'frontend/src/modules/finance/BusinessViewerControls.test.tsx': 'd25e874a3c95f23232d8f38ba06322a748aa8037228802db020533461e9fe3b6',
+ 'frontend/src/modules/finance/FinanceOverview.test.tsx': '44c3ed0c9e7fdda16792e34718716570d2911953aedd3f26c1b75d238e0e01c9',
+ 'frontend/src/modules/finance/FinanceScreen.tsx': 'cab17f4c79005f91e4ebcfc3b89cff388ddba9fd93d0d98cc46020ce8b675912',
+ 'frontend/src/modules/finance/ManualCollectionsTab.test.tsx': 'be56328cb81864680e1d003b1c8b7b56cb5fdd92c8cecf816d9e437fad8122da',
+ 'frontend/src/modules/finance/ManualCollectionsTab.tsx': '492e4e7ee7a937b07f27c23f2d20a2498c11e54aaecba3c5247e2017936acd22',
+ 'frontend/src/modules/finance/TenderCorrections.test.tsx': 'c7cdd43b42b2d4391b26594213aece092735febed98ce3dbf9b1f539a725e089',
+ 'frontend/src/modules/finance/TipPayoutsTab.tsx': '521f319f5bc00ac5341899ce415cb86b2b6ed03322a677088d4b52be34341fc6',
+ 'frontend/src/modules/gaming/GamingInlineShift.test.tsx': 'adabffa565e72f3d7c1cff3dc540049ef379fbd92ca36801a53114771da231a3',
+ 'frontend/src/modules/gaming/GamingReadState.test.tsx': '7e21f8826a98a7634627d1cce00294119c53081dfc8c26fae5b0dc1d104fa042',
+ 'frontend/src/modules/gaming/GamingScreen.tsx': '2a2a7fedc6791abae7d9aa21f3fb86b470fcfaf0dc8b991c4ef17d258a1220c2',
+ 'frontend/src/modules/inventory/InventoryScreen.test.tsx': '98adcf4b39b9be511e8e8d4cb82969c43ac711d2592b00603694b115643e8374',
+ 'frontend/src/modules/inventory/InventoryScreen.tsx': 'dfef4c0f4c0c9c68abca0bf8d97ca5704c10311d2c448e00181648e2dd60142d',
+ 'frontend/src/modules/pos/HistoricalPaidBillRecovery.tsx': 'ab804bde48582118639f34add1f3a1001d57133de5798911ca950d84e13a3a66',
+ 'frontend/src/modules/pos/LivePOSScreen.tsx': '01590068a39841850851250a61329a26157792700d6aae2abc0130eb067261f3',
+ 'frontend/src/modules/pos/OperationsReadState.test.tsx': '9cdb0c66be9661d64eb8c906d204e99a54b75abc1c6485730633498f4068f747',
+ 'frontend/src/modules/pos/OperatorRecoveryScreen.tsx': '85a6bf4e91dc866a80eff5407eb9b5ed57b4ebf9077e91d8861a96bb5cc041ff',
+ 'frontend/src/modules/pos/OrdersAndShiftsScreen.test.tsx': '69e77baa61b26dcc51af462d2585ee9f7df117856130e5113f3f9d7e2afd0b66',
+ 'frontend/src/modules/pos/OrdersAndShiftsScreen.tsx': '65d049d21f8eda5350d5a0cf0424fac93aafd4007d178ebc4d469df1093457ab',
+ 'frontend/src/modules/pos/PaidBillAmendment.test.tsx': '8c8082e83fdb73403b6ac1a941ed091c35c7d18b91f14122bb226aafe6b53e2d',
+ 'frontend/src/modules/pos/PaidBillAmendment.tsx': 'e1a7f8da5a226cefb92e7d19cac2ef9dc5df36d9239d7bb8d6967d4b387c01da',
+ 'frontend/src/modules/pos/PosPermissions.test.tsx': '6c03b055a2a29d1b48bd943148928d2f5da7c2a2448deb2d1bc38a61ae75e555',
+ 'frontend/src/modules/pos/PosWorkspace.tsx': 'bfc09ed9d39141caa439dd3ac3d94c4bc2629c7e3a5057ace3c892668f01edc0',
+ 'frontend/src/modules/pos/ReceiptNoValueCorrection.test.tsx': 'eec44ab5d207715abad99db3ea97e32379e311661cd1c448ca44b79ca5bb0af3',
+ 'frontend/src/modules/pos/ReceiptNoValueCorrection.tsx': '25ffadb95507c7ffadc50f8ee29e116b648e4f743dc999b120ba58b7826df1d8',
+ 'frontend/src/modules/pos/RetainedMistakeCorrectionDialog.test.tsx': 'e7cf53dac56c551163300c663704b567d1ddafde9a5f4c4ca16530aa7e27ea48',
+ 'frontend/src/modules/pos/RetainedMistakeCorrectionDialog.tsx': '309b1f0af8e58ae13a8a2cbf2c0b4ba87daf6e0edfb6730497fce4250d14065d',
+ 'frontend/src/modules/pos/receipt-correction-journal.test.ts': '8fc27482e7ce2b2cc1a7d1587e9210cd18b081e80081541a22e5abe75da79c8c',
+ 'frontend/src/modules/pos/receipt-correction-journal.ts': '7771ad32a52b7b4005728f631e30238a69e978ad1ee20eb388993c7af1500fcf',
+ 'frontend/src/modules/pos/receipt-paid-summary.test.tsx': 'affde64f9ec1f57dd235ed9f409e4f905adda85e4272eb210cea55e40810d66b',
+ 'frontend/src/modules/pos/use-paid-focused-field.test.tsx': '18aa3a8bb433b4ab0b4c827c0c22da9bae6d2da258b5377519d47e9c37cbd38c',
+ 'frontend/src/modules/pos/use-paid-focused-field.ts': '1db65f564675f68fabe001f04829a8c23b8a606e4200fedcd3a441914518664f',
+ 'frontend/src/modules/refunds/RefundsScreen.tsx': '4725b000add8d5b584119fb3243fe7612b9d602dab42c4ac3c9925241eae6998',
+ 'frontend/src/modules/refunds/exact-refund-task-screen.test.tsx': 'a36f651cdc2b588425674bdd79d2a6a09afe1328ba3fb2b35cd01da91fdf34c7',
+ 'frontend/src/modules/refunds/exact-refund-task.test.ts': '309a3f222930ed86fde8ee6a3059131a557f25bf1014d0c79caaaa2843ebb80d',
+ 'frontend/src/modules/refunds/exact-refund-task.ts': 'e1dda8b3dbe2042eabceeebe0a0f3102616f1a88c13a47bed905482826960eba',
+ 'frontend/src/modules/reports/ReportsScreen.tsx': '007d38d896e0e83321528715a5f7e3fa7d23f31fae34bff6943ab2838789508a',
+ 'frontend/src/modules/settings/SettingsScreen.tsx': '1f8de5cd62b93ff2c18d676431286af963927080bdc15ac43b7fd2f162a53cf0',
+ 'frontend/src/modules/settings/tabs/AccessControlTab.tsx': '90b6f25c46945ca3d8e1c3370dc78d88b237cee66dac3f7f38325c71025e23a5',
+ 'frontend/src/modules/settings/tabs/AccountTab.tsx': 'f7bffae30ff8dbe9eab3613e4cf9e6bf00566768f64eaedb623c5524b010eaf6',
+ 'frontend/src/modules/settings/tabs/CompanyTab.test.tsx': 'ab44b0666e1e0ec938f231d4f394d240394c223c199418a219687c8999f8f96e',
+ 'frontend/src/modules/settings/tabs/CompanyTab.tsx': '3536d94812e42265984a80bde107685dd50d5ef86d54625d4c15b92f99d91195',
+ 'frontend/src/modules/settings/tabs/access-control-policy.test.ts': '43235be33955e51ec56c2ddfedd1c50d15d0742a7b0f8086ae41dc23259eaee0',
+ 'frontend/src/modules/settings/tabs/access-control-policy.ts': 'cea9f9cbf243ea30da6e8af070f73a3c0f9730dd06e44c7f9dd17b2559afb8f3',
+ 'frontend/src/modules/staff/DailyWorkPanel.tsx': 'a3f6a5685020bd7b0e15c804f340f2559b65ddde48b96d648b2da934e373d426',
+ 'frontend/src/modules/staff/DailyWorkWorkspace.tsx': '96ad7650c0f05217a0b22073055524c69c85421ee733baa47b88c13c6ab6181c',
+ 'frontend/src/modules/staff/SharedAttendancePanel.test.tsx': 'c8e53fd6f3e56dd80bd55d34b19bd45d312a26f8936e7528339080ccc45bdcdc',
+ 'frontend/src/modules/staff/SharedAttendancePanel.tsx': '6192684da851a22edcf4291c8ef0409a799a8d172c30693a5445548e71db84d1',
+ 'frontend/src/modules/staff/StaffScreen.tsx': '6906f432d2ef019bdb1aaa90573da467a1cc5b98fbf4729c37847f216f69587e',
+ 'frontend/src/modules/staff/StaffTimeScreen.test.tsx': '9a65ec3513fbb1cebc87fc7bc9942c3fec685754e5a62acb22a129401a32954d',
+ 'frontend/src/modules/staff/StaffTimeScreen.tsx': '30e5ad86f48e55d93fcb54b10950a50ebebbc05ea8a39fde268b9a1f673a73de',
+ 'frontend/src/modules/staff/staff-edit-policy.test.ts': '0b78aed7dd290a9126cc2ebf92b1afff3aa0f1fe70ec5eda1e3e8f028085d1cd',
+ 'frontend/src/modules/staff/staff-edit-policy.ts': 'a49ff80bd8093d43c369f604ba89ea6134157a18d5a78bbca456d3812eb8a89b',
+ 'frontend/src/modules/staff/staff-password-paid-admission.test.tsx': 'e7279835dd548fc625ccf61c8c0780b9a28b6e2bcbf63637dc543b822f7c2d4e',
+ 'frontend/src/modules/staff/staff-time-policy.test.ts': 'ab928d64e2eafc85494f942ea46bf3fd0c6c53f515aaf76259fd5eaf061e5b21',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/screens/staff/time/SharedAttendanceControllerTest.kt': '8063838473e8459621aa06e3c07b9ec65fc8fdaf943c51d276b1afef4552d115',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/components/LiquidSharedComponentsUiTest.kt': '0a8efbf3cc5c8ee91967eb0ac9d10066d0b7a0480f076ee45b35c6c196b7e54f',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/TerminalSelectionUiTest.kt': 'e8f30957c7397e6728550a22eea3d12fe41ac2cbb3b55cf2254fbacb29a5ae72',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/customers/CustomersTableUiTest.kt': 'b28e681c060a8b7e4c746141e500500fe1e767e86e8018ea1c0805b724f26069',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/home/ExecutiveHomePresentationUiTest.kt': 'bf3dace22fd18a915041487fe8843c66c7a84843dbbd6c9dfa741aa182a03f03',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/reports/ReportsOverviewUiTest.kt': 'd62f5da7b9fdff85c4f12c2bce0a34f6ea777c8bba099fad897bc70b85ab4913',
+ 'frontend/src/modules/staff/staff-time-policy.ts': 'e8101eabdfc39157777428b8e026f619480d830545f2b4adb0e08b2515bfed2f',
+ 'frontend/src/registerServiceWorker.test.ts': '3e3b7a250304d02636e0e553100de46992e3e02494db7ce00267227bf4273dfc',
+ 'frontend/src/registerServiceWorker.ts': '0cba9ee2ad0a86a3d49b53ba5fd9aa06a116e5ab38036b6a871a7ae2ca8c2b94',
+ 'frontend/src/test-fixtures/paid-bill.ts': '68598b5b80db0a50ab19f7362dd124007e8e3fd95eb0569c0faa96c6d8ce4bc5',
+ 'frontend/src/test-fixtures/root-recovery.ts': '6a8a9bb41f25d513361ee2123e6fb0413086b64a22487fd2bc7c696b60323248',
+ 'infra/docker/backend.Dockerfile': '14d10f5b7e5e54fe40694d7b60d59738ed8b67a72f2d5f949c7e4c7d89140e63',
+ 'infra/docker/caddy-zlib/README.md': 'f0949f69b77712a0431f60af62e797d4441e1fe7b233142167e48655001de038',
+ 'infra/docker/caddy-zlib/runtime-probe.c': '5add619f241be021a6bae5bde641266e672c45fac821aae4508c417277c47cab',
+ 'infra/docker/caddy-zlib/verify-official-zlib.sh': 'a673cb4dd14417cdf527d4300847d02dbaa333a955077163ba5f25a890fa173a',
+ 'infra/docker/caddy.Dockerfile': '5acf0c8d434e68fad9a388fce0d1f7877a37b082db08c0dbdbb71404691f730d',
+ 'infra/docker/cpython/README.md': 'd60b00d63224462c8bf56ffa9a94d9d17a2ad2448bafddcd37cd3912005f3b16',
+ 'infra/docker/cpython/build-hashlib-backport.py': 'b0a11ff3f686252d7428b05c6b6f496c2431b56016fb65f730a5e748bb882654',
+ 'infra/docker/cpython/cpython-7d9da920.patch': '346c4b31e1cdd87d08cd2e79dbbcc00e6e8c6d47bdb045346be7bbf40c283fed',
+ 'infra/docker/cpython/verify-hashlib-fips.py': 'bf68db56077fded82f43dc6b6f7dd9f9d734348c425cef0952ca13d29c765275',
+ 'infra/docker/frontend.Dockerfile': 'ef73e061c5b1fbdef6c50a65d1a94a54863818126c161643a95304586f796707',
+ 'infra/docker/postgres.Dockerfile': '7c2917c3909ee6c6c092ba7b1283782341a92cfc98da462ada5094438ef0feff',
+ 'infra/docker/redis.Dockerfile': 'd88f5607d18ce708011356dcf373ba4fed643be9365c13b5d67a9eeeacfd722a',
+ 'infra/docker/verify-backend-runtime-profile.py': '47050fc151188f655f0af8c2d38b90b4fe07cf1d776829412c3d6a2a55017aca',
+ 'infra/scripts/install-on-vm.sh': 'f9e0c2cee79d3584c7bd72de145f31afd187b29c8e0cabe34bb4a744995e14c9',
+ 'infra/scripts/run-hardened-image-scanners.sh': '1057a67e3921cf7ab8e2769b7809f2907361e5f2234dce9a5c57adaa12b649bb',
+ 'infra/scripts/verify-build72-readiness.py': '6ea525dcddc7e841eaa3353ff93250199d2f6ee3009cfcc1811da223a3d0bd76',
+ 'infra/scripts/verify-build72-transition.py': 'a8c9182bd744fde1ff4019c55f7ddd8f6f9579ff49677d3ef7464c0bd7eb818d',
+ 'infra/scripts/verify-build72-upgrade-runtime.py': '5c1a48733f13d75edf8c3dba16c620612ca87b5f89df5dbf88c40593a8829a3f',
+ 'infra/scripts/verify-production-runtime-images.sh': '73271faac5decb05871193c2bf5f98e0c87be02a275ff70dc5f85ca8f0ab2ba0',
+ 'infra/scripts/verify-zlib-vex.py': '521d9afdcf42b27af9d5a66db0c622923c9db1fa4e17622533423a263e9a5419',
+ 'ops/stage_android_release.py': 'be366a445e8e3085ba369a9ab256f74a6a95abf5339df2ef37d286732b67b916',
+ 'scripts/run_android_instrumentation_ci.sh': 'ca8c6639c73fd41f4483dfe0c82c967309078398af4529d2ad68d677c8c40699',
+ 'scripts/verify_android_instrumentation_shards.py': 'fa04552ffcc5902aabb0eb636dc13cf911b88e68e1364f17c74c71d6a123d8e9',
+ 'tests/test_android_instrumentation_shards.py': '25149d3aabce18dbbeddb0aea375701bedadee0e38182b189e204ee2721ed5ab',
+ 'tests/test_android_release_pipeline.py': '61aca24758fe3dd959260fcdf32f19b3265e78f8f9dea0f9d9e85d074b166a83',
+ 'tests/test_android_release_staging.py': '5ebdc790f1b0b15aec409cec86b413487bb8ae3a5d49d82f17ff11dcf1d58320',
+ 'tests/test_backend_runtime_profile.py': 'f8bbaa1aa026a898d0785ae02f64bf47115171a61603a0baa40d05e217b91929',
+ 'tests/test_build42_pending_compatibility.py': '811c8569352103b35a5ed7733afd320881ec825e761027d8e5d49c61ac24bcd0',
+ 'tests/test_build66_transition.py': 'cf9f2086d7ae5a7f1defa288801f9c1af2f2db571ad00b626840477d742beb84',
+ 'tests/test_build72_readiness.py': 'a01802c691b3050411f22990173e61b0e0d508fa0b25997da88e03ae8d5ea839',
+ 'tests/test_caddy_dependency_security.py': '840bf03d6e36f348f5d9d707cd2ad15ea5875b549879d2b7c9a6542a118ecce2',
+ 'tests/test_ci_docker_connection.py': '83453eca762f227a1646534b7627117be59867cf122062bb1430e6a19e652731',
+ 'tests/test_code26_physical_audit_lane.py': 'd2b0abe0aa2d102bd251327b488cf3a8fda06d0aff5f01cdb1dc6a7e31365a70',
+ 'tests/test_docker_context_safety.py': '37c65ed3e6609475caf677fb804089310e97507560ac9f3eb44bd03750819d79',
+ 'tests/test_hardened_scanner_runtime.py': 'b4ad2eb8aaf37c1b32ef03efc4083cddc170659bc30a42e16555d5ac93235b71',
+ 'tests/test_installer_firewall_idempotence.py': '09eddf06f7484a1f2c4f1f7881ed1ae2b2fa7cfa6ef4ec137531bc0ce9443041',
+ 'tests/test_official_zlib_runtime.py': 'd9882f8752e522a471daebb103e8892f924479d32974e340bc70727ebbc56701',
+ 'tests/test_production_installer_safety.py': 'dd6032cbe67b4d0c83bfb2badad27c5e6cdd2c050cd67ca6ae047d7259412ea8',
+ 'tests/test_unreviewed_build72_hold.py': '862ca43fcd0df0e342c4517d8e570dd3076254b24fd182c3f6736459c5558b04',
+ 'tests/test_verified_pip_bootstrap.py': '43e9829a713577dbf7b550eaba03abc9f3c5fb6f99e9c5934158b5974d8ab30a',
+ 'tests/test_zlib_security_remediation.py': '3214117cd45745f50db24dbac9494f0c3ec1a127ed77496836e72aed68a728fb',
+ 'tests/verify_production_installer_lock_metadata.py': '912d8c7cad665f81a8c3919f944ff894e08082ed6db196b6e441ef2c2a7b1877'}
+
+REVIEWED_CODE30_4_BUILD73_SHA256 = {'.env.production.example': '784386e8f33c4a8df6de4822ff6abf5ec7b317e80c14a6bf44b77abe5f3d1d94',
+ 'PROJECT_STATE.md': '5c4a54ae804f70cfd6c07762cbc23a3115c96c89a32c18f4fa5c64f39903ceb0',
+ 'README.md': 'c6f7b9e6c05429d8c20fad110cc9bcf7569ab3648213fef34506406e1a863ab7',
+ 'android-native/app/build.gradle.kts': '39ff4a128aadf16566a603aec62356ea260b3ea95690ab0182756002c7e348d2',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/PhysicalSmoothnessUiTest.kt': '4f4fb6a335f5e67fb84bdf4df2360b06be0b5d8241784a0833032621e9c5f3cb',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': '595e9d7104c51c390877c4fbbac381a6cf8421d39e6167f792ea60423fd954e9',
+ 'android-native/settings.gradle.kts': '6d058b77d9c4af9a4f2de2bed076daaa0d7c4eee6bcb835f9d3ef47feb0ba0a7',
+ 'backend/app/__init__.py': 'fec581423f9ae83e3f84f3cc9bffd6697b22a8e386a4e2469632e2ccf20ef92a',
+ 'backend/docs/POS_START_WORK.md': 'e5b11c2748b4c1139cc625b1d6d140ff1843cea93037da460cce6b47147560d6',
+ 'backend/pyproject.toml': '4f99ff37e97eb46f8efd3cc12251b499e37819022c0d3c93041b273eef5f4444',
+ 'backend/tests/unit/test_release_contracts.py': '014e7598ee56d7e2c325aad0a31d8b0ca9fa42e32c774288ad0d4fabc56ab74a',
+ 'backend/tests/unit/test_remote_assistance_contract.py': '9de61d944666130d1036f2da2e986219d04015c1a3ad62b5b9f9f0716c61c79f',
+ 'docker-compose.prod.yml': 'bb527b5f409cf8e76cf973e546202d7d0af34d1d1e9acd65071c35bfe2d8225e',
+ 'docs/V3_1_66_RELEASE_CANDIDATE.md': '207be705ab7f6f003fc5a30982a997a865aabee8948162ba628cfc3698b58795',
+ 'frontend/.env.example': '83742553a94772ec2015f0fce89a8bba4bf4277d8e1783dfbe07f2873cb52322',
+ 'frontend/package-lock.json': 'f345cf9cf6167b4da5cb5e5d4fbac6c065f0024b37a95f9c8d4d222ae7a53e0e',
+ 'frontend/package.json': '0e55758b4abef5d6c8de491e4d8c9592050937975438ff1048a45eebdbb3561c',
+ 'frontend/pnpm-lock.yaml': '8be15bbd04af80d1f5b591982df40a43ac1edf7247190c71fcf1dc0e076ce669',
+ 'frontend/pnpm-workspace.yaml': '458c979159f56678a7337e8161138a32aace8e535b4090272cc27a5a012620d4',
+ 'frontend/scripts/verify-picomatch-extglobs.mjs': 'c2d0996ecfcddeb89c04c161a3d4161a5183f687a4487dcda9d56780d751954a',
+ 'frontend/vendor/picomatch-v2/LICENSE': 'd0cd141b0c322fded5dfad1d4645bb2fedfc05b7321fe1009469638190d59ef9',
+ 'frontend/vendor/picomatch-v2/NOTICE.md': '2e6761da0e68c03a2d9493c5740e131fa899ce855d1a4c58532fd3340dccf793',
+ 'frontend/vendor/picomatch-v2/index.js': '5695ff5dfcd5a338a40630bd506056f2950bcb08fe1cc068519cbbfe60add480',
+ 'frontend/vendor/picomatch-v2/lib/constants.js': '980225ab847a88a784f6d315557b8434f7742b2551ce20e354455c61b938c0a5',
+ 'frontend/vendor/picomatch-v2/lib/parse.js': 'b216da71ff9f39f61c46878a7f1a8e67ec6e04e574c806fe798e016d0a789bb4',
+ 'frontend/vendor/picomatch-v2/lib/picomatch.js': '2cb169cbe17d356036c5f62a377318b85e30817877e59797842aec9d8b15f54b',
+ 'frontend/vendor/picomatch-v2/lib/scan.js': '227fcc994a477ea95c5a0435d32783566334c6bd0dcc4a103029735ad8c9c535',
+ 'frontend/vendor/picomatch-v2/lib/utils.js': '809fc29cf35ab0aa76b99cad29182f62c0ae598902481d10f9868eaef71981ee',
+ 'frontend/vendor/picomatch-v2/package.json': 'a6a7812bacc6665b59016c6a7c62e5ab7f3baf7776e58514372aebc1cc9cc928',
+ 'frontend/vendor/picomatch-v4/LICENSE': 'd0cd141b0c322fded5dfad1d4645bb2fedfc05b7321fe1009469638190d59ef9',
+ 'frontend/vendor/picomatch-v4/NOTICE.md': '9056e925fbdfa37b543a93c8b4e64639d29275bc4234a046f8b8e744faefff04',
+ 'frontend/vendor/picomatch-v4/index.js': '02ae26406508e28f9ba0865be16cf77f0b33de6c4d4d49c212c4176df1d5625a',
+ 'frontend/vendor/picomatch-v4/lib/constants.js': 'c28f952d2758261fe5428a121add485cc25b03e0193633f649de903dc0e5e222',
+ 'frontend/vendor/picomatch-v4/lib/parse.js': '46c19521acb0aa05a48fd7a2ddcb7b737b1fdbf289780bca0413c49afe8903b6',
+ 'frontend/vendor/picomatch-v4/lib/picomatch.js': 'fdd249d7ffff853f3bb1c77eafc8baa1a437bea85a94c35877b83c6a40d9ca94',
+ 'frontend/vendor/picomatch-v4/lib/scan.js': '6457a1764e5c2e543cc3a0c00ce12ebb3764097628868198370b64d4e642aaae',
+ 'frontend/vendor/picomatch-v4/lib/utils.js': 'f04604f70cd1a3f6ace80b84766468674ff38b4bb83818d2ef1d81fc6355f935',
+ 'frontend/vendor/picomatch-v4/package.json': '69462602c9f9e78593939f63b1250cadeb424e23d2d4c5d1c465b69691fcb024',
+ 'frontend/vendor/picomatch-v4/posix.js': '5695ff5dfcd5a338a40630bd506056f2950bcb08fe1cc068519cbbfe60add480',
+ 'infra/docker/frontend.Dockerfile': 'b660bf4417b4a86eb19c19ecb43d259fff989a98232f1fa7d7cd24928f74d1d2',
+ 'infra/docker/verify-backend-runtime-profile.py': '404f77ab199ed54b565510da2de85e83f3cf6073dcb03318561da01dc6d05246',
+ 'infra/scripts/install-on-vm.sh': '2ca07948170e8ab0f424bade357695985993bf16d391d10a0c26d156ad387781',
+ 'infra/scripts/verify-build72-transition.py': '97331f2a339afe11823ca72d5267875126feeddbb325412bd46f1bc817dc9dd2',
+ 'infra/scripts/verify-build72-upgrade-runtime.py': '98b8a94c8506cab3bc2fda6c02c7da71285151405edbd4cecaf36f257ad1373f',
+ 'infra/scripts/verify-production-runtime-images.sh': 'b766905c8b05dd095c3c3915989df7c47a7f6b811fecf382c4e235f1186e35e0',
+ 'ops/stage_android_release.py': '2ec7913135dd5c17d366ad6f18c27d8279b0f257bf1421bafac9206c891b974c',
+ 'tests/test_android_release_pipeline.py': '5bbb45c3aed57f86877cb0c9901d61bd7e6d13c5283a68a41eefd9dade5eb5db',
+ 'tests/test_android_release_staging.py': '704cf7f83b3fc88bdbe450a6b6f4b03602884eb207f21b75bc2d301159ed07a6',
+ 'tests/test_backend_runtime_profile.py': '41601456f530c68b1237da692c97991e49fd8af30983298af7df4ed818f9c348',
+ 'tests/test_build72_readiness.py': '4f358a4e16953f61bb5cfb45106b4470cd648120e520d1bc7e011dceb2b76d3d',
+ 'tests/test_caddy_dependency_security.py': 'febb1927ca3ebd35fb7fef041c4d91c29f9116c575a1e4267ac0f0320675d47b',
+ 'tests/test_code26_physical_audit_lane.py': '6084944c232219034920a7a2b1ad55a49aea3ede5166e39fcaa8dd8ed2a0c561',
+ 'tests/test_docker_context_safety.py': '8a5efb58e1c7f74da0469cbaa9b555e164bf6a74fdaa2f17a38e546421545397',
+ 'tests/test_unreviewed_build72_hold.py': 'ecc58e5239077158a1d1d01c6b96c29b29d16019b5594345593cb5a9c197215a',
+ 'tests/test_verified_pip_bootstrap.py': '4f53b2a9886e039435e7aeec1113fa17ac1dcececbe186f45169032e12f13f6b',
+ 'tests/verify_production_installer_lock_metadata.py': '3f05abbbb236b4c69b1133ede9c04397bf9c9bbc819b621e9260322cf43bcdf3'}
+
+REVIEWED_CODE30_4_BUILD74_SHA256 = {'.env.production.example': 'ac7c7f01191230bd2b1e7fc90d1e0c320b65b24e3630061f8282a513e3a9a99c',
+ 'PROJECT_STATE.md': '9e1cbab17cc9a94bd01ae24af7c6bc4b7bb4324379b74d52d413434db7bd4234',
+ 'README.md': '2adf428e6b67a150f76f9ca8e012f29b80330994975f3666dead9e1fbf6bcefa',
+ 'android-native/app/build.gradle.kts': '6a204f44fb7d9ef7cb80b312a81c0e626d78b85f004744fdc514f0287333688e',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/PhysicalSmoothnessUiTest.kt': '3b353dd6fe122daa3ce36272b56dbc2693ec1b608c994977d85ad84a5d9c70c2',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/WorkspaceScaffoldUiTest.kt': '61ba859a9b5a11ddbe3ae4e744ba09a97ccad7b4a18eca208fc72d357df7d505',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/WorkspaceScreenshotCapture.kt': '50ae790efaa10bbed83d1aad089cceedbdb31dcf14ec64b93fa52017e99ad5b3',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/ControlDeckFullShellScreenshotsUiTest.kt': '2a50cd81875cf389afddea64d060377126fe1d2a8b5008aac103984104fb971a',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': '46faa0020038f51a44bd85f4fb3ba4a4f32e3e0ebf45477d2c12050c3c4e327f',
+ 'backend/app/__init__.py': 'ea127ad8ee6dc08c2f79828c6d2fd41ac187b6c3abdded846957cf333d2bcefc',
+ 'backend/docs/POS_START_WORK.md': 'f2773546c1c97430d6cc7e5364907ee269c596b00a6837d7146103be12348871',
+ 'backend/pyproject.toml': '9c3653f02f0bed5b009744ffdde8bbde5cb0da2e0df9b7e7f73cf490fcaaf38f',
+ 'backend/tests/unit/test_release_contracts.py': '8bff16dc4cf3adc14c438ed8b09a41db848956ed03a5797c7a14909c42a4c323',
+ 'backend/tests/unit/test_remote_assistance_contract.py': '54ab134e713db98c974f2ec57a505d6c8d9df6cc6e040a586c0b5ce0872a266b',
+ 'docker-compose.prod.yml': '8c860f46197f6e9ac7a5bae5989aa3babc38b7a219098cfdcaf486d42a922331',
+ 'docs/V3_1_67_RELEASE_CANDIDATE.md': '1e9056aa35b9bdae604183d2117d40f98ae5a01d70206a7b54ff47f122d8ce6c',
+ 'frontend/.env.example': 'de20380a1f206f62cd1c44cff7b8e86e52f851ec0f529c09e54ac3a1bce6d8cb',
+ 'frontend/package-lock.json': '926e372b5328b8fa2f4d012d852d5fb48144884ac5bf840f0487c6970a44c4c3',
+ 'frontend/package.json': '02f8ad76ab39e882b5bc8fdf0de745bb0d2e94fe9564e30dee92c1660f18e37d',
+ 'infra/docker/verify-backend-runtime-profile.py': '4eb995f6bd9ea0e3edf03377ddbb28fe508d44133895d21b119aa103ad5e22f3',
+ 'infra/scripts/install-on-vm.sh': '5eb7c0eaf0f355014f8866f0c4faf25c81a0dbf94dbd06b0db9df85f3fb79ff7',
+ 'infra/scripts/verify-build72-transition.py': '3a0af86769e3faac9b9c483568682dadbbdfd91365fe7935ccea1be12fb1a6bf',
+ 'infra/scripts/verify-build72-upgrade-runtime.py': '9a6a614921780d65b56c2c345001aedb64d94c5693bb25234408664632f44c04',
+ 'infra/scripts/verify-production-runtime-images.sh': 'dd4d14e91bc176538b9a26150404e3698fd2bb3a1930954cb85163d3372ca48f',
+ 'ops/stage_android_release.py': '4c90dd9a9b3d588c199e9188459a189d1809394a29c5c665a371be083e63a9aa',
+ 'scripts/run_android_instrumentation_ci.sh': '90dab35dedae8f75fce494c4d148e4696eee57f4d7d517644716a232f3a15211',
+ 'scripts/verify_android_instrumentation_shards.py': '5ce503b0521da19be3053db13dff76723e6029c5a0983cd49b1a7bd9408f7402',
+ 'tests/test_android_instrumentation_shards.py': '632afc5219c358718c70b2283c83fa359d24321155eb0160b45c70bca3ce0e4d',
+ 'tests/test_android_release_staging.py': 'd357806d91fb18ee9e42f48f159326bcb93391438a4313cf8ebed2953ebffb55',
+ 'tests/test_backend_runtime_profile.py': '68f7e43d5f5cdd7b8d090e58047f6eb19c64669dd4102297ae8928fd9255e970',
+ 'tests/test_build72_readiness.py': '1555ad17d637b8adbd964757f7e9a390d4dd6041207fbbf84d75421838d1af33',
+ 'tests/test_code26_physical_audit_lane.py': '0bea0024f9ed6a1f337a0418519c1dce2c21b25705b1bc23f2063debead4d11c',
+ 'tests/test_unreviewed_build72_hold.py': 'c362bf077ec3f1d736d24f525d206730dbebd3bfacc4b03d41c8a3f1cf935c0d',
+ 'tests/test_verified_pip_bootstrap.py': '330f5cb74a6ae710b1c52a461e2131696211aafa0464ae79dc65bf9657eac0a5',
+ 'tests/verify_production_installer_lock_metadata.py': 'ef80f9afc5733d1389d6ece8660131fab2e7af08b27ebd9d1aaa78e29cb0ba23'}
+
+# Separate successor overlay. Signed Build 74 maps and source remain immutable.
+REVIEWED_CODE30_4_BUILD75_SHA256 = {'.env.production.example': 'cb328fa12c0e9b91003ce8bbc55ba860d19bb6e33be002571a52e446ae06c35f',
+ '.github/actions/scan-production-images/action.yml': '604ce930de605ef58918759a04c7af1ec94506b1ae2b09f90c39d63f783d744d',
+ 'PROJECT_STATE.md': '9a23c759794a78002b22890663b8a07b73cf323884dcabd32ec6aebba7ed66d9',
+ 'README.md': 'b8e440b3601e4b6a2cfbba7f83e3c86a835c45aed01a2e28e537b62fabe15f85',
+ 'android-native/app/build.gradle.kts': '21971a4529829d96baea5c6c20264c31f2d96ca87b8a7edea14805c9db5759cb',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/WorkspaceContextInvalidationUiTest.kt': '442ebf311126b15824097aee83832cf8080a92ea0bdb0f532392cfd2fc3b9aff',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/WorkspaceScaffoldUiTest.kt': '0b342df943a4b6034fac173fa3be38e8f2ca25c957cc9069440cd3942ed11e6a',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/components/LiquidSharedComponentsUiTest.kt': '2830874eb4369027730a5b68a0ab7dc45b0537705fb06115cdd7f52eaa2da4ba',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/components/TouchRippleLifecycleUiTest.kt': 'f4a90ed893fc614eb35e0a8f07e52827cb64f6df2931e903335b1743cbd4bf0a',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/ExecutiveEntryPresentationUiTest.kt': '8c8ac346bed081b6d74437bee71b667919f2bfc1d12732437f41c308fb5d6059',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingBoardUiTest.kt': '6e185dbe630480f6165b1941a45e6635cbbf3cef40038d590598557f2eac7add',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceGlassDerivativeUiTest.kt': 'bdee6971d0b91f5a305e8b52f52ddaa8f910fd967a7fd70fe5bc33f95b0d6dd6',
+ 'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/theme/WorkspaceGlassUiTest.kt': '26dcfeee95841cb69147188978529a59e62a12d32e514b2f2d6b0bcb7ba4cdd3',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/Nav.kt': 'd74753f1a976df8c8860bce60479f6631e0dca4bd473400978e7544b49e87979',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/components/Primitives.kt': '77ebd135957b50b180693a053f885dda5b6daf9c4e3c7754146a9e78eb4a66ca',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/ExecutiveEntryPresentation.kt': '39478ce4a52aaa0f95e25b722a278d41f88df8133698a3e1f4314141a372c97d',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/PosScreen.kt': 'fd84be9a1737f9f0943c31994c5a8ad6b643729b6842f38701983c9ff2cf503a',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingDurationDial.kt': '57e5d4f2163d68aa20706948243eb6e9c8c8981809ae1cd763923389e4344373',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/gaming/GamingScreen.kt': '30eebc4ceeaebfac948f6582bbc357d262395e5aa12ace595eb70ae015cd43fa',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/screens/home/ExecutiveHomeFinish.kt': '1b4d859d6851b9b2a0a00dc578f9f455e7f942b34befaf6ca4f421702428cf9a',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/Theme.kt': 'd0bc0421a9f70758715736cb8577a15f7e8f4aba8d708a12d5b0add29a4a72dc',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/WorkspaceBackgroundRenderer.kt': '61eac7d4e49ca0067e168bce7a34aa2a4fdbf653e051bbe4e77704d0a360bd46',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/WorkspaceGlass.kt': '9fa9c3c14fc60e3549360265531bedcb6f20495428503385d90f174bc7355f31',
+ 'android-native/app/src/main/java/cloud/dcompany/erp/ui/theme/WorkspaceInteractionFeedback.kt': 'd0edf5753c3dbced37e71d786d268676b84b229ceff39459b30bece01185a023',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': '4aa5c9973ce9ee462a0261b004726d71c99da7ba97cbf4f390831fd89f3a8b61',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/ui/theme/WorkspaceGlassPolicyTest.kt': '205f56e99139850b739817b5e2daa235c18619d8bddf7f2dadd7d255699a7bb4',
+ 'backend/app/__init__.py': '7590e9978ef0c7bbfaeab63f922100b55362ccd74192ba9fff32f6628a30d252',
+ 'backend/docs/POS_START_WORK.md': '9aeb86cd7e636d659220ec34de8bb77aeea620053570a342e3f27d7f962ee674',
+ 'backend/pyproject.toml': 'c554c9be8f3688362e4b01da0ff7b913673750160f723a866788f20d6543d4e7',
+ 'backend/tests/unit/test_release_contracts.py': '2dce05efc358251818a07b0883b2c2f6d4e7519c21527f03b502e30f5e411dfe',
+ 'backend/tests/unit/test_remote_assistance_contract.py': 'b64835d9e6ea97f0f1ea795e5e84bedeef1ad8bc727ef3782608e1341e4e9d0c',
+ 'docker-compose.prod.yml': '70c363f8ff5f6870704dbc03227e7d7905142e8fd8e6620661fcdd7f3001276d',
+ 'docs/V3_1_68_RELEASE_CANDIDATE.md': 'a4906f948fb8cd2f856c1b17ee800efc8e78b00878a9507efdaaa4521067af01',
+ 'frontend/.env.example': '41d4b2de478c5c622abe9c616637db58850a32441aaa97c7c2f2e0bd0cdd8931',
+ 'frontend/package-lock.json': '8f2bd6c86b927bdbbd10255c34a48c1cc75c6a9e366165bf388c2fe3e3768cef',
+ 'frontend/package.json': '057def6962b4f96871ee72ed41199447314add4d7a668760d185b8d9e7f8dbc6',
+ 'infra/docker/verify-backend-runtime-profile.py': '584bd377d8b051b0d97d97fe60e8cd0b7d0f8750ba7b13b680261d98dbc0ddcc',
+ 'infra/scripts/backend-openssl-assessment.py': '846825fc9f0d47884e56cd6e252bad6c4e867a2d349e413b0b185211cb752d35',
+ 'infra/scripts/install-on-vm.sh': '4de634110fcec4cd67bb4c38c7cb647d0506382bdfb7c6206d436c4293e72ded',
+ 'infra/scripts/run-hardened-image-scanners.sh': '7cee31bd0537df820bd0fe94a029b1e21bc068c5c22b2da781ca353489cc4538',
+ 'infra/scripts/service-openssl-assessments.py': 'e598b3d3b5d14d3e58008cc7ea1ec7a4384b13dfc511932c0885a9c43fe16409',
+ 'infra/scripts/verify-build72-transition.py': '7dbe22517fbaa8e7f35de20d5719eb963bbe42b72ee1c9e556e631574ae6d069',
+ 'infra/scripts/verify-build72-upgrade-runtime.py': 'f6f01e35381ce362763e138e1056e26290ad7b4544e4841de726e485ea753408',
+ 'infra/scripts/verify-production-runtime-images.sh': 'd697e3d6fcb9ad6f006904af1a1f2f7389cdac4af507023f48695eb95fe21753',
+ 'infra/scripts/verify-zlib-vex.py': '2743e4c2780b1e5fa4a19f3978059d247c6787a43e792575749a0f3b2b2f2c66',
+ 'infra/security/vex/README.backend-openssl.md': 'b61246900c54883b6286f50212f43f4efe6b0de2e7555cf52d9b35c7d10beeeb',
+ 'infra/security/vex/README.service-openssl.md': 'ee8a48f8a97d997ff17ff8217a788dc1ccf68d5fc43d79f2b8105064fd9680bd',
+ 'infra/security/vex/backend-openssl-reviewed.json': '3d38cd80311413765aabe730c2f699b98155c4634f98c3007850e498fdc759e0',
+ 'infra/security/vex/caddy-static-go-openssl-reviewed.json': 'd358db4689ba3e64baa93ceaa5f585add96f7ee17f038144ba7a4f025cc64eb3',
+ 'infra/security/vex/frontend-http-only-openssl-reviewed.json': '8af722d5698169766d293a1abebab1b394960cb488c8a74504f24dfe464c7bac',
+ 'infra/security/vex/postgres16-pgcrypto-openssl-reviewed.json': 'f381a5f54d42354f7bdad357fde3ced186ff448c0ffac108174867d689c7e83a',
+ 'ops/stage_android_release.py': 'cbb5c0eddd448d920cb05110eb2e489a3e4a225dc9b479bddb5b38f79fd7c1c3',
+ 'tests/fixtures/backend_openssl_reviewed_matches.json': '761500b346a490be2c9835ba68d2da97a96340f62f6db886d9efe97f99e3ab73',
+ 'tests/fixtures/backend_openssl_syft_artifacts.json': '99cc75e1e3881da50a8371695ffbe2f5050df17e2abebae2ec3f36dfeebc5361',
+ 'tests/fixtures/caddy_openssl_reviewed_matches.json': '011830c44373d40274e8c17a7311ffdf55a8db45c3bf8b1e014c83e7dd1695fa',
+ 'tests/fixtures/frontend_openssl_reviewed_matches.json': 'b01d8b8344f21d5abedd03f63175524a89eeb197b0492ec31ace69bd4b5fa2a8',
+ 'tests/fixtures/postgres_openssl_reviewed_matches.json': 'c2317c2c4b90cd594e165bd28a656392131d5d91128d0e27f99dd976f0675faf',
+ 'tests/test_android_release_staging.py': '09fd8bfb62a5ba23c6dedc418239e48bdfc420540149ea4c3d72a8b0591c5257',
+ 'tests/test_backend_openssl_assessment.py': '3dd33bf3ef83e5d98b78ba626c16fb844ae5b33c77d3912812f60c2c8f0cf68b',
+ 'tests/test_backend_runtime_profile.py': '09d80777c3f0bf6b2861ca96c2b1a680f867243681717c3ac0feecd1fd9a958c',
+ 'tests/test_build72_readiness.py': 'e96d747e39f7e0178a7a66b83bb0eba160d79c793cf19f821791b07440881f60',
+ 'tests/test_code26_physical_audit_lane.py': 'd78ec63e118e9ae906aa738123d8aa5b71a52195f3c931230a56f900af7f0e98',
+ 'tests/test_hardened_scanner_runtime.py': '62c9fb83dceffa8ba8cfc00017a0c6c0c53777e18c218f5a54b9e0b77a19ba4a',
+ 'tests/test_service_openssl_assessments.py': '232eaaa95e02425c58b2dfb9ed8fa1b2d5957c7c6396c87bf545a3f1155f01da',
+ 'tests/test_unreviewed_build72_hold.py': '3c57ce4912f9a2d43f348aa128bf6743b61981930fc61bf66492f4554e94004a',
+ 'tests/test_verified_pip_bootstrap.py': '2ea04239233772635f9681ec0a00a6b2140e0f890b61526c54b2f002ac1853f1',
+ 'tests/verify_production_installer_lock_metadata.py': '8eceb19678ff080ddcb6d6e4d6f71faef2d736f2d2b3641001ab67ec5186c9a6'}
+
+REVIEWED_CODE30_4_BUILD76_SHA256 = {'.env.production.example': '0147b90e91a99e94ebda1f7ee47312add507645fbb7785533f5faf29817c096c',
+ 'PROJECT_STATE.md': '9b170fc10737d1fe7ff27e1f85dd85ba9b6b3e12e46dbff02de60b2a584f9883',
+ 'README.md': 'fa9622307629a14c095031d14de8cebe81d9a7930194050efeecf14a80e40005',
+ 'android-native/app/build.gradle.kts': 'ef31f252c0f0b20949839a565e6e02d7a10726750bf2378cd117c09bd2daa9d1',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': 'de8279ead521c8348317c07e47e78022449b4132d0645d8b9f7b40a373e7b358',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/core/update/VerifiedApkDownloaderTest.kt': '47c611558d25df6d724e4aa59080607b8b3b3e37de0e83d7fe9e1a3097dc9c5b',
+ 'backend/app/__init__.py': '4c4af0814d8ac2df73cce7ba6541ccebd9579985f6ae78f44531e2728d525887',
+ 'backend/docs/POS_START_WORK.md': '0712a7309862ea5d9136a423218b3f89a18bf64937b0562bb102fbb0dd3db5c9',
+ 'backend/pyproject.toml': '5de4f58f1775e49fa2fb880ca579af1a4a7f16ee07e31ea550497b37b19dd7a6',
+ 'backend/tests/unit/test_release_contracts.py': 'c795238758898e615f5aa5f669e111ec6c852d48c867bf9fb7e2d7d09a8f6875',
+ 'backend/tests/unit/test_remote_assistance_contract.py': '12ca4c0b1cb74633a6c1584f7d9362d21d4e1d25db19fdd661b4090b2f500c5a',
+ 'docker-compose.prod.yml': '5eb9eb2701b91912fd29523d4218e94eced2bbd13bf13d03e065add16f703344',
+ 'docs/V3_1_69_RELEASE_CANDIDATE.md': 'dbd0c0f47312126bd40827ba2c43089493cc840429082158b17aca5629682568',
+ 'frontend/.env.example': 'c726355f5a766816ec51bb3c1b4fae30ba54b95f38357e4f426dbd91eaedd578',
+ 'frontend/package-lock.json': 'c270e43f2592d053dde6e5ea379b8ef1a5282a3161c816789e9ecaa1145cc333',
+ 'frontend/package.json': '6aa26f31d869b90d9e2193eef937be3293e7677c28563db20da43f21fc4cb958',
+ 'infra/docker/verify-backend-runtime-profile.py': 'e888b6613fdf290f1427fc738de3b22be02110c41a4a327fbe8a49404e873283',
+ 'infra/scripts/install-on-vm.sh': 'd3dd84078feefbc8294f233fc093339e29ba4c97bd8215e06375b33bf6ea18d5',
+ 'infra/scripts/verify-build72-transition.py': '8ad3389c5c74208fa8dea4a22d372956d6c9a4a090e3f61b609e1070f01de8f3',
+ 'infra/scripts/verify-build72-upgrade-runtime.py': 'ecedd14486a43270a2faa120b1a143e29a4a95011153833f67e41fd608b7a404',
+ 'infra/scripts/verify-production-runtime-images.sh': '32a17f5277fb1777c43a1ddd42f5028b5c3ce509610a6585c5b9ef8ea7af26e5',
+ 'infra/security/vex/backend-openssl-reviewed.json': 'fb1cc5b72a5d1b280c8d3fa711d7992cce5573afdfbc7f70bb664e1ca0a5e145',
+ 'infra/security/vex/caddy-static-go-openssl-reviewed.json': '88214c00078b5ac528c098700519adb878f4f0b8b2874e931505269908b49680',
+ 'infra/security/vex/frontend-http-only-openssl-reviewed.json': '335be7af10528109e42c518bc6d4beff257fc4081b035089a550757504259303',
+ 'infra/security/vex/postgres16-pgcrypto-openssl-reviewed.json': 'b8c2a76e1b72b66d168315e9c31852ef3ed2605c48501c807467c87b86c4e62b',
+ 'ops/stage_android_release.py': 'bf9f2c1515aaf7d30c0d02dbdf2c3f867e6f54e24ee238fc274866cfc2d3de33',
+ 'tests/test_android_release_staging.py': 'd061e89f524ff567761ab99a7bf5b2c528d85dc31a19095caae06300eb603caa',
+ 'tests/test_backend_runtime_profile.py': 'adcd34283fad48924c67af05f5094698df939458bba3a726d474ed498f3b1b95',
+ 'tests/test_build72_readiness.py': 'c13ae31ea113402a46eb2ecd7e9a762e83fc1fd7f9c4fca706e66b7c670f8804',
+ 'tests/test_ci_docker_connection.py': '2f016c627856acd5ece85bbdec222c75469ec653651e9f2f2916324809754fbd',
+ 'tests/test_code26_physical_audit_lane.py': 'f6ebde88c272c68bc7f632b37d9147106f3999ee5beee1dc6871102f099e617f',
+ 'tests/test_docker_context_safety.py': 'b27c7cded6318f3f12066b8a015e0666326b9324676bf25902cd821a65b3f77e',
+ 'tests/test_production_installer_safety.py': 'ab10314a8d099ae6b18e8699121caaf2e7894a0b6818c3856f8a3fefdad5ae9d',
+ 'tests/test_unreviewed_build72_hold.py': '204e0a6fae33c2fe088f6656f9ac73abf4accef4fea16b8d260c89a8aa051dac',
+ 'tests/test_verified_pip_bootstrap.py': '85ea1dd894b2b6ab46cc3bb69700bf3c144a572ea28d11d3c52fac83308e60dd',
+ 'tests/verify_production_installer_lock_metadata.py': '274c6a03d562cb6e091b220c3708a4e8b2f08b8ef16fb21d2f589e1cdfff66b1'}
+
+REVIEWED_CODE30_4_BUILD77_SHA256 = {'.env.production.example': 'c1283dfec95cfeee36c84571dabb2a6eb5062de768b7f2665ce51d8f12060e70',
+ 'PROJECT_STATE.md': '00dc7fb70cda4603541cd8b2d8486e69b07d90eee0e5278d334ec3f845514f50',
+ 'README.md': '76ad14b92930b2826659f2cd9cdef7644f9eac9c135cfe3edfd7be2c74fd63c3',
+ 'android-native/app/build.gradle.kts': '99dea936b935270b93758c4ff8e26ff4b30f1a7a23777cd68396b332ae7d970e',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': 'f45bcaf0a482acb1f04e8a4b54b1ddd2c63318f14be544bc76c566ce6cfd01ad',
+ 'backend/app/__init__.py': 'fe93375fce84382d88ed69e7a8b3b0ef8de6863d0c2cf0a6edd06913ebfc67ad',
+ 'backend/docs/POS_START_WORK.md': 'fc0acff1ea685d84686fefb54d39f546ca66246a828507717e64bd9c6c4dcbd7',
+ 'backend/pyproject.toml': '6f6e864413308393b22b7893f7af13a70cf37a4faaf24579bfc8e0fc3e15dc05',
+ 'backend/tests/unit/test_release_contracts.py': 'b1253d75506aa74ac36ea86171dfee67a61c88520475c0fec76a1b9fc05a1aa5',
+ 'backend/tests/unit/test_remote_assistance_contract.py': '0e67c2baacd4f2608d356535efaae8965a4f0b481c83aece7614ba248d6e4efa',
+ 'docker-compose.prod.yml': '9c5a1f6c6930e98a7f433fa2e4b33e0b7f02f24f3d2e64d6afaa11fa5bd890c2',
+ 'docs/V3_1_70_RELEASE_CANDIDATE.md': '10ebd7a71c9fb7c3304388500ac0be6646bb8143058e7c4fa13701dc1195d8a8',
+ 'frontend/.env.example': '8ffb665e8c99a4f09985afc3626c74b0e516423104fdff8ccfc274f8b60f804b',
+ 'frontend/package-lock.json': '019e9f6b8d4e11b937beb7825b4fc196911ea69d455b99598c50d1ed851908e7',
+ 'frontend/package.json': '745cef67d80b7cab40f52be9f25a862f8bb84ef58bba7fbec33b6def4c79181b',
+ 'infra/docker/verify-backend-runtime-profile.py': '8a6c5f64ab1211d5a8458edd55e5185e0042c58f9f1b0de34e704c3c82dcede7',
+ 'infra/scripts/install-on-vm.sh': '10bbff656e177f9c6bd236ee26acd9eda1928b93e6fdb98ebe93452171ba9ee4',
+ 'infra/scripts/verify-build72-readiness.py': '9a975f20333817350421bc149402b7d06ace1cc7f3f7a1b3a8fac418dc40e7f8',
+ 'infra/scripts/verify-build72-transition.py': '15de8f3ab404967bb2d238f6266a5142babab99ffc8c1f7f253bfc1dc56fccca',
+ 'infra/scripts/verify-build72-upgrade-runtime.py': '0b6ad995a72960506898aada470a20acdba15e56698f4da45aca5b98aaf2f6b4',
+ 'infra/scripts/verify-build77-tablet-close.sql': '7cf3c3f08f1cbaec49e652926f5a5fa1764b294a726980133c37778a081ea339',
+ 'infra/scripts/verify-production-runtime-images.sh': '8488c25bbb50fa9933f837195ac35905989f96e0fa10532a040cbf5451e1bc51',
+ 'infra/security/vex/backend-openssl-reviewed.json': 'ae8f99d49274584ba757bf041d62ac25ce2243420baece534f0c397cb4e50b87',
+ 'infra/security/vex/caddy-static-go-openssl-reviewed.json': '7802da773c47d83b7ebf33366316192f9ef88e982f6c86d3ca6b2e49d8b75f5c',
+ 'infra/security/vex/frontend-http-only-openssl-reviewed.json': '5f13f06471f75ad4ebf689ecd04e7e666d21c2b582f1ab8b0e7a9ba5c06686df',
+ 'infra/security/vex/postgres16-pgcrypto-openssl-reviewed.json': '5b2ee04d98eb6f8d06708fdd7e4f94d919eca82d3f57dafdf6b0b48da7d5b2ca',
+ 'ops/stage_android_release.py': '9d494bed6628039441a7aff36c511f4836a91c79b87ab740043ed5f4b6e23eb2',
+ 'tests/test_android_release_staging.py': '17e7ceedffb71809ee536a6d0b3899b12b8dfce91635a667016b6a49fd7204a6',
+ 'tests/test_backend_runtime_profile.py': 'f43de0bd54ce875073039dc78f8d208b7e79de2818eebb18e17eb76c2b242c87',
+ 'tests/test_build72_readiness.py': '18607a053492d1f1b3a1bfd354cd7993f91aabc11167d24dbf6909021b6d3112',
+ 'tests/test_code26_physical_audit_lane.py': '3cbdca95fdae404c41a96e5dd1799fbe8aebafb65d47b1f58cb99cf7322fdae0',
+ 'tests/test_unreviewed_build72_hold.py': 'e4c98f5555f553334c4f63bdde9fe90924dbe4315713766f5fe04cde5dbe70ee',
+ 'tests/test_verified_pip_bootstrap.py': 'b6ad78b21dee35d303561066de4d71a0757e344092358721d6119056e6fed28f',
+ 'tests/verify_production_installer_lock_metadata.py': '0758f4aaf3aad208e70cca1fac7727967d996cc0ab651173c36ac240a7aa896e'}
+
+REVIEWED_CODE30_4_BUILD78_SHA256 = {'.env.production.example': '3e6a49729fbde656661aef19ed57cb3b2f075dea6e6b1242326f024cf6d0b7d7',
+ 'PROJECT_STATE.md': '4f0e0446532fe94756e67129e020c47a4a3b316fec2fbf2ad5ff06da64689301',
+ 'README.md': '944698d3d28b908bb7a2894a56333bd9242b72ee947327796f0f833c9ed9fca4',
+ 'android-native/app/build.gradle.kts': 'aeb908a4a50756f09334fabb1f9dd8a1b2678a5751c95624b10ed7b0ce278565',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': '7e9e6acb7aa50d8528536b82bd5e20919aa678d7b8cbcd0e3a1ac55f445c0070',
+ 'backend/app/__init__.py': '384c59850e947b1ebf18a5726d3d4f48bd0ee787db7bacdc153657475ebbb16c',
+ 'backend/docs/POS_START_WORK.md': 'd2dd4bdae01aab261c4d6b1a24356fcacd31395835954dcb0a7513b4333b6333',
+ 'backend/pyproject.toml': 'b096abfae25ce5b600ab6ab65adbc13424bf6b7b2ba597d12dcfd08f02f5608e',
+ 'backend/tests/unit/test_release_contracts.py': 'c1a319052a43bc3f6770860f6e85a578a87fb8036ceac570f65f01c05fb9a6ff',
+ 'backend/tests/unit/test_remote_assistance_contract.py': '8544d484618e3bf5759209b2606b101c7a4015a87d48f0f25577fa03ae7e295d',
+ 'docker-compose.prod.yml': '737018a44cdb799862fa03a2f1cef342a5d44d12fb701921912f0ded8335ef8a',
+ 'docs/V3_1_71_RELEASE_CANDIDATE.md': 'e3c6b7def8d3b060e88471938b3e2e1b2cc01f5c8a772b2901df276bdeb005a6',
+ 'frontend/.env.example': '3e6ba2a9a568c4f5a329a73763ea2fdf57cd81573203c23fe1e7b72cb0ab3b01',
+ 'frontend/package-lock.json': '01833347bd8eedf37d998b1124edc7b0c9845b83c3903b4c0a3ff32eb82fe0ea',
+ 'frontend/package.json': 'f2efd6c6c243206ac9bc6eb5f8523b940574f99b2be4a1e6dd3eb5bc10ba8ba7',
+ 'infra/docker/backend.Dockerfile': 'ace1bad25e18ad127d23f774613b6a5fb5bb2c7fbfd728bf843d3289a5d789a4',
+ 'infra/docker/frontend.Dockerfile': '0f8c7a8f5b88c28d5f8dc8ade038072e00bc1ff09bea10c0f32b1343ec73cd45',
+ 'infra/docker/postgres.Dockerfile': '83bd0095f59e7a135bc198382240f65ba5f9bbc1a2101b5ccb8b0c46f8fd6a3c',
+ 'infra/docker/verify-backend-runtime-profile.py': 'a62e381a0cf6dbe725619ae45971aa7f44b0ac7d03193f27e4f1622babc68ea9',
+ 'infra/scripts/install-on-vm.sh': '4dd90eafa51310b4dc128ecc106e6142fba1ad3520405c9acc5628dd2f7b4769',
+ 'infra/scripts/verify-build72-transition.py': '036efdc0db94106324a68e575e3ff5ca609b465d3225a12b4684397977d59186',
+ 'infra/scripts/verify-build72-upgrade-runtime.py': '0485fcef91a92c72d2c0c3d9bb7ef11e9bf64eecfdc183b916d7aa1659d60b12',
+ 'infra/scripts/verify-production-runtime-images.sh': 'fa34b318fbe1aa60a9d0e6a912d49f35d9e81f83de86b502ea5f50d12b042be9',
+ 'infra/security/vex/caddy-static-go-openssl-reviewed.json': 'e841e4746b9fac6245a0263c652f8f87b98b90d2548bec32c7121e9e2358a6b4',
+ 'ops/stage_android_release.py': '16e728c63bbf9b75db33fcd4f900f97c4941ada7d7afe3bc985a6f02f8b5ce0f',
+ 'tests/openssl_historical_fixtures.py': '90f73544a6d606d3900fc8e8884d80ff6b19dade0490a047eb2d5f220aa846b7',
+ 'tests/test_android_release_staging.py': '82559d699330170fffde4497984260e4a76b59cb9d65fe1abf02aee061d5831e',
+ 'tests/test_backend_openssl_assessment.py': '2ba890ecd2c1fd94ee7065dde839363b0db7544ec593fd31b8d2aee0224efc31',
+ 'tests/test_backend_runtime_profile.py': 'a53805258438ad20f29abadc15f838788fd63b0df3746fa2e5eb6c7af7a233d3',
+ 'tests/test_build72_readiness.py': 'be0da857fbd8b344936b2485d8da027e393f94bb60b296bd57297e5e27d035ac',
+ 'tests/test_caddy_dependency_security.py': '98c9da42ed47808a7897e5f31b4717048f72ec6b21377aab3ebc1bdbd2ed81a2',
+ 'tests/test_code26_physical_audit_lane.py': '646829fc97d68c81ba12d29b837276605221954074ae07c2e4531a9fa66ffcd8',
+ 'tests/test_service_openssl_assessments.py': '78e9b6f03b50a3eaea962924aed947a7eed9793f52be0c46929bc085d804a114',
+ 'tests/test_unreviewed_build72_hold.py': 'e4fee28b1e5feee16f07de91d5e77878f07f5ba3764c8e7360a2055bbbb5d59a',
+ 'tests/test_verified_pip_bootstrap.py': '969cc6a8b80d3efea670762d55eae4c7bc525ff3b08fad5e45c4ff28390dc6d6',
+ 'tests/verify_production_installer_lock_metadata.py': '1df749e0e826b3a6934df9370ce1c2852c5c08c8b0e4a1140690e75a24101ee1'}
+
+REVIEWED_CODE30_4_BUILD79_SHA256 = {'.env.production.example': '3e1b9e64cf17e4255d8d249978be4075fcde197b1d0848e86ba0422ffe763de1',
+ '.github/actions/scan-production-images/action.yml': 'f6845bc54d9418d24cbd8770dfbc9a3f43b1769284edbc31ac04b9524b4b1226',
+ 'PROJECT_STATE.md': '81acba06f2e515d69d4e421bd5e061a29559f14487400fab093cce007b064f8b',
+ 'README.md': 'be8d5e4334922a7b7c2ef382cf05a2f3ac71dd4cfb434389fa7514df0f0e594a',
+ 'android-native/app/build.gradle.kts': '51d3d11ea73b17b8016f443275c0af594b97f00b8dc9ac082ab3e7c0f2d67459',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': 'b6af44924d2958538cd49efac46ec18f662a83bad4c36ade335c29043ad2f4c2',
+ 'backend/app/__init__.py': 'cca3518f56773719ba45aefd0a8ce4e22a9baa697f0c3287ea58be5719337f10',
+ 'backend/docs/POS_START_WORK.md': 'e5d7cdebf677ee011c7fd7fd6a521af4a52f26592ca20a5beb047aaa40806d75',
+ 'backend/pyproject.toml': '372e746903093a37c9ebaec22be17e0f2f54a3f8e750e7b87ef9642c87d6f7e6',
+ 'backend/tests/unit/test_release_contracts.py': '3d850e881f61990b2a0717272c8ad1163d5e3ba9f3e6007c1d45073329662bdd',
+ 'backend/tests/unit/test_remote_assistance_contract.py': 'f9b5c88a08e7c8f6dff0cd0cc63a15b311b31ec6871f553a4d4ed72627196e76',
+ 'docker-compose.prod.yml': '11e0f0dd50ebd4ddeff0e6d11b5017c23ca72861ecf70c61b1b55af43668ac02',
+ 'docs/V3_1_72_RELEASE_CANDIDATE.md': '2d148e013e62010a72181b2e822050bba446b7725459d99eb841b38539003919',
+ 'frontend/.env.example': '4253e265bd5be35c322204f56648bc18310a1a176b0590b986865a3ea80a3dae',
+ 'frontend/package-lock.json': '98dac020c8016f6c1e4bdbf5bd5f4abf9137bf608a6fd90bc79ba70c713b678b',
+ 'frontend/package.json': '619fe857c6986461c17db5d2bb84ced29f494b673e931a46da06685e91d0e105',
+ 'infra/docker/openssl/verify-vendor-r1.sh': 'fe6c70da6e6856198bc1434372bdb5b8cadd3e491a02ac3a193fe73dd41586e9',
+ 'infra/docker/verify-backend-runtime-profile.py': '2c7dae54456cfcbcf58792acd19fcb3092c582cedbf4abc23e49b123263780f4',
+ 'infra/scripts/install-on-vm.sh': 'e9f8ddb37f4a6f012b096481fa653e3a3222cf6a96cf15fdee0fd9d0ffaa356f',
+ 'infra/scripts/openssl-vendor-fixed.py': '5819f122c833b7e523c589a6d17e1a02d172f62852d644014ba073923fe1f5df',
+ 'infra/scripts/run-hardened-image-scanners.sh': 'd37b0d514ec384f7c1078b9894a10e1add442c42b5d49cba0dd582c9be3a18ea',
+ 'infra/scripts/verify-build72-transition.py': '32be5bc52ecba7ce0711d04dba8df5ac09a63b3300503ca5b42b89d9561ccf7a',
+ 'infra/scripts/verify-build72-upgrade-runtime.py': 'e6ce91bd25b295f0d9213b267011d56b1575828557c788965d441487bde6fd9d',
+ 'infra/scripts/verify-production-runtime-images.sh': '818048165e5a7d5f851f425546d0db1e24ee82c60390c3cccf7405153b41f15e',
+ 'infra/scripts/verify-zlib-vex.py': '46356acb29296f03a55d59005c3fcf304b5756245e9948116ac27b11f72f9e92',
+ 'infra/security/vex/README.openssl-vendor-fixed.md': '6566b4e026c59bc0ae78b547350d5332f4295ad855219ca4d144767e1cc65181',
+ 'infra/security/vex/caddy-static-go-openssl-reviewed.json': 'f28c54c8ec593b73b84018a23986b879cf52b582de27d4496d3d068ab4eb70b3',
+ 'infra/security/vex/openssl-alpine324-r1-fixed.json': '628c4643002e4bec9a69f07285ccfc21c56a9d74f552e6c622c4040dfdf37640',
+ 'ops/stage_android_release.py': '04f401aa175d8fd7f8fb02bc40d9c730098f4c10ce71903841b73bdc4385cd37',
+ 'tests/fixtures/openssl_alpine324_r1_vendor_matches.json': '05e73088e2fdbf6fdbe10805278126589b82b595ce0cd08ce88585c9fa85a62a',
+ 'tests/test_android_release_staging.py': '36ddd258d74a4192579799cb2c065119bae6180f228593a381c79aed9e5720ed',
+ 'tests/test_backend_runtime_profile.py': '8c0f1ad64fb2617c768807177228974ffca486ec9fd654b6a86797d5d48f907e',
+ 'tests/test_build72_readiness.py': '6c76567ce0b343b28375ff9c0a9b54b8f9ee4d33aeb80ff5c9c6cac34c4000c1',
+ 'tests/test_ci_docker_connection.py': '0f41a7d417511d29e9d58d097280799576caf51eb4f1b92dce451bf097e9d5c6',
+ 'tests/test_code26_physical_audit_lane.py': 'a012b80979f07ece406a40174d2447bf4d15a974fda348ecdfb129218512383e',
+ 'tests/test_docker_context_safety.py': '21912bc2f7c72c04be703142a2454082eb67e8a1a78411bcfb384b59641cd60a',
+ 'tests/test_openssl_vendor_fixed.py': 'a9c9573b1a583a98e0f6fefa8fa9c2ec950dbfb20dfa73683de822bc12cc7042',
+ 'tests/test_production_installer_safety.py': 'a2b4ee62a76f5e0b85835a485d4b86a47f32c1e2a548f6fe017fc5d845b25fb0',
+ 'tests/test_unreviewed_build72_hold.py': 'fd9705a0284a4d937a0b53e5e39b007d92f0d2dbfe490b58ace52f18668e2fd7',
+ 'tests/test_verified_pip_bootstrap.py': '6d874336143cdd08702f037dd40beac4d3e820f0898e07e74e34420e86b880ab',
+ 'tests/verify_production_installer_lock_metadata.py': 'b6988d474a1079f65f7475cf61895e06e7a8c34029776f79a2bcd91332ab7437'}
+
+REVIEWED_CODE30_4_BUILD80_SHA256 = {'.env.production.example': 'b58853023a29f792ed2830066d65b793e6d0f7cc120d94eb7b1b41c2f42a540b',
+ '.github/workflows/ci.yml': '83175ce74e0497f97bb966c0ac3759f12886e8e56000eb7659ddd79ebf1357b9',
+ '.github/workflows/release.yml': 'b314e438f6375d0d56d48ae5bc10590b2bf0549e3144701b23f63b6f31261a2e',
+ 'PROJECT_STATE.md': '4f580b77bd83320297e564211a36eb24c3996c8dd9bf30f9dbe07229189b8362',
+ 'README.md': '063adfb0ce07b30de4535145edaa12ba4fd14f8f786d4ed1bb15c4c8c7210271',
+ 'android-native/app/build.gradle.kts': '931881d7ff855f06fa4f1b3499a4dbc1a5575248bb31b1a5527992fe42b8e2d1',
+ 'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': '9d4f6783b7d16c8b60604cd571868b296995f827d643f9166bd2130dbe808173',
+ 'backend/app/__init__.py': '74517ec3df0377f90342fddc75b3e71a3fd22d561f1dd0464693d1625212d147',
+ 'backend/docs/POS_START_WORK.md': '48164f51db3a4803d8caab14f51d2046e641e6f1e2f9ca4beffd2439401c8e21',
+ 'backend/pyproject.toml': '7d8a856fc89eef93ffd73a0cb2279f8e88209bd95f8d3a24f6de4ccb85c60b59',
+ 'backend/tests/unit/test_release_contracts.py': 'c46588beeb2cbd3fdd2ac27b1b55e7f9a21f81f16246e30b0bcf4d4b9be4391b',
+ 'backend/tests/unit/test_remote_assistance_contract.py': '449ac0e140ffa1988beccd65ad18b6edc27767a632ffeb5f7a5b9a586551f91b',
+ 'docker-compose.prod.yml': '99d9a8267ad359d175196dc3b25fa0715ed0ef132bc21482274a53aa93501e30',
+ 'docs/V3_1_73_RELEASE_CANDIDATE.md': '1f5ceacb52c4f2b18afbb03e47e78478d909707f8860c38ccc2afb9c7a62bc0d',
+ 'frontend/.env.example': '292b62cdc274ac45057f5ec44041a2588bf2a88fa7b95bfd3c4eee549fc72701',
+ 'frontend/package-lock.json': 'e3db2480ddaafe0a5f4ffae80f50e9fcbd32fc4e54e1b999a6406c81f0bda726',
+ 'frontend/package.json': 'dc952bda00d0be4c2a5a330552033c4a6f52e9d9341fac773cc19f3e5781173d',
+ 'infra/docker/caddy-zlib/verify-official-zlib.sh': '68cc449113dd67227d7eea109f9d313b8b10ea56c987e7a74583910b7cfe7845',
+ 'infra/docker/openssl/verify-vendor-r1.sh': 'ea1dcba0912d2161ee172838d64c961c3ab34329f18eaffa61242cf0b73fd392',
+ 'infra/docker/postgres.Dockerfile': 'd9a6e091ee26b6d12b41c81202360e487e61336f1d4f7a1e5f80326a182c442e',
+ 'infra/docker/verify-backend-runtime-profile.py': '6586b291cc353d12325ae68a2cb81c3b3e5cab2cf2f99a5eed9899adebe3e6f2',
+ 'infra/scripts/install-on-vm.sh': 'bb566462803aae7a56ed3156eb0fe31d23d59b9e9a912e337042fb4b5a5be743',
+ 'infra/scripts/openssl-vendor-fixed.py': '139ef461148a6b43898e7f7608d4432264849def35ce75c6f8beb00a8b5f316b',
+ 'infra/scripts/postgres16-compatibility-fixture.sql': 'f3cbadc5834fb0570102f7394b39e4ee8bf7fbc9ee14e97aade840057db9030f',
+ 'infra/scripts/select-ci-postgres16-client.sh': 'e91ca18603a04aca48790210d2e835011c5323661b47d4b7b7ffb88d72db9b2d',
+ 'infra/scripts/verify-build72-transition.py': 'f8d681f6372c982852216f42555e613e26b5cc4ff034167941ee249247d2d295',
+ 'infra/scripts/verify-build72-upgrade-runtime.py': 'a7a9520671b47945257121189eb5c0dc2de979e451e1bfef8265358719774548',
+ 'infra/scripts/verify-postgres16-image-compatibility.sh': 'd38ba0b980deadcb25469d1f14c30af621678a125018f9d8ef77969b0e67a263',
+ 'infra/scripts/verify-production-runtime-images.sh': '069972220adcb7eb8b60863d739c1713b051796d1520ff02b95fdfb001f79f05',
+ 'infra/scripts/verify-zlib-vex.py': '891bc39fa123956ab23aa3940747376bbd20d4cf7e98b2323bf7e2f8a22bacfc',
+ 'infra/security/vex/caddy-static-go-openssl-reviewed.json': 'd03e48a7f829b0c52668d8aaced8b5a142c1cde80fe622e9a50c674a56b6f759',
+ 'infra/security/vex/openssl-alpine324-r1-fixed.json': '9d62ada5fadcb809b8f987b41d1017e5b4fc1e3d5761f8e96e137e53555992b0',
+ 'ops/stage_android_release.py': 'da59c313b8c49bca6a43bdd562f5fd717c5fd004e5d75ca5820ce9b007465498',
+ 'tests/postgres16_security_fixtures.py': 'eb7990ad986528242dc3ce0d17146eb3dc3e16d47aa55196f8e733ff1807cec1',
+ 'tests/test_android_release_staging.py': '91616d1811b5d7f16c6902ecedf58638d75a996c10911f67f9a9b6010f8b86a7',
+ 'tests/test_backend_runtime_profile.py': '1afd2f185b71be2159ea6a6b4e34de79243833b4365d85444c78d0647e48fde7',
+ 'tests/test_build72_readiness.py': 'a3d6d1a9294872d17eeb3ab1250c58d782fca02528901293a098e5935092e952',
+ 'tests/test_caddy_dependency_security.py': '3b3be6cbf6b7f7bb04ec554f9bfd0aecf169e8f04cfe76d2a962d0a69fc0030d',
+ 'tests/test_ci_postgres16_client.py': '39c7d78821f832fdd0b080b0b3e2b51c38081553abc8c2a42cd16e2cf6174c9f',
+ 'tests/test_code26_physical_audit_lane.py': '9b5f79406e48bf726bb6a8e68731ce177b1bc53cf66f50d686615b9fb52eaa7a',
+ 'tests/test_hardened_scanner_runtime.py': '2f962c898b88797cf56be8256d0bb081c4b1942f7e6ab7c202050e4b7601388b',
+ 'tests/test_openssl_vendor_fixed.py': '4a8728acac47ffffe865b080d26e5496a7cae278b8c80a3ce2ab88f7606136df',
+ 'tests/test_service_openssl_assessments.py': '3d6dfcfcb9328e32fe9203c8d5e34e0f13f2cb3279c82cb256b0943adeb2e69a',
+ 'tests/test_unreviewed_build72_hold.py': '02fc92c786a21e00043e2eb386e648d1ea1b23d5e24410d050744d5cb56ba373',
+ 'tests/test_verified_pip_bootstrap.py': 'e936873679324614f2f3fdbbff33c7960b74715bdecf6afe36053a32e47d5516',
+ 'tests/test_zlib_security_remediation.py': '05e1c61aa3f8fb5c12d1a236126f6875c8aefed72ce9e6d6606266e694d86c00',
+ 'tests/verify_production_installer_lock_metadata.py': '4e69eaf0f4c1a543a67dbc294de886ac59dda0d408b73fef073e65aa4e39639b'}
+
+REVIEWED_CODE30_4_BUILD81_SHA256 = {
+    '.env.production.example': '9b43414d01b8865297bfdfc51f1f3838db82230dfc6c0274d137c351c8d75789',
+    '.github/actions/scan-production-images/action.yml': '2783774ecf36d6fa0d89b39abdf702017ab1102ed5052757e1686a5373f5e8eb',
+    '.github/workflows/ci.yml': '3b4f22932ef1444927350781310c1a61a65955840aca45ce39e9f50899007194',
+    '.github/workflows/release.yml': 'd4ad082ed92c90e44c661811957b48a166f940b26be8da737e39f325c9f70225',
+    'PROJECT_STATE.md': '22eb4a71e3a40c1cc7c46af04ea7fe12757d3893fc47514f42d083a72144fbac',
+    'README.md': 'b02e22265ca85f9ea154ddd84a1ce1d904a2451307d12b7b3e4b6926a99ddff1',
+    'android-native/app/build.gradle.kts': '70a21572dca4c1ffcb2dce55f4a25163578ddd4c67511805def85856c7cdad1c',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/LoginWorkspaceUiTest.kt': 'a072a2b03b6deb757b30b697a22214b765dda61a4fdd9baa90d9e34d96910bc3',
+    'android-native/app/src/androidTest/java/cloud/dcompany/erp/ui/screens/gaming/GamingDialogUiTest.kt': 'c0367a714a7af76da11eaef1bec0ece6b5769e6befd347e756b6e1546104904b',
+    'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': 'd444b9212499fe1c1026b9fc3802c6dfbfd69bcedd1c3478201ced0e9ca74cd5',
+    'backend/app/__init__.py': '28ed5c19b4fbc3ec66e3c8f05e4bbed7447dd53e76b1b4d0775ae4c60771bac1',
+    'backend/docs/POS_START_WORK.md': '89b82ba49f9faa60535a616799a685da4a8017802bd2b2d4cd5824ca4dc1627e',
+    'backend/pyproject.toml': 'a64b829c1a34dada04e54dbfbe35da914ad270c5239e743ecbdbf12c27bd4f8a',
+    'backend/tests/unit/test_release_contracts.py': 'f1a8bbeaa5d071d85f79291e08f758cdcb77ca72e574c72c8130717a3ab455da',
+    'backend/tests/unit/test_remote_assistance_contract.py': '2ccc0ad3db98a7050728e298d10803b9a8212e396e2f5824070cc6142fe00285',
+    'docker-compose.prod.yml': 'f5f82d0015fb17615ebaae076ccc5d990e93a96fd8134c964a4f4b75ccd0b800',
+    'docs/V3_1_74_RELEASE_CANDIDATE.md': '347c02e3d727b9b5899e745153b4b50ba1b1dd6692629850f6475395f45325c6',
+    'frontend/.env.example': 'ac48fb239251fe6b43f807a00cd2b4a404b98c061414ba3c2a286a697c0c1a06',
+    'frontend/package-lock.json': '004a1a9b6ffdd1b55d5523d27503e6a9e1b8dce5fd80a17e955e7f474a5a9248',
+    'frontend/package.json': 'f103d7632cfaf5a505ec6d106747342d2218774d61f0f32ba28935047905024b',
+    'infra/docker/backend.Dockerfile': '86d2d052ce8dd539caee5a2132f830e928c0112d0bd4dab24dd7c593a7aae4e3',
+    'infra/docker/caddy.Dockerfile': '42886724edbd12ead28641e7c21968c2d817d5c4a70ccc43b7e403f9529c1006',
+    'infra/docker/frontend.Dockerfile': '53bc5e4f8bbc69e845cfe0a4445c46b02e12ef72ca011b15581b6df655c6338b',
+    'infra/docker/openssl/backport.Dockerfile': '8e7134e9a2b91e63662ae6fdbaf3976cd2b183d4831b099912319c085b499f8d',
+    'infra/docker/openssl/install-backport.sh': '3565888f8231a00d05a57c1cfa8a04b25128f671a4be10e2d607fc36cfd76a6a',
+    'infra/docker/openssl/verify-backport-runtime.sh': '7288a1fb650b6e91e43bbd341ca67d59a5ac9313a982bfbf2376c8f3eb04c6e5',
+    'infra/docker/postgres.Dockerfile': 'd86f3d1718e4d84f6fb39ff13fea81dd4a242b3f4b4474fe9e393d67edbe82e5',
+    'infra/docker/verify-backend-runtime-profile.py': '31884bce99bf15d22bd1d94cb8ef3d05adefb906f829db72779bdcc7f739ff0f',
+    'infra/scripts/install-on-vm.sh': '00dce67a9cd1e2846589ad06472628cc0a13a1ad320e03b061d892932c863af9',
+    'infra/scripts/openssl-vendor-fixed.py': 'f09794fdc6b8c4cdfbfca689f967eeaef787cc3dedab78b8892fabddfcc0739c',
+    'infra/scripts/run-hardened-image-scanners.sh': '5f9aa97f39df24df3574da7d3f27f81b6b19686c48d26ec14be5784bdc71b079',
+    'infra/scripts/verify-build72-transition.py': '2bc3e340bc7c6ebbf6a66b0eaff3f505a716e406ccc5c133cca19e589e5aeecf',
+    'infra/scripts/verify-build72-upgrade-runtime.py': 'b6a8736702a1a2157a844b875bb6ee26ab5e2b55d15add0751b6c83df6d58088',
+    'infra/scripts/verify-production-runtime-images.sh': '8a67da7819024209754330b85413a33dce637c5c4c78ade449854ea67283deca',
+    'infra/scripts/verify-zlib-vex.py': '92d2e2e09b141eccc4251e091ce9fd6f266377a0ad41b07a8f3b7690fc92e722',
+    'infra/security/vex/caddy-static-go-openssl-reviewed.json': '52d6ea9208988fad265c54d875980dd2efd488044319e831b42729834bea65b6',
+    'infra/security/vex/openssl-dcompany-backport-fixed.json': 'c3783a70cc3c21266490b0999c45dfef5ed563f54757802def2298533882a11b',
+    'ops/stage_android_release.py': 'f8a6e1b0f694e2e34e89ea37d3aab43ce519ddca94ce364ce23011560f5e553f',
+    'tests/test_android_release_staging.py': 'b02b7ab48591710977148aa0dc743a3adefab1a92992bab355a6a056df16ea6e',
+    'tests/test_backend_runtime_profile.py': '0ade29e0013f4076496c2c76fe5d2c8555fa0e8f1377e172b31d6e3076326f89',
+    'tests/test_build72_readiness.py': '92f05aa619251922c1575f747b78db5de8601957d516c44728d1cbc938dd2cb1',
+    'tests/test_caddy_dependency_security.py': '5253b32e827ce51cedf01127624aa14e6d1a8b7eb02410dd4ac9d2e37b87080d',
+    'tests/test_ci_docker_connection.py': 'cf98b9a98a418228e335bc5ec2ea03fcdbaff6f1a2ca6747240d71b5541a9f4c',
+    'tests/test_code26_physical_audit_lane.py': 'edc4cc83b16062dba3b5f80c13b03c6d0dafaeb4fd56d9db939ad8c5d38d514b',
+    'tests/test_hardened_scanner_runtime.py': '92b2f53b4d4fdfa336ced4a5a840d9dfe5f048a242bec3354ae4fbeacb1831b1',
+    'tests/test_openssl_vendor_fixed.py': 'f450d2bcc2e11cac3beee8cfaf80246de709a296cd846bfa444f1f94da96a7eb',
+    'tests/test_production_installer_safety.py': 'b3a2d7d3b9cd68ee7aec54fc4b8e526f88c6144b146cbd321d8571f4534c7a71',
+    'tests/test_unreviewed_build72_hold.py': '9b85440e6f1d19e198cf11ecc6f2830f1369e69b86802546dfcb1368f594623b',
+    'tests/test_verified_pip_bootstrap.py': '0ab041c81d9c1ef8ede1fd256a523c297baeb411d2f8e7fb0dc953b7cb3eb291',
+    'tests/verify_production_installer_lock_metadata.py': '3d0a93d5bb5623aae723dd7bfdd8761a84f6735fa16a630324f4b01bf996e9ad',
+}
+
+REVIEWED_CODE30_4_BUILD82_SHA256 = {
+    '.env.production.example': '3f1912e74ba94aeda9d76dc6145bf4238d8f0c76bf2c94656361d6fb3dd5b255',
+    'PROJECT_STATE.md': 'bab7388ec9240fc742916d1d0ab890ef0b3ba8d22d4aff0f4038568e1a62d86b',
+    'README.md': 'd04218292c5548ce24c5e9f833b250e681dbc5b2d23881f38eaf132a840c33d3',
+    'android-native/app/build.gradle.kts': 'c284d3debf886a6ce0ff6991084582841935df8dfec321890414f7f0da2ab4bf',
+    'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': '08a3e5f3d1902310b9e43c448fbdacb6fe557294dddc520ef60e6889fb2325e5',
+    'backend/app/__init__.py': '13a8c9d84944ffb77dfbbb617ea4c95e7cb930e0f386d44ae10484f589caff7c',
+    'backend/docs/POS_START_WORK.md': '4e080562140c176ae19ab5e86fbb43c8dde256e67f79c509c0da1ee4a911de6b',
+    'backend/pyproject.toml': '34007f2361c1387b66464c7ced8e2937f7eb2b6fdae58150358247cf34dff644',
+    'backend/tests/unit/test_release_contracts.py': 'e005d909d56430df8b440342989bda40cb0d6f0c0a086954dc875330b4867e40',
+    'backend/tests/unit/test_remote_assistance_contract.py': 'a75108b4a14405b0feb2ba1239f0ce1384d43334b91423daa55a7bbdaaa1896d',
+    'docker-compose.prod.yml': 'e43368f6ae1d768b5f384303cded158ed13ddbba122ff503cdab30e18afd72f5',
+    'docs/V3_1_75_RELEASE_CANDIDATE.md': '6a98f59327be4594798f3b2af93e2d79f2283496ef1ca8eb045e3828c820b0a0',
+    'frontend/.env.example': '6115282e02512b90ad18e0146d45954acc1c6286e745d558c82535a76cfc98b7',
+    'frontend/package-lock.json': '8db784def618d014a41397effccee724830c45bc77ea337069293930fbaf810c',
+    'frontend/package.json': '56ce0d7f5a184fae2a6f91177ae6fa2d3f114706ffa1168b0c6cf41bb9dce04d',
+    'infra/docker/verify-backend-runtime-profile.py': 'c3f27b5e17b04a6b826a648dba6d08e053031708c4eb4d44305085b9f6fb4300',
+    'infra/scripts/install-on-vm.sh': 'dbca9b815cbd711296b8c82a1db0297b35868b68b4c3681a989466a52d142986',
+    'infra/scripts/verify-build72-transition.py': 'd355e5a3e2e90be6d8146d80bfe8cc2cb79a0272ae6e57807cbc6e1c222dc6ac',
+    'infra/scripts/verify-build72-upgrade-runtime.py': '70f985518414005ec24ff77ac1d884ada24be7d2a26ac1c3194a5054b893529f',
+    'infra/scripts/verify-production-runtime-images.sh': '5e7deb7a057965103400c415519d2ea6c7ca2274d810298dab0488ba45e4cd4f',
+    'ops/stage_android_release.py': '2a8c1351a7fd1a30f6d926d9ec71185dd7ff1b20c5ece29bd4c019974c48d116',
+    'tests/openssl_historical_fixtures.py': '6d75204f8e2d068e585a4bd15b4bbbad321f6b6f342756cf051f7235e7af692f',
+    'tests/test_android_release_pipeline.py': '04d5146d9205c72e709e9c8f48885586af5cb4e05936784e92d8392b7e3eb434',
+    'tests/test_android_release_staging.py': '6559bdf09003eab62bd31247a608cec5408d0c836870df3f8a7770f75db95172',
+    'tests/test_backend_runtime_profile.py': '174b944d0a815cf5a269350d2c1135d9e1f40ec536617299e902170620a71fc9',
+    'tests/test_build72_readiness.py': '60cb69cc0ad636a8b708c25f280d8a4bef221b20a3ebb9af770271a29ed429a9',
+    'tests/test_code26_physical_audit_lane.py': '5f48b4afd1263cdf6f7d74cc78b7a4ba25c75e218d1c38ab06b4b309d09e6ef2',
+    'tests/test_service_openssl_assessments.py': 'd52eb739e626578516684e85923997ba4d44081a76b65a084addd5b374e75cc1',
+    'tests/test_unreviewed_build72_hold.py': '8170e9e0d85b5e21ce5c321bc500be0902e18e96ccc0c8bfbbaf7911ce870c92',
+    'tests/test_verified_pip_bootstrap.py': 'b4a13310e55469d4f738b3026f614e0c8eddf707d66087fc206734ecee945fc3',
+    'tests/verify_production_installer_lock_metadata.py': 'b376fc999a8560a41d943824475458ae57c14c4e9d143dbdeff315fa2ba90ff0',
+}
+
+REVIEWED_CODE30_4_BUILD83_SHA256 = {
+    '.env.production.example': '3b87cc81f3460fd3c43daf89d0ca9393d98044b30e992b1611affbc5670a6313',
+    'PROJECT_STATE.md': '001f11dcd0d207359243630fb532fc88fee631611a1a7da6b9942a72806b8039',
+    'README.md': '852c54b7a950ec7359b19299da9eff58cf8f1ee9f00d87e74909b5d5646eee40',
+    'android-native/app/build.gradle.kts': '684c3ef73b8098138082a02fa0acd4c60104d9f07d075c0b26eb907fe74ee888',
+    'android-native/app/src/test/java/cloud/dcompany/erp/AndroidReleaseIdentityTest.kt': 'fb54b035b9129576f40cf5374948922a9d23b17e24281133fb07dc22f7f976b9',
+    'backend/app/__init__.py': '6f283bfee61fca797521c1801e3db53981062070bdaee6b07394b3df400900de',
+    'backend/docs/POS_START_WORK.md': '1426ec63b06abcb5b619506e58b8c502704d3d3486078e594b7879f0ba8bd09f',
+    'backend/pyproject.toml': '8a3fbc2320fce125e61bb9048db09d455cf61fcac3056e24dea37cd1b11d6160',
+    'backend/tests/unit/test_release_contracts.py': '0a6dbdbcad167283b6c82258e49813ad28f2e86421fc174843dd88621a219b8f',
+    'backend/tests/unit/test_remote_assistance_contract.py': '8f1f59d76e7eef70c8b423ca132ef476be56bda93ebb1d9c58463a8f951adfec',
+    'docker-compose.prod.yml': '971cf0d8a027e52e22791f2e705e5796cf2644d4e99007c3baeac03f9e3726a5',
+    'docs/V3_1_76_RELEASE_CANDIDATE.md': '5034dbb4971ac3e7f5149893d9f5afc36f83436fb27a8a4f466cfcfeccce0be9',
+    'frontend/.env.example': '21a091617bad0771aa90c3f21fa4badb567606b5dc70eaf42dcad30ad7ee3b48',
+    'frontend/package-lock.json': '4a635f64dc0709172e1e95f0e85a081ef912c3fbe9fd65eb26e370fd46bc5576',
+    'frontend/package.json': '750b252995e3638f24731f2fecf19533b9f250305b1e36c828f39d45283ffa4c',
+    'infra/docker/verify-backend-runtime-profile.py': '4f0dde57e1a903ee8641b8f93f3946312cc9eb5643de7a04b07150e0c2354bd9',
+    'infra/scripts/install-on-vm.sh': 'f1e83901f0079ca548572e6aec9d6e39ce7b6adb9bc4f774457069c13ed0445d',
+    'infra/scripts/verify-build72-transition.py': 'c158eed8afd1549e00295f934fcd049b12f937c9f1ed10fed58060b6f41bf0f3',
+    'infra/scripts/verify-build72-upgrade-runtime.py': '9264cb33fb4622fc8e8dc0d95db2c11f54fedba08c7a3c594cd72f6a07c8d693',
+    'infra/scripts/verify-production-runtime-images.sh': '945a19fbdc6d4e15a4a6a23bccb59d87d318685f954c4750d40f7040799c11a7',
+    'ops/stage_android_release.py': 'da87d5cea7eee6b4bea7f5ced0792c45ed28317868a6f547e3133249a7f2e9aa',
+    'tests/test_android_release_staging.py': 'd96833bfb642fa96f4c8ea969808fad5488996992156561e896039771c8580cb',
+    'tests/test_backend_runtime_profile.py': 'e65d9bf257a3306b3055cc415ab60c4760ff1977e91f960b6a0f6a1af8e973f8',
+    'tests/test_build72_readiness.py': 'b41fb6ee62d6a5d3e85c8162a267bf7dd560d855a0ded3bfdc558e79d98cf79f',
+    'tests/test_code26_physical_audit_lane.py': '05a59fe4df73b1c9a5ca988c4eb34ff6460b957319e9d8e408b2128d8c4a601b',
+    'tests/test_unreviewed_build72_hold.py': 'fa28165b7cb72b2bd307127eb044525fc877accce71f34c8f023138db0c81ccc',
+    'tests/test_verified_pip_bootstrap.py': '5d5f2eeacd7b4b02447df6308473aa1690fe0d7cfc6626b766cb46608a6b6a6e',
+    'tests/verify_production_installer_lock_metadata.py': '0953a5a04871bf9992ebf00056afea64199b199113279d2dddf2ca34ddf0eda8',
+}
+
 REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
     path
     for path in (
@@ -1715,13 +3860,42 @@ REVIEWED_CODE30_4_PRODUCTION_PATHS = frozenset(
         | REVIEWED_CODE30_4_BUILD52_SHA256
         | REVIEWED_CODE30_4_BUILD53_SHA256
         | REVIEWED_CODE30_4_BUILD54_SHA256
+        | REVIEWED_CODE30_4_BUILD55_SHA256
+        | REVIEWED_CODE30_4_BUILD56_SHA256
+        | REVIEWED_CODE30_4_BUILD57_SHA256
+        | REVIEWED_CODE30_4_BUILD58_SHA256
+        | REVIEWED_CODE30_4_BUILD59_SHA256
+        | REVIEWED_CODE30_4_BUILD60_SHA256
+        | REVIEWED_CODE30_4_BUILD61_SHA256
+        | REVIEWED_CODE30_4_BUILD62_SHA256
+        | REVIEWED_CODE30_4_BUILD63_SHA256
+        | REVIEWED_CODE30_4_BUILD64_SHA256
+        | REVIEWED_CODE30_4_BUILD65_SHA256
+        | REVIEWED_CODE30_4_BUILD66_SHA256
+        | REVIEWED_CODE30_4_BUILD67_SHA256
+        | REVIEWED_CODE30_4_BUILD68_SHA256
+        | REVIEWED_CODE30_4_BUILD69_SHA256
+        | REVIEWED_CODE30_4_BUILD70_SHA256
+        | REVIEWED_CODE30_4_BUILD71_SHA256
+        | REVIEWED_CODE30_4_BUILD72_SHA256
+        | REVIEWED_CODE30_4_BUILD73_SHA256
+        | REVIEWED_CODE30_4_BUILD74_SHA256
+        | REVIEWED_CODE30_4_BUILD75_SHA256
+        | REVIEWED_CODE30_4_BUILD76_SHA256
+        | REVIEWED_CODE30_4_BUILD77_SHA256
+        | REVIEWED_CODE30_4_BUILD78_SHA256
+        | REVIEWED_CODE30_4_BUILD79_SHA256
+        | REVIEWED_CODE30_4_BUILD80_SHA256
+        | REVIEWED_CODE30_4_BUILD81_SHA256
+        | REVIEWED_CODE30_4_BUILD82_SHA256
+        | REVIEWED_CODE30_4_BUILD83_SHA256
     )
     if path.startswith(("backend/app/", "frontend/src/", "android-native/app/src/main/"))
 )
 
 
 def _current_code30_4_sha256(path: str, fallback: str | None = None) -> str | None:
-    return REVIEWED_CODE30_4_BUILD54_SHA256.get(path) or REVIEWED_CODE30_4_BUILD53_SHA256.get(path) or REVIEWED_CODE30_4_BUILD52_SHA256.get(path) or REVIEWED_CODE30_4_BUILD51_SHA256.get(path) or REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
+    return REVIEWED_CODE30_4_BUILD83_SHA256.get(path) or REVIEWED_CODE30_4_BUILD82_SHA256.get(path) or REVIEWED_CODE30_4_BUILD81_SHA256.get(path) or REVIEWED_CODE30_4_BUILD80_SHA256.get(path) or REVIEWED_CODE30_4_BUILD79_SHA256.get(path) or REVIEWED_CODE30_4_BUILD78_SHA256.get(path) or REVIEWED_CODE30_4_BUILD77_SHA256.get(path) or REVIEWED_CODE30_4_BUILD76_SHA256.get(path) or REVIEWED_CODE30_4_BUILD75_SHA256.get(path) or REVIEWED_CODE30_4_BUILD74_SHA256.get(path) or REVIEWED_CODE30_4_BUILD73_SHA256.get(path) or REVIEWED_CODE30_4_BUILD72_SHA256.get(path) or REVIEWED_CODE30_4_BUILD71_SHA256.get(path) or REVIEWED_CODE30_4_BUILD70_SHA256.get(path) or REVIEWED_CODE30_4_BUILD69_SHA256.get(path) or REVIEWED_CODE30_4_BUILD68_SHA256.get(path) or REVIEWED_CODE30_4_BUILD67_SHA256.get(path) or REVIEWED_CODE30_4_BUILD66_SHA256.get(path) or REVIEWED_CODE30_4_BUILD65_SHA256.get(path) or REVIEWED_CODE30_4_BUILD64_SHA256.get(path) or REVIEWED_CODE30_4_BUILD63_SHA256.get(path) or REVIEWED_CODE30_4_BUILD62_SHA256.get(path) or REVIEWED_CODE30_4_BUILD61_SHA256.get(path) or REVIEWED_CODE30_4_BUILD60_SHA256.get(path) or REVIEWED_CODE30_4_BUILD59_SHA256.get(path) or REVIEWED_CODE30_4_BUILD58_SHA256.get(path) or REVIEWED_CODE30_4_BUILD57_SHA256.get(path) or REVIEWED_CODE30_4_BUILD56_SHA256.get(path) or REVIEWED_CODE30_4_BUILD55_SHA256.get(path) or REVIEWED_CODE30_4_BUILD54_SHA256.get(path) or REVIEWED_CODE30_4_BUILD53_SHA256.get(path) or REVIEWED_CODE30_4_BUILD52_SHA256.get(path) or REVIEWED_CODE30_4_BUILD51_SHA256.get(path) or REVIEWED_CODE30_4_BUILD50_SHA256.get(path) or REVIEWED_CODE30_4_BUILD49_SHA256.get(path) or REVIEWED_CODE30_4_BUILD48_SHA256.get(path) or REVIEWED_CODE30_4_BUILD47_SHA256.get(path) or REVIEWED_CODE30_4_BUILD46_SHA256.get(path) or REVIEWED_CODE30_4_BUILD45_SHA256.get(path) or REVIEWED_CODE30_4_BUILD44_SHA256.get(path) or REVIEWED_CODE30_4_BUILD43_SHA256.get(path) or REVIEWED_CODE30_4_BUILD42_SHA256.get(
         path,
         REVIEWED_CODE30_4_BUILD41_SHA256.get(
             path,
@@ -1936,6 +4110,36 @@ def _normalise_release_identity(path: str, text: str) -> str:
         return text
     normalised = text
     for current, baseline in (
+        ("3.1.76", "3.1.14"),
+        ("3.1.75", "3.1.14"),
+        ("3.1.74", "3.1.14"),
+        ("3.1.73", "3.1.14"),
+        ("3.1.72", "3.1.14"),
+        ("3.1.71", "3.1.14"),
+        ("3.1.70", "3.1.14"),
+        ("3.1.69", "3.1.14"),
+        ("3.1.68", "3.1.14"),
+        ("3.1.67", "3.1.14"),
+        ("3.1.66", "3.1.14"),
+        ("3.1.65", "3.1.14"),
+        ("3.1.64", "3.1.14"),
+        ("3.1.63", "3.1.14"),
+        ("3.1.62", "3.1.14"),
+        ("3.1.61", "3.1.14"),
+        ("3.1.60", "3.1.14"),
+        ("3.1.59", "3.1.14"),
+        ("3.1.58", "3.1.14"),
+        ("3.1.57", "3.1.14"),
+        ("3.1.56", "3.1.14"),
+        ("3.1.55", "3.1.14"),
+        ("3.1.54", "3.1.14"),
+        ("3.1.53", "3.1.14"),
+        ("3.1.52", "3.1.14"),
+        ("3.1.51", "3.1.14"),
+        ("3.1.50", "3.1.14"),
+        ("3.1.49", "3.1.14"),
+        ("3.1.48", "3.1.14"),
+        ("3.1.47", "3.1.14"),
         ("3.1.46", "3.1.14"),
         ("3.1.45", "3.1.14"),
         ("3.1.44", "3.1.14"),
@@ -2026,10 +4230,10 @@ def _normalise_release_identity(path: str, text: str) -> str:
     ):
         normalised = normalised.replace(current, baseline)
     normalised = re.sub(
-        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54)\b", "version_code=25", normalised
+        r"version_code\s*=\s*(?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71|72|73|74|75|76|77|78|79|80|81|82|83)\b", "version_code=25", normalised
     )
     normalised = re.sub(
-        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54),\s*BuildConfig\.VERSION_CODE\)",
+        r"assertEquals\((?:26|27|28|29|30|31|32|33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64|65|66|67|68|69|70|71|72|73|74|75|76|77|78|79|80|81|82|83),\s*BuildConfig\.VERSION_CODE\)",
         "assertEquals(25, BuildConfig.VERSION_CODE)",
         normalised,
     )
@@ -2216,9 +4420,141 @@ def _code30_4_build53_delta_paths(root: Path) -> set[str]:
 
 
 def _code30_4_build54_delta_paths(root: Path) -> set[str]:
-    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD53_BASE).splitlines())
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD53_BASE, CODE30_4_BUILD54_BASE).splitlines())
+
+
+def _code30_4_build55_delta_paths(root: Path) -> set[str]:
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD54_BASE, CODE30_4_BUILD55_BASE).splitlines())
+
+
+def _code30_4_build56_delta_paths(root: Path) -> set[str]:
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD55_BASE, CODE30_4_BUILD56_BASE).splitlines())
+
+
+def _code30_4_build57_delta_paths(root: Path) -> set[str]:
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD56_BASE, CODE30_4_BUILD57_BASE).splitlines())
+
+
+def _code30_4_build58_delta_paths(root: Path) -> set[str]:
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD57_BASE, CODE30_4_BUILD58_BASE).splitlines())
+
+
+def _code30_4_build59_delta_paths(root: Path) -> set[str]:
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD58_BASE, CODE30_4_BUILD59_BASE).splitlines())
+
+
+def _code30_4_build60_delta_paths(root: Path) -> set[str]:
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD59_BASE, CODE30_4_BUILD60_BASE).splitlines())
+
+
+def _code30_4_build61_delta_paths(root: Path) -> set[str]:
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD60_BASE, CODE30_4_BUILD61_BASE).splitlines())
+
+
+def _code30_4_build62_delta_paths(root: Path) -> set[str]:
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD61_BASE, CODE30_4_BUILD62_BASE).splitlines())
+
+
+def _code30_4_build63_delta_paths(root: Path) -> set[str]:
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD62_BASE, CODE30_4_BUILD63_BASE).splitlines())
+
+
+def _code30_4_build64_delta_paths(root: Path) -> set[str]:
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD63_BASE, CODE30_4_BUILD64_BASE).splitlines())
+
+
+def _code30_4_build65_delta_paths(root: Path) -> set[str]:
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD64_BASE, CODE30_4_BUILD65_BASE).splitlines())
+
+
+def _code30_4_build66_delta_paths(root: Path) -> set[str]:
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD65_BASE, CODE30_4_BUILD66_BASE).splitlines())
+
+
+def _code30_4_build67_delta_paths(root: Path) -> set[str]:
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD66_BASE, CODE30_4_BUILD67_BASE).splitlines())
+
+
+def _code30_4_build68_delta_paths(root: Path) -> set[str]:
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD67_BASE, CODE30_4_BUILD68_BASE).splitlines())
+
+
+def _code30_4_build69_delta_paths(root: Path) -> set[str]:
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD68_BASE, CODE30_4_BUILD69_BASE).splitlines())
+
+
+def _code30_4_build70_delta_paths(root: Path) -> set[str]:
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD69_BASE, CODE30_4_BUILD70_BASE).splitlines())
+
+
+def _code30_4_build71_delta_paths(root: Path) -> set[str]:
+    return set(_git(root, "diff", "--name-only", CODE30_4_BUILD70_BASE, CODE30_4_BUILD71_BASE).splitlines())
+
+
+def _code30_4_build72_delta_paths(root: Path) -> set[str]:
+    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD71_BASE).splitlines())
     changed.update(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
     return {path for path in changed if path}
+
+
+def _code30_4_build75_delta_paths(root: Path) -> set[str]:
+    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD74_BASE).splitlines())
+    changed.update(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
+    return {path for path in changed if path}
+
+
+def _code30_4_build76_delta_paths(root: Path) -> set[str]:
+    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD75_BASE).splitlines())
+    changed.update(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
+    return {path for path in changed if path}
+
+
+def _code30_4_build77_delta_paths(root: Path) -> set[str]:
+    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD76_BASE).splitlines())
+    changed.update(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
+    return {path for path in changed if path}
+
+
+def _code30_4_build78_delta_paths(root: Path) -> set[str]:
+    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD77_BASE).splitlines())
+    changed.update(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
+    return {path for path in changed if path}
+
+
+def _code30_4_build79_delta_paths(root: Path) -> set[str]:
+    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD78_BASE).splitlines())
+    changed.update(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
+    return {path for path in changed if path}
+
+
+def _code30_4_build80_delta_paths(root: Path) -> set[str]:
+    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD79_BASE).splitlines())
+    changed.update(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
+    return {path for path in changed if path}
+
+
+def _code30_4_build81_delta_paths(root: Path) -> set[str]:
+    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD80_BASE).splitlines())
+    changed.update(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
+    return {path for path in changed if path}
+
+
+def _code30_4_build82_delta_paths(root: Path) -> set[str]:
+    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD81_BASE).splitlines())
+    changed.update(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
+    return {path for path in changed if path}
+
+
+def _code30_4_build83_delta_paths(root: Path) -> set[str]:
+    changed = set(_git(root, "diff", "--name-only", CODE30_4_BUILD82_BASE).splitlines())
+    changed.update(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
+    return {path for path in changed if path}
+
+
+def _verify_public_checkout(root: Path, errors: list[str]) -> None:
+    archive = root / "docs/cloud-migration"
+    if archive.exists() or archive.is_symlink():
+        errors.append("Private transfer data is forbidden in the public checkout.")
 
 
 def _is_canonical_regular_file(path: Path) -> bool:
@@ -2529,6 +4865,319 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
             errors.append(f"Code30.4 build-53 file differs from reviewed bytes: {path}")
 
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD54_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD54_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-54 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-54 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD55_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD55_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-55 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-55 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD56_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD56_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-56 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-56 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD57_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD57_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-57 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-57 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD58_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD58_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-58 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-58 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD59_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD59_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-59 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-59 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD60_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD60_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-60 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-60 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD61_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD61_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-61 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-61 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD62_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD62_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-62 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-62 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD63_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD63_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-63 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-63 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD64_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD64_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-64 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-64 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD65_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD65_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-65 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-65 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD66_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD66_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-66 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-66 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD67_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD67_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-67 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-67 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD68_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD68_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-68 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-68 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD69_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD69_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-69 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-69 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD70_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD70_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-70 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-70 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD74_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD74_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-74 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-74 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD75_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD75_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-75 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-75 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD76_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD76_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-76 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-76 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD77_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD77_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-77 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-77 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD78_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD78_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-78 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-78 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD79_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD79_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-79 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-79 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD80_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD80_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-80 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-80 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD81_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD81_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-81 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-81 file differs from reviewed bytes: {path}")
+
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD82_SHA256.items():
+        try:
+            frozen_bytes = _git_bytes(root, "show", f"{CODE30_4_BUILD82_BASE}:{path}")
+        except subprocess.CalledProcessError:
+            errors.append(f"Code30.4 build-82 file absent from immutable base: {path}")
+            continue
+        if hashlib.sha256(frozen_bytes).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-82 file differs from reviewed bytes: {path}")
+
+    if set(REVIEWED_CODE30_4_BUILD83_SHA256) & set(CODE30_4_FREEZE_CONTROL_PATHS):
+        errors.append("Code30.4 build-83 product overlay overlaps freeze controls")
+    expected_build83_paths = set(REVIEWED_CODE30_4_BUILD83_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build83_paths = _code30_4_build83_delta_paths(root)
+    for path in sorted(expected_build83_paths - current_build83_paths):
+        errors.append(f"reviewed Code30.4 build-83 delta path disappeared: {path}")
+    for path in sorted(current_build83_paths - expected_build83_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-83 delta: {path}")
+    for path, expected_sha256 in REVIEWED_CODE30_4_BUILD83_SHA256.items():
+        candidate = root / path
+        if not candidate.is_file() or candidate.is_symlink():
+            errors.append(f"Code30.4 build-83 file is absent or linked: {path}")
+            continue
+        if hashlib.sha256(candidate.read_bytes()).hexdigest() != expected_sha256:
+            errors.append(f"Code30.4 build-83 file differs from reviewed bytes: {path}")
+
+    if (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
+        errors.append("Code30.4 build-81 product overlay overlaps freeze controls")
+    expected_build81_paths = (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build81_paths = _code30_4_build81_delta_paths(root)
+    for path in sorted(expected_build81_paths - current_build81_paths):
+        errors.append(f"reviewed Code30.4 build-81 delta path disappeared: {path}")
+    for path in sorted(current_build81_paths - expected_build81_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-81 delta: {path}")
+
+    if (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256)))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
+        errors.append("Code30.4 build-80 product overlay overlaps freeze controls")
+    expected_build80_paths = (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256)))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build80_paths = _code30_4_build80_delta_paths(root)
+    for path in sorted(expected_build80_paths - current_build80_paths):
+        errors.append(f"reviewed Code30.4 build-80 delta path disappeared: {path}")
+    for path in sorted(current_build80_paths - expected_build80_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-80 delta: {path}")
+
+    if (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256))))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
+        errors.append("Code30.4 build-79 product overlay overlaps freeze controls")
+    expected_build79_paths = (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256))))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build79_paths = _code30_4_build79_delta_paths(root)
+    for path in sorted(expected_build79_paths - current_build79_paths):
+        errors.append(f"reviewed Code30.4 build-79 delta path disappeared: {path}")
+    for path in sorted(current_build79_paths - expected_build79_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-79 delta: {path}")
+
+    if (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256)))))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
+        errors.append("Code30.4 build-78 product overlay overlaps freeze controls")
+    expected_build78_paths = (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256)))))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build78_paths = _code30_4_build78_delta_paths(root)
+    for path in sorted(expected_build78_paths - current_build78_paths):
+        errors.append(f"reviewed Code30.4 build-78 delta path disappeared: {path}")
+    for path in sorted(current_build78_paths - expected_build78_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-78 delta: {path}")
+
+    if (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256))))))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
+        errors.append("Code30.4 build-77 product overlay overlaps freeze controls")
+    expected_build77_paths = (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256))))))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build77_paths = _code30_4_build77_delta_paths(root)
+    for path in sorted(expected_build77_paths - current_build77_paths):
+        errors.append(f"reviewed Code30.4 build-77 delta path disappeared: {path}")
+    for path in sorted(current_build77_paths - expected_build77_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-77 delta: {path}")
+
+    if (set(REVIEWED_CODE30_4_BUILD76_SHA256) | (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256)))))))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
+        errors.append("Code30.4 build-76 product overlay overlaps freeze controls")
+    expected_build76_paths = (set(REVIEWED_CODE30_4_BUILD76_SHA256) | (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256)))))))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build76_paths = _code30_4_build76_delta_paths(root)
+    for path in sorted(expected_build76_paths - current_build76_paths):
+        errors.append(f"reviewed Code30.4 build-76 delta path disappeared: {path}")
+    for path in sorted(current_build76_paths - expected_build76_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-76 delta: {path}")
+
+    if (set(REVIEWED_CODE30_4_BUILD75_SHA256) | (set(REVIEWED_CODE30_4_BUILD76_SHA256) | (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256))))))))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
+        errors.append("Code30.4 build-75 product overlay overlaps freeze controls")
+    expected_build75_paths = (set(REVIEWED_CODE30_4_BUILD75_SHA256) | (set(REVIEWED_CODE30_4_BUILD76_SHA256) | (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256))))))))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build75_paths = _code30_4_build75_delta_paths(root)
+    for path in sorted(expected_build75_paths - current_build75_paths):
+        errors.append(f"reviewed Code30.4 build-75 delta path disappeared: {path}")
+    for path in sorted(current_build75_paths - expected_build75_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-75 delta: {path}")
+
     expected_build42_paths = set(REVIEWED_CODE30_4_BUILD42_SHA256) | set(
         CODE30_4_FREEZE_CONTROL_PATHS
     )
@@ -2622,6 +5271,135 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
     for path in sorted(current_build54_paths - expected_build54_paths):
         errors.append(f"unreviewed path entered the Code30.4 build-54 delta: {path}")
 
+    expected_build55_paths = set(REVIEWED_CODE30_4_BUILD55_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build55_paths = _code30_4_build55_delta_paths(root)
+    for path in sorted(expected_build55_paths - current_build55_paths):
+        errors.append(f"reviewed Code30.4 build-55 delta path disappeared: {path}")
+    for path in sorted(current_build55_paths - expected_build55_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-55 delta: {path}")
+
+    expected_build56_paths = set(REVIEWED_CODE30_4_BUILD56_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build56_paths = _code30_4_build56_delta_paths(root)
+    for path in sorted(expected_build56_paths - current_build56_paths):
+        errors.append(f"reviewed Code30.4 build-56 delta path disappeared: {path}")
+    for path in sorted(current_build56_paths - expected_build56_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-56 delta: {path}")
+
+    expected_build57_paths = set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build57_paths = _code30_4_build57_delta_paths(root)
+    for path in sorted(expected_build57_paths - current_build57_paths):
+        errors.append(f"reviewed Code30.4 build-57 delta path disappeared: {path}")
+    for path in sorted(current_build57_paths - expected_build57_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-57 delta: {path}")
+
+    expected_build58_paths = set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build58_paths = _code30_4_build58_delta_paths(root)
+    for path in sorted(expected_build58_paths - current_build58_paths):
+        errors.append(f"reviewed Code30.4 build-58 delta path disappeared: {path}")
+    for path in sorted(current_build58_paths - expected_build58_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-58 delta: {path}")
+
+    expected_build59_paths = set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build59_paths = _code30_4_build59_delta_paths(root)
+    for path in sorted(expected_build59_paths - current_build59_paths):
+        errors.append(f"reviewed Code30.4 build-59 delta path disappeared: {path}")
+    for path in sorted(current_build59_paths - expected_build59_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-59 delta: {path}")
+
+    expected_build60_paths = set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build60_paths = _code30_4_build60_delta_paths(root)
+    for path in sorted(expected_build60_paths - current_build60_paths):
+        errors.append(f"reviewed Code30.4 build-60 delta path disappeared: {path}")
+    for path in sorted(current_build60_paths - expected_build60_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-60 delta: {path}")
+
+    expected_build61_paths = set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build61_paths = _code30_4_build61_delta_paths(root)
+    for path in sorted(expected_build61_paths - current_build61_paths):
+        errors.append(f"reviewed Code30.4 build-61 delta path disappeared: {path}")
+    for path in sorted(current_build61_paths - expected_build61_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-61 delta: {path}")
+
+    expected_build62_paths = set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build62_paths = _code30_4_build62_delta_paths(root)
+    for path in sorted(expected_build62_paths - current_build62_paths):
+        errors.append(f"reviewed Code30.4 build-62 delta path disappeared: {path}")
+    for path in sorted(current_build62_paths - expected_build62_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-62 delta: {path}")
+
+    expected_build63_paths = set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build63_paths = _code30_4_build63_delta_paths(root)
+    for path in sorted(expected_build63_paths - current_build63_paths):
+        errors.append(f"reviewed Code30.4 build-63 delta path disappeared: {path}")
+    for path in sorted(current_build63_paths - expected_build63_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-63 delta: {path}")
+
+    expected_build64_paths = set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build64_paths = _code30_4_build64_delta_paths(root)
+    for path in sorted(expected_build64_paths - current_build64_paths):
+        errors.append(f"reviewed Code30.4 build-64 delta path disappeared: {path}")
+    for path in sorted(current_build64_paths - expected_build64_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-64 delta: {path}")
+
+    expected_build65_paths = set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build65_paths = _code30_4_build65_delta_paths(root)
+    for path in sorted(expected_build65_paths - current_build65_paths):
+        errors.append(f"reviewed Code30.4 build-65 delta path disappeared: {path}")
+    for path in sorted(current_build65_paths - expected_build65_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-65 delta: {path}")
+
+    expected_build66_paths = set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build66_paths = _code30_4_build66_delta_paths(root)
+    for path in sorted(expected_build66_paths - current_build66_paths):
+        errors.append(f"reviewed Code30.4 build-66 delta path disappeared: {path}")
+    for path in sorted(current_build66_paths - expected_build66_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-66 delta: {path}")
+
+    expected_build67_paths = set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build67_paths = _code30_4_build67_delta_paths(root)
+    for path in sorted(expected_build67_paths - current_build67_paths):
+        errors.append(f"reviewed Code30.4 build-67 delta path disappeared: {path}")
+    for path in sorted(current_build67_paths - expected_build67_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-67 delta: {path}")
+
+    expected_build68_paths = set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build68_paths = _code30_4_build68_delta_paths(root)
+    for path in sorted(expected_build68_paths - current_build68_paths):
+        errors.append(f"reviewed Code30.4 build-68 delta path disappeared: {path}")
+    for path in sorted(current_build68_paths - expected_build68_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-68 delta: {path}")
+
+    expected_build69_paths = set(REVIEWED_CODE30_4_BUILD69_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build69_paths = _code30_4_build69_delta_paths(root)
+    for path in sorted(expected_build69_paths - current_build69_paths):
+        errors.append(f"reviewed Code30.4 build-69 delta path disappeared: {path}")
+    for path in sorted(current_build69_paths - expected_build69_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-69 delta: {path}")
+
+    expected_build70_paths = set(REVIEWED_CODE30_4_BUILD70_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build70_paths = _code30_4_build70_delta_paths(root)
+    for path in sorted(expected_build70_paths - current_build70_paths):
+        errors.append(f"reviewed Code30.4 build-70 delta path disappeared: {path}")
+    for path in sorted(current_build70_paths - expected_build70_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-70 delta: {path}")
+
+    expected_build71_paths = set(REVIEWED_CODE30_4_BUILD71_SHA256) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build71_paths = _code30_4_build71_delta_paths(root)
+    for path in sorted(expected_build71_paths - current_build71_paths):
+        errors.append(f"reviewed Code30.4 build-71 delta path disappeared: {path}")
+    for path in sorted(current_build71_paths - expected_build71_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-71 delta: {path}")
+
+    _verify_public_checkout(root, errors)
+    if (set(REVIEWED_CODE30_4_BUILD72_SHA256) | (set(REVIEWED_CODE30_4_BUILD73_SHA256) | (set(REVIEWED_CODE30_4_BUILD74_SHA256) | (set(REVIEWED_CODE30_4_BUILD75_SHA256) | (set(REVIEWED_CODE30_4_BUILD76_SHA256) | (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256)))))))))))) & set(CODE30_4_FREEZE_CONTROL_PATHS):
+        errors.append("Code30.4 build-72 product overlay overlaps freeze controls")
+    expected_build72_paths = (set(REVIEWED_CODE30_4_BUILD72_SHA256) | (set(REVIEWED_CODE30_4_BUILD73_SHA256) | (set(REVIEWED_CODE30_4_BUILD74_SHA256) | (set(REVIEWED_CODE30_4_BUILD75_SHA256) | (set(REVIEWED_CODE30_4_BUILD76_SHA256) | (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256)))))))))))) | set(CODE30_4_FREEZE_CONTROL_PATHS)
+    current_build72_paths = _code30_4_build72_delta_paths(root)
+    for path in sorted(expected_build72_paths - current_build72_paths):
+        errors.append(f"reviewed Code30.4 build-72 delta path disappeared: {path}")
+    for path in sorted(current_build72_paths - expected_build72_paths):
+        errors.append(f"unreviewed path entered the Code30.4 build-72 delta: {path}")
+
     # Post-release Code30.3 maintenance tools are pinned by their own map.
     expected_paths = set(REVIEWED_CODE30_4_SHA256) | set(
         CODE30_4_FREEZE_CONTROL_PATHS
@@ -2631,7 +5409,7 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         REVIEWED_CODE30_4_BUILD41_SHA256
     ) | set(
         REVIEWED_CODE30_4_BUILD42_SHA256
-    ) | set(REVIEWED_CODE30_4_BUILD43_SHA256) | set(REVIEWED_CODE30_4_BUILD44_SHA256) | set(REVIEWED_CODE30_4_BUILD45_SHA256) | set(REVIEWED_CODE30_4_BUILD46_SHA256) | set(REVIEWED_CODE30_4_BUILD47_SHA256) | set(REVIEWED_CODE30_4_BUILD48_SHA256) | set(REVIEWED_CODE30_4_BUILD49_SHA256) | set(REVIEWED_CODE30_4_BUILD50_SHA256) | set(REVIEWED_CODE30_4_BUILD51_SHA256) | set(REVIEWED_CODE30_4_BUILD52_SHA256) | set(REVIEWED_CODE30_4_BUILD53_SHA256) | set(REVIEWED_CODE30_4_BUILD54_SHA256)
+    ) | set(REVIEWED_CODE30_4_BUILD43_SHA256) | set(REVIEWED_CODE30_4_BUILD44_SHA256) | set(REVIEWED_CODE30_4_BUILD45_SHA256) | set(REVIEWED_CODE30_4_BUILD46_SHA256) | set(REVIEWED_CODE30_4_BUILD47_SHA256) | set(REVIEWED_CODE30_4_BUILD48_SHA256) | set(REVIEWED_CODE30_4_BUILD49_SHA256) | set(REVIEWED_CODE30_4_BUILD50_SHA256) | set(REVIEWED_CODE30_4_BUILD51_SHA256) | set(REVIEWED_CODE30_4_BUILD52_SHA256) | set(REVIEWED_CODE30_4_BUILD53_SHA256) | set(REVIEWED_CODE30_4_BUILD54_SHA256) | set(REVIEWED_CODE30_4_BUILD55_SHA256) | set(REVIEWED_CODE30_4_BUILD56_SHA256) | set(REVIEWED_CODE30_4_BUILD57_SHA256) | set(REVIEWED_CODE30_4_BUILD58_SHA256) | set(REVIEWED_CODE30_4_BUILD59_SHA256) | set(REVIEWED_CODE30_4_BUILD60_SHA256) | set(REVIEWED_CODE30_4_BUILD61_SHA256) | set(REVIEWED_CODE30_4_BUILD62_SHA256) | set(REVIEWED_CODE30_4_BUILD63_SHA256) | set(REVIEWED_CODE30_4_BUILD64_SHA256) | set(REVIEWED_CODE30_4_BUILD65_SHA256) | set(REVIEWED_CODE30_4_BUILD66_SHA256) | set(REVIEWED_CODE30_4_BUILD67_SHA256) | set(REVIEWED_CODE30_4_BUILD68_SHA256) | set(REVIEWED_CODE30_4_BUILD69_SHA256) | set(REVIEWED_CODE30_4_BUILD70_SHA256) | set(REVIEWED_CODE30_4_BUILD71_SHA256) | (set(REVIEWED_CODE30_4_BUILD72_SHA256) | (set(REVIEWED_CODE30_4_BUILD73_SHA256) | (set(REVIEWED_CODE30_4_BUILD74_SHA256) | (set(REVIEWED_CODE30_4_BUILD75_SHA256) | (set(REVIEWED_CODE30_4_BUILD76_SHA256) | (set(REVIEWED_CODE30_4_BUILD77_SHA256) | (set(REVIEWED_CODE30_4_BUILD78_SHA256) | (set(REVIEWED_CODE30_4_BUILD79_SHA256) | (set(REVIEWED_CODE30_4_BUILD80_SHA256) | (set(REVIEWED_CODE30_4_BUILD81_SHA256) | (set(REVIEWED_CODE30_4_BUILD82_SHA256) | set(REVIEWED_CODE30_4_BUILD83_SHA256))))))))))))
     current_paths = _code30_4_delta_paths(root)
     for path in sorted(expected_paths - current_paths):
         errors.append(f"reviewed Code30.4 delta path disappeared: {path}")
@@ -2655,6 +5433,35 @@ def _verify_code30_4_exact_delta(root: Path, errors: list[str]) -> None:
         | REVIEWED_CODE30_4_BUILD52_SHA256
         | REVIEWED_CODE30_4_BUILD53_SHA256
         | REVIEWED_CODE30_4_BUILD54_SHA256
+        | REVIEWED_CODE30_4_BUILD55_SHA256
+        | REVIEWED_CODE30_4_BUILD56_SHA256
+        | REVIEWED_CODE30_4_BUILD57_SHA256
+        | REVIEWED_CODE30_4_BUILD58_SHA256
+        | REVIEWED_CODE30_4_BUILD59_SHA256
+        | REVIEWED_CODE30_4_BUILD60_SHA256
+        | REVIEWED_CODE30_4_BUILD61_SHA256
+        | REVIEWED_CODE30_4_BUILD62_SHA256
+        | REVIEWED_CODE30_4_BUILD63_SHA256
+        | REVIEWED_CODE30_4_BUILD64_SHA256
+        | REVIEWED_CODE30_4_BUILD65_SHA256
+        | REVIEWED_CODE30_4_BUILD66_SHA256
+        | REVIEWED_CODE30_4_BUILD67_SHA256
+        | REVIEWED_CODE30_4_BUILD68_SHA256
+        | REVIEWED_CODE30_4_BUILD69_SHA256
+        | REVIEWED_CODE30_4_BUILD70_SHA256
+        | REVIEWED_CODE30_4_BUILD71_SHA256
+        | REVIEWED_CODE30_4_BUILD72_SHA256
+        | REVIEWED_CODE30_4_BUILD73_SHA256
+        | REVIEWED_CODE30_4_BUILD74_SHA256
+        | REVIEWED_CODE30_4_BUILD75_SHA256
+        | REVIEWED_CODE30_4_BUILD76_SHA256
+        | REVIEWED_CODE30_4_BUILD77_SHA256
+        | REVIEWED_CODE30_4_BUILD78_SHA256
+        | REVIEWED_CODE30_4_BUILD79_SHA256
+        | REVIEWED_CODE30_4_BUILD80_SHA256
+        | REVIEWED_CODE30_4_BUILD81_SHA256
+        | REVIEWED_CODE30_4_BUILD82_SHA256
+        | REVIEWED_CODE30_4_BUILD83_SHA256
     )
     for path, expected_sha256 in current_hashes.items():
         # These files define the freeze itself and cannot carry a current-tree
@@ -2721,6 +5528,31 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD51_BASE}^{{commit}}")
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD52_BASE}^{{commit}}")
     _git(root, "cat-file", "-e", f"{CODE30_4_BUILD53_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD54_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD55_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD56_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD57_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD58_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD59_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD60_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD61_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD62_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD63_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD64_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD65_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD66_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD67_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD68_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD69_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD70_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD74_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD75_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD76_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD77_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD78_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD79_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD80_BASE}^{{commit}}")
+    _git(root, "cat-file", "-e", f"{CODE30_4_BUILD81_BASE}^{{commit}}")
     _verify_code30_2_exact_delta(root, errors)
     _verify_code30_3_exact_delta(root, errors)
     _verify_code30_4_exact_delta(root, errors)
@@ -2745,7 +5577,27 @@ def verify_repository(root: Path, baseline: str = CODE25_BASE) -> RegressionFree
             path, candidate_normalised
         )
         reviewed_test_sha256 = (
-            REVIEWED_CODE30_4_BUILD54_SHA256.get(path)
+            REVIEWED_CODE30_4_BUILD83_SHA256.get(path) or REVIEWED_CODE30_4_BUILD82_SHA256.get(path) or REVIEWED_CODE30_4_BUILD81_SHA256.get(path) or REVIEWED_CODE30_4_BUILD80_SHA256.get(path) or REVIEWED_CODE30_4_BUILD79_SHA256.get(path) or REVIEWED_CODE30_4_BUILD78_SHA256.get(path) or REVIEWED_CODE30_4_BUILD77_SHA256.get(path) or REVIEWED_CODE30_4_BUILD76_SHA256.get(path) or REVIEWED_CODE30_4_BUILD75_SHA256.get(path) or REVIEWED_CODE30_4_BUILD74_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD73_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD72_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD71_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD70_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD69_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD68_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD67_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD66_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD65_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD64_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD63_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD62_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD61_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD60_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD59_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD58_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD57_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD56_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD55_SHA256.get(path)
+            or REVIEWED_CODE30_4_BUILD54_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD53_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD52_SHA256.get(path)
             or REVIEWED_CODE30_4_BUILD51_SHA256.get(path)

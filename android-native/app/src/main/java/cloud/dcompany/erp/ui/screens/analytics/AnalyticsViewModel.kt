@@ -4,6 +4,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.auth.BranchScopeMismatchException
+import cloud.dcompany.erp.core.auth.CacheScopeLease
+import cloud.dcompany.erp.core.auth.EffectivePermissions
+import cloud.dcompany.erp.core.auth.ErpPermission
+import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.core.auth.fetchAndCommitScoped
 import cloud.dcompany.erp.core.auth.verifyBranchScopedPayload
 import cloud.dcompany.erp.core.db.cached
@@ -16,6 +20,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 enum class AnalyticsTab(val label: String) { Today("Today"), Growth("Growth") }
@@ -28,6 +34,9 @@ enum class GrowthPeriodOption(val query: String, val label: String) {
 
 data class AnalyticsUiState(
     val tab: AnalyticsTab = AnalyticsTab.Today,
+    val scopeLease: CacheScopeLease? = null,
+    val canReadToday: Boolean = false,
+    val canReadGrowth: Boolean = false,
 
     val todayLoading: Boolean = true,
     val todayError: String? = null,
@@ -44,6 +53,30 @@ data class AnalyticsUiState(
     val topItemsError: String? = null,
     val topItemsFetchedAtMillis: Long? = null,
 )
+
+internal fun canReadAnalyticsDashboard(profile: MeResponse?): Boolean = profile?.takeIf {
+    it.effectivePermissions != null
+}?.let {
+    val permissions = EffectivePermissions.from(it)
+    permissions.has(ErpPermission.AnalyticsRead) && permissions.has(ErpPermission.FinanceRead)
+} == true
+
+internal fun visibleAnalyticsState(
+    state: AnalyticsUiState, profile: MeResponse?, lease: CacheScopeLease?,
+): AnalyticsUiState {
+    val matches = profile != null && lease != null && state.scopeLease == lease && profile.userId == lease.scope.userId &&
+        profile.companyId == lease.scope.companyId && profile.branchId == lease.scope.branchId
+    val analytics = matches && profile?.let { EffectivePermissions.from(it).has(ErpPermission.AnalyticsRead) } == true
+    if (!analytics) return AnalyticsUiState(todayLoading = false, growthLoading = false, topItemsLoading = false)
+    return if (canReadAnalyticsDashboard(profile)) state else state.copy(
+        tab = AnalyticsTab.Growth, canReadToday = false, dashboard = null, dashboardFetchedAtMillis = null,
+    )
+}
+
+internal fun dashboardFailureState(state: AnalyticsUiState, error: Throwable): AnalyticsUiState =
+    if (error is ApiException && error.status in setOf(401, 403)) {
+        state.copy(dashboard = null, dashboardFetchedAtMillis = null)
+    } else state
 
 internal enum class CachedDataPresentation { INITIAL_LOADING, BLOCKING_ERROR, FRESH, STALE }
 
@@ -118,13 +151,45 @@ class AnalyticsViewModel : ViewModel() {
     private var growthSerial = 0L
     private var topItemsSerial = 0L
 
+    private var boundLease: CacheScopeLease? = null
+    private var deniedDashboardLease: CacheScopeLease? = null
+
     init {
-        loadToday()
-        loadGrowth()
-        loadTopItems()
+        viewModelScope.launch {
+            combine(DCompanyApp.instance.shiftCache.profile, cacheIsolation.activeLeaseFlow) { profile, lease ->
+                profile to lease
+            }.collect { (profile, lease) ->
+                val matches = profile != null && lease != null && profile.userId == lease.scope.userId &&
+                    profile.companyId == lease.scope.companyId && profile.branchId == lease.scope.branchId
+                val todayAllowed = matches && canReadAnalyticsDashboard(profile)
+                val growthAllowed = matches && profile?.let {
+                    EffectivePermissions.from(it).has(ErpPermission.AnalyticsRead)
+                } == true
+                if (boundLease == lease && _state.value.canReadToday == todayAllowed &&
+                    _state.value.canReadGrowth == growthAllowed) return@collect
+                todaySerial++; growthSerial++; topItemsSerial++
+                todayJob?.cancel(); growthJob?.cancel(); topItemsJob?.cancel()
+                boundLease = lease
+                _state.value = AnalyticsUiState(
+                    tab = if (todayAllowed) AnalyticsTab.Today else AnalyticsTab.Growth,
+                    scopeLease = lease, canReadToday = todayAllowed, canReadGrowth = growthAllowed,
+                    todayLoading = false, growthLoading = false, topItemsLoading = false,
+                )
+                if (!todayAllowed && lease != null) {
+                    deniedDashboardLease = lease
+                    discardDashboardCache(lease)
+                }
+                if (todayAllowed) loadToday()
+                if (growthAllowed) { loadGrowth(); loadTopItems() }
+            }
+        }
     }
 
-    fun selectTab(tab: AnalyticsTab) { _state.value = _state.value.copy(tab = tab) }
+    fun selectTab(tab: AnalyticsTab) {
+        if (tab == AnalyticsTab.Today && !_state.value.canReadToday) return
+        if (tab == AnalyticsTab.Growth && !_state.value.canReadGrowth) return
+        _state.value = _state.value.copy(tab = tab)
+    }
 
     fun retryToday() = loadToday()
 
@@ -147,77 +212,67 @@ class AnalyticsViewModel : ViewModel() {
 
     fun retryTopItems() = loadTopItems()
 
+    private suspend fun discardDashboardCache(lease: CacheScopeLease) {
+        try {
+            cacheIsolation.commitIfCurrent(lease) { db.reportSnapshotDao().deleteWithPrefix("dashboard:") }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // Memory remains empty and this lease cannot read cached financial data again.
+        }
+    }
+
     private fun loadToday() {
+        if (!_state.value.canReadToday) return
+        val lease = boundLease ?: return
         val requestId = ++todaySerial
         todayJob?.cancel()
         val today = businessToday()
-        val key = "dashboard:$today"
-        val expectedBranchId = cacheIsolation.currentLease()?.scope?.branchId
+        val key = "dashboard:v2:${lease.scope.branchId}:$today"
+        fun current() = requestId == todaySerial && boundLease == lease &&
+            cacheIsolation.currentLease() == lease && _state.value.canReadToday
         _state.value = _state.value.copy(todayLoading = true, todayError = null)
         todayJob = viewModelScope.launch {
             try {
-                verifyBranchScopedPayload(
-                    expectedBranchId,
-                    expectedBranchId,
-                    "analytics dashboard",
-                )
-                db.reportSnapshotDao().cached<DashboardKpis>(key)?.let { (cachedValue, fetchedAt) ->
-                    val belongsToActiveBranch = runCatching {
-                        verifyBranchScopedPayload(
-                            expectedBranchId,
-                            cachedValue.branchId,
-                            "saved dashboard",
-                        )
-                    }.isSuccess
-                    if (belongsToActiveBranch && requestId == todaySerial) {
-                        _state.value = _state.value.copy(
-                            dashboard = cachedValue,
-                            dashboardFetchedAtMillis = fetchedAt,
-                        )
+                verifyBranchScopedPayload(lease.scope.branchId, lease.scope.branchId, "analytics dashboard")
+                if (deniedDashboardLease != lease) {
+                    db.reportSnapshotDao().cached<DashboardKpis>(key)?.let { (saved, fetchedAt) ->
+                        if (current() && saved.branchId == lease.scope.branchId) {
+                            _state.value = _state.value.copy(dashboard = saved, dashboardFetchedAtMillis = fetchedAt)
+                        }
                     }
                 }
-                lateinit var dashboard: DashboardKpis
-                val committed = cacheIsolation.fetchAndCommitScoped(
-                    fetch = {
-                        api.dashboard(today.toString()).also {
-                            verifyBranchScopedPayload(
-                                expectedBranchId,
-                                it.branchId,
-                                "analytics dashboard",
-                            )
-                        }
-                    },
-                    store = {
-                        dashboard = it
-                        db.reportSnapshotDao().store(key, it)
-                    },
-                )
-                if (!committed || requestId != todaySerial) {
-                    return@launch
+                val dashboard = api.dashboard(today.toString())
+                verifyBranchScopedPayload(lease.scope.branchId, dashboard.branchId, "analytics dashboard")
+                if (!current()) return@launch
+                cacheIsolation.commitIfCurrent(lease) {
+                    if (current()) db.reportSnapshotDao().store(key, dashboard)
                 }
-                val now = System.currentTimeMillis()
+                if (!current()) return@launch
+                deniedDashboardLease = null
                 _state.value = _state.value.copy(
-                    dashboard = dashboard,
-                    dashboardFetchedAtMillis = now,
-                    todayError = null,
+                    dashboard = dashboard, dashboardFetchedAtMillis = System.currentTimeMillis(), todayError = null,
                 )
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                if (requestId == todaySerial) {
-                    _state.value = _state.value.copy(
+                if (current()) {
+                    _state.value = dashboardFailureState(_state.value, error).copy(
                         todayError = analyticsLoadError(error, "Could not load today's numbers."),
                     )
+                    if (error is ApiException && error.status in setOf(401, 403)) {
+                        deniedDashboardLease = lease
+                        discardDashboardCache(lease)
+                    }
                 }
             } finally {
-                if (requestId == todaySerial) {
-                    _state.value = _state.value.copy(todayLoading = false)
-                }
+                if (current()) _state.value = _state.value.copy(todayLoading = false)
             }
         }
     }
 
     private fun loadGrowth() {
+        if (!_state.value.canReadGrowth) return
         val requestId = ++growthSerial
         growthJob?.cancel()
         val s = _state.value
@@ -296,6 +351,7 @@ class AnalyticsViewModel : ViewModel() {
      * growth fetch, and vice versa, which sharing one try/catch used to do.
      */
     private fun loadTopItems() {
+        if (!_state.value.canReadGrowth) return
         val requestId = ++topItemsSerial
         topItemsJob?.cancel()
         val today = businessToday()

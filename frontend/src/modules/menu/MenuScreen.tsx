@@ -446,7 +446,7 @@ export function ItemForm({
           </select>
         </Field>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Price (₹)">
+          <Field label="Price">
             <input type="number" min={0} step="0.01" required className="input font-mono text-right"
               value={form.price_rupees}
               onChange={(e) => setForm({ ...form, price_rupees: e.target.value })}/>

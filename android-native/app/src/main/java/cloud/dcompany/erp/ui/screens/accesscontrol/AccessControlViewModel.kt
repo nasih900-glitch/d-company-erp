@@ -62,6 +62,7 @@ data class AccessControlUiState(
 class AccessControlViewModel(
     private val api: AccessControlApi = ApiClient.create<AccessControlApi>(),
 ) : ViewModel() {
+    private val operations = cloud.dcompany.erp.core.handover.applicationCallerOperations()
 
     private val _state = MutableStateFlow(AccessControlUiState())
     val state: StateFlow<AccessControlUiState> = _state.asStateFlow()
@@ -115,6 +116,7 @@ class AccessControlViewModel(
     fun dismissNotice() { _state.value = _state.value.copy(notice = null) }
 
     private fun setCell(roleCode: String, module: String, allowed: JsonElement) {
+        if (_state.value.cells.firstOrNull { it.roleCode == roleCode && it.module == module }?.configurable != true) return
         val key = "$roleCode:$module"
         if (key in _state.value.busyKeys) return
         if (_state.value.authorityUnknown) {
@@ -128,7 +130,10 @@ class AccessControlViewModel(
             actionError = null,
             notice = null,
         )
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = {
+            _state.value = _state.value.copy(busyKeys = _state.value.busyKeys - key,
+                actionError = "Resolve the original till handover before changing access.")
+        }) {
             try {
                 val updated = api.update(AccessControlUpdateBody(roleCode, module, allowed))
                 _state.value = _state.value.copy(
@@ -137,6 +142,7 @@ class AccessControlViewModel(
                     },
                     notice = accessChangeNotice(updated),
                 )
+                reconciled()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (e: ApiException) {

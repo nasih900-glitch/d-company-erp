@@ -5,6 +5,8 @@ import cloud.dcompany.erp.core.db.LocalHeldOrderPaymentEntity
 import cloud.dcompany.erp.core.db.SyncState
 import cloud.dcompany.erp.core.net.CheckoutClaimResult
 import cloud.dcompany.erp.core.net.Order
+import kotlinx.coroutines.CancellationException
+import java.time.Duration
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -33,6 +35,42 @@ object CheckoutClientInstancePolicy {
 
 class CheckoutClientInstanceUnavailableException :
     IllegalStateException(CheckoutClientInstancePolicy.UNAVAILABLE_MESSAGE)
+
+/**
+ * Process-local proof for one fresh server claim. Never persist an elapsed
+ * clock value or construct proof from a Room row with just an absolute expiry.
+ */
+class CheckoutClaimWindow private constructor(
+    private val token: String,
+    private val requestStartedElapsedMillis: Long,
+    private val serverRemainingMillis: Long,
+) {
+    fun hasConfirmationWindow(claimToken: String, nowElapsedMillis: Long): Boolean =
+        claimToken == token &&
+            nowElapsedMillis >= requestStartedElapsedMillis &&
+            serverRemainingMillis - (nowElapsedMillis - requestStartedElapsedMillis) >
+            HeldOrderClaimPolicy.CONFIRMATION_GUARD_MILLIS
+
+    companion object {
+        const val UNVERIFIED_TIME_MESSAGE =
+            "The server did not provide valid checkout timing. Check that the ERP server is updated and review the bill again."
+
+        // checkout_claim_ttl_seconds is bounded to 600 seconds on the server.
+        private val maxLifetime = Duration.ofMinutes(10)
+
+        fun from(claim: CheckoutClaimResult, requestStartedElapsedMillis: Long): CheckoutClaimWindow? {
+            val serverTime = claim.serverTime ?: return null
+            if (requestStartedElapsedMillis < 0L || claim.claimToken.isBlank()) return null
+            val remaining = runCatching {
+                Duration.between(Instant.parse(serverTime), Instant.parse(claim.expiresAt))
+            }.getOrNull() ?: return null
+            if (remaining <= Duration.ZERO || remaining > maxLifetime) return null
+            // Measure from before the request, not receipt of the response,
+            // so request, server processing and response time cannot add time.
+            return CheckoutClaimWindow(claim.claimToken, requestStartedElapsedMillis, remaining.toMillis())
+        }
+    }
+}
 
 /** Pure checkout invariants shared by the UI confirmation and sync recovery paths. */
 object HeldOrderClaimPolicy {
@@ -78,8 +116,28 @@ object HeldOrderClaimPolicy {
             claim.dueMinor == payment.expectedDueMinor &&
             payment.amountMinor == payment.expectedDueMinor
 
-    fun hasConfirmationWindow(expiresAtMillis: Long, nowMillis: Long): Boolean =
-        expiresAtMillis - nowMillis > CONFIRMATION_GUARD_MILLIS
+    /**
+     * Paid/refunded orders cannot accept new payments. The exact original key
+     * can recover its existing receipt even when the bearer was lost.
+     */
+    fun canReplayWithoutClaim(orderId: String, order: Order): Boolean =
+        order.id == orderId && (order.status == "paid" || order.status == "refunded")
+
+    /** A failed receipt read cannot undo a successful payment POST. */
+    suspend fun readOrderAfterAcceptedPayment(loadOrder: suspend () -> Order): Order =
+        try {
+            loadOrder()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            // The outbox treats this as an ambiguous reconciliation failure,
+            // even if the GET itself returned a definitive API error.
+            throw IllegalStateException(
+                "The payment may already be committed, but its final invoice " +
+                    "could not be verified yet. Do not collect again.",
+                failure,
+            )
+        }
 
     fun shouldReacquireAfterPaymentError(code: String?): Boolean =
         code in recoverablePaymentClaimCodes
@@ -119,6 +177,18 @@ object HeldOrderClaimPolicy {
  * Publication is the only allowed boundary between editable pricing and money.
  */
 object DirectOrderPublishPolicy {
+    fun canPresentPreparedCheckout(
+        totalMinor: Long,
+        dueMinor: Long,
+        claimToken: String,
+        confirmationWindow: CheckoutClaimWindow?,
+        nowElapsedMillis: Long,
+    ): Boolean =
+        // The exact 0.00 completion is also the idempotent recovery route.
+        // It cannot collect money and remains subject to server claim checks.
+        (totalMinor == 0L && dueMinor == 0L) ||
+            confirmationWindow?.hasConfirmationWindow(claimToken, nowElapsedMillis) == true
+
     fun idempotencyKey(localId: String): String {
         require(localId.isNotBlank()) { "A local order identity is required." }
         return "direct-publish:$localId"
@@ -172,9 +242,13 @@ object DirectOrderPublishPolicy {
             order.paidMinor == 0L
     }
 
-    /** Legacy direct outbox rows had no claim; new published direct rows do. */
+    /**
+     * A rejected direct settlement clears its bearer, but keeps the evidence
+     * that the reviewed bill required a lease. Legacy direct rows lack it.
+     */
     fun paymentNeedsClaim(payment: LocalHeldOrderPaymentEntity): Boolean =
-        payment.requiresCheckoutClaim || payment.claimToken != null
+        payment.requiresCheckoutClaim || payment.claimToken != null ||
+            payment.claimOrderVersion != null || payment.claimExpiresAtMillis != null
 }
 
 enum class PreparedHeldCheckoutAction {

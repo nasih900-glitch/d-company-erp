@@ -2,3 +2,8 @@ allowBuilds:
   esbuild: true
 onlyBuiltDependencies:
   - esbuild
+overrides:
+  braces: file:braces-compat
+  postcss-selector-parser: 7.1.6
+  "picomatch@^2": file:vendor/picomatch-v2
+  "picomatch@^4": file:vendor/picomatch-v4

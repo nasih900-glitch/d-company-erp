@@ -104,11 +104,23 @@ class _Session:
         self.results = list(results)
         self.added = []
         self.statements = []
+        self.start_work_keys = []
 
-    async def execute(self, statement):
+    async def execute(self, statement, parameters=None):
+        if str(statement) == "SELECT dcompany_start_work_lock(:key)":
+            assert isinstance(parameters, dict) and set(parameters) == {"key"}
+            assert isinstance(parameters["key"], str) and parameters["key"].startswith("shift-open:")
+            self.start_work_keys.append(parameters["key"])
+            return _Result()
+        assert parameters is None
         assert self.results, f"Unexpected SQL statement: {statement}"
         self.statements.append(statement)
         return _Result(self.results.pop(0))
+
+    async def scalar(self, statement, parameters):
+        assert str(statement) == "SELECT 1 FROM shift_start_work_cancellations WHERE action_key=:key"
+        assert parameters == {"key": self.start_work_keys[-1]}
+        return None  # This fixture has no Owner-cancelled Start work action.
 
     def add(self, entity) -> None:
         self.added.append(entity)
@@ -345,6 +357,7 @@ async def test_open_shift_refuses_v2_retired_key_before_any_shift_lookup() -> No
     assert raised.value.details["identity_matches_retired_action"] is True
     assert session.added == []
     assert session.results == [recreated_shift]
+    assert session.start_work_keys == [KEY_A]
 
 
 @pytest.mark.asyncio
@@ -359,3 +372,4 @@ async def test_open_shift_with_malformed_v2_receipt_creates_nothing() -> None:
 
     assert session.added == []
     assert session.results == []
+    assert session.start_work_keys == [KEY_A]

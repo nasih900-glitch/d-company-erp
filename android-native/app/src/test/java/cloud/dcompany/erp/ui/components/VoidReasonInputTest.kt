@@ -47,4 +47,12 @@ class VoidReasonInputTest {
 
         assertEquals("a".repeat(VOID_REASON_MAX_LENGTH), limitVoidReasonInput(raw))
     }
+
+    @Test fun `multiline reason retains every reviewed character within audit limit`() {
+        val reason = "Reviewed retained item detail.\n".repeat(20).take(499) + "Z"
+        assertEquals(500, reason.length)
+        assertTrue(reason.contains('\n'))
+        assertEquals(reason, limitVoidReasonInput(reason))
+        assertEquals(reason, resolvedVoidReason(VOID_REASON_OTHER_ID, reason))
+    }
 }

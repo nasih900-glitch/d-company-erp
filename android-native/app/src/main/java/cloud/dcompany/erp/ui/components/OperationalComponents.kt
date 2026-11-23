@@ -50,7 +50,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.theme.WorkspacePanelShape
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
 
 enum class UiTone { Neutral, Brand, Success, Warning, Danger, Information }
 
@@ -116,8 +118,8 @@ fun MetricCard(
 ) {
     val colors = toneColors(tone)
     Row(
-        modifier.heightIn(min = 88.dp).clip(Radius.shapeLg).background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, Radius.shapeLg)
+        modifier.heightIn(min = 88.dp).clip(WorkspacePanelShape)
+            .liquidWorkspaceSurface(WorkspacePanelShape)
             .padding(Spacing.md),
         horizontalArrangement = Arrangement.spacedBy(Spacing.md),
         verticalAlignment = Alignment.CenterVertically,
@@ -169,12 +171,58 @@ fun OperationalBanner(
     icon: ImageVector,
     modifier: Modifier = Modifier,
     compact: Boolean = false,
+    compactActionLayout: Boolean = false,
+    showFullDetail: Boolean = false,
     action: (@Composable RowScope.() -> Unit)? = null,
 ) {
     val colors = toneColors(tone)
+    val glassRole = when (tone) {
+        UiTone.Danger -> WorkspaceGlassRole.ERROR
+        UiTone.Warning -> WorkspaceGlassRole.WARNING
+        else -> WorkspaceGlassRole.PANEL
+    }
+    if (compactActionLayout && action != null) {
+        Column(
+            modifier.fillMaxWidth().clip(Radius.shapeMd)
+                .liquidWorkspaceSurface(Radius.shapeMd, glassRole)
+                .semantics { liveRegion = LiveRegionMode.Polite }
+                .padding(horizontal = Spacing.lg, vertical = Spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = colors.foreground,
+                    modifier = Modifier.size(if (compact) 18.dp else 22.dp),
+                )
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(title, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        detail,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = if (showFullDetail) Int.MAX_VALUE else 2,
+                        overflow = if (showFullDetail) TextOverflow.Clip else TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
+                content = action,
+            )
+        }
+        return
+    }
     Row(
-        modifier.fillMaxWidth().clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surfaceVariant)
-            .border(1.dp, colors.border, Radius.shapeMd)
+        modifier.fillMaxWidth().clip(Radius.shapeMd)
+            .liquidWorkspaceSurface(Radius.shapeMd, glassRole)
             .semantics { liveRegion = LiveRegionMode.Polite }
             .padding(horizontal = Spacing.lg, vertical = if (compact) 0.dp else Spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
@@ -188,8 +236,8 @@ fun OperationalBanner(
                 detail,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+                maxLines = if (showFullDetail) Int.MAX_VALUE else 2,
+                overflow = if (showFullDetail) TextOverflow.Clip else TextOverflow.Ellipsis,
             )
         }
         action?.invoke(this)
@@ -206,8 +254,11 @@ fun ErpButton(
     busy: Boolean = false,
     leadingIcon: ImageVector? = null,
     contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
+    containerColor: Color? = null,
+    contentColor: Color? = null,
+    textStyle: TextStyle? = null,
 ) {
-    val (container, content) = when (intent) {
+    val (defaultContainer, defaultContent) = when (intent) {
         ActionIntent.Primary -> MaterialTheme.colorScheme.primary to MaterialTheme.colorScheme.background
         ActionIntent.Secondary -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSurface
         ActionIntent.Success -> MaterialTheme.colorScheme.operationalGood to MaterialTheme.colorScheme.background
@@ -215,6 +266,8 @@ fun ErpButton(
         ActionIntent.Destructive -> MaterialTheme.colorScheme.operationalDanger to MaterialTheme.colorScheme.background
         ActionIntent.Quiet -> Color.Transparent to MaterialTheme.colorScheme.onSurfaceVariant
     }
+    val container = containerColor ?: defaultContainer
+    val content = contentColor ?: defaultContent
     val border = when (intent) {
         ActionIntent.Secondary -> BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
         else -> null
@@ -252,7 +305,7 @@ fun ErpButton(
         }
         Text(
             if (busy) "$text…" else text,
-            style = MaterialTheme.typography.labelLarge,
+            style = textStyle ?: MaterialTheme.typography.labelLarge,
             maxLines = 1,
         )
     }

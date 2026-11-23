@@ -51,7 +51,7 @@ internal class RemoteAssistanceNotification(private val context: Context) {
         manager?.activeNotifications?.any { it.id == NOTIFICATION_ID } == true
     }.getOrDefault(false)
 
-    fun show(timeoutMillis: Long, sharingPaused: Boolean = false): Boolean {
+    fun show(timeoutMillis: Long, target: RemoteStopTarget, sharingPaused: Boolean = false): Boolean {
         if (!canShowPersistentIndicator()) return false
         val notificationManager = manager ?: return false
         val copy = remoteAssistanceNotificationCopy(sharingPaused)
@@ -68,6 +68,7 @@ internal class RemoteAssistanceNotification(private val context: Context) {
             0,
             Intent(context, RemoteAssistanceStopReceiver::class.java).apply {
                 action = ACTION_STOP
+                data = android.net.Uri.parse(target.dataUri)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
@@ -105,7 +106,7 @@ internal class RemoteAssistanceNotification(private val context: Context) {
     private companion object {
         const val CHANNEL_ID = REMOTE_ASSISTANCE_NOTIFICATION_CHANNEL_ID
         const val NOTIFICATION_ID = 44_901
-        const val ACTION_STOP = "cloud.dcompany.erp.remote_assistance.STOP"
+        const val ACTION_STOP = REMOTE_STOP_ACTION
     }
 
     internal fun isStopAction(action: String?): Boolean = action == ACTION_STOP
@@ -118,6 +119,7 @@ class RemoteAssistanceStopReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val app = context.applicationContext as? DCompanyApp ?: return
         if (!RemoteAssistanceNotification(context).isStopAction(intent.action)) return
-        app.remoteAssistance.stopByUser()
+        val target = parseRemoteStopTarget(intent.action, intent.dataString) ?: return
+        app.remoteAssistance.stopFromNotification(target)
     }
 }

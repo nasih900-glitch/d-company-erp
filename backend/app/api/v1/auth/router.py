@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Request, Response, status
@@ -26,11 +26,11 @@ from app.core.security import (
     hash_password,
     issue_access_token,
     issue_refresh_token,
-    verify_password,
 )
 from app.core.tenant import TenantDep
 from app.models import AuditLog, Branch, Company, Role, User, UserRole
 from app.services.audit.recorder import set_actor
+from app.services.auth.credentials import password_failure, validated_role_assignment
 from app.services.auth.otp import (
     OTP_PASSWORD_RESET,
     OTP_REGISTER,
@@ -204,44 +204,7 @@ async def _roles_and_branch(
     session: SessionDep,
     user: User,
 ) -> tuple[list[str], UUID | None]:
-    rows = (
-        await session.execute(
-            select(
-                Role.code,
-                Role.company_id.label("role_company_id"),
-                UserRole.branch_id,
-                Branch.company_id.label("branch_company_id"),
-                Branch.deleted_at.label("branch_deleted_at"),
-            )
-            .join(UserRole, UserRole.role_id == Role.id)
-            .outerjoin(Branch, Branch.id == UserRole.branch_id)
-            .where(UserRole.user_id == user.id)
-            .order_by(UserRole.created_at.asc(), UserRole.id.asc())
-        )
-    ).all()
-    branch_ids: set[UUID] = set()
-    for row in rows:
-        if row.role_company_id != user.company_id:
-            raise AuthError(
-                "Account role assignment is invalid. Ask the protected owner to correct it."
-            )
-        if row.branch_id is not None:
-            if (
-                row.branch_company_id != user.company_id
-                or row.branch_deleted_at is not None
-            ):
-                raise AuthError(
-                    "Account branch assignment is invalid. "
-                    "Ask the protected owner to correct it."
-                )
-            branch_ids.add(row.branch_id)
-    if len(branch_ids) > 1:
-        raise AuthError(
-            "Account roles are assigned to multiple branches. "
-            "Ask the protected owner to select one branch."
-        )
-    roles = [row.code for row in rows]
-    assigned_branch_id = next(iter(branch_ids), None)
+    roles, assigned_branch_id = await validated_role_assignment(session, user)
     return roles, assigned_branch_id or await _default_branch_id(session, user.company_id)
 
 
@@ -570,7 +533,9 @@ async def login(
     settings = get_settings()
     email = payload.email.strip().lower()
     await enforce_login_rate_limit(request, email)
-    users = (await session.execute(select(User).where(User.email == email))).scalars().all()
+    users = (
+        await session.execute(select(User).where(User.email == email).with_for_update(key_share=True))
+    ).scalars().all()
     user = users[0] if len(users) == 1 else None
     if not user or user.deleted_at:
         company_id = await _fallback_company_id(session)
@@ -587,35 +552,15 @@ async def login(
         )
         await session.commit()
         raise AuthError("invalid credentials")
-    if user.status != "active":
-        _audit_auth_event(
-            session=session,
-            request=request,
-            action="login_failed",
-            email=user.email,
-            company_id=user.company_id,
-            user=user,
-            details={"reason": "account_inactive", "status": user.status},
-        )
-        await session.commit()
-        raise AuthError("invalid credentials")
-    if user.locked_until and user.locked_until > datetime.now(timezone.utc):
-        _audit_auth_event(
-            session=session,
-            request=request,
-            action="login_failed",
-            email=user.email,
-            company_id=user.company_id,
-            user=user,
-            details={"reason": "account_locked"},
-        )
-        await session.commit()
-        raise AuthError("account temporarily locked")
-    if not verify_password(payload.password, user.password_hash):
-        user.failed_login_count = (user.failed_login_count or 0) + 1
-        if user.failed_login_count >= settings.failed_login_lockout_threshold:
-            user.locked_until = datetime.now(timezone.utc) + timedelta(
-                minutes=settings.failed_login_lockout_minutes
+    failure = password_failure(user, payload.password)
+    if failure is not None:
+        details = {"reason": failure}
+        if failure == "account_inactive":
+            details["status"] = user.status
+        elif failure == "invalid_password":
+            details.update(
+                failed_login_count=user.failed_login_count,
+                locked_until=user.locked_until.isoformat() if user.locked_until else None,
             )
         _audit_auth_event(
             session=session,
@@ -624,17 +569,13 @@ async def login(
             email=user.email,
             company_id=user.company_id,
             user=user,
-            details={
-                "reason": "invalid_password",
-                "failed_login_count": user.failed_login_count,
-                "locked_until": user.locked_until.isoformat() if user.locked_until else None,
-            },
+            details=details,
         )
         await session.commit()
-        raise AuthError("invalid credentials")
+        raise AuthError(
+            "account temporarily locked" if failure == "account_locked" else "invalid credentials"
+        )
 
-    user.failed_login_count = 0
-    user.locked_until = None
     user.last_login_at = datetime.now(timezone.utc)
 
     # Roles

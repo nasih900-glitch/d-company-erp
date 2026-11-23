@@ -87,6 +87,7 @@ internal class TenderWorkspaceViewModel(
     private val wallNow: () -> Long = System::currentTimeMillis,
     private val refreshReaders: suspend (TenderScope, TenderReceipt) -> List<String> = ::refreshTenderReaders,
     private val notifyReaders: (TenderScope, TenderReceipt) -> Unit = TenderCorrectionNotices::publish,
+    private val operations: cloud.dcompany.erp.core.handover.CallerOperations = cloud.dcompany.erp.core.handover.applicationCallerOperations(),
 ) : ViewModel() {
     private val tasks get() = suppliedScope ?: viewModelScope
     private val _state = MutableStateFlow(TenderWorkspaceState())
@@ -134,7 +135,7 @@ internal class TenderWorkspaceViewModel(
         if (_state.value.busy || _state.value.readingSavedWork || !authorityMatches()) return
         val operation = ++generation
         _state.value = _state.value.copy(readingSavedWork = true, storageError = null)
-        work = tasks.launch {
+        work = operations.launch(tasks, onRejected = { finish(operation, owner, source); _state.value = _state.value.copy(readingSavedWork = false, error = "Resolve the original till handover before reviewing corrections. Saved work is retained.") }) {
             try {
                 val saved = journal.read(owner)
                 if (!current(operation, owner, source)) return@launch
@@ -157,7 +158,7 @@ internal class TenderWorkspaceViewModel(
         val started = elapsedNow()
         val operation = ++generation
         _state.value = _state.value.copy(busy = true, error = null)
-        work = tasks.launch {
+        work = operations.launch(tasks, onRejected = { admissionRejected(operation, owner, source) }) {
             try {
                 val result = api.unlockTender(TenderUnlockRequest(owner.branchId, if (kind == TenderKind.PAYMENT) "payment" else "daily", password))
                 if (!current(operation, owner, source)) return@launch
@@ -168,6 +169,7 @@ internal class TenderWorkspaceViewModel(
                 scheduleExpiry(next)
                 _state.value = _state.value.copy(authorizedKind = kind)
                 fetchHistory(next, operation, owner, source)
+                reconciled()
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
                 if (current(operation, owner, source)) {
@@ -202,7 +204,7 @@ internal class TenderWorkspaceViewModel(
         val operation = ++generation
         _state.value = _state.value.copy(busy = true, error = null, refreshError = null, receipt = null, confirmed = false,
             paymentPreview = null, dailyPreview = null, reviewedRejection = null)
-        work = tasks.launch {
+        work = operations.launch(tasks, onRejected = { admissionRejected(operation, owner, source) }) {
             try {
                 journal.read(owner)?.let { saved ->
                     if (current(operation, owner, source)) _state.value = _state.value.copy(pending = saved, error = "Another saved request needs explicit recovery. Nothing new was sent.")
@@ -223,6 +225,7 @@ internal class TenderWorkspaceViewModel(
                         _state.value = _state.value.copy(dailyPreview = preview)
                     }
                 }
+                reconciled()
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) { fail(operation, owner, source, failure) }
             finally { finish(operation, owner, source) }
@@ -268,7 +271,7 @@ internal class TenderWorkspaceViewModel(
         if (!token.allows(command, elapsedNow()) || !authorityMatches()) return
         val operation = ++generation
         _state.value = _state.value.copy(busy = true, error = null, reviewedRejection = null)
-        work = tasks.launch {
+        work = operations.launch(tasks, onRejected = { admissionRejected(operation, owner, source) }) {
             var sent = false
             try {
                 val stored = journal.read(owner)
@@ -302,6 +305,7 @@ internal class TenderWorkspaceViewModel(
                     _state.value = _state.value.copy(storageError = "The receipt is recorded, but saved-request cleanup could not be verified. Keep this exact request for recovery.")
                 }
                 refreshAcceptedReaders(result, operation, owner, source)
+                reconciled()
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
                 if (!current(operation, owner, source)) return@launch
@@ -316,6 +320,13 @@ internal class TenderWorkspaceViewModel(
         }
     }
 
+    private fun admissionRejected(operation: Long, owner: TenderScope, source: TenderContext) {
+        if (current(operation, owner, source)) {
+            _state.value = _state.value.copy(error = "Resolve the original till handover before changing tender records.")
+            finish(operation, owner, source)
+        }
+    }
+
     /** Explicit read retry; never executes or replaces the retained command. */
     fun refreshViews() {
         val owner = scope ?: return
@@ -325,7 +336,7 @@ internal class TenderWorkspaceViewModel(
         val operation = ++generation
         _state.value = _state.value.copy(busy = true)
         notifyReaders(owner, receipt)
-        work = tasks.launch {
+        work = operations.launch(tasks, onRejected = { finish(operation, owner, source); _state.value = _state.value.copy(readingSavedWork = false, error = "Resolve the original till handover before reviewing corrections. Saved work is retained.") }) {
             try { refreshAcceptedReaders(receipt, operation, owner, source) }
             finally { finish(operation, owner, source) }
         }
@@ -346,7 +357,7 @@ internal class TenderWorkspaceViewModel(
         if (busy() || _state.value.reviewedRejection != expected || _state.value.pending != expected || !requireGrant(expected.kind)) return
         val operation = ++generation
         _state.value = _state.value.copy(busy = true)
-        work = tasks.launch {
+        work = operations.launch(tasks, onRejected = { finish(operation, owner, source); _state.value = _state.value.copy(readingSavedWork = false, error = "Resolve the original till handover before reviewing corrections. Saved work is retained.") }) {
             try {
                 journal.clearExact(expected)
                 val remaining = journal.read(owner)
@@ -366,7 +377,7 @@ internal class TenderWorkspaceViewModel(
         if (busy() || !requireGrant(_state.value.pending?.kind ?: source.kind)) return
         val operation = ++generation
         _state.value = _state.value.copy(busy = true, historyError = null)
-        work = tasks.launch { try { fetchHistory(token, operation, owner, source) } finally { finish(operation, owner, source) } }
+        work = operations.launch(tasks, onRejected = { finish(operation, owner, source); _state.value = _state.value.copy(readingSavedWork = false, error = "Resolve the original till handover before reviewing corrections. Saved work is retained.") }) { try { fetchHistory(token, operation, owner, source) } finally { finish(operation, owner, source) } }
     }
 
     private suspend fun fetchHistory(token: TenderGrant, operation: Long, owner: TenderScope, source: TenderContext) {

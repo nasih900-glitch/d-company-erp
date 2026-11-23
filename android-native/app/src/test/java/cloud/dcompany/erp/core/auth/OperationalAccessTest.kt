@@ -1,12 +1,25 @@
 package cloud.dcompany.erp.core.auth
 
 import cloud.dcompany.erp.core.net.MeResponse
+import cloud.dcompany.erp.core.sync.posLinkedGamingReviewPullAllowed
+import cloud.dcompany.erp.ui.screens.gaming.GamingApi
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import retrofit2.http.Query
 
 class OperationalAccessTest {
+
+    @Test
+    fun `Reports inventory requires both analytics and inventory read grants`() {
+        assertFalse(permissions().reportsAccess().canReadInventory)
+        assertFalse(permissions(ErpPermission.AnalyticsRead).reportsAccess().canReadInventory)
+        assertFalse(permissions(ErpPermission.InventoryRead).reportsAccess().canReadInventory)
+        assertFalse(permissions(ErpPermission.FinanceRead).reportsAccess().canReadInventory)
+        assertTrue(permissions(ErpPermission.AnalyticsRead, ErpPermission.InventoryRead).reportsAccess().canReadInventory)
+    }
+
 
     @Test
     fun `authoritative permissions map to least privilege screen capabilities`() {
@@ -95,6 +108,7 @@ class OperationalAccessTest {
             ErpPermission.GamingTournamentManage,
         )
         assertTrue(gaming.gamingAccess().canManageSessions)
+        assertFalse(gaming.gamingAccess().canVoidUnlinkedSessionsAcrossShifts)
         assertFalse(gaming.gamingAccess().canReconcileLegacySessions)
         assertEquals(
             EventsAccess(canManageEvents = true, canCheckInTickets = true),
@@ -114,6 +128,15 @@ class OperationalAccessTest {
         assertTrue(finance.financeAccess().canRecordExpenses)
         assertFalse(finance.financeAccess().canManageAssets)
         assertFalse(finance.financeAccess().canRecordPartnerCapital)
+
+        assertEquals(
+            ReportsAccess(canReadOverview = true, canReadPnl = false),
+            permissions(ErpPermission.AnalyticsRead).reportsAccess(),
+        )
+        assertEquals(
+            ReportsAccess(canReadOverview = false, canReadPnl = true),
+            permissions(ErpPermission.FinanceRead).reportsAccess(),
+        )
 
         val ownerFinance = permissions(
             ErpPermission.FinanceWrite,
@@ -219,6 +242,118 @@ class OperationalAccessTest {
         }
         assertEquals(1, deniedFeedback)
         assertEquals(1, apiOrOutboxWrites)
+    }
+
+    @Test
+    fun `all normalized owner tiers share the gaming owner hint`() {
+        for (role in listOf("owner", "co_owner", "super_owner")) {
+            assertTrue(listOf(role).hasNormalizedOwnerRole())
+        }
+        assertFalse(listOf("manager", "gaming_supervisor").hasNormalizedOwnerRole())
+    }
+
+    @Test
+    fun `linked POS review pull requires exact owner profile permission and cache lease`() {
+        val lease = CacheScopeLease(
+            scope = CacheScope(
+                userId = "user-1",
+                companyId = "company-1",
+                branchId = "branch-1",
+                terminalId = "terminal-1",
+            ),
+            generation = 7,
+        )
+        val granted = profile(
+            effective = listOf(
+                ErpPermission.GamingRead,
+                ErpPermission.GamingWrite,
+                ErpPermission.PosRead,
+                ErpPermission.PosWrite,
+                ErpPermission.PosVoid,
+            ),
+            roles = listOf("owner"),
+        )
+
+        assertTrue(posLinkedGamingReviewPullAllowed(granted, lease))
+        assertFalse(
+            posLinkedGamingReviewPullAllowed(
+                granted.copy(userId = "other-user"),
+                lease,
+            ),
+        )
+        assertFalse(
+            posLinkedGamingReviewPullAllowed(
+                granted.copy(companyId = "other-company"),
+                lease,
+            ),
+        )
+        assertFalse(
+            posLinkedGamingReviewPullAllowed(
+                granted.copy(branchId = "other-branch"),
+                lease,
+            ),
+        )
+        assertFalse(
+            posLinkedGamingReviewPullAllowed(
+                granted.copy(branchId = null),
+                lease.copy(scope = lease.scope.copy(branchId = null)),
+            ),
+        )
+        assertFalse(
+            posLinkedGamingReviewPullAllowed(
+                granted,
+                lease.copy(scope = lease.scope.copy(terminalId = null)),
+            ),
+        )
+        assertFalse(
+            posLinkedGamingReviewPullAllowed(
+                granted.copy(roles = listOf("manager")),
+                lease,
+            ),
+        )
+        for (required in listOf(
+            ErpPermission.GamingWrite,
+            ErpPermission.PosRead,
+            ErpPermission.PosWrite,
+            ErpPermission.PosVoid,
+        )) {
+            assertFalse(
+                "Missing $required must hide linked POS review work",
+                posLinkedGamingReviewPullAllowed(
+                    granted.copy(
+                        effectivePermissions = granted.effectivePermissions.orEmpty() - required,
+                    ),
+                    lease,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `gaming board wire exposes the explicit linked review projection flag`() {
+        val sessions = GamingApi::class.java.declaredMethods.single { it.name == "sessions" }
+        val queryNames = sessions.parameterAnnotations
+            .flatMap { annotations -> annotations.filterIsInstance<Query>() }
+            .map(Query::value)
+
+        assertEquals(
+            listOf("unbilled_only", "include_pos_linked_reviewable", "limit"),
+            queryNames,
+        )
+    }
+
+    @Test
+    fun `Reports export requires both explicit analytics grants with no legacy owner bypass`() {
+        assertFalse(permissions(ErpPermission.AnalyticsRead).reportsAccess().canExportOverview)
+        assertFalse(permissions(ErpPermission.AnalyticsExport).reportsAccess().canExportOverview)
+        assertFalse(permissions(ErpPermission.FinanceRead).reportsAccess().canExportOverview)
+        assertTrue(permissions(ErpPermission.AnalyticsRead, ErpPermission.AnalyticsExport)
+            .reportsAccess().canExportOverview)
+        for (effective in listOf<List<String>?>(null, emptyList())) {
+            val legacyOwner = profile(emptyList(), roles = listOf("owner"), protectedAccess = true)
+                .copy(effectivePermissions = effective, accessibleModules = null)
+            assertFalse(EffectivePermissions.from(legacyOwner).reportsAccess().canExportOverview)
+        }
     }
 
     private fun permissions(vararg effective: String): EffectivePermissions =

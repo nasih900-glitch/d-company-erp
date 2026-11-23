@@ -45,6 +45,13 @@ internal class SessionRefreshLease internal constructor(
         session === other.session && mutationVersion == other.mutationVersion
 }
 
+/** Process-only proof for one original logout, including retry after a durable-clear failure. */
+internal class SessionLogoutLease internal constructor(internal val lineage: Any?, internal val loginGeneration: Long) {
+    internal var removedVersion: Long? = null
+    internal var removedLoginGeneration: Long? = null
+    override fun toString() = "SessionLogoutLease(<redacted>)"
+}
+
 /**
  * Identifies one explicit login attempt without retaining either credential.
  *
@@ -300,6 +307,11 @@ class TokenStore internal constructor(
                 ?.access
         }
 
+    /** Snapshot a rotated pair only inside the original logical login, never the next cashier. */
+    internal fun refreshLeaseFor(original: SessionRefreshLease): SessionRefreshLease? = synchronized(SESSION_MUTATION_LOCK) {
+        cachedSession?.takeIf { it.lineage === original.session.lineage }?.let { SessionRefreshLease(it, sessionMutationVersion) }
+    }
+
     /** True only while this explicit-login lineage is still the installed session. */
     internal fun isCurrent(lease: LoginSessionLease): Boolean =
         synchronized(SESSION_MUTATION_LOCK) {
@@ -396,6 +408,46 @@ class TokenStore internal constructor(
             eraseDurableSessionLocked()
         }
         finishDurableClear(durableResult)
+    }
+
+    internal fun captureLogoutLease(original: SessionRefreshLease?): SessionLogoutLease? = synchronized(SESSION_MUTATION_LOCK) {
+        if (cachedSession?.lineage !== original?.session?.lineage) null
+        else SessionLogoutLease(original?.session?.lineage, explicitLoginGeneration)
+    }
+
+    /** Refresh follows A's lineage; a newer explicit login is never erased by A's suspended logout. */
+    internal fun clearForLogoutIfCurrent(lease: SessionLogoutLease): Boolean {
+        val result = synchronized(SESSION_MUTATION_LOCK) {
+            val ownRetry = logoutRemovalIsCurrentLocked(lease)
+            if (!ownRetry && (explicitLoginGeneration != lease.loginGeneration || cachedSession?.lineage !== lease.lineage)) return false
+            if (!ownRetry) {
+                sessionMutationVersion += 1
+                explicitLoginGeneration += 1
+                cachedSession = null
+                lease.removedVersion = sessionMutationVersion
+                lease.removedLoginGeneration = explicitLoginGeneration
+            }
+            eraseDurableSessionLocked()
+        }
+        finishDurableClear(result)
+        return true
+    }
+
+    private fun logoutRemovalIsCurrentLocked(lease: SessionLogoutLease): Boolean = cachedSession == null &&
+        lease.removedVersion == sessionMutationVersion && lease.removedLoginGeneration == explicitLoginGeneration
+    internal fun isCurrentLogoutRemoval(lease: SessionLogoutLease): Boolean = synchronized(SESSION_MUTATION_LOCK) {
+        logoutRemovalIsCurrentLocked(lease)
+    }
+    internal fun commitIfOriginalLoginCurrent(original: SessionRefreshLease?, commit: () -> Unit): Boolean = synchronized(SESSION_MUTATION_LOCK) {
+        if (cachedSession?.lineage !== original?.session?.lineage) false else { commit(); true }
+    }
+    internal fun publishIfCurrentLogout(lease: SessionLogoutLease, publish: () -> Unit): Boolean = synchronized(SESSION_MUTATION_LOCK) {
+        val original = explicitLoginGeneration == lease.loginGeneration && cachedSession?.lineage === lease.lineage
+        if (!original && !logoutRemovalIsCurrentLocked(lease)) false else { publish(); true }
+    }
+    /** Non-suspending publication only; no cache or IO work may enter this callback. */
+    internal fun publishIfCurrentLogoutRemoval(lease: SessionLogoutLease, publish: () -> Unit): Boolean = synchronized(SESSION_MUTATION_LOCK) {
+        if (!logoutRemovalIsCurrentLocked(lease)) false else { publish(); true }
     }
 
     /** Clear only the session that received a definitive refresh rejection. */

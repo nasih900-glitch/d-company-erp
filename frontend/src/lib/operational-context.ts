@@ -1,3 +1,4 @@
+import { advanceRootWorkspaceEpoch } from './root-workspace-epoch';
 import type { ShiftDTO, TerminalDTO } from './erp-api';
 
 const TERMINAL_KEY = 'terminal_id';
@@ -198,7 +199,9 @@ export function storeTerminalId(terminalId: string): void {
   if (!target) return;
   try {
     if (target.getItem(TERMINAL_KEY) !== terminalId) clearStoredShift();
+    const previous = target.getItem(TERMINAL_KEY);
     target.setItem(TERMINAL_KEY, terminalId);
+    if (previous !== terminalId) advanceRootWorkspaceEpoch();
   } catch {
     // POS will surface a precise terminal error when browser storage is unavailable.
   }
@@ -213,7 +216,9 @@ export function storeTerminalId(terminalId: string): void {
  */
 export function clearStoredTerminal(): void {
   try {
+    const previous = storage()?.getItem(TERMINAL_KEY);
     storage()?.removeItem(TERMINAL_KEY);
+    if (previous) advanceRootWorkspaceEpoch();
   } catch {
     // Best-effort cleanup for private browsing and storage-disabled browsers.
   }

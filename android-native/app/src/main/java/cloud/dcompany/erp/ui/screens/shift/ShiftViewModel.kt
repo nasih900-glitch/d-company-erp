@@ -4,12 +4,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cloud.dcompany.erp.DCompanyApp
 import cloud.dcompany.erp.core.auth.ShiftAccess
+import cloud.dcompany.erp.core.auth.CacheScopeLease
 import cloud.dcompany.erp.core.auth.authorizeAction
 import cloud.dcompany.erp.core.db.LocalShiftEntity
 import cloud.dcompany.erp.core.db.RejectedOpenRecoveryResult
 import cloud.dcompany.erp.core.db.RejectedOpenRecoveryStatus
 import cloud.dcompany.erp.core.db.ResolvedOpenShift
 import cloud.dcompany.erp.core.db.ShiftCloseCaptureResult
+import cloud.dcompany.erp.core.db.ShiftCloseBlockerCounts
 import cloud.dcompany.erp.core.db.ShiftCloseCaptureStatus
 import cloud.dcompany.erp.core.db.ShiftHistoryMergePolicy
 import cloud.dcompany.erp.core.db.ShiftHistoryRow
@@ -18,12 +20,15 @@ import cloud.dcompany.erp.core.db.observeShiftForManagement
 import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.core.sync.RejectedShiftOpenVerificationStatus
 import cloud.dcompany.erp.ui.screens.businessDateTime
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
@@ -73,6 +78,8 @@ data class ShiftUiState(
     val currentUserId: String? = null,
     val canClose: Boolean = false,
     val closeOriginMessage: String? = null,
+    /** Current workspace cache only; null is unchecked, and zero is not server approval. */
+    val closeBlockers: ShiftCloseBlockerCounts? = null,
     /**
      * A refused open/close attempt, not yet dismissed. Previously invisible:
      * a rejected row was excluded from both `open` and `history`, so the
@@ -170,6 +177,24 @@ internal fun launchShiftOpeningCapture(
 class ShiftViewModel : ViewModel() {
 
     private val app = DCompanyApp.instance
+    private val operations = app.handoverOperations.caller(app.shiftCache.profile.value, app.cacheIsolation.currentLease())
+    internal val startWorkController = cloud.dcompany.erp.ui.screens.shift.work.StartWorkController(
+        cloud.dcompany.erp.ui.screens.shift.work.AndroidStartWorkRuntime(app.shiftCache.profile.value, app.cacheIsolation.currentLease()),
+        cloud.dcompany.erp.ui.screens.shift.work.AtomicStartWorkStore(java.io.File(app.noBackupFilesDir.canonicalFile,
+            cloud.dcompany.erp.ui.screens.shift.work.START_WORK_DIRECTORY)))
+    internal val startWorkState = startWorkController.state
+    internal fun reviewStartWork() { viewModelScope.launch { startWorkController.refresh() } }
+    internal fun retryStartWork(value: cloud.dcompany.erp.ui.screens.shift.work.PendingStartWork) {
+        viewModelScope.launch { startWorkController.retry(value) }
+    }
+    internal fun ownerStartWork(value: cloud.dcompany.erp.ui.screens.shift.work.PendingStartWork,
+        email: String, password: String, reason: String, cancel: Boolean) {
+        viewModelScope.launch { startWorkController.owner(value, email, password, reason, cancel) }
+    }
+    internal fun onlineStartWorkName(): String? = app.shiftCache.profile.value?.takeIf {
+        app.connectivity.online.value && app.terminalStore.activeValidatedTerminal.value?.onlineStartWorkSupported == true &&
+            cloud.dcompany.erp.core.auth.EffectivePermissions.from(it).has(cloud.dcompany.erp.core.auth.ErpPermission.StaffAttendanceWrite)
+    }?.name
     private val db = app.db
     private val access = MutableStateFlow(ShiftAccess())
     private val confirmedTerminalId = app.terminalStore.activeValidatedTerminal
@@ -178,16 +203,30 @@ class ShiftViewModel : ViewModel() {
     private data class ResolvedShiftState(
         val terminalId: String?,
         val open: ResolvedOpenShift?,
+        val closeBlockers: ShiftCloseBlockerCounts? = null,
+        val reviewLease: CacheScopeLease? = null,
     )
-    private val resolvedShift = confirmedTerminalId.flatMapLatest { terminalId ->
-        if (terminalId == null) {
-            flowOf(ResolvedShiftState(null, null))
-        } else {
-            db.shiftDao().observeShiftForManagement(terminalId).map { current ->
-                ResolvedShiftState(terminalId, current)
+    private val resolvedShift = combine(confirmedTerminalId, app.shiftCache.profile, ::Pair)
+        .flatMapLatest { (terminalId, _) ->
+            if (terminalId == null) {
+                flowOf(ResolvedShiftState(null, null))
+            } else {
+                db.shiftDao().observeShiftForManagement(terminalId).flatMapLatest { current ->
+                    if (current == null) flowOf(ResolvedShiftState(terminalId, null))
+                    else {
+                        val reviewLease = app.cacheIsolation.currentLease()
+                        db.shiftCloseSafetyDao().observeBlockersForExactShift(
+                            localShiftId = current.local?.localId ?: current.shiftId,
+                            serverShiftId = current.local?.serverShiftId ?: current.server?.serverShiftId,
+                            terminalId = terminalId,
+                        ).distinctUntilChanged().map { blockers ->
+                            ResolvedShiftState(terminalId, current, blockers, reviewLease)
+                        }.onStart { emit(ResolvedShiftState(terminalId, current)) }
+                            .catch { emit(ResolvedShiftState(terminalId, current)) }
+                    }
+                }
             }
         }
-    }
     private data class HistoryState(
         val rows: List<ShiftHistoryRow>,
         val latestLocalClosed: LocalShiftEntity?,
@@ -338,6 +377,13 @@ class ShiftViewModel : ViewModel() {
             // The opener remains attribution, not an extra ownership lock.
             canClose = currentOpen != null && interaction.access.canClose && closeOrigin?.allowed == true,
             closeOriginMessage = closeOrigin?.message,
+            closeBlockers = scopedCloseReviewCounts(
+                counts = scopedCurrent?.closeBlockers,
+                reviewLease = scopedCurrent?.reviewLease,
+                currentLease = app.cacheIsolation.currentLease(),
+                userId = profile?.userId, companyId = profile?.companyId,
+                branchId = profile?.branchId, terminalId = session.terminalId,
+            ),
             rejectedShift = latestRejected,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ShiftUiState())
@@ -351,6 +397,7 @@ class ShiftViewModel : ViewModel() {
                     }
                 }
         }
+        reviewStartWork()
         app.sync.requestSync()
     }
 
@@ -388,6 +435,15 @@ class ShiftViewModel : ViewModel() {
                 "Recover the saved rejected shift attempt before creating another shift identity."
             return
         }
+        if (!startWorkState.value.ready || startWorkState.value.pending.isNotEmpty() || startWorkState.value.busy) {
+            operationError.value = "Review the saved Start work request before opening another shift."
+            return
+        }
+        if (onlineStartWorkName() != null) {
+            if (!state.value.currentShiftLoaded) return
+            viewModelScope.launch { startWorkController.start(floatMinor) }
+            return
+        }
         val profile = app.shiftCache.profile.value
         if (profile == null) {
             operationError.value = "The signed-in profile is unavailable. Reconnect before opening a shift."
@@ -412,42 +468,47 @@ class ShiftViewModel : ViewModel() {
         }
         val started = launchShiftOpeningCapture(viewModelScope, busy) {
             try {
-                val localId = UUID.randomUUID().toString()
-                if (!app.cacheIsolation.commitIfCurrent(scopeLease) {
-                        db.shiftDao().insert(
-                            LocalShiftEntity(
-                                localId = localId,
-                                terminalId = assignedTerminalId,
-                                branchId = assignedBranchId,
-                                openingFloatMinor = floatMinor,
-                                openedAtMillis = System.currentTimeMillis(),
-                                openedByUserId = profile.userId,
-                                openedByName = profile.name,
-                                openedByEmail = profile.email,
-                                state = ShiftState.OPEN_PENDING,
-                            ),
-                        )
+                operations.run {
+                    try {
+                        val localId = UUID.randomUUID().toString()
+                        if (!app.cacheIsolation.commitIfCurrent(scopeLease) {
+                                db.shiftDao().insert(
+                                    LocalShiftEntity(
+                                        localId = localId,
+                                        terminalId = assignedTerminalId,
+                                        branchId = assignedBranchId,
+                                        openingFloatMinor = floatMinor,
+                                        openedAtMillis = System.currentTimeMillis(),
+                                        openedByUserId = profile.userId,
+                                        openedByName = profile.name,
+                                        openedByEmail = profile.email,
+                                        state = ShiftState.OPEN_PENDING,
+                                    ),
+                                )
+                            }
+                        ) {
+                            operationError.value =
+                                "The signed-in account changed before the shift was saved. Nothing was opened; review Shift again."
+                            return@run
+                        }
+                        operationError.value = null
+                        val openingMessage = if (state.value.offlineGamingSupported) {
+                            "Shift saved on this tablet. Gaming and supported POS work can continue offline. Saved work will sync in order; review any server conflict before taking payment again."
+                        } else if (state.value.online) {
+                            "Shift saved on this tablet. POS work can be saved locally; wait for server confirmation before starting Gaming."
+                        } else {
+                            "Shift saved offline. POS work can be saved locally. Reconnect to confirm this shift before starting Gaming; pending work will sync automatically."
+                        }
+                        operationNotice.value = openingMessage
+                        openingNotice.value = ShiftOpeningNotice(localId, assignedTerminalId, openingMessage)
+                        app.sync.requestSync()
+                    } catch (_: Exception) {
+                        operationError.value =
+                            "The shift could not be saved on this tablet. Try again; if it continues, ask an owner for help."
                     }
-                ) {
-                    operationError.value =
-                        "The signed-in account changed before the shift was saved. Nothing was opened; review Shift again."
-                    return@launchShiftOpeningCapture
                 }
-                operationError.value = null
-                val openingMessage = if (state.value.offlineGamingSupported) {
-                    "Shift saved on this tablet. Gaming and supported POS work can continue offline. Saved work will sync in order; review any server conflict before taking payment again."
-                } else if (state.value.online) {
-                    "Shift saved on this tablet. POS work can be saved locally; wait for server confirmation before starting Gaming."
-                } else {
-                    "Shift saved offline. POS work can be saved locally. Reconnect to confirm this shift before starting Gaming; pending work will sync automatically."
-                }
-                operationNotice.value = openingMessage
-                openingNotice.value = ShiftOpeningNotice(localId, assignedTerminalId, openingMessage)
-                app.sync.requestSync()
-            } catch (_: Exception) {
-                operationError.value =
-                    "The shift could not be saved on this tablet. Try again; if it continues, ask an owner for help."
-            }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { operationError.value = "Resolve the original till handover before opening this shift." }
         }
         if (!started) operationNotice.value = "Shift opening is already being saved. Wait for the current result."
     }
@@ -490,7 +551,7 @@ class ShiftViewModel : ViewModel() {
             return
         }
         busy.value = true
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; operationError.value = "Resolve the original till handover before changing this shift." }) {
             try {
                 val closedAt = System.currentTimeMillis()
                 var captureResult: ShiftCloseCaptureResult? = null
@@ -579,7 +640,7 @@ class ShiftViewModel : ViewModel() {
             return
         }
         busy.value = true
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; operationError.value = "Resolve the original till handover before changing this shift." }) {
             try {
                 var captureResult: ShiftCloseCaptureResult? = null
                 if (!app.cacheIsolation.commitIfCurrent(scopeLease) {
@@ -632,7 +693,7 @@ class ShiftViewModel : ViewModel() {
             return
         }
         busy.value = true
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; operationError.value = "Resolve the original till handover before changing this shift." }) {
             try {
                 if (!app.cacheIsolation.commitIfCurrent(scopeLease) {
                         db.shiftDao().cancelRejectedClose(shift.localId)
@@ -689,7 +750,7 @@ class ShiftViewModel : ViewModel() {
             return
         }
         busy.value = true
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; operationError.value = "Resolve the original till handover before changing this shift." }) {
             try {
                 var result: RejectedOpenRecoveryResult? = null
                 if (!app.cacheIsolation.commitIfCurrent(scopeLease) {
@@ -743,7 +804,7 @@ class ShiftViewModel : ViewModel() {
             return
         }
         busy.value = true
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; operationError.value = "Resolve the original till handover before changing this shift." }) {
             try {
                 val result = app.sync.verifyAndClearRejectedShiftOpen(shift.localId)
                 if (result.succeeded) {
@@ -769,7 +830,7 @@ class ShiftViewModel : ViewModel() {
         val terminalId = app.terminalStore.confirmedTerminalId()
         if (lease.scope.terminalId != terminalId ||
             !canAcknowledgeShiftCloseResult(localId, state.value, terminalId)) return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { busy.value = false; operationError.value = "Resolve the original till handover before changing this shift." }) {
             try {
                 app.cacheIsolation.commitIfCurrent(lease) {
                     // The button belongs to the rendered receipt, never a newer result.

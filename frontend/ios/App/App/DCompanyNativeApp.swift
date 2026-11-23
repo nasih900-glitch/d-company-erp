@@ -92,6 +92,12 @@ private enum DCompanyAPIError: Error, LocalizedError {
         }
     }
 
+    var isAccessDenied: Bool {
+        if case .unauthenticated = self { return true }
+        if case .badStatus(let code, _) = self { return code == 401 || code == 403 }
+        return false
+    }
+
     var isUnauthorized: Bool {
         if case .badStatus(let code, _) = self {
             return code == 401
@@ -694,6 +700,7 @@ private struct MeResponse: Decodable {
     let company_id: String
     let branch_id: String?
     let accessible_modules: [String]
+    let effective_permissions: [String]?
 }
 
 private struct MenuCategoryDTO: Codable, Identifiable, Hashable {
@@ -2393,12 +2400,20 @@ private struct OfflineSnapshot: Codable {
     let menuItems: [MenuItemDTO]
     let ingredients: [IngredientDTO]
     let dailyReport: ReportDTO?
+    let dailyReportScope: FinanceReadScope?
 }
 
-private final class OfflineSnapshotStore {
-    static let shared = OfflineSnapshotStore()
+private struct FinanceReadScope: Codable, Hashable {
+    let generation: UUID
+    let companyId: String
+    let userId: String
+    let branchId: String
+}
 
+private actor OfflineSnapshotStore {
+    static let shared = OfflineSnapshotStore()
     private let fileURL: URL
+    private var latestRevision = 0
 
     private init() {
         let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -2407,39 +2422,29 @@ private final class OfflineSnapshotStore {
         fileURL = directory.appendingPathComponent("offline-snapshot.json")
     }
 
-    func load() async -> OfflineSnapshot? {
-        let url = fileURL
-        return await Task.detached(priority: .utility) {
-            guard let data = try? Data(contentsOf: url) else { return nil }
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            return try? decoder.decode(OfflineSnapshot.self, from: data)
-        }.value
+    func load() -> OfflineSnapshot? {
+        guard let data = try? Data(contentsOf: fileURL) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(OfflineSnapshot.self, from: data)
     }
 
-    func save(categories: [MenuCategoryDTO], menuItems: [MenuItemDTO], ingredients: [IngredientDTO], dailyReport: ReportDTO?) async {
-        let url = fileURL
-        let snapshot = OfflineSnapshot(
-            version: 1,
-            savedAt: Date(),
-            categories: categories,
-            menuItems: menuItems,
-            ingredients: ingredients,
-            dailyReport: dailyReport
-        )
-        await Task.detached(priority: .utility) {
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            guard let data = try? encoder.encode(snapshot) else { return }
-            try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-        }.value
+    func save(categories: [MenuCategoryDTO], menuItems: [MenuItemDTO], ingredients: [IngredientDTO],
+              dailyReport: ReportDTO?, dailyReportScope: FinanceReadScope?, revision: Int) {
+        guard revision >= latestRevision else { return }
+        latestRevision = revision
+        let snapshot = OfflineSnapshot(version: 2, savedAt: Date(), categories: categories,
+            menuItems: menuItems, ingredients: ingredients, dailyReport: dailyReport, dailyReportScope: dailyReportScope)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(snapshot) else { return }
+        try? data.write(to: fileURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
-    func clear() async {
-        let url = fileURL
-        await Task.detached(priority: .utility) {
-            try? FileManager.default.removeItem(at: url)
-        }.value
+    func clear(revision: Int) {
+        guard revision >= latestRevision else { return }
+        latestRevision = revision
+        try? FileManager.default.removeItem(at: fileURL)
     }
 }
 
@@ -2802,6 +2807,10 @@ private final class AppCache: ObservableObject {
     @Published var menuItems: [MenuItemDTO] = []
     @Published var ingredients: [IngredientDTO] = []
     @Published var dailyReport: ReportDTO?
+    @Published private(set) var dailyReportScope: FinanceReadScope?
+    @Published private(set) var deniedFinanceScope: FinanceReadScope?
+    @Published private(set) var financeRevision = 0
+    private var persistenceRevision = 0
     @Published var lastSyncedAt: Date?
 
     var hasMenuData: Bool {
@@ -2813,22 +2822,52 @@ private final class AppCache: ObservableObject {
     }
 
     func restoreFromDisk() async {
-        guard let snapshot = await OfflineSnapshotStore.shared.load() else { return }
+        let revision = persistenceRevision
+        guard let snapshot = await OfflineSnapshotStore.shared.load(), revision == persistenceRevision else { return }
         categories = snapshot.categories
         menuItems = snapshot.menuItems
         ingredients = snapshot.ingredients
         dailyReport = snapshot.dailyReport
+        dailyReportScope = snapshot.dailyReportScope
         lastSyncedAt = snapshot.savedAt
     }
 
     func markSynced() async {
         lastSyncedAt = Date()
+        persistenceRevision += 1
         await OfflineSnapshotStore.shared.save(
             categories: categories,
             menuItems: menuItems,
             ingredients: ingredients,
-            dailyReport: dailyReport
+            dailyReport: dailyReport, dailyReportScope: dailyReportScope, revision: persistenceRevision
         )
+    }
+
+    func admitFinance(scope: FinanceReadScope) {
+        if deniedFinanceScope == scope { deniedFinanceScope = nil }
+    }
+
+    func admitDailyReport(_ report: ReportDTO, scope: FinanceReadScope) async {
+        dailyReport = report
+        dailyReportScope = scope
+        deniedFinanceScope = nil
+        await markSynced()
+    }
+
+    func invalidateFinance(scope: FinanceReadScope) async {
+        financeRevision += 1
+        deniedFinanceScope = scope
+        dailyReport = nil
+        dailyReportScope = nil
+        await markSynced()
+    }
+
+    func rejectUnadmittedDailyReport(scope: FinanceReadScope) async {
+        if dailyReportScope != scope {
+            dailyReport = nil
+            dailyReportScope = nil
+            await markSynced()
+        }
     }
 
     func clear() {
@@ -2836,9 +2875,14 @@ private final class AppCache: ObservableObject {
         menuItems = []
         ingredients = []
         dailyReport = nil
+        dailyReportScope = nil
+        deniedFinanceScope = nil
+        financeRevision += 1
         lastSyncedAt = nil
+        persistenceRevision += 1
+        let revision = persistenceRevision
         Task {
-            await OfflineSnapshotStore.shared.clear()
+            await OfflineSnapshotStore.shared.clear(revision: revision)
         }
     }
 }
@@ -2901,6 +2945,7 @@ private enum TerminalStore {
     }
 }
 
+@MainActor
 private final class AppSession: ObservableObject {
     enum Status: Equatable {
         case restoring
@@ -2908,6 +2953,7 @@ private final class AppSession: ObservableObject {
         case signedIn
     }
 
+    @Published private(set) var sessionGeneration = UUID()
     @Published var status: Status = .restoring
     @Published var me: MeResponse?
     @Published var lastError: String?
@@ -2958,6 +3004,20 @@ private final class AppSession: ObservableObject {
         hasProtectedOwnerAccess || accessibleModules.contains(module)
     }
 
+    func hasEffectivePermission(_ permission: String) -> Bool {
+        me?.effective_permissions?.contains(permission) == true
+    }
+
+    var canReadFinanceReports: Bool { hasEffectivePermission("finance.read") }
+    var canReadAnalyticsDashboard: Bool {
+        hasEffectivePermission("analytics.read") && canReadFinanceReports
+    }
+    var financeReadScope: FinanceReadScope? {
+        guard status == .signedIn, !isAuthenticating, let me, let branch = me.branch_id else { return nil }
+        return FinanceReadScope(generation: sessionGeneration, companyId: me.company_id,
+                                userId: me.user_id, branchId: branch)
+    }
+
     var canSeeInventory: Bool { hasModule("inventory") }
     var canSeeInsights: Bool { hasModule("insights_reports") }
     var canSeeTables: Bool { hasModule("tables") }
@@ -2979,6 +3039,8 @@ private final class AppSession: ObservableObject {
 
     func restore() async {
         guard status == .restoring else { return }
+        sessionGeneration = UUID()
+        let generation = sessionGeneration
         accessToken = TokenStore.read("access_token")
         refreshToken = TokenStore.read("refresh_token")
 
@@ -2991,34 +3053,44 @@ private final class AppSession: ObservableObject {
             let resolvedMe: MeResponse = try await authorized { token in
                 try await APIClient.shared.get("auth/me", token: token)
             }
+            guard sessionGeneration == generation else { return }
             me = resolvedMe
             await resolveTerminalClaim(for: resolvedMe)
+            guard sessionGeneration == generation else { return }
             status = .signedIn
             RealtimeClient.shared.connect()
         } catch {
-            signOut()
+            if sessionGeneration == generation { signOut() }
         }
     }
 
     func login(email: String, password: String) async {
+        sessionGeneration = UUID()
+        let generation = sessionGeneration
         lastError = nil
         isAuthenticating = true
-        defer { isAuthenticating = false }
+        defer { if sessionGeneration == generation { isAuthenticating = false } }
         do {
             let token: TokenPair = try await APIClient.shared.post("auth/login", body: LoginRequest(email: email, password: password))
+            guard sessionGeneration == generation else { return }
             save(token)
             let resolvedMe: MeResponse = try await APIClient.shared.get("auth/me", token: token.access_token)
+            guard sessionGeneration == generation else { return }
             me = resolvedMe
             await resolveTerminalClaim(for: resolvedMe)
+            guard sessionGeneration == generation else { return }
             status = .signedIn
             RealtimeClient.shared.connect()
         } catch {
+            guard sessionGeneration == generation else { return }
             status = .signedOut
             lastError = readable(error)
         }
     }
 
     func signOut() {
+        sessionGeneration = UUID()
+        isAuthenticating = false
         RealtimeClient.shared.disconnect()
         TokenStore.delete("access_token")
         TokenStore.delete("refresh_token")
@@ -3037,6 +3109,7 @@ private final class AppSession: ObservableObject {
     // terminals) it clears any stale stored terminal id rather than letting
     // a device silently keep using one that's no longer valid.
     func resolveTerminalClaim(for me: MeResponse) async {
+        let generation = sessionGeneration
         do {
             let terminals: [TerminalDTO] = try await authorized { token in
                 try await APIClient.shared.get(
@@ -3044,6 +3117,7 @@ private final class AppSession: ObservableObject {
                     queryItems: me.branch_id.map { [URLQueryItem(name: "branch_id", value: $0)] } ?? []
                 )
             }
+            guard sessionGeneration == generation else { return }
             let resolution = resolveTerminal(branchId: me.branch_id, storedTerminalId: TerminalStore.read(), terminals: terminals)
             switch resolution {
             case .ready(let terminalId, _):
@@ -3063,6 +3137,7 @@ private final class AppSession: ObservableObject {
                 self.terminalIssue = terminalResolutionMessage(resolution)
             }
         } catch {
+            guard sessionGeneration == generation else { return }
             TerminalStore.clear()
             terminalId = nil
             terminalOptions = []
@@ -3081,6 +3156,7 @@ private final class AppSession: ObservableObject {
     }
 
     func authorized<T>(_ operation: (String) async throws -> T) async throws -> T {
+        let generation = sessionGeneration
         guard let token = accessToken else {
             throw DCompanyAPIError.unauthenticated
         }
@@ -3088,7 +3164,9 @@ private final class AppSession: ObservableObject {
         do {
             return try await operation(token)
         } catch let error as DCompanyAPIError where error.isUnauthorized {
+            guard sessionGeneration == generation else { throw CancellationError() }
             try await refresh()
+            guard sessionGeneration == generation else { throw CancellationError() }
             guard let refreshed = accessToken else {
                 throw DCompanyAPIError.unauthenticated
             }
@@ -3097,14 +3175,17 @@ private final class AppSession: ObservableObject {
     }
 
     private func refresh() async throws {
+        let generation = sessionGeneration
         guard let refreshToken else {
             throw DCompanyAPIError.unauthenticated
         }
 
         do {
             let token: TokenPair = try await APIClient.shared.post("auth/refresh", body: RefreshRequest(refresh_token: refreshToken))
+            guard sessionGeneration == generation else { throw CancellationError() }
             save(token)
         } catch {
+            guard sessionGeneration == generation else { throw CancellationError() }
             signOut()
             throw error
         }
@@ -4130,7 +4211,16 @@ private struct DashboardNativeView: View {
     @EnvironmentObject private var network: NetworkMonitor
     @EnvironmentObject private var cache: AppCache
     let openTab: (NativeTab) -> Void
-    @State private var report: ReportDTO?
+    @State private var storedReport: ReportDTO?
+    @State private var reportScope: FinanceReadScope?
+    @State private var reportRevision: Int?
+    @State private var reportRequestID = UUID()
+
+    private var report: ReportDTO? {
+        guard session.canReadFinanceReports, let scope = session.financeReadScope,
+              reportScope == scope, reportRevision == cache.financeRevision, cache.deniedFinanceScope != scope else { return nil }
+        return storedReport
+    }
     @State private var lowStockCount = 0
     @State private var menuCount = 0
     @State private var isLoading = true
@@ -4254,7 +4344,7 @@ private struct DashboardNativeView: View {
                                         WorkspaceLinkRow(title: "OCR — Receipts", subtitle: "Scan bills, extract vendor and amount, approve", icon: "scanner")
                                     }
                                 }
-                                if session.canSeeInsights {
+                                if session.canReadAnalyticsDashboard {
                                     NavigationLink {
                                         AnalyticsNativeView()
                                     } label: {
@@ -4324,7 +4414,8 @@ private struct DashboardNativeView: View {
             }
             .background(Brand.background)
         }
-        .task { await load() }
+        .task(id: session.financeReadScope) { await load() }
+        .onChange(of: session.canReadFinanceReports) { _ in Task { await load() } }
     }
 
     private var twoColumns: [GridItem] {
@@ -4332,52 +4423,76 @@ private struct DashboardNativeView: View {
     }
 
     private var hasCachedSnapshot: Bool {
-        report != nil || menuCount > 0 || (session.canSeeInventory && lowStockCount > 0) || cache.dailyReport != nil || cache.hasMenuData || (session.canSeeInventory && cache.hasInventoryData)
+        report != nil || menuCount > 0 || (session.canSeeInventory && lowStockCount > 0) || (cache.dailyReportScope == session.financeReadScope && session.canReadFinanceReports && cache.dailyReport != nil) || cache.hasMenuData || (session.canSeeInventory && cache.hasInventoryData)
     }
 
     private func load() async {
+        guard let scope = session.financeReadScope else { return }
+        let request = UUID()
+        reportRequestID = request
+        func current() -> Bool { session.financeReadScope == scope && reportRequestID == request }
+        await cache.rejectUnadmittedDailyReport(scope: scope)
+        guard current() else { return }
+        let revision = cache.financeRevision
         applyCachedSnapshot()
         isLoading = !hasCachedSnapshot
-        defer { isLoading = false }
+        defer { if current() { isLoading = false } }
         error = nil
-        do {
-            async let loadedReport: ReportDTO = session.authorized { token in
-                try await APIClient.shared.get("reports/daily", token: token)
+        if session.canReadFinanceReports {
+            do {
+                let freshReport: ReportDTO = try await session.authorized { token in
+                    try await APIClient.shared.get("reports/daily", token: token)
+                }
+                guard current(), session.canReadFinanceReports, revision == cache.financeRevision else { return }
+                storedReport = freshReport
+                reportScope = scope
+                reportRevision = revision
+                await cache.admitDailyReport(freshReport, scope: scope)
+            } catch is CancellationError { return
+            } catch {
+                guard current(), revision == cache.financeRevision else { return }
+                if (error as? DCompanyAPIError)?.isAccessDenied == true {
+                    storedReport = nil
+                    reportScope = nil
+                    await cache.invalidateFinance(scope: scope)
+                }
+                if current() { self.error = readable(error) }
             }
-            async let loadedItems: [MenuItemDTO] = session.authorized { token in
+        } else {
+            storedReport = nil
+            reportScope = nil
+            await cache.invalidateFinance(scope: scope)
+        }
+        guard current() else { return }
+        do {
+            let freshItems: [MenuItemDTO] = try await session.authorized { token in
                 try await APIClient.shared.get("menu/items", token: token)
             }
-            let (freshReport, freshItems) = try await (loadedReport, loadedItems)
             let freshIngredients: [IngredientDTO]
             if session.canSeeInventory {
                 freshIngredients = try await session.authorized { token in
                     try await APIClient.shared.get("inventory/ingredients", token: token)
                 }
-            } else {
-                freshIngredients = []
-            }
-            withAnimation(.easeOut(duration: 0.18)) {
-                report = freshReport
-                menuCount = freshItems.count
-                lowStockCount = session.canSeeInventory ? freshIngredients.filter(\.isLowStock).count : 0
-                cache.dailyReport = freshReport
-                cache.menuItems = freshItems
-                if session.canSeeInventory {
-                    cache.ingredients = freshIngredients
-                } else {
-                    cache.ingredients = []
-                }
-            }
+            } else { freshIngredients = [] }
+            guard current() else { return }
+            menuCount = freshItems.count
+            lowStockCount = session.canSeeInventory ? freshIngredients.filter(\.isLowStock).count : 0
+            cache.menuItems = freshItems
+            cache.ingredients = freshIngredients
             await cache.markSynced()
         } catch is CancellationError {
-        } catch {
-            self.error = readable(error)
-        }
+        } catch { if current() { self.error = readable(error) } }
     }
 
     private func applyCachedSnapshot() {
-        if let cachedReport = cache.dailyReport {
-            report = cachedReport
+        if session.canReadFinanceReports, let scope = session.financeReadScope,
+           cache.dailyReportScope == scope, cache.deniedFinanceScope != scope, let cachedReport = cache.dailyReport {
+            storedReport = cachedReport
+            reportScope = scope
+            reportRevision = cache.financeRevision
+        } else {
+            storedReport = nil
+            reportScope = nil
         }
         if cache.hasMenuData {
             menuCount = cache.menuItems.count
@@ -4507,7 +4622,7 @@ private struct WorkspaceNativeView: View {
                                     WorkspaceLinkRow(title: "OCR — Receipts", subtitle: "Scan bills, extract vendor and amount, approve", icon: "scanner")
                                 }
                             }
-                            if session.canSeeInsights {
+                            if session.canReadAnalyticsDashboard {
                                 NavigationLink {
                                     AnalyticsNativeView()
                                 } label: {
@@ -9088,7 +9203,17 @@ private struct ReportsNativeView: View {
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var network: NetworkMonitor
     @EnvironmentObject private var cache: AppCache
-    @State private var report: ReportDTO?
+    @State private var storedReport: ReportDTO?
+    @State private var reportScope: FinanceReadScope?
+    @State private var reportRevision: Int?
+    @State private var reportPeriod: ReportPeriodScope?
+    @State private var reportRequestID = UUID()
+
+    private var report: ReportDTO? {
+        guard session.canReadFinanceReports, let scope = session.financeReadScope,
+              reportScope == scope, reportPeriod == period, reportRevision == cache.financeRevision, cache.deniedFinanceScope != scope else { return nil }
+        return storedReport
+    }
     @State private var taxCompliance: TaxComplianceDTO?
     @State private var period: ReportPeriodScope = .daily
     @State private var isLoading = true
@@ -9147,7 +9272,7 @@ private struct ReportsNativeView: View {
                             }
                         }
 
-                        if let taxCompliance {
+                        if session.hasEffectivePermission("analytics.read"), let taxCompliance {
                             GSTComplianceCard(compliance: taxCompliance)
                         }
 
@@ -9267,10 +9392,8 @@ private struct ReportsNativeView: View {
                         }
                         .disabled(report == nil)
 
-                        // GST filing exports — same analytics.export permission as
-                        // the report itself; gated the same way canSeeInsights
-                        // gates the Insights/Analytics tabs elsewhere in the app.
-                        if session.canSeeInsights {
+                        // Exports require their explicit capability in addition to finance admission.
+                        if session.canReadFinanceReports && session.hasEffectivePermission("analytics.export") {
                             Divider()
 
                             Button {
@@ -9296,7 +9419,11 @@ private struct ReportsNativeView: View {
             }
             .background(Brand.background)
         }
-        .task { await load() }
+        .task(id: session.financeReadScope) { await load() }
+        .onChange(of: session.canReadFinanceReports) { _ in Task { await load() } }
+        .onChange(of: cache.deniedFinanceScope) { scope in
+            if scope == session.financeReadScope { clearReport() }
+        }
         .sheet(item: $shareFile) { file in
             ActivityShareSheet(activityItems: [file.url])
         }
@@ -9314,7 +9441,10 @@ private struct ReportsNativeView: View {
     }
 
     private func exportGstr1() async {
-        guard !isExportingGstr1 else { return }
+        guard !isExportingGstr1, session.canReadFinanceReports, session.hasEffectivePermission("analytics.export"),
+              let scope = session.financeReadScope else { return }
+        let revision = cache.financeRevision
+        func current() -> Bool { session.financeReadScope == scope && revision == cache.financeRevision }
         isExportingGstr1 = true
         exportError = nil
         defer { isExportingGstr1 = false }
@@ -9327,16 +9457,25 @@ private struct ReportsNativeView: View {
                     queryItems: [URLQueryItem(name: "yyyy_mm", value: month)]
                 )
             }
+            guard current(), session.canReadFinanceReports, session.hasEffectivePermission("analytics.export") else { return }
             shareFile = try CSVExporter.write(data, filename: "GSTR1-\(month).csv")
             Haptics.success()
         } catch is CancellationError {
         } catch {
+            guard current() else { return }
+            if (error as? DCompanyAPIError)?.isAccessDenied == true {
+                clearReport()
+                await cache.invalidateFinance(scope: scope)
+            }
             exportError = readable(error)
         }
     }
 
     private func exportGstr3b() async {
-        guard !isExportingGstr3b else { return }
+        guard !isExportingGstr3b, session.canReadFinanceReports, session.hasEffectivePermission("analytics.export"),
+              let scope = session.financeReadScope else { return }
+        let revision = cache.financeRevision
+        func current() -> Bool { session.financeReadScope == scope && revision == cache.financeRevision }
         isExportingGstr3b = true
         exportError = nil
         defer { isExportingGstr3b = false }
@@ -9349,52 +9488,95 @@ private struct ReportsNativeView: View {
                     queryItems: [URLQueryItem(name: "yyyy_mm", value: month)]
                 )
             }
+            guard current(), session.canReadFinanceReports, session.hasEffectivePermission("analytics.export") else { return }
             shareFile = try CSVExporter.write(data, filename: "GSTR3B-\(month).csv")
             Haptics.success()
         } catch is CancellationError {
         } catch {
+            guard current() else { return }
+            if (error as? DCompanyAPIError)?.isAccessDenied == true {
+                clearReport()
+                await cache.invalidateFinance(scope: scope)
+            }
             exportError = readable(error)
         }
     }
 
+    private func clearReport() {
+        storedReport = nil
+        reportScope = nil
+        reportRevision = nil
+        reportPeriod = nil
+        taxCompliance = nil
+        shareFile = nil
+    }
+
     private func load() async {
-        if period == .daily, let cachedDailyReport = cache.dailyReport {
-            report = cachedDailyReport
-        } else {
-            report = nil
+        guard let scope = session.financeReadScope else { clearReport(); return }
+        let requestID = UUID()
+        reportRequestID = requestID
+        let requestedPeriod = period
+        func current() -> Bool {
+            session.financeReadScope == scope && reportRequestID == requestID && period == requestedPeriod
+        }
+        guard session.canReadFinanceReports else {
+            clearReport()
+            await cache.invalidateFinance(scope: scope)
+            if current() { error = "Finance read permission is required."; isLoading = false }
+            return
+        }
+        if !session.hasEffectivePermission("analytics.read") { taxCompliance = nil }
+        await cache.rejectUnadmittedDailyReport(scope: scope)
+        guard current() else { return }
+        let revision = cache.financeRevision
+        if period == .daily, cache.dailyReportScope == scope, cache.deniedFinanceScope != scope {
+            storedReport = cache.dailyReport
+            reportScope = scope
+            reportRevision = revision
+            reportPeriod = .daily
+        } else if reportScope != scope || reportPeriod != requestedPeriod || reportRevision != revision {
+            clearReport()
         }
         isLoading = report == nil
-        defer { isLoading = false }
+        defer { if current() { isLoading = false } }
         error = nil
-        taxCompliance = nil
         do {
-            let request = reportRequest(for: period)
+            let request = reportRequest(for: requestedPeriod)
             let loadedReport: ReportDTO = try await session.authorized { token in
                 try await APIClient.shared.get(request.path, token: token, queryItems: request.queryItems)
             }
-            let shouldCacheDailyReport = period == .daily
-            withAnimation(.easeOut(duration: 0.18)) {
-                report = loadedReport
-                if shouldCacheDailyReport {
-                    cache.dailyReport = loadedReport
-                }
+            guard current(), session.canReadFinanceReports, revision == cache.financeRevision else { return }
+            cache.admitFinance(scope: scope)
+            storedReport = loadedReport
+            reportScope = scope
+            reportRevision = revision
+            reportPeriod = requestedPeriod
+            if requestedPeriod == .daily { await cache.admitDailyReport(loadedReport, scope: scope) }
+            guard current(), revision == cache.financeRevision else { return }
+            guard session.hasEffectivePermission("analytics.read") else {
+                taxCompliance = nil
+                return
             }
-            if shouldCacheDailyReport {
-                await cache.markSynced()
-            }
-            taxCompliance = try? await session.authorized { token in
+            let loadedTax: TaxComplianceDTO = try await session.authorized { token in
                 try await APIClient.shared.get(
-                    "reports/tax-compliance",
-                    token: token,
+                    "reports/tax-compliance", token: token,
                     queryItems: [
                         URLQueryItem(name: "from_date", value: DateFormatters.apiDateOnly.string(from: loadedReport.period_start)),
                         URLQueryItem(name: "to_date", value: DateFormatters.apiDateOnly.string(from: loadedReport.period_end))
                     ]
                 )
             }
+            guard current(), session.canReadFinanceReports, revision == cache.financeRevision else { return }
+            guard session.hasEffectivePermission("analytics.read") else { taxCompliance = nil; return }
+            taxCompliance = loadedTax
         } catch is CancellationError {
         } catch {
-            self.error = readable(error)
+            guard current(), revision == cache.financeRevision else { return }
+            if (error as? DCompanyAPIError)?.isAccessDenied == true {
+                clearReport()
+                await cache.invalidateFinance(scope: scope)
+            }
+            if current() { self.error = readable(error) }
         }
     }
 
@@ -9460,7 +9642,16 @@ private struct SimpleBarChart: View {
 private struct AnalyticsNativeView: View {
     @EnvironmentObject private var session: AppSession
     @EnvironmentObject private var network: NetworkMonitor
-    @State private var data: DashboardKPIsDTO?
+    @EnvironmentObject private var cache: AppCache
+    @State private var storedData: DashboardKPIsDTO?
+    @State private var dataScope: FinanceReadScope?
+    @State private var dataRevision: Int?
+    @State private var requestID = UUID()
+    private var data: DashboardKPIsDTO? {
+        guard session.canReadAnalyticsDashboard, let scope = session.financeReadScope,
+              dataScope == scope, dataRevision == cache.financeRevision, cache.deniedFinanceScope != scope else { return nil }
+        return storedData
+    }
     @State private var isLoading = true
     @State private var error: String?
 
@@ -9525,25 +9716,48 @@ private struct AnalyticsNativeView: View {
             }
             .background(Brand.background)
         }
-        .task { await load() }
+        .task(id: session.financeReadScope) { await load() }
+        .onChange(of: session.canReadAnalyticsDashboard) { _ in Task { await load() } }
     }
 
     private var twoColumns: [GridItem] { [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)] }
     private var threeColumns: [GridItem] { [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)] }
 
     private func load() async {
+        let request = UUID()
+        requestID = request
+        guard session.canReadAnalyticsDashboard, let scope = session.financeReadScope else {
+            storedData = nil; dataScope = nil; isLoading = false
+            error = "Analytics and finance read permissions are required."
+            return
+        }
+        let revision = cache.financeRevision
+        func current() -> Bool { session.financeReadScope == scope && requestID == request && revision == cache.financeRevision }
         isLoading = data == nil
-        defer { isLoading = false }
+        defer { if current() { isLoading = false } }
         error = nil
         do {
             let today = DateFormatters.apiDateOnly.string(from: Date())
             let result: DashboardKPIsDTO = try await session.authorized { token in
                 try await APIClient.shared.get("analytics/dashboard", token: token, queryItems: [URLQueryItem(name: "on_date", value: today)])
             }
-            withAnimation(.easeOut(duration: 0.18)) { data = result }
+            guard current(), session.canReadAnalyticsDashboard else { return }
+            cache.admitFinance(scope: scope)
+            storedData = result
+            dataScope = scope
+            dataRevision = revision
         } catch is CancellationError {
         } catch {
+            guard current() else { return }
             self.error = readable(error)
+            if (error as? DCompanyAPIError)?.isAccessDenied == true {
+                storedData = nil
+                dataScope = nil
+                dataRevision = nil
+                // Invalidation changes the revision, so finish local loading before awaiting persistence.
+                isLoading = false
+                await cache.invalidateFinance(scope: scope)
+            }
         }
     }
 }

@@ -15,6 +15,8 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select, text
 
+from app.api.v1.gaming import router as gaming_router
+from app.core.errors import ForbiddenError
 from app.core.security import hash_password
 from app.models import (
     AuditLog,
@@ -936,6 +938,7 @@ async def test_missing_ended_amount_fails_closed_until_owner_repairs_it(
         headers={
             "Authorization": f"Bearer {token}",
             "X-Terminal-Id": str(seed_owner["terminal"].id),
+            "Idempotency-Key": f"cancel:{uuid4()}",
         },
     )
 
@@ -1708,6 +1711,297 @@ async def test_unbilled_filter_excludes_cancelled_and_already_ordered_history(
     assert response.status_code == 200, response.text
     returned_ids = {row["id"] for row in response.json()}
     assert returned_ids == {str(active.id), str(paused.id), str(ended.id)}
+
+
+@pytest.mark.asyncio
+async def test_owner_linked_review_projection_is_explicit_scoped_unpaid_and_bounded(
+    client,
+    session,
+    seed_owner,
+    monkeypatch,
+) -> None:
+    now = datetime.now(UTC)
+    seed_owner["company"].gst_registration_type = "unregistered"
+    seed_owner["company"].is_composition = False
+    seed_owner["branch"].state_code = "32"
+    seed_owner["terminal"].purpose = "hybrid"
+    main_shift = _shift(seed_owner, opened_at=now - timedelta(hours=2))
+    live_station = _station(seed_owner)
+    review_station = _station(seed_owner)
+    paid_station = _station(seed_owner)
+
+    foreign_branch = Branch(
+        id=uuid4(),
+        company_id=seed_owner["company"].id,
+        name=f"Foreign {uuid4().hex[:8]}",
+        invoice_series_code="F2",
+    )
+    foreign_terminal = Terminal(
+        id=uuid4(),
+        branch_id=foreign_branch.id,
+        name="Foreign hybrid",
+        purpose="hybrid",
+        is_active=True,
+        device_id=f"foreign-{uuid4()}",
+    )
+    foreign_shift = _shift(
+        seed_owner,
+        opened_at=now - timedelta(hours=2),
+        terminal_id=foreign_terminal.id,
+    )
+    foreign_shift.branch_id = foreign_branch.id
+    foreign_station = _station(seed_owner, branch_id=foreign_branch.id)
+
+    staff_role = Role(
+        id=uuid4(),
+        company_id=seed_owner["company"].id,
+        # Manager deliberately carries every permission required by the
+        # conditional projection. The denial below therefore proves the
+        # normalized Owner-role boundary rather than passing incidentally on
+        # a missing POS permission.
+        code="manager",
+        name="Operations manager",
+        permissions=[],
+    )
+    staff = User(
+        id=uuid4(),
+        company_id=seed_owner["company"].id,
+        email=f"linked-review-staff-{uuid4().hex[:8]}@test.local",
+        name="Linked review staff",
+        password_hash=hash_password("staff-password-1234"),
+        status="active",
+    )
+
+    def held_order(*, branch_id: UUID, terminal_id: UUID, shift_id: UUID) -> Order:
+        return Order(
+            id=uuid4(),
+            company_id=seed_owner["company"].id,
+            branch_id=branch_id,
+            terminal_id=terminal_id,
+            shift_id=shift_id,
+            opened_by=seed_owner["owner"].id,
+            type="session",
+            status="held",
+            subtotal_minor=4_000,
+            total_minor=4_000,
+            opened_at=now - timedelta(minutes=20),
+            held_at=now - timedelta(minutes=5),
+        )
+
+    paid_at = now - timedelta(minutes=1)
+    paid_category = MenuCategory(
+        id=uuid4(),
+        company_id=seed_owner["company"].id,
+        name=f"Projection paid {uuid4().hex[:8]}",
+        sort_order=0,
+    )
+    paid_item = MenuItem(
+        id=uuid4(),
+        company_id=seed_owner["company"].id,
+        category_id=paid_category.id,
+        sku=f"PROJECTION-PAID-{uuid4().hex[:8]}",
+        name="Settled projection exclusion",
+        type="gaming",
+        base_price_minor=4_000,
+        tax_rate=0,
+        price_includes_tax=True,
+        is_available=False,
+    )
+    paid_order = Order(
+        id=uuid4(),
+        company_id=seed_owner["company"].id,
+        branch_id=seed_owner["branch"].id,
+        terminal_id=seed_owner["terminal"].id,
+        shift_id=main_shift.id,
+        opened_by=seed_owner["owner"].id,
+        type="session",
+        status="paid",
+        subtotal_minor=4_000,
+        total_minor=4_000,
+        opened_at=now - timedelta(minutes=20),
+        closed_at=paid_at,
+        invoice_no=f"D/PR/26/{uuid4().hex[:8]}",
+        fiscal_year="2026-27",
+        invoice_issued_at=paid_at,
+    )
+    paid_line = OrderLine(
+        id=uuid4(),
+        order_id=paid_order.id,
+        menu_item_id=paid_item.id,
+        qty=1,
+        unit_price_minor=4_000,
+        line_total_minor=4_000,
+        discount_minor=0,
+        tax_rate=0,
+        taxable_value_minor=4_000,
+        cgst_minor=0,
+        sgst_minor=0,
+        igst_minor=0,
+        cess_minor=0,
+        kitchen_status="served",
+        kitchen_served_at=paid_at,
+    )
+    paid_payment = Payment(
+        id=uuid4(),
+        order_id=paid_order.id,
+        shift_id=main_shift.id,
+        recorded_by=seed_owner["owner"].id,
+        method="cash",
+        amount_minor=4_000,
+        tendered_minor=4_000,
+        change_minor=0,
+        paid_at=paid_at,
+        source_integrity_revision=48,
+    )
+    foreign_order = held_order(
+        branch_id=foreign_branch.id,
+        terminal_id=foreign_terminal.id,
+        shift_id=foreign_shift.id,
+    )
+
+    live = _running_session(
+        seed_owner,
+        station=live_station,
+        shift=main_shift,
+        start_at=now - timedelta(minutes=2),
+    )
+
+    def linked(station: Station, shift: Shift, order: Order, minutes: int) -> GamingSession:
+        row = _running_session(
+            seed_owner,
+            station=station,
+            shift=shift,
+            start_at=now - timedelta(minutes=minutes + 5),
+            status="ended",
+            amount_minor=4_000,
+        )
+        row.end_at = now - timedelta(minutes=5)
+        row.billable_minutes = minutes
+        row.order_id = order.id
+        return row
+
+    reviewable = _running_session(
+        seed_owner,
+        station=review_station,
+        shift=main_shift,
+        start_at=now - timedelta(minutes=25),
+        status="ended",
+        amount_minor=4_000,
+    )
+    reviewable.end_at = now - timedelta(minutes=5)
+    reviewable.billable_minutes = 20
+    paid = linked(paid_station, main_shift, paid_order, 25)
+    foreign = linked(foreign_station, foreign_shift, foreign_order, 30)
+
+    # These fixtures use scalar foreign-key ids rather than ORM relationships,
+    # so dependency ordering is explicit: branch/role/user before their
+    # terminal, stations and shift.
+    session.add_all([foreign_branch, staff_role, staff])
+    await session.flush()
+    session.add_all(
+        [
+            live_station,
+            review_station,
+            paid_station,
+            foreign_terminal,
+            foreign_station,
+            main_shift,
+        ]
+    )
+    await session.flush()
+    session.add(foreign_shift)
+    await session.flush()
+    session.add(foreign_order)
+    await session.flush()
+    session.add(paid_category)
+    await session.flush()
+    session.add(paid_item)
+    await session.flush()
+    await _persist_paid_order_fixture(
+        session,
+        order=paid_order,
+        line=paid_line,
+        payment=paid_payment,
+    )
+    session.add_all([live, reviewable, paid, foreign])
+    session.add(UserRole(id=uuid4(), user_id=staff.id, role_id=staff_role.id))
+    await session.commit()
+
+    owner_token = await _login(client, seed_owner)
+    owner_headers = {
+        "Authorization": f"Bearer {owner_token}",
+        "X-Terminal-Id": str(seed_owner["terminal"].id),
+    }
+    sent_to_pos = await client.post(
+        f"/api/v1/gaming/sessions/{reviewable.id}/send-to-pos",
+        headers=owner_headers,
+    )
+    assert sent_to_pos.status_code == 201, sent_to_pos.text
+    assert sent_to_pos.json()["amount_minor"] == 4_000
+    generated_order = await session.get(Order, UUID(sent_to_pos.json()["order_id"]))
+    assert generated_order is not None
+    generated_charge_lines = (
+        await session.execute(
+            select(OrderLine).where(OrderLine.order_id == generated_order.id)
+        )
+    ).scalars().all()
+    assert len(generated_charge_lines) == 1
+    assert generated_charge_lines[0].client_line_id is None
+
+    ordinary = await client.get(
+        "/api/v1/gaming/sessions?unbilled_only=true&limit=10",
+        headers=owner_headers,
+    )
+    limited = await client.get(
+        "/api/v1/gaming/sessions?unbilled_only=true&include_pos_linked_reviewable=true&limit=1",
+        headers=owner_headers,
+    )
+    reviewed = await client.get(
+        "/api/v1/gaming/sessions?unbilled_only=true&include_pos_linked_reviewable=true&limit=10",
+        headers=owner_headers,
+    )
+
+    assert ordinary.status_code == 200, ordinary.text
+    assert limited.status_code == 200, limited.text
+    assert reviewed.status_code == 200, reviewed.text
+    assert {row["id"] for row in ordinary.json()} == {str(live.id)}
+    assert [row["id"] for row in limited.json()] == [str(live.id)]
+    assert [row["id"] for row in reviewed.json()] == [str(live.id), str(reviewable.id)]
+
+    staff_login = await client.post(
+        "/api/v1/auth/login",
+        json={"email": staff.email, "password": "staff-password-1234"},
+    )
+    assert staff_login.status_code == 200, staff_login.text
+    denied = await client.get(
+        "/api/v1/gaming/sessions?unbilled_only=true&include_pos_linked_reviewable=true&limit=10",
+        headers={
+            "Authorization": f"Bearer {staff_login.json()['access_token']}",
+            "X-Terminal-Id": str(seed_owner["terminal"].id),
+        },
+    )
+    assert denied.status_code == 403, denied.text
+    assert "Only an Owner can review Gaming charges that have reached POS." in denied.text
+
+    invalid_mode = await client.get(
+        "/api/v1/gaming/sessions?include_pos_linked_reviewable=true&limit=10",
+        headers=owner_headers,
+    )
+    assert invalid_mode.status_code == 422, invalid_mode.text
+
+    for missing_permission in ("gaming.write", "pos.read", "pos.write", "pos.void"):
+        async def deny_one_permission(_session, _tenant, permission: str) -> None:
+            if permission == missing_permission:
+                raise ForbiddenError(f"missing permission: {permission}")
+
+        monkeypatch.setattr(gaming_router, "require_permission", deny_one_permission)
+        denied_permission = await client.get(
+            "/api/v1/gaming/sessions"
+            "?unbilled_only=true&include_pos_linked_reviewable=true&limit=10",
+            headers=owner_headers,
+        )
+        assert denied_permission.status_code == 403, denied_permission.text
+        assert missing_permission in denied_permission.text
 
 
 @pytest.mark.asyncio

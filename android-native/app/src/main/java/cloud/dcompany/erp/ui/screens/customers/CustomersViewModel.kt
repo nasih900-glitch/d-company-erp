@@ -113,6 +113,7 @@ data class CustomersUiState(
 class CustomersViewModel : ViewModel() {
 
     private val appCtx = DCompanyApp.instance
+    private val operations = appCtx.handoverOperations.caller(appCtx.shiftCache.profile.value, appCtx.cacheIsolation.currentLease())
     private val db = appCtx.db
 
     private val query = MutableStateFlow("")
@@ -319,7 +320,7 @@ class CustomersViewModel : ViewModel() {
         if (!requireWrite()) return
         val localId = customer.localWriteId ?: return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { notice.value = "Resolve the original till handover before retrying a customer change." }) {
             var queued = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     db.customerDao().getLocal(localId)?.let { row ->
@@ -385,7 +386,7 @@ class CustomersViewModel : ViewModel() {
         saving.value = true
         saveError.value = null
 
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { saving.value = false; saveError.value = "Resolve the original till handover before saving a customer." }) {
             try {
                 val dao = db.customerDao()
                 val now = System.currentTimeMillis()

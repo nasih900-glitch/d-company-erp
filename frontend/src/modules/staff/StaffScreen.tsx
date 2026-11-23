@@ -1,3 +1,5 @@
+import { withoutPaidBillWork } from '@/lib/paid-bill-admission';
+import { hasExactPermission } from '@/lib/effective-permissions';
 /**
  * Staff screen — full CRUD on users.
  *
@@ -11,17 +13,17 @@
  *  - Suspend / activate
  *  - Soft-delete
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Phone, UserPlus, Edit2, KeyRound, ShieldOff, ShieldCheck, Trash2,
-  Mail, AlertCircle, Loader2, Clock, LogIn, LogOut,
+  Mail, AlertCircle, Loader2, Clock,
 } from 'lucide-react';
 
 import { LIVE_MODE } from '@/lib/demo';
 import { STAFF, type StaffMember } from '@/lib/demo-data';
-import { attendance, auth, staff, type OnShiftDTO, type UserDTO, type RoleDTO } from '@/lib/erp-api';
-import { subscribeRealtime } from '@/lib/realtime';
-import { roleLabel } from '@/lib/roles';
+import { auth, staff, type UserDTO, type RoleDTO } from '@/lib/erp-api';
+import { managedRoleLabel, primaryRoleCode, roleLabel, rolePurpose } from '@/lib/roles';
 import { useAuth } from '@/modules/auth/AuthContext';
 import Modal from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmDialog';
@@ -29,8 +31,10 @@ import { useNotifications } from '@/components/ui/Notifications';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 import {
   buildStaffAccessPatch,
+  buildStaffDiscountPatch,
   canChangeStaffAccess,
   editableStaffRoleOptions,
+  staffRoleOptionGroups,
 } from './staff-edit-policy';
 
 const ROLE_COLOR: Record<string, string> = {
@@ -40,6 +44,8 @@ const ROLE_COLOR: Record<string, string> = {
   partner: 'border-accent-purple/40 text-accent-purple',
   manager: 'border-accent/40 text-accent',
   cashier: 'border-fg-muted/40 text-fg-muted',
+  gaming_cashier: 'border-fg-muted/40 text-fg-muted',
+  store_staff: 'border-fg-muted/40 text-fg-muted',
   kitchen: 'border-fg-muted/40 text-fg-muted',
   gaming_supervisor: 'border-fg-muted/40 text-fg-muted',
   auditor: 'border-fg-muted/40 text-fg-muted',
@@ -47,17 +53,9 @@ const ROLE_COLOR: Record<string, string> = {
 };
 
 const DEFAULT_ROLES: RoleDTO[] = [
-  { code: 'owner', name: 'Owner', description: 'Business owner title' },
-  { code: 'partner', name: 'Partner', description: 'Business partner title' },
-  { code: 'manager', name: 'Manager', description: 'Operations manager title' },
-  { code: 'cashier', name: 'Cashier', description: 'Cashier title' },
-  { code: 'kitchen', name: 'Kitchen', description: 'Kitchen team title' },
-  { code: 'gaming_supervisor', name: 'Gaming Supervisor', description: 'Gaming team title' },
-  { code: 'auditor', name: 'Auditor', description: 'Audit staff title' },
-  { code: 'staff', name: 'Staff', description: 'General staff — no Inventory or Insights/Reports access by default' },
-];
-
-const ROLE_DESCRIPTIONS = new Map(DEFAULT_ROLES.map((role) => [role.code, role.description]));
+  'owner', 'store_staff', 'auditor', 'manager', 'gaming_cashier', 'partner', 'cashier',
+  'kitchen', 'gaming_supervisor', 'staff',
+].map((code) => ({ code, name: roleLabel(code), description: rolePurpose(code) }));
 
 export default function StaffScreen() {
   const notifications = useNotifications();
@@ -71,8 +69,11 @@ export default function StaffScreen() {
   const [deleteUser, setDeleteUser] = useState<UserDTO | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const { me } = useAuth();
+  const canRead = hasExactPermission(me, 'staff.read');
+  const canWrite = hasExactPermission(me, 'staff.write');
 
-  async function load() {
+  const load = useCallback(async () => {
+    if (!canRead) { setUsers([]); setLoading(false); return; }
     setLoading(true);
     setError(null);
     try {
@@ -82,7 +83,8 @@ export default function StaffScreen() {
         if (r.length) {
           setRoles(r.map((role) => ({
             ...role,
-            description: ROLE_DESCRIPTIONS.get(role.code) ?? role.description,
+            name: roleLabel(role.code),
+            description: rolePurpose(role.code),
           })));
         }
       } else {
@@ -93,12 +95,12 @@ export default function StaffScreen() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [canRead]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, [load]);
 
   async function confirmDelete() {
-    if (!deleteUser) return;
+    if (!canWrite || !deleteUser) return;
     setDeleteBusy(true);
     try {
       await staff.deleteUser(deleteUser.id);
@@ -114,6 +116,7 @@ export default function StaffScreen() {
   }
 
   async function onToggleStatus(u: UserDTO) {
+    if (!canWrite) return;
     const next = u.status === 'active' ? 'suspended' : 'active';
     try {
       await staff.updateUser(u.id, { status: next });
@@ -135,12 +138,12 @@ export default function StaffScreen() {
             {users.length} user{users.length === 1 ? '' : 's'} · {onShift} active · Staff titles
           </p>
         </div>
-        <button className="btn btn-primary" onClick={() => setAddOpen(true)}>
+        {canWrite && <button className="btn btn-primary" onClick={() => { if (canWrite) setAddOpen(true); }}>
           <UserPlus size={14}/> Add user
-        </button>
+        </button>}
       </header>
 
-      {LIVE_MODE && <AttendanceWidget/>}
+      {LIVE_MODE && hasExactPermission(me, 'staff.attendance.write') && <AttendanceWidget/>}
 
       {error && (
         <div className="card mb-4 border-accent-bad/40 bg-accent-bad/10 text-accent-bad text-sm flex items-center gap-2">
@@ -162,10 +165,10 @@ export default function StaffScreen() {
                 targetRoles: [...u.roles, ...(u.managed_roles ?? [])],
                 callerHasAuditAccess: Boolean(me?.audit_access),
               })}
-              onEdit={() => setEditUser(u)}
-              onPassword={() => setPwdUser(u)}
+              onEdit={() => { if (canWrite) setEditUser(u); }}
+              onPassword={() => { if (canWrite) setPwdUser(u); }}
               onToggle={() => onToggleStatus(u)}
-              onDelete={() => setDeleteUser(u)}
+              onDelete={() => { if (canWrite) setDeleteUser(u); }}
             />
           ))}
           {!users.length && (
@@ -174,7 +177,7 @@ export default function StaffScreen() {
         </div>
       )}
 
-      {addOpen && (
+      {canWrite && addOpen && (
         <AddUserModal
           onClose={() => setAddOpen(false)}
           onSuccess={() => {
@@ -184,12 +187,15 @@ export default function StaffScreen() {
           }}
         />
       )}
-      {editUser && (
+      {canWrite && editUser && (
         <EditUserModal
           user={editUser}
           roles={roles}
           currentUserId={me?.user_id ?? null}
           canManageOwnerAccess={Boolean(me?.audit_access)}
+          canManageDiscountAccess={Boolean(me?.audit_access || me?.roles.some(
+            (role) => ['owner', 'co_owner', 'super_owner'].includes(role),
+          ))}
           onClose={() => setEditUser(null)}
           onSuccess={() => {
             setEditUser(null);
@@ -198,7 +204,7 @@ export default function StaffScreen() {
           }}
         />
       )}
-      {pwdUser && (
+      {canWrite && pwdUser && (
         <PasswordModal
           user={pwdUser}
           onClose={() => setPwdUser(null)}
@@ -208,7 +214,7 @@ export default function StaffScreen() {
           }}
         />
       )}
-      {deleteUser && (
+      {canWrite && deleteUser && (
         <ConfirmModal
           title="Delete staff user"
           message={`Delete ${deleteUser.name}? This cannot be undone.`}
@@ -223,128 +229,13 @@ export default function StaffScreen() {
   );
 }
 
-// ---------------------------------------------------------------- Attendance
-// Fallback only — the real-time push (see subscribeRealtime below) is what
-// actually keeps this in sync; this just covers the rare case of a missed
-// or dropped push (e.g. reconnecting after a network blip).
-const ATTENDANCE_POLL_MS = 120_000;
-
+// Keep account administration separate from actual-break attendance recording.
 function AttendanceWidget() {
-  const { me } = useAuth();
-  const [onShift, setOnShift] = useState<OnShiftDTO[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  async function load() {
-    try {
-      setOnShift(await attendance.onShift());
-      setErr(null);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'failed to load on-shift list');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => { load(); }, []);
-
-  // On-shift roster is shared across every device. Real-time push is what
-  // actually keeps this current — the moment anyone clocks in or out,
-  // every other screen hears about it within about a second, quietly (no
-  // loading spinner). The interval below is just a safety net for a
-  // missed push, not the primary mechanism.
-  useEffect(() => {
-    const unsubscribe = subscribeRealtime('attendance', load);
-    const id = setInterval(load, ATTENDANCE_POLL_MS);
-    return () => { unsubscribe(); clearInterval(id); };
-  }, []);
-
-  const myEntry = onShift.find((s) => s.user_id === me?.user_id);
-  const clockedIn = !!myEntry;
-
-  async function handleClockIn() {
-    if (!me?.branch_id) {
-      setErr('No branch on this account — ask an owner to assign one before clocking in.');
-      return;
-    }
-    setBusy(true); setErr(null);
-    try {
-      await attendance.clockIn(me.branch_id);
-      await load();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'clock-in failed');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleClockOut() {
-    setBusy(true); setErr(null);
-    try {
-      await attendance.clockOut();
-      await load();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'clock-out failed');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="card mb-4">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <div className="font-semibold flex items-center gap-2">
-            <Clock size={15}/> Attendance
-          </div>
-          <p className="text-xs text-fg-muted mt-0.5">
-            {clockedIn
-              ? `You clocked in at ${formatClockTime(myEntry!.clock_in_at)}`
-              : 'You are not clocked in right now'}
-          </p>
-        </div>
-        <button
-          className={`btn ${clockedIn ? 'btn-ghost' : 'btn-primary'} !min-h-[36px]`}
-          onClick={clockedIn ? handleClockOut : handleClockIn}
-          disabled={busy || loading}
-        >
-          {busy
-            ? <Loader2 className="animate-spin" size={14}/>
-            : clockedIn ? <LogOut size={14}/> : <LogIn size={14}/>}
-          {clockedIn ? 'Clock out' : 'Clock in'}
-        </button>
-      </div>
-
-      {err && <div className="mt-3"><ErrorRow text={err}/></div>}
-
-      <div className="mt-4 pt-3 border-t border-bg-border/60">
-        <div className="text-xs text-fg-muted mb-2">
-          On shift now {onShift.length ? `(${onShift.length})` : ''}
-        </div>
-        {loading ? (
-          <div className="text-xs text-fg-muted flex items-center gap-2">
-            <Loader2 className="animate-spin" size={12}/> Loading…
-          </div>
-        ) : onShift.length ? (
-          <div className="flex flex-wrap gap-2">
-            {onShift.map((s) => (
-              <span key={s.id} className="chip text-xs">
-                {s.user_name ?? s.user_email ?? 'Staff'} · since {formatClockTime(s.clock_in_at)}
-              </span>
-            ))}
-          </div>
-        ) : (
-          <div className="text-xs text-fg-muted">Nobody is clocked in right now.</div>
-        )}
-      </div>
-    </div>
-  );
-}
-function formatClockTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return <div className="card mb-4 flex flex-wrap items-center justify-between gap-3">
+    <div><h3 className="flex items-center gap-2 font-semibold"><Clock size={16} /> Individual time & attendance</h3>
+      <p className="mt-1 text-sm text-fg-muted">Record actual breaks, review monthly hours and keep draft salary proposals separate from payments.</p></div>
+    <Link className="btn btn-ghost" to="/staff/time">Open working time</Link>
+  </div>;
 }
 
 // ---------------------------------------------------------------- UserCard
@@ -358,7 +249,9 @@ function UserCard({
   onToggle: () => void;
   onDelete: () => void;
 }) {
-  const primaryRole = user.managed_roles?.[0] ?? user.roles[0] ?? 'cashier';
+  const canWrite = hasExactPermission(useAuth().me, 'staff.write');
+  const assignedRoles = (user.managed_roles ?? user.roles).filter((role) => role !== 'pos_discount');
+  const primaryRole = primaryRoleCode(assignedRoles);
   const accessNote = user.managed_roles?.includes('super_owner')
     ? 'Audit owner · full operational access'
     : user.managed_roles?.includes('co_owner')
@@ -375,7 +268,7 @@ function UserCard({
           </div>
           <div className="min-w-0">
             <div className="font-semibold truncate">{user.name}</div>
-            <div className="text-xs text-fg-muted truncate">{roleLabel(primaryRole)}</div>
+            <div className="text-xs text-fg-muted truncate">{assignedRoles.map(user.managed_roles ? managedRoleLabel : roleLabel).join(', ') || 'No role'}</div>
             {accessNote && (
               <div className="mt-1 flex items-center gap-1 text-[11px] text-fg-muted">
                 <ShieldCheck size={11} className="shrink-0" aria-hidden="true"/>
@@ -394,7 +287,7 @@ function UserCard({
           <div className="flex items-center gap-2"><Phone size={11}/> {user.phone}</div>
         )}
       </div>
-      <div className="flex gap-1 flex-wrap pt-3 border-t border-bg-border/60">
+      {canWrite && <div className="flex gap-1 flex-wrap pt-3 border-t border-bg-border/60">
         <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs" onClick={onEdit}>
           <Edit2 size={11}/> Edit
         </button>
@@ -420,7 +313,7 @@ function UserCard({
             </button>
           </>
         )}
-      </div>
+      </div>}
     </div>
   );
 }
@@ -429,6 +322,7 @@ function UserCard({
 function AddUserModal({
   onClose, onSuccess,
 }: { onClose: () => void; onSuccess: () => void }) {
+  const canWrite = hasExactPermission(useAuth().me, 'staff.write');
   const [form, setForm] = useState({
     email: '', name: '', password: '', confirm: '', phone: '',
   });
@@ -439,6 +333,7 @@ function AddUserModal({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (!canWrite) return;
     setBusy(true); setErr(null);
     try {
       if (!challenge) {
@@ -514,42 +409,53 @@ function AddUserModal({
 
 // ---------------------------------------------------------------- Edit
 function EditUserModal({
-  user, roles, currentUserId, canManageOwnerAccess, onClose, onSuccess,
+  user, roles, currentUserId, canManageOwnerAccess, canManageDiscountAccess, onClose, onSuccess,
 }: {
   user: UserDTO;
   roles: RoleDTO[];
   currentUserId: string | null;
   canManageOwnerAccess: boolean;
+  canManageDiscountAccess: boolean;
   onClose: () => void;
   onSuccess: () => void;
 }) {
+  const canWrite = hasExactPermission(useAuth().me, 'staff.write');
   const isSelf = user.id === currentUserId;
-  const originalRoleCode = user.managed_roles?.[0] ?? user.roles[0] ?? 'cashier';
+  const originalRoleCode = primaryRoleCode(user.managed_roles ?? user.roles);
+  const hasMultiplePrimaryRoles = (user.managed_roles ?? user.roles).filter((role) => role !== 'pos_discount').length > 1;
   const effectiveRoles = [...user.roles, ...(user.managed_roles ?? [])];
   const isOwner = effectiveRoles.some((role) => (
     role === 'owner' || role === 'co_owner' || role === 'super_owner'
   ));
   const isProtectedOwner = effectiveRoles.includes('super_owner');
   const accessChangesLocked = isSelf || isProtectedOwner || (isOwner && !canManageOwnerAccess);
-  const roleOptions = editableStaffRoleOptions(roles, canManageOwnerAccess);
+  const roleChangesLocked = accessChangesLocked || (isOwner && user.managed_roles == null);
+  const roleOptions = editableStaffRoleOptions(roles, canManageOwnerAccess, user.managed_roles != null);
+  const { everyday, advanced } = staffRoleOptionGroups(roleOptions);
+  const displayRole = user.managed_roles ? managedRoleLabel : roleLabel;
   const [form, setForm] = useState({
     name: user.name,
     phone: user.phone ?? '',
     role_code: originalRoleCode,
     status: user.status,
   });
+  const originalDiscountAllowed = originalRoleCode === 'gaming_cashier' && (user.manual_discount_allowed ?? user.roles.includes('pos_discount'));
+  const [discountAllowed, setDiscountAllowed] = useState(originalDiscountAllowed);
   const [roleSelectionChanged, setRoleSelectionChanged] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (!canWrite) return;
     setBusy(true); setErr(null);
     try {
       const accessPatch = buildStaffAccessPatch({
         originalRoleCode,
         selectedRoleCode: form.role_code,
         roleSelectionChanged,
+        roleChangesLocked,
+        hasMultiplePrimaryRoles,
         originalStatus: user.status,
         selectedStatus: form.status,
         accessChangesLocked,
@@ -558,6 +464,11 @@ function EditUserModal({
         name: form.name.trim(),
         phone: form.phone.trim() || null,
         ...accessPatch,
+        ...buildStaffDiscountPatch({
+          originalAllowed: originalDiscountAllowed, selectedAllowed: discountAllowed,
+          canManage: canManageDiscountAccess && !accessChangesLocked, selectedRoleCode: form.role_code,
+          primaryRoleWillBeReplaced: accessPatch.role_code !== undefined,
+        }),
       });
       onSuccess();
     } catch (e) {
@@ -580,11 +491,10 @@ function EditUserModal({
             onChange={(e) => setForm({ ...form, phone: e.target.value })}/>
         </Field>
         <Field label="Role">
-          {accessChangesLocked ? (
+          {roleChangesLocked ? (
             <input
               className="input"
-              value={roleOptions.find((role) => role.code === originalRoleCode)?.name
-                ?? roleLabel(originalRoleCode)}
+              value={displayRole(originalRoleCode)}
               disabled
             />
           ) : (
@@ -593,12 +503,45 @@ function EditUserModal({
                 setRoleSelectionChanged(true);
                 setForm({ ...form, role_code: e.target.value });
               }}>
-              {roleOptions.map((r) => (
-                <option key={r.code} value={r.code}>{r.name}</option>
-              ))}
+              {!roleOptions.some((role) => role.code === originalRoleCode) && (
+                <option value={originalRoleCode}>{displayRole(originalRoleCode)} (current)</option>
+              )}
+              <optgroup label="Everyday roles">
+                {everyday.map((role) => <option key={role.code} value={role.code}>{displayRole(role.code)}</option>)}
+              </optgroup>
+              {advanced.length > 0 && <optgroup label="Advanced / legacy roles">
+                {advanced.map((role) => <option key={role.code} value={role.code}>{displayRole(role.code)}</option>)}
+              </optgroup>}
             </select>
           )}
         </Field>
+        {isOwner && user.managed_roles == null && !accessChangesLocked && (
+          <p className="text-xs text-fg-muted">Exact owner access is unavailable. Refresh Staff online before changing this role.</p>
+        )}
+        <p className="text-xs text-fg-muted">{hasMultiplePrimaryRoles ? 'Selected role purpose: ' : ''}{rolePurpose(form.role_code)}</p>
+        <p className="text-xs text-fg-muted">Role choices use existing permissions. Configurable role access may differ; review Access Control for exact actions.</p>
+        {hasMultiplePrimaryRoles && <div className="text-xs text-fg-muted space-y-2">
+          <p>This account combines multiple roles. A role replacement removes other assignments and supplemental grants. Profile-only saves preserve them.</p>
+          {!roleChangesLocked && <button type="button" className="btn btn-ghost text-xs"
+            onClick={() => setRoleSelectionChanged(true)} disabled={roleSelectionChanged}>
+            {roleSelectionChanged ? 'Save will use only the selected role' : 'Use only the selected role when saving'}
+          </button>}
+        </div>}
+        {canManageDiscountAccess && !accessChangesLocked && form.role_code === 'gaming_cashier' && (
+          <div className="rounded-xl border border-bg-border p-3 space-y-2">
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={discountAllowed}
+                disabled={form.role_code !== 'gaming_cashier'}
+                onChange={(event) => setDiscountAllowed(event.target.checked)}/>
+              Allow manual POS discounts
+            </label>
+            <p className="text-xs text-fg-muted">
+              Legacy Gaming &amp; POS staff only. Adds discounts without management access.
+              Role replacement removes previous grants; this Owner control reapplies the selected discount setting for this legacy role.
+              An access change signs out existing sessions.
+            </p>
+          </div>
+        )}
         <Field label="Status">
           {accessChangesLocked ? (
             <input className="input" value={form.status === 'active' ? 'Active' : 'Suspended'} disabled/>
@@ -633,9 +576,11 @@ function EditUserModal({
 }
 
 // ---------------------------------------------------------------- Password
-function PasswordModal({
+export function PasswordModal({
   user, onClose, onSuccess,
 }: { user: UserDTO; onClose: () => void; onSuccess: () => void }) {
+  const { me } = useAuth();
+  const canWrite = hasExactPermission(me, 'staff.write');
   const [pwd, setPwd] = useState('');
   const [confirmPwd, setConfirmPwd] = useState('');
   const [challenge, setChallenge] = useState<{ id: string; destination: string } | null>(null);
@@ -646,14 +591,19 @@ function PasswordModal({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (!canWrite) return;
     setBusy(true); setErr(null);
     try {
       if (!challenge) {
-        const result = await auth.requestPasswordReset(user.email);
+        const result = await (user.id === me?.user_id
+          ? withoutPaidBillWork(() => auth.requestPasswordReset(user.email))
+          : auth.requestPasswordReset(user.email));
         setChallenge({ id: result.challenge_id, destination: result.destination });
       } else {
         if (pwd !== confirmPwd) throw new Error('Passwords do not match');
-        await auth.confirmPasswordReset(challenge.id, code, pwd);
+        await (user.id === me?.user_id
+          ? withoutPaidBillWork(() => auth.confirmPasswordReset(challenge.id, code, pwd))
+          : auth.confirmPasswordReset(challenge.id, code, pwd));
         setDone(true);
         setTimeout(onSuccess, 900);
       }

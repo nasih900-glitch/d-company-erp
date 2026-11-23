@@ -1,0 +1,11 @@
+# Build 63 guarded release and deployment
+
+Candidate: 3.1.56 / Android63 / Room58 / Alembic0094. Immutable predecessor:3.1.55 /62. Read `V3_1_56_RELEASE_CANDIDATE.md` for the exact coordinated-job budget correction and its limits. Build 62 history and every inherited literal source map remain immutable.
+
+1. Keep candidate source admission unfrozen until exact staged-source review. Preserve all 35 inherited literal maps and add only the Build 63 overlay. Independently verify the Git archive, backend wire manifest (`digest TAB backend-relative path LF`) and protected inventory (`repo-relative path NUL digest LF`); never substitute one hash format for another.
+2. After committing the reviewed source, run the real committed-HEAD manifest/protected-inventory regression with the actual unmodified declared pins. Require complete green branch CI before tagging the new immutable release. The 65-minute coordinated-job budget must still execute every migration, backend/repository test, dependency/security and web gate; timeout or partial progress cannot pass.
+3. Preserve the Build 62 public BUNDLE transform, same-variant APK reference, raw/audit retention, all seven exact handoff comparisons, locked/verified dependencies and ProfileInstaller 1.4.1. Require fresh canonical unsigned builds and independent reproduction; use the unchanged protected signing job only after all upstream gates pass. See `BUILD62_GUARDED_DEPLOYMENT.md` for the inherited packaging and generated-APK validation boundaries.
+4. Admit actual signed bytes with the original certificate, then run the preserved signed-upgrade matrix and failure controls on those exact candidate bytes. Prior emulator fixtures do not establish acceptance for a newly signed candidate. Keep the unavailable physical Redmi Pad2 limitation explicit.
+5. Deploy only through the existing guarded installer with exact eligible prior Build 54 runtime, normal Owner-session acceptance, maintenance, backup/restore and rollback evidence. Preserve databases, volumes, pending offline work, stock and financial history. Verify actual public update metadata and immutable APK bytes after deployment before reporting an offered update.
+
+This runbook does not activate private plans, create credentials or bypass any acceptance gate. No deployed, installed, signed or offered claim follows from source preparation alone.

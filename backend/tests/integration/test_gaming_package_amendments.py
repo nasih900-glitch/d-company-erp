@@ -589,8 +589,12 @@ async def test_cancelled_amendment_durable_replay_requires_cancellation_evidence
 
     cancelled = await client.post(
         f"/api/v1/gaming/sessions/{session_id}/cancel",
-        json={"reason": "Incorrect booking confirmed by staff"},
-        headers=_headers(seed_owner, token),
+        json={
+            "reason": "Incorrect booking confirmed by staff",
+            "expected_order_id": None,
+            "expected_billing_revision": amended.json()["billing_revision"],
+        },
+        headers=_headers(seed_owner, token, f"cancel:{uuid4()}"),
     )
     assert cancelled.status_code == 200, cancelled.text
     assert cancelled.json()["status"] == "cancelled"

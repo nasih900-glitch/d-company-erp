@@ -18,6 +18,8 @@ data class StaffUser(
     val phone: String? = null,
     val status: String,
     val roles: List<String> = emptyList(),
+    // Authorized online management metadata only; StaffCacheEntity keeps public roles.
+    @SerialName("managed_roles") val managedRoles: List<String>? = null,
     @SerialName("last_login_at") val lastLoginAt: String? = null,
 )
 

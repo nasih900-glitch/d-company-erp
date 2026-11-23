@@ -1,6 +1,12 @@
 package cloud.dcompany.erp.ui.screens.finance
 
 import android.content.Context
+import cloud.dcompany.erp.BuildConfig
+import cloud.dcompany.erp.core.handover.OperationDispatchGate
+import cloud.dcompany.erp.core.handover.OperationTaggedCallFactory
+import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
+import okhttp3.MediaType.Companion.toMediaType
+import retrofit2.Retrofit
 import cloud.dcompany.erp.core.errors.RecoveryRisk
 import cloud.dcompany.erp.core.errors.recoveryGuidance
 import cloud.dcompany.erp.core.net.ApiClient
@@ -136,6 +142,10 @@ internal interface FinanceWriteRecoveryStore {
     fun clear(write: PendingFinanceOnlineWrite): Boolean
 }
 
+internal const val FINANCE_RECOVERY_BLOCKED_MESSAGE = "Pending financial work needs recovery. Its saved evidence has been retained; do not enter a replacement request."
+/** No parser cause or other account's private command escapes this storage boundary. */
+internal class FinanceRecoveryUnavailable : java.io.IOException(FINANCE_RECOVERY_BLOCKED_MESSAGE)
+
 internal class SharedPreferencesFinanceWriteRecoveryStore(context: Context) :
     FinanceWriteRecoveryStore {
     private val preferences = context.applicationContext.getSharedPreferences(
@@ -143,30 +153,38 @@ internal class SharedPreferencesFinanceWriteRecoveryStore(context: Context) :
         Context.MODE_PRIVATE,
     )
 
-    override fun load(scope: FinanceWriteScope): PendingFinanceOnlineWrite? {
-        val key = key(scope)
-        val raw = preferences.getString(key, null) ?: return null
-        val restored = runCatching {
-            ApiClient.json.decodeFromString<PendingFinanceOnlineWrite>(raw)
-        }.getOrNull()
-        if (restored?.scope == scope) return restored
-        preferences.edit().remove(key).apply()
-        return null
+    override fun load(scope: FinanceWriteScope): PendingFinanceOnlineWrite? = synchronized(lock) {
+        try {
+            val raw = preferences.getString(key(scope), null) ?: return@synchronized null
+            ApiClient.json.decodeFromString<PendingFinanceOnlineWrite>(raw).also {
+                if (it.scope != scope) throw FinanceRecoveryUnavailable()
+            }
+        } catch (_: Exception) { throw FinanceRecoveryUnavailable() }
     }
 
-    override fun save(write: PendingFinanceOnlineWrite): Boolean = runCatching {
-        preferences.edit()
-            .putString(key(write.scope), ApiClient.json.encodeToString(write))
-            .commit()
-    }.getOrDefault(false)
+    override fun save(write: PendingFinanceOnlineWrite): Boolean = synchronized(lock) {
+        try {
+            val existing = load(write.scope)
+            val raw = ApiClient.json.encodeToString(write)
+            if (existing != null && (existing != write || preferences.getString(key(write.scope), null) != raw)) return@synchronized false
+            preferences.edit().putString(key(write.scope), raw).commit()
+        } catch (_: Exception) { false }
+    }
 
-    override fun clear(write: PendingFinanceOnlineWrite): Boolean {
-        val key = key(write.scope)
-        val current = preferences.getString(key, null)
-        val expected = runCatching { ApiClient.json.encodeToString(write) }.getOrNull()
-            ?: return false
-        if (current != expected) return false
-        return preferences.edit().remove(key).commit()
+    override fun clear(write: PendingFinanceOnlineWrite): Boolean = synchronized(lock) {
+        try {
+            val key = key(write.scope)
+            val current = preferences.getString(key, null)
+            val expected = ApiClient.json.encodeToString(write)
+            if (current != expected) return@synchronized false
+            preferences.edit().remove(key).commit()
+        } catch (_: Exception) { false }
+    }
+
+    /** Presence only, across scopes; malformed retained bytes can never become a clean result. */
+    fun hasSavedWork(): Boolean = synchronized(lock) {
+        try { preferences.all.keys.any { it.startsWith("pending:") } }
+        catch (_: Exception) { throw FinanceRecoveryUnavailable() }
     }
 
     private fun key(scope: FinanceWriteScope): String = buildString {
@@ -179,6 +197,7 @@ internal class SharedPreferencesFinanceWriteRecoveryStore(context: Context) :
     }
 
     private companion object {
+        val lock = Any()
         const val PREFERENCES = "dcompany_finance_online_write_recovery_v1"
     }
 }
@@ -192,8 +211,29 @@ internal interface FinanceOnlineWriteExecutor {
     suspend fun execute(write: PendingFinanceOnlineWrite): FinanceOnlineWriteResult
 }
 
+/** Confirmed accounting writes have one physical attempt; only the saved request may be retried explicitly. */
+internal fun singleAttemptFinanceWriteExecutor(
+    accessToken: String,
+    terminalId: String?,
+    beforeDispatch: () -> Unit,
+    baseUrl: String = BuildConfig.API_BASE_URL,
+    operationGate: OperationDispatchGate? = null,
+): FinanceOnlineWriteExecutor {
+    // An omitted test override uses the mandatory production startup/original-operation gate.
+    val client = if (operationGate == null) {
+        ApiClient.ephemeralAuthorityClient(accessToken, terminalId, beforeDispatch, singleAttempt = true)
+    } else {
+        ApiClient.ephemeralAuthorityClient(accessToken, terminalId, beforeDispatch, singleAttempt = true, operationGate = operationGate)
+    }
+    val api = Retrofit.Builder().baseUrl(baseUrl)
+        .callFactory(OperationTaggedCallFactory(client))
+        .addConverterFactory(ApiClient.json.asConverterFactory("application/json".toMediaType()))
+        .build().create(FinanceApi::class.java)
+    return RetrofitFinanceOnlineWriteExecutor(api)
+}
+
 internal class RetrofitFinanceOnlineWriteExecutor(
-    private val api: FinanceApi = ApiClient.create(),
+    private val api: FinanceApi,
 ) : FinanceOnlineWriteExecutor {
     override suspend fun execute(write: PendingFinanceOnlineWrite): FinanceOnlineWriteResult =
         when (write.kind) {
@@ -228,8 +268,8 @@ internal class RetrofitFinanceOnlineWriteExecutor(
         }
 }
 
-internal fun preserveFinanceWriteForRetry(error: Throwable): Boolean =
-    error !is ApiException || error.mustPreserveOutbox
+internal fun preserveFinanceWriteForRetry(error: Throwable, retainedBeforeAttempt: Boolean = false): Boolean =
+    retainedBeforeAttempt || error !is ApiException || error.mustPreserveOutbox
 
 internal fun financeWriteFailureMessage(error: Throwable, preserved: Boolean): String {
     if (preserved) {

@@ -6,16 +6,24 @@ import retrofit2.http.Query
 
 /**
  * Reports are read-only aggregations — nothing here mutates money, so none of
- * these calls carries an Idempotency-Key. Every endpoint requires the
- * analytics.read permission; a cashier account gets a 403 whose message the
- * screen shows verbatim.
+ * these calls carries an Idempotency-Key. The reduced Overview requires
+ * analytics.read; the full P&L and inventory
+ * costing calls require finance.read. A caller must never infer one grant from
+ * the other.
  *
  * Query parameter names match backend/app/api/v1/reports/router.py exactly.
- * All are optional server-side and default to the current period in the
- * company's own timezone, but this screen always sends them so the picker and
- * the report on screen can never disagree.
+ * The Overview dates are optional server-side. Its first Daily request omits
+ * them so the company timezone, rather than the tablet timezone, chooses the
+ * current business day. Once that validated day is displayed, picker requests
+ * send both dates explicitly so the controls and response cannot disagree.
  */
-interface ReportsApi {
+internal interface ReportsApi {
+
+    @GET("reports/overview?schema_version=reports.overview.v2")
+    suspend fun overview(
+        @Query("from_date") fromDate: String? = null,
+        @Query("to_date") toDate: String? = null,
+    ): ReportsOverviewWire
 
     /** Catalogue coverage behind COGS; loaded independently so P&L stays available if it fails. */
     @GET("insights/inventory/costing-coverage")

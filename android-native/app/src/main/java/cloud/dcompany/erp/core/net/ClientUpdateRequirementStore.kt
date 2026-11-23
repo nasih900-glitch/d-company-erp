@@ -10,6 +10,9 @@ private const val STORE_NAME = "client_update_requirement"
 private const val KEY_INSTALLED_VERSION_CODE = "installed_version_code"
 private const val KEY_POLICY_REVISION = "policy_revision"
 private const val KEY_NOTICE_JSON = "notice_json"
+private const val KEY_AUTHORITY_BUILD = "authority_build"
+private const val KEY_AUTHORITY_REVISION = "authority_revision"
+private const val KEY_AUTHORITY_JSON = "authority_json"
 private const val PERSISTENCE_SCHEMA_VERSION = 1
 
 private val persistenceJson = Json {
@@ -135,7 +138,52 @@ class ClientUpdateRequirementStore(
     private val preferences = context.getSharedPreferences(STORE_NAME, Context.MODE_PRIVATE)
     private val lock = Any()
 
+    fun restoreAuthority(): ClientPolicyAuthority? = synchronized(lock) {
+        if (preferences.getInt(KEY_AUTHORITY_BUILD, -1) != installedVersionCode) return@synchronized null
+        runCatching {
+            persistenceJson.decodeFromString(ClientPolicyAuthority.serializer(), preferences.getString(KEY_AUTHORITY_JSON, null) ?: "")
+        }.getOrNull()?.takeIf {
+            it.revision == preferences.getInt(KEY_AUTHORITY_REVISION, -1) && it.revision > 0 && it.minimum > 0 &&
+                it.required == (installedVersionCode < it.minimum)
+        }
+    }
+
+    /** Commit the highest authority and required gate together; never erase it on Optional. */
+    @SuppressLint("ApplySharedPref")
+    fun persistDecision(authority: ClientPolicyAuthority, notice: ClientUpdateNotice?): Boolean = synchronized(lock) {
+        if (authority.revision <= 0 || authority.minimum <= 0 ||
+            authority.required != (installedVersionCode < authority.minimum)) return@synchronized false
+        if (authority.required && (notice == null || notice.policyRevision != authority.revision ||
+                notice.currentVersionCode != installedVersionCode || notice.minimumSupportedVersionCode != authority.minimum ||
+                (notice.latestVersionCode ?: 0) < authority.minimum)) return@synchronized false
+        val previous = restoreAuthority()
+        if (previous != null && (authority.revision < previous.revision ||
+                (authority.revision == previous.revision && authority != previous))) return@synchronized false
+        if (notice != null && !authority.required) return@synchronized false
+        val editor = preferences.edit()
+            .putInt(KEY_AUTHORITY_BUILD, installedVersionCode)
+            .putInt(KEY_AUTHORITY_REVISION, authority.revision)
+            .putString(KEY_AUTHORITY_JSON, persistenceJson.encodeToString(ClientPolicyAuthority.serializer(), authority))
+        if (notice == null) {
+            editor.remove(KEY_INSTALLED_VERSION_CODE).remove(KEY_POLICY_REVISION).remove(KEY_NOTICE_JSON)
+        } else {
+            editor.putInt(KEY_INSTALLED_VERSION_CODE, installedVersionCode)
+                .putInt(KEY_POLICY_REVISION, notice.policyRevision)
+                .putString(KEY_NOTICE_JSON, encodePersistedUpdateRequirement(installedVersionCode, notice))
+        }
+        editor.commit()
+    }
+
     fun restore(): ClientUpdateNotice? = synchronized(lock) {
+        if (preferences.getInt(KEY_AUTHORITY_BUILD, -1) == installedVersionCode && restoreAuthority() == null) {
+            return@synchronized ClientUpdateNotice("The saved update policy could not be read. Reconnect to verify this build.",
+                null, installedVersionCode, null, null, preferences.getInt(KEY_AUTHORITY_REVISION, 0).coerceAtLeast(0))
+        }
+        val authority = restoreAuthority()
+        if (authority?.required == true && !preferences.contains(KEY_INSTALLED_VERSION_CODE)) {
+            return@synchronized ClientUpdateNotice("This build requires an update. Reconnect to recover verified update details.",
+                null, installedVersionCode, authority.minimum, authority.minimum, authority.revision)
+        }
         when (
             val restored = restorePersistedUpdateRequirement(
                 storedInstalledVersionCode = if (preferences.contains(KEY_INSTALLED_VERSION_CODE)) {
@@ -152,11 +200,21 @@ class ClientUpdateRequirementStore(
                 currentInstalledVersionCode = installedVersionCode,
             )
         ) {
-            PersistedRequirementRestore.None -> null
+            PersistedRequirementRestore.None -> authority?.takeIf { it.required }?.let {
+                ClientUpdateNotice("This build requires an update. Reconnect to recover verified update details.",
+                    null, installedVersionCode, it.minimum, it.minimum, it.revision)
+            }
             PersistedRequirementRestore.ClearStaleVersion -> {
+                // A current-build Required stamp wins over a damaged/older
+                // notice-version key. Only a genuine new installed build may
+                // discard the previous build's gate.
+                if (authority?.required == true) return@synchronized ClientUpdateNotice(
+                    "This build requires an update. Reconnect to recover verified update details.",
+                    null, installedVersionCode, authority.minimum, authority.minimum, authority.revision)
+
                 // This build already ignores the stale record, so cleanup does
                 // not need to block Application.onCreate().
-                preferences.edit().clear().apply()
+                preferences.edit().remove(KEY_INSTALLED_VERSION_CODE).remove(KEY_POLICY_REVISION).remove(KEY_NOTICE_JSON).apply()
                 null
             }
             is PersistedRequirementRestore.Required -> restored.notice
@@ -190,6 +248,6 @@ class ClientUpdateRequirementStore(
             0
         }
         if (storedRevision != expectedPolicyRevision.coerceAtLeast(0)) return@synchronized false
-        preferences.edit().clear().commit()
+        preferences.edit().remove(KEY_INSTALLED_VERSION_CODE).remove(KEY_POLICY_REVISION).remove(KEY_NOTICE_JSON).commit()
     }
 }

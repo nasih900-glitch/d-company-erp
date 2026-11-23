@@ -1,3 +1,4 @@
+import { hasExactPermission } from '@/lib/effective-permissions';
 import { useCallback, useEffect, useState } from 'react';
 import { AlertCircle, Ban, HandCoins, Loader2, Plus, RefreshCw } from 'lucide-react';
 
@@ -26,6 +27,7 @@ const TIPS_PAYABLE_ACCOUNT_CODE = '2400';
 // TIP PAYOUTS — the only write path that pays TIPS_PAYABLE back out to staff
 // ============================================================================
 export default function TipPayoutsTab() {
+  const canWrite = hasExactPermission(useAuth().me, 'finance.write');
   const requests = useLatestRequest();
   const { me } = useAuth();
   const notifications = useNotifications();
@@ -109,9 +111,9 @@ export default function TipPayoutsTab() {
           <button className="btn btn-ghost" onClick={() => void load()} aria-label="Refresh tip payouts">
             <RefreshCw size={14}/>
           </button>
-          <button className="btn btn-primary" onClick={() => setAddOpen(true)} disabled={!branches.length}>
+          {canWrite && <button className="btn btn-primary" onClick={() => { if (canWrite) setAddOpen(true); }} disabled={!branches.length}>
             <Plus size={14}/> Pay out tips
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -182,13 +184,13 @@ export default function TipPayoutsTab() {
                     ) : row.is_corrected ? (
                       <span className="chip border-accent-gold/40 text-accent-gold text-[10px]">Corrected</span>
                     ) : row.method === 'cash' && row.source_shift_status !== 'open' ? (
-                      <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs"
-                        onClick={() => setCorrecting(row)} aria-label="Correct tip payout">
+                      canWrite && <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs"
+                        onClick={() => { if (canWrite) setCorrecting(row); }} aria-label="Correct tip payout">
                         <Ban size={13}/> Correct
                       </button>
                     ) : (
-                      <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs hover:!text-accent-bad"
-                        onClick={() => setVoiding(row)} aria-label="Void tip payout">
+                      canWrite && <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs hover:!text-accent-bad"
+                        onClick={() => { if (canWrite) setVoiding(row); }} aria-label="Void tip payout">
                         <Ban size={13}/> Void
                       </button>
                     )}
@@ -233,13 +235,13 @@ export default function TipPayoutsTab() {
                   ) : row.is_corrected ? (
                     <span className="chip border-accent-gold/40 text-accent-gold text-[10px]">Corrected</span>
                   ) : row.method === 'cash' && row.source_shift_status !== 'open' ? (
-                    <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs"
-                      onClick={() => setCorrecting(row)}>
+                    canWrite && <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs"
+                      onClick={() => { if (canWrite) setCorrecting(row); }}>
                       <Ban size={13}/> Correct
                     </button>
                   ) : (
-                    <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs hover:!text-accent-bad"
-                      onClick={() => setVoiding(row)}>
+                    canWrite && <button className="btn btn-ghost !min-h-[32px] !py-1 !px-2 text-xs hover:!text-accent-bad"
+                      onClick={() => { if (canWrite) setVoiding(row); }}>
                       <Ban size={13}/> Void
                     </button>
                   )}
@@ -250,7 +252,7 @@ export default function TipPayoutsTab() {
         </div>
       )}
 
-      {addOpen && (
+      {canWrite && addOpen && (
         <TipPayoutForm
           branches={branches}
           openShifts={openShifts}
@@ -265,7 +267,7 @@ export default function TipPayoutsTab() {
           }}
         />
       )}
-      {voiding && (
+      {canWrite && voiding && (
         <VoidTipPayoutForm
           row={voiding}
           onClose={() => setVoiding(null)}
@@ -277,7 +279,7 @@ export default function TipPayoutsTab() {
           }}
         />
       )}
-      {correcting && (
+      {canWrite && correcting && (
         <TipPayoutCorrectionForm
           row={correcting}
           openShifts={openShifts.filter((shift) => shift.branch_id === correcting.branch_id)}
@@ -327,6 +329,7 @@ function TipPayoutForm({
   onClose: () => void;
   onSuccess: () => void;
 }) {
+  const canWrite = hasExactPermission(useAuth().me, 'finance.write');
   const [form, setForm] = useState<{
     branch_id: string;
     shift_id: string;
@@ -362,9 +365,10 @@ function TipPayoutForm({
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (!canWrite) return;
     const amountMinor = rupeesToMinor(form.amount_rupees);
     if (amountMinor === null) {
-      setErr('Enter an amount greater than ₹0 with no more than two decimal places.');
+      setErr('Enter an amount greater than 0 with no more than two decimal places.');
       return;
     }
     if (form.note.trim().length < 3) {
@@ -447,7 +451,7 @@ function TipPayoutForm({
           </Field>
         )}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="Amount (₹)">
+          <Field label="Amount">
             <input type="number" required min="0.01" step="0.01" inputMode="decimal" autoFocus
               className="input font-mono text-right text-xl" value={form.amount_rupees}
               onChange={(event) => setForm((current) => ({ ...current, amount_rupees: event.target.value }))}/>
@@ -497,12 +501,14 @@ function VoidTipPayoutForm({
   onClose: () => void;
   onSuccess: () => void;
 }) {
+  const canWrite = hasExactPermission(useAuth().me, 'finance.write');
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (!canWrite) return;
     setBusy(true);
     setErr(null);
     try {
@@ -554,6 +560,7 @@ function TipPayoutCorrectionForm({
   onClose: () => void;
   onSuccess: () => void;
 }) {
+  const canWrite = hasExactPermission(useAuth().me, 'finance.write');
   const [shiftId, setShiftId] = useState(openShifts[0]?.id ?? '');
   const [reason, setReason] = useState('');
   const [key] = useState(newTipPayoutCorrectionKey);
@@ -562,6 +569,7 @@ function TipPayoutCorrectionForm({
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (!canWrite) return;
     if (!shiftId) {
       setErr('Open a same-branch shift and select its drawer before correcting this payout.');
       return;

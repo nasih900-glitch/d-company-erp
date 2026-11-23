@@ -23,15 +23,18 @@ RUN set -eux; \
     go mod download; \
     go mod verify; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' github.com/caddyserver/caddy/v2)" = "v2.11.4"; \
-    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/crypto)" = "v0.57.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' github.com/go-jose/go-jose/v3)" = "v3.0.6-0.20261030183946-0e502b87c7aa"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' github.com/go-jose/go-jose/v4)" = "v4.1.7"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' github.com/klauspost/compress)" = "v1.20.2"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/crypto)" = "v0.58.0"; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/mod)" = "v0.41.0"; \
-    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/net)" = "v0.60.0"; \
-    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/sync)" = "v0.23.0"; \
-    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/sys)" = "v0.48.0"; \
-    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/telemetry)" = "v0.0.0-20260811182544-a038080d80e5"; \
-    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/term)" = "v0.46.0"; \
-    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/text)" = "v0.42.0"; \
-    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/tools)" = "v0.49.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/net)" = "v0.62.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/sync)" = "v0.24.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/sys)" = "v0.49.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/telemetry)" = "v0.0.0-20260924152758-ed294f943157"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/term)" = "v0.47.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/text)" = "v0.43.0"; \
+    test "$(go list -mod=readonly -m -f '{{.Version}}' golang.org/x/tools)" = "v0.51.0"; \
     test "$(go list -mod=readonly -m -f '{{.Version}}' google.golang.org/grpc)" = "v1.83.2"
 
 COPY infra/docker/caddy-build/main.go ./
@@ -42,18 +45,27 @@ RUN set -eux; \
       go build -p=1 -mod=readonly -buildvcs=false \
         -tags='nobadger,nomysql,nopgx' \
         -trimpath \
-        -ldflags='-s -w -buildid= -X github.com/caddyserver/caddy/v2.CustomVersion=v2.11.4-dcompany.1' \
+        -ldflags='-s -w -buildid= -X github.com/caddyserver/caddy/v2.CustomVersion=v2.11.4-dcompany.3' \
         -o /out/caddy .; \
-    echo '1b95bdb9ca9ffaec90a9e3a9592e8cedc2212abd64c709219149b8b4285d07d7  /out/caddy' | sha256sum -c -; \
+    echo 'bab9ead64a1462df94c98fc8046af79601867b9e4b9cfa1359e0073acc546699  /out/caddy' | sha256sum -c -; \
     go version -m /out/caddy | grep -F 'go1.26.9'; \
     go version -m /out/caddy | grep -F 'github.com/caddyserver/caddy/v2'; \
-    go version -m /out/caddy | grep -F 'v2.11.4'
+    go version -m /out/caddy | grep -F 'v2.11.4'; \
+    go version -m /out/caddy | grep -Fx "$(printf '\tdep\tgolang.org/x/net\tv0.62.0\th1:18ELalfM5+XNRwzM2nYqXsZQ9ByS1uhj2O/U7+5jqRY=')"; \
+    go version -m /out/caddy | grep -Fx "$(printf '\tdep\tgithub.com/klauspost/compress\tv1.20.2\th1:v5tiZvm1KGLyg5d5oXdXe3lsSPrbEUiKoXGia//I7Qo=')"
 
-FROM caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648 AS zlib-builder
-WORKDIR /tmp/dcompany-zlib
-RUN apk add --no-cache --virtual .zlib-build-deps build-base patch
-COPY infra/docker/zlib/ /tmp/dcompany-zlib/
-RUN sh /tmp/dcompany-zlib/build-patched-zlib.sh
+COPY infra/docker/caddy-build/verify-system-ca/ /tmp/dcompany-verify-system-ca/
+RUN set -eux; \
+    export CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" GOMAXPROCS=1 GOMEMLIMIT=256MiB; \
+    go test -p=1 -mod=readonly -count=1 -v \
+      /tmp/dcompany-verify-system-ca/main.go /tmp/dcompany-verify-system-ca/main_test.go; \
+    go build -p=1 -mod=readonly -buildvcs=false -trimpath -ldflags='-s -w -buildid=' \
+      -o /out/verify-caddy-system-ca /tmp/dcompany-verify-system-ca/main.go
+
+FROM caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648 AS caddy-zlib-probe-builder
+RUN apk add --no-cache --virtual .zlib-probe-build-deps build-base
+COPY infra/docker/caddy-zlib/runtime-probe.c /tmp/caddy-zlib-runtime-probe.c
+RUN cc -O2 -Wall -Wextra -Werror /tmp/caddy-zlib-runtime-probe.c -ldl -o /tmp/caddy-zlib-runtime-probe
 
 # Retain the exact upstream 2.11.4 runtime contract and replace only the Go
 # binary. Exact package pins make future repository drift fail closed; the
@@ -68,45 +80,71 @@ LABEL org.opencontainers.image.title="D Company ERP Caddy" \
       org.opencontainers.image.revision="${APP_REVISION}" \
       org.opencontainers.image.source="https://github.com/caddyserver/caddy" \
       com.dcompany.upstream.version="v2.11.4" \
-      com.dcompany.zlib.version="1.3.2" \
-      com.dcompany.zlib.source.sha256="bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16" \
-      com.dcompany.zlib.null-guard.commit="e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca" \
-      com.dcompany.zlib.null-guard.sha256="183bc8b9dd078a41a62de5c2d905d9b0196b45bc46f100d7e4147ec228207c74" \
-      com.dcompany.zlib.printf-return.commit="bbc2ccf3d0de267576b524b875c769a724a513b0" \
-      com.dcompany.zlib.printf-return.sha256="7d00ee29be5e636d30da2890961e83e35cee0b152333ecd97a46ae2e71eb5d47" \
-      com.dcompany.zlib.patch.commit="df84af25dc1942490e1d1c899a07619152a46148" \
-      com.dcompany.zlib.patch.sha256="110ff14375733173d8aa54574473424fbd7dfe4b81f1ca34a759c6fe14b15b14" \
-      com.dcompany.zlib.followup.commit="7235b0a581227c56a79a43ff828f8ef6794194c8" \
-      com.dcompany.zlib.followup.sha256="96040ee84d0d187905283912dbd3f7b66ac2033976a2ceefe9b8cca63143d9c2"
+      com.dcompany.zlib.version="1.4-r0" \
+      com.dcompany.zlib.provenance="signed-alpine-3.23-apk" \
+      com.dcompany.zlib.apk-port.commit="0436c6d655a04cbfd7987202a970f5aa7870a901" \
+      com.dcompany.openssl.version="3.5.9_p20261123-r0" \
+      com.dcompany.openssl.provenance="signed-local-backport-apks"
+
+COPY --from=caddy-builder /out/verify-caddy-system-ca /tmp/verify-caddy-system-ca
 
 RUN set -eux; \
+    mkdir -p /etc/dcompany/caddy-zlib; \
+    zlib_download_dir="$(mktemp -d)"; \
+    apk fetch --no-cache --recursive --output "$zlib_download_dir" 'zlib=1.4-r0'; \
+    apk verify --no-network "$zlib_download_dir/zlib-1.4-r0.apk"; \
+    cp "$zlib_download_dir/zlib-1.4-r0.apk" /etc/dcompany/caddy-zlib/zlib-1.4-r0.apk; \
+    chmod 0444 /etc/dcompany/caddy-zlib/zlib-1.4-r0.apk; \
+    rm -rf -- "$zlib_download_dir"; \
     apk add --no-cache --upgrade \
-      'c-ares=1.34.8-r0' \
-      'curl=8.22.0-r0' \
-      'libcurl=8.22.0-r0' \
+      'ca-certificates=20261020-r0' \
+      'ca-certificates-bundle=20261020-r0' \
+      'c-ares=1.34.9-r0' \
       'libcrypto3=3.5.9-r0' \
       'libssl3=3.5.9-r0' \
-      'zlib=1.3.2-r1'; \
+      'brotli-libs=1.2.1-r0' \
+      'zlib=1.4-r0'; \
+    retained_apk_constraints="$(awk -F: '$1 == "P" { name = $2 } $1 == "V" && name != "curl" && name != "libcurl" { print name "=" $2 }' /lib/apk/db/installed | LC_ALL=C sort)"; \
+    test -n "$retained_apk_constraints"; \
+    apk add --no-network --repositories-file /dev/null $retained_apk_constraints; \
+    apk del --no-network --repositories-file /dev/null curl libcurl; \
+    remaining_apk_constraints="$(awk -F: '$1 == "P" { name = $2 } $1 == "V" { print name "=" $2 }' /lib/apk/db/installed | LC_ALL=C sort)"; \
+    test "$remaining_apk_constraints" = "$retained_apk_constraints"; \
+    if command -v curl >/dev/null 2>&1 || command -v wcurl >/dev/null 2>&1; then exit 1; fi; \
+    test ! -e /usr/lib/libcurl.so.4; \
+    test ! -e /usr/lib/libcurl.so.4.8.0; \
     installed_packages="$(apk info -v)"; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'c-ares-1.34.8-r0'; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'curl-8.22.0-r0'; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'libcurl-8.22.0-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'ca-certificates-20261020-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'ca-certificates-bundle-20261020-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'c-ares-1.34.9-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libcrypto3-3.5.9-r0'; \
     printf '%s\n' "$installed_packages" | grep -Fx 'libssl3-3.5.9-r0'; \
-    printf '%s\n' "$installed_packages" | grep -Fx 'zlib-1.3.2-r1'
+    printf '%s\n' "$installed_packages" | grep -Fx 'brotli-libs-1.2.1-r0'; \
+    printf '%s\n' "$installed_packages" | grep -Fx 'zlib-1.4-r0'
 
-COPY --from=zlib-builder /out/usr/lib/libz.so.1.3.2 /usr/lib/libz.so.1.3.2
-COPY --from=zlib-builder /out/etc/dcompany/zlib-patch-evidence.env /etc/dcompany/zlib-patch-evidence.env
-COPY --from=zlib-builder /out/zlib-runtime-probe /tmp/zlib-runtime-probe
-COPY infra/docker/zlib/verify-patched-zlib.sh /tmp/verify-patched-zlib.sh
+RUN --mount=type=bind,from=openssl_backport,source=/,target=/tmp/openssl-backport,ro \
+    --mount=type=bind,source=infra/docker/openssl/install-backport.sh,target=/tmp/install-openssl-backport.sh,ro \
+    sh /tmp/install-openssl-backport.sh caddy /tmp/openssl-backport
 
 RUN set -eux; \
-    sh /tmp/verify-patched-zlib.sh; \
-    rm -f /tmp/zlib-runtime-probe /tmp/verify-patched-zlib.sh
+    apk info -e 'libcrypto3=3.5.9_p20261123-r0'; \
+    apk info -e 'libssl3=3.5.9_p20261123-r0'; \
+    test -s /etc/dcompany/openssl-backport/provenance.json; \
+    update-ca-certificates --fresh; \
+    /tmp/verify-caddy-system-ca; \
+    rm -f /tmp/verify-caddy-system-ca
+
+COPY --from=caddy-zlib-probe-builder /tmp/caddy-zlib-runtime-probe /usr/local/bin/dcompany-caddy-zlib-probe
+COPY infra/docker/caddy-zlib/verify-official-zlib.sh /usr/local/bin/verify-caddy-zlib
 
 COPY --from=caddy-builder /out/caddy /usr/bin/caddy
 
 RUN set -eux; \
     chmod 0755 /usr/bin/caddy; \
     setcap cap_net_bind_service=+ep /usr/bin/caddy; \
-    caddy version | grep -F 'v2.11.4-dcompany.1'
+    caddy version | grep -F 'v2.11.4-dcompany.3'
+
+RUN --mount=type=bind,source=infra/docker/install-pinned-musl-utils.sh,target=/tmp/install-pinned-musl-utils.sh,ro \
+    sh /tmp/install-pinned-musl-utils.sh 3.23
+
+RUN /usr/local/bin/verify-caddy-zlib

@@ -24,7 +24,7 @@ interface PublicationReview {
 export function summarizeLoyaltyProgramChanges(before: LoyaltyProgramRulesDTO, after: LoyaltyProgramRulesDTO): string[] {
   const changes: string[] = [];
   if (before.gaming_earn_points !== after.gaming_earn_points || before.gaming_earn_rupees !== after.gaming_earn_rupees) {
-    changes.push(`Gaming earn: ${before.gaming_earn_points} per ₹${before.gaming_earn_rupees} → ${after.gaming_earn_points} per ₹${after.gaming_earn_rupees}`);
+    changes.push(`Gaming earn: ${before.gaming_earn_points} per ${before.gaming_earn_rupees} → ${after.gaming_earn_points} per ${after.gaming_earn_rupees}`);
   }
   if (before.minor_per_point !== after.minor_per_point) changes.push(`100-point value: ${inr(before.minor_per_point * 100)} → ${inr(after.minor_per_point * 100)}`);
   after.ranks.forEach((rank, index) => {
@@ -235,9 +235,9 @@ export default function LoyaltyProgramTab() {
         <div className="grid gap-3 sm:grid-cols-3">
           <NumberField label="Points earned" value={draft.gaming_earn_points} min={0}
             onChange={(value) => setDraft({ ...draft, gaming_earn_points: value })}/>
-          <NumberField label="Per gaming spend (₹)" value={draft.gaming_earn_rupees} min={1}
+          <NumberField label="Per gaming spend" value={draft.gaming_earn_rupees} min={1}
             onChange={(value) => setDraft({ ...draft, gaming_earn_rupees: value })}/>
-          <NumberField label="Value of 100 points (₹)" value={draft.minor_per_point} min={1}
+          <NumberField label="Value of 100 points" value={draft.minor_per_point} min={1}
             onChange={(value) => setDraft({ ...draft, minor_per_point: value })}/>
         </div>
         <p className="text-xs text-fg-muted">Membership point multipliers still apply. Zero earning pauses new gaming points without changing balances or history.</p>
@@ -277,7 +277,7 @@ export default function LoyaltyProgramTab() {
                   onChange={(description) => setDraft({ ...draft, rewards: draft.rewards.map((item, i) => i === index ? { ...item, description } : item) })}/>
                 <NumberField label="Points cost" value={reward.points_cost} min={1}
                   onChange={(points_cost) => setDraft({ ...draft, rewards: draft.rewards.map((item, i) => i === index ? { ...item, points_cost } : item) })}/>
-                <MoneyField label="Bill credit (₹)" valueMinor={reward.value_minor}
+                <MoneyField label="Bill credit" valueMinor={reward.value_minor}
                   onChangeMinor={(value_minor) => setDraft({ ...draft, rewards: draft.rewards.map((item, i) => i === index ? { ...item, value_minor } : item) })}/>
                 <label className="block text-xs text-fg-muted">Minimum rank
                   <select className="input mt-1" value={reward.min_rank_key}

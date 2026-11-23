@@ -38,6 +38,9 @@ from app.models import (
     StockMovement,
 )
 from app.services.accounting.refund_allocation import cumulative_refunded_tip_minor
+from app.services.pos.receipt_correction_projection import (
+    corrected_sale_cohort, period_corrections, uncorrected_sale,
+)
 from app.services.inventory.accounting import load_inventory_value_changes
 from app.services.inventory.valuation import remaining_batch_totals, round_minor
 from app.services.reports.metrics import average_ticket_minor
@@ -123,6 +126,8 @@ class TopItemDTO(BaseModel):
 
 
 class GrowthPeriodDTO(BaseModel):
+    receipt_corrections_minor: int = 0
+    original_orders_count: int = 0
     label: str
     revenue_minor: int
     refunds_minor: int
@@ -803,12 +808,24 @@ async def _period_stats(
     net_order_revenue = order_revenue - (
         refunds_minor - membership_refunds - refunded_tips_minor
     )
+    correction_rows = await period_corrections(
+        session, company_id=company_id, branch_id=branch_id, start_at=f_dt, end_at=t_dt,
+    )
+    correction_minor = sum(row.amount_minor for row in correction_rows)
+    corrected_count, corrected_cohort_minor = await corrected_sale_cohort(
+        session, company_id=company_id, branch_id=branch_id, start_at=f_dt, end_at=t_dt,
+    )
+    original_orders_count = n
+    n = max(0, n - corrected_count)
+    net_order_revenue -= correction_minor
     avg = average_ticket_minor(
         gross_sale_cohort_minor=order_revenue,
-        same_cohort_refunds_minor=cohort_refunds_for_average,
+        same_cohort_refunds_minor=cohort_refunds_for_average + corrected_cohort_minor,
         orders_count=n,
     )
     return GrowthPeriodDTO(
+        receipt_corrections_minor=correction_minor,
+        original_orders_count=original_orders_count,
         label="",
         revenue_minor=(
             net_order_revenue
@@ -894,6 +911,7 @@ async def top_items(
                 Order.branch_id == tenant.branch_id,
                 sale_at >= f_dt, sale_at < t_dt,
                 Order.status.in_(("paid", "refunded")),
+                uncorrected_sale(as_of=t_dt),
                 OrderLine.voided_at.is_(None),
             )
             .group_by(
@@ -948,6 +966,7 @@ async def heatmap(
                 Order.branch_id == tenant.branch_id,
                 sale_at >= f_dt, sale_at < t_dt,
                 Order.status.in_(("paid", "refunded")),
+                uncorrected_sale(as_of=t_dt),
             )
             .group_by("dow", "hour")
         )

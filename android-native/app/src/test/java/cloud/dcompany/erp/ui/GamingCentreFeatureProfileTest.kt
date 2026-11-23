@@ -9,7 +9,7 @@ import org.junit.Test
 
 class GamingCentreFeatureProfileTest {
     @Test
-    fun `ordinary staff with refund permission receive focused operational destinations`() {
+    fun `ordinary staff receive explicitly granted staff read and personal settings routes`() {
         val staff = profile(
             roles = listOf("cashier"),
             permissions = everyModulePermission,
@@ -23,6 +23,8 @@ class GamingCentreFeatureProfileTest {
                 Destination.Shift,
                 Destination.Customers,
                 Destination.Inventory,
+                Destination.Staff,
+                Destination.Settings,
                 Destination.Help,
             ),
             allowedDestinations(staff),
@@ -30,7 +32,7 @@ class GamingCentreFeatureProfileTest {
     }
 
     @Test
-    fun `authorised manager gets Products but not protected owner modules`() {
+    fun `legacy gaming manager title does not grant product management identity`() {
         val manager = profile(
             roles = listOf("gaming_manager"),
             permissions = everyModulePermission,
@@ -44,12 +46,26 @@ class GamingCentreFeatureProfileTest {
                 Destination.Shift,
                 Destination.Customers,
                 Destination.Inventory,
-                Destination.Menu,
+                Destination.Staff,
+                Destination.Settings,
                 Destination.Help,
             ),
             allowedDestinations(manager),
         )
         assertEquals("Products", Destination.Menu.label)
+    }
+
+    @Test
+    fun `current manager identity can manage Products without gaining finance or audit grants`() {
+        val manager = profile(roles = listOf("manager"), permissions = listOf(
+            ErpPermission.GamingRead, ErpPermission.PosRead, ErpPermission.MenuRead,
+            ErpPermission.StaffAttendanceWrite,
+        ))
+        assertEquals(listOf(Destination.Gaming, Destination.Pos, Destination.Customers,
+            Destination.Menu, Destination.Staff, Destination.Settings, Destination.Help), allowedDestinations(manager))
+        assertFalse(Destination.Finance in allowedDestinations(manager))
+        assertFalse(Destination.Reports in allowedDestinations(manager))
+        assertFalse(Destination.AuditLog in allowedDestinations(manager))
     }
 
     @Test
@@ -118,6 +134,31 @@ class GamingCentreFeatureProfileTest {
         assertFalse(Destination.Refunds in allowedDestinations(withoutRefund))
         val withRefund = withoutRefund.copy(effectivePermissions = everyModulePermission)
         assertTrue(Destination.Refunds in allowedDestinations(withRefund))
+    }
+
+    @Test
+    fun `business workspace Reports accepts explicit read access while ordinary staff remain excluded`() {
+        val analyticsOwner = profile(
+            roles = listOf("owner"),
+            protectedAccess = true,
+            permissions = listOf(ErpPermission.AnalyticsRead),
+        )
+        val financeOwner = analyticsOwner.copy(
+            effectivePermissions = listOf(ErpPermission.FinanceRead),
+        )
+        val emptyOwner = analyticsOwner.copy(effectivePermissions = emptyList())
+        val privilegedManager = analyticsOwner.copy(
+            roles = listOf("manager"),
+            protectedAccess = false,
+            effectivePermissions = listOf(ErpPermission.AnalyticsRead, ErpPermission.FinanceRead),
+        )
+
+        assertTrue(Destination.Reports in allowedDestinations(analyticsOwner))
+        assertTrue(Destination.Reports in allowedDestinations(financeOwner))
+        assertFalse(Destination.Reports in allowedDestinations(emptyOwner))
+        assertTrue(Destination.Reports in allowedDestinations(privilegedManager))
+        val operationalStaff = privilegedManager.copy(roles = listOf("store_staff"))
+        assertFalse(Destination.Reports in allowedDestinations(operationalStaff))
     }
 
     @Test

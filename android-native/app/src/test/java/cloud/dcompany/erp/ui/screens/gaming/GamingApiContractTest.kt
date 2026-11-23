@@ -17,6 +17,14 @@ import retrofit2.http.POST
 class GamingApiContractTest {
 
     @Test
+    fun `Void retention discovery is a distinct GET from ended session handoff`() {
+        val method = GamingApi::class.java.getDeclaredMethod(
+            "voidRetentionTargets", String::class.java, kotlin.coroutines.Continuation::class.java,
+        )
+        assertEquals("gaming/sessions/{id}/void-retention-targets", method.getAnnotation(GET::class.java)?.value)
+    }
+
+    @Test
     fun `selected saved customer id survives start JSON and response decode`() {
         val body = ApiClient.json.parseToJsonElement(
             ApiClient.json.encodeToString(

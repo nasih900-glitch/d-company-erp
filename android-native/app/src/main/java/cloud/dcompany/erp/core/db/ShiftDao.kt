@@ -170,6 +170,10 @@ interface ShiftDao {
     @Query("SELECT * FROM server_open_shift_cache WHERE terminalId = :terminalId LIMIT 1")
     suspend fun serverOpen(terminalId: String): ServerOpenShiftEntity?
 
+    @Query("DELETE FROM server_open_shift_cache WHERE terminalId=:terminalId AND serverShiftId=:shiftId")
+    suspend fun deleteExactServerOpen(terminalId: String, shiftId: String)
+
+
     @Query("SELECT * FROM local_shifts WHERE state = 'closed' ORDER BY closedAtMillis DESC LIMIT :limit")
     fun observeHistory(limit: Int = 30): Flow<List<LocalShiftEntity>>
 

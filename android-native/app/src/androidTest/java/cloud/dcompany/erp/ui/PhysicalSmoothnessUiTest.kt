@@ -2,9 +2,15 @@ package cloud.dcompany.erp.ui
 
 import android.content.res.Configuration
 import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.SystemClock
 import android.util.Log
 import android.util.SparseIntArray
+import android.view.Choreographer
+import android.view.FrameMetrics
+import android.view.ViewTreeObserver
+import android.view.Window
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -27,7 +33,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -39,6 +44,7 @@ import androidx.core.app.FrameMetricsAggregator
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.platform.graphics.HardwareRendererCompat
 import cloud.dcompany.erp.BuildConfig
 import cloud.dcompany.erp.core.sync.OutboxWorkStatus
 import cloud.dcompany.erp.ui.components.SyncAvailabilityProblem
@@ -50,9 +56,14 @@ import cloud.dcompany.erp.ui.theme.DCompanyTheme
 import cloud.dcompany.erp.ui.theme.Spacing
 import java.io.File
 import java.time.Instant
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.ceil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -69,10 +80,37 @@ private const val PHYSICAL_PERFORMANCE_LOG_TAG = "DCompanyPhysicalPerf"
  * screenshots and video as acceptance evidence.
  */
 @RunWith(AndroidJUnit4::class)
-@SdkSuppress(minSdkVersion = Build.VERSION_CODES.N)
+@SdkSuppress(minSdkVersion = Build.VERSION_CODES.O)
 class PhysicalComponentFrameStressUiTest {
     @get:Rule
     val compose = createAndroidComposeRule<ComponentActivity>()
+
+    private lateinit var auditActivity: ComponentActivity
+    private lateinit var frameAcceptance: String
+    private var emulated = false
+
+    @Before
+    fun verifyFrameAcceptanceMode() {
+        frameAcceptance = InstrumentationRegistry.getArguments().getString("erpFrameAcceptance") ?: "physical"
+        require(frameAcceptance in setOf("physical", "hosted-software-telemetry")) {
+            "Unknown frame acceptance mode"
+        }
+        val property = ProcessBuilder("/system/bin/getprop", "ro.kernel.qemu").start()
+        try {
+            check(property.waitFor(5, TimeUnit.SECONDS) && property.exitValue() == 0) { "Cannot identify the frame test device" }
+            val qemu = property.inputStream.bufferedReader().readText().trim()
+            require(qemu in setOf("", "0", "1")) { "Unknown frame test device" }
+            emulated = qemu == "1"
+        } finally {
+            property.destroy()
+        }
+        if (frameAcceptance == "hosted-software-telemetry") {
+            check(emulated && Build.HARDWARE == "ranchu") { "Software frame telemetry requires the admitted emulator" }
+        }
+        check(emulated || (Build.HARDWARE !in setOf("ranchu", "goldfish") &&
+            listOf(Build.MANUFACTURER, Build.MODEL, Build.HARDWARE).all { it.isNotBlank() && it != Build.UNKNOWN })
+        ) { "Physical frame acceptance requires an identified device" }
+    }
 
     @Test
     fun workspaceChromeAndGamingCardsHaveBoundedFramesAndStableGeometry() {
@@ -83,6 +121,7 @@ class PhysicalComponentFrameStressUiTest {
         val busyStationId = inputs.busyStationId
         val wallClock = inputs.wallClock
         val stations = inputs.stations
+        val window = compose.activity.window
         setAuditContent(inputs)
         writeScreenshot("01-gaming-online.png")
 
@@ -102,32 +141,49 @@ class PhysicalComponentFrameStressUiTest {
         assertEquals(stableStationBounds, captureStationBounds(stations.take(4)))
         writeScreenshot("02-gaming-server-issue.png")
 
-        // Warm the component harness before measuring. physicalAudit derives
-        // from release; this remains instrumentation, not a Macrobenchmark.
-        // Class loading and first composition therefore stay outside the
-        // frame interval.
-        repeat(25) { index ->
-            compose.runOnIdle {
-                connection.value = SyncAvailabilityProblem.entries[index % 5]
-                outbox.value = OutboxWorkStatus(retryableCount = index % 2)
-                syncing.value = index % 3 == 0
-                busyStationId.value = null
-                wallClock.longValue += 1_000L
-            }
-            compose.waitForIdle()
+        val stressSamples = 200
+        val callbackThread = HandlerThread("erp-frame-stress").apply { start() }
+        val callbackHandler = Handler(callbackThread.looper)
+        val completedFrames = LinkedBlockingQueue<CompletedFrame>()
+        val droppedReports = AtomicInteger()
+        val listener = Window.OnFrameMetricsAvailableListener { _, frame, dropped ->
+            droppedReports.addAndGet(dropped)
+            completedFrames.add(
+                CompletedFrame(
+                    frame.getMetric(FrameMetrics.VSYNC_TIMESTAMP),
+                    frame.getMetric(FrameMetrics.TOTAL_DURATION),
+                ),
+            )
         }
+        val histogram = SparseIntArray()
+        val drawingWasEnabled = HardwareRendererCompat.isDrawingEnabled()
 
-        val frameMetrics = FrameMetricsAggregator(FrameMetricsAggregator.TOTAL_DURATION)
-        var collectedMetrics: SparseIntArray? = null
-        frameMetrics.add(compose.activity)
-
-        // Forty full availability cycles reproduce the old online/offline
-        // oscillation under a simultaneously ticking multi-station board.
-        // Busy-station churn is excluded here: a write lock changes twice per
-        // real action, not 200 times in a burst, and previously dominated the
-        // trace by intentionally recomposing every disabled station action.
+        // Keep all 200 transitions and their geometry checks at the maximum
+        // rate the display can complete them. Compose idleness alone permits
+        // the test to enqueue later inputs behind an unfinished frame.
         try {
-            repeat(200) { index ->
+            HardwareRendererCompat.setDrawingEnabled(true)
+            compose.runOnIdle { window.addOnFrameMetricsAvailableListener(listener, callbackHandler) }
+            // Drain render completion as well as Compose work for every warmup update.
+            // Its separate histogram keeps class loading outside the measured interval.
+            val warmupHistogram = SparseIntArray()
+            repeat(25) { index ->
+                compose.runOnIdle {
+                    connection.value = SyncAvailabilityProblem.entries[index % 5]
+                    outbox.value = OutboxWorkStatus(retryableCount = index % 2)
+                    syncing.value = index % 3 == 0
+                    busyStationId.value = null
+                    wallClock.longValue += 1_000L
+                }
+                compose.waitForIdle()
+                val frameVsyncNanos = awaitCommittedStressFrame(window, "warmup $index")
+                recordFramesThroughInput(completedFrames, warmupHistogram, frameVsyncNanos, "warmup $index")
+            }
+            val warmupDrained = CountDownLatch(1)
+            check(callbackHandler.post { warmupDrained.countDown() }) { "Frame callback handler stopped during warmup" }
+            check(warmupDrained.await(5, TimeUnit.SECONDS)) { "Warmup frame callbacks did not drain" }
+            completedFrames.clear()
+            repeat(stressSamples) { index ->
                 compose.runOnIdle {
                     connection.value = when (index % 5) {
                         0 -> SyncAvailabilityProblem.VERIFYING
@@ -147,6 +203,8 @@ class PhysicalComponentFrameStressUiTest {
                     wallClock.longValue += 1_000L
                 }
                 compose.waitForIdle()
+                val frameVsyncNanos = awaitCommittedStressFrame(window, "sample $index")
+                recordFramesThroughInput(completedFrames, histogram, frameVsyncNanos, "sample $index")
                 assertEquals(
                     stableWorkflowBounds,
                     compose.onNodeWithTag("physical-gaming-board").fetchSemanticsNode().boundsInRoot,
@@ -154,33 +212,106 @@ class PhysicalComponentFrameStressUiTest {
                 assertEquals(stableStationBounds, captureStationBounds(stations.take(4)))
             }
         } finally {
-            // FrameMetricsAggregator posts histogram updates on its own
-            // HandlerThread. Compose idleness alone does not guarantee those
-            // callbacks have drained before remove() snapshots the metrics.
-            compose.waitForIdle()
-            SystemClock.sleep(250)
-            collectedMetrics = frameMetrics.remove(compose.activity)
-                ?.getOrNull(FrameMetricsAggregator.TOTAL_INDEX)
+            try {
+                InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                    window.removeOnFrameMetricsAvailableListener(listener)
+                }
+            } finally {
+                callbackThread.quitSafely()
+                callbackThread.join(3_000)
+                HardwareRendererCompat.setDrawingEnabled(drawingWasEnabled)
+                assertTrue("The frame callback thread did not stop", !callbackThread.isAlive)
+            }
         }
-
+        for (frame in completedFrames) recordStressFrame(histogram, frame)
         val metrics = summarizeFrameMetrics(
-            collectedMetrics,
+            histogram,
             compose.activity.display?.refreshRate ?: 60f,
         )
         writeScreenshot("03-gaming-after-connectivity-stress.png")
-        writeMetrics(metrics)
+        writeMetrics(
+            metrics,
+            measurementDetails = "samples=$stressSamples pacing=draw-commit-vsync droppedReports=${droppedReports.get()} " +
+                "geometryChecks=$stressSamples geometryStable=true",
+        )
         Log.i(PHYSICAL_PERFORMANCE_LOG_TAG, metrics.asLogLine())
+        assertEquals("The frame callback dropped stress evidence", 0, droppedReports.get())
 
         assertTrue(
             "The physical run captured too few frames for a useful audit: ${metrics.totalFrames}",
-            metrics.totalFrames >= 100,
+            metrics.totalFrames >= stressSamples,
         )
-        assertEquals("A frozen frame was detected during Gaming/connectivity stress", 0, metrics.frozenFrames)
+        assertPhysicalFrameAcceptance(metrics, "Gaming/connectivity stress")
         // Jank and percentile values are calibration evidence on the first
         // physical matrix. Cloud instrumentation, video capture and refresh
         // rate materially affect them, so we inspect and compare the pulled
         // files before establishing a device-specific release threshold.
     }
+
+    private fun awaitCommittedStressFrame(window: Window, phase: String): Long {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val committed = CountDownLatch(1)
+        val decor = window.decorView
+        var frameVsyncNanos = 0L
+        var choreographer: Choreographer? = null
+        val commitCallback = Runnable { committed.countDown() }
+        val drawListener = object : ViewTreeObserver.OnDrawListener {
+            override fun onDraw() {
+                decor.post(commitCallback)
+            }
+        }
+        val frameCallback = Choreographer.FrameCallback { vsyncNanos ->
+            frameVsyncNanos = vsyncNanos
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && decor.isHardwareAccelerated) {
+                decor.viewTreeObserver.registerFrameCommitCallback(commitCallback)
+            } else {
+                decor.viewTreeObserver.addOnDrawListener(drawListener)
+            }
+            decor.invalidate()
+        }
+        try {
+            instrumentation.runOnMainSync {
+                choreographer = Choreographer.getInstance().also { it.postFrameCallback(frameCallback) }
+            }
+            check(committed.await(5, TimeUnit.SECONDS)) { "No stress draw committed during $phase" }
+            return frameVsyncNanos
+        } finally {
+            instrumentation.runOnMainSync {
+                choreographer?.removeFrameCallback(frameCallback)
+                if (decor.viewTreeObserver.isAlive) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        decor.viewTreeObserver.unregisterFrameCommitCallback(commitCallback)
+                    }
+                    decor.viewTreeObserver.removeOnDrawListener(drawListener)
+                }
+                decor.removeCallbacks(commitCallback)
+            }
+        }
+    }
+
+    private fun recordFramesThroughInput(
+        completedFrames: LinkedBlockingQueue<CompletedFrame>,
+        histogram: SparseIntArray,
+        frameVsyncNanos: Long,
+        phase: String,
+    ) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (true) {
+            val remaining = deadline - System.nanoTime()
+            val frame = if (remaining > 0) completedFrames.poll(remaining, TimeUnit.NANOSECONDS) else null
+            checkNotNull(frame) { "No frame metrics arrived for committed vsync $frameVsyncNanos during $phase" }
+            recordStressFrame(histogram, frame)
+            if (frame.vsyncNanos >= frameVsyncNanos && frame.durationNanos > 0) return
+        }
+    }
+
+    private fun recordStressFrame(histogram: SparseIntArray, frame: CompletedFrame) {
+        if (frame.durationNanos <= 0) return
+        val durationMillis = ((frame.durationNanos + 500_000L) / 1_000_000L).toInt()
+        histogram.put(durationMillis, histogram.get(durationMillis) + 1)
+    }
+
+    private data class CompletedFrame(val vsyncNanos: Long, val durationNanos: Long)
 
     @Test
     fun gamingTimersAtProductionCadenceHaveStableGeometry() {
@@ -316,12 +447,13 @@ class PhysicalComponentFrameStressUiTest {
                 "minimum is $minimumCapturedFrames",
             metrics.totalFrames >= minimumCapturedFrames,
         )
-        assertEquals("$scenario contained a frozen frame", 0, metrics.frozenFrames)
+        assertPhysicalFrameAcceptance(metrics, scenario)
         // No percentile/jank threshold is calibrated to the observed devices.
         // Keep slow evidence visible even when geometry and safety checks pass.
     }
 
     private fun setAuditContent(inputs: PhysicalAuditInputs) {
+        auditActivity = compose.activity
         compose.setContent {
             DCompanyTheme {
                 // Match MainActivity's edge-to-edge contract so the system
@@ -359,9 +491,10 @@ class PhysicalComponentFrameStressUiTest {
     private fun writeScreenshot(filename: String) {
         val output = auditDirectory().resolve(filename)
         output.outputStream().use { stream ->
-            val bitmap = compose.onRoot()
-                .captureToImage()
-                .asAndroidBitmap()
+            val bitmap = captureWithFailureObservation(
+                capture = { compose.onRoot().captureToImage() },
+                observe = { observePhysicalCaptureFailure(auditActivity, filename, it) },
+            ).asAndroidBitmap()
             try {
                 check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream)) {
                     "Could not encode physical component-audit screenshot $filename"
@@ -376,7 +509,7 @@ class PhysicalComponentFrameStressUiTest {
         metrics: FrameSummary,
         scenario: String = "component-gaming-connectivity",
         filename: String = "frame-metrics.txt",
-        measurementDetails: String = "samples=200 cadence=idle-bounded-stress",
+        measurementDetails: String,
     ) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val display = context.resources.displayMetrics
@@ -384,8 +517,15 @@ class PhysicalComponentFrameStressUiTest {
             buildString {
                 appendLine(metrics.asLogLine(scenario))
                 appendLine(measurementDetails)
+                appendLine("frameAcceptance=$frameAcceptance emulator=$emulated " +
+                    "hardwareAcceptance=${frameAcceptance == "physical" && !emulated}")
+                val arguments = InstrumentationRegistry.getArguments()
+                for (name in listOf("sourceInventorySha256", "targetApkSha256", "testApkSha256", "captureRunId")) {
+                    appendLine("$name=${arguments.getString("dcompany.$name")}")
+                }
                 appendLine("metric=FrameMetrics.TOTAL_DURATION roundedMs budgetProxy=true platformDeadlineAttribution=false")
                 appendLine("device=${Build.MANUFACTURER} ${Build.MODEL}")
+                appendLine("board=${Build.HARDWARE}")
                 appendLine("android=${Build.VERSION.RELEASE} api=${Build.VERSION.SDK_INT}")
                 appendLine("app=${BuildConfig.VERSION_NAME} code=${BuildConfig.VERSION_CODE}")
                 appendLine(
@@ -394,6 +534,12 @@ class PhysicalComponentFrameStressUiTest {
                 )
             },
         )
+    }
+
+    private fun assertPhysicalFrameAcceptance(metrics: FrameSummary, scenario: String) {
+        if (frameAcceptance == "physical") {
+            assertEquals("$scenario contained a frozen frame", 0, metrics.frozenFrames)
+        }
     }
 
     private fun captureStationBounds(stations: List<Station>) = stations.associate { station ->

@@ -18,7 +18,6 @@ import {
 } from './product-profile';
 
 const staffAccess: ProfileAccessContext = {
-  isOwner: false,
   hasAuditAccess: false,
   hasSystemAccess: false,
   hasMembershipAccess: true,
@@ -43,21 +42,25 @@ describe('Gaming Centre web product profile', () => {
   });
 
   it('keeps the normal staff workspace focused on the daily gaming flow', () => {
-    expect(labels(staffAccess)).toEqual(['Gaming', 'POS', 'Shift', 'Customers', 'Refunds', 'Stock', 'Help']);
+    expect(labels(staffAccess)).toEqual(['Gaming', 'POS', 'Shift', 'Customers', 'Refunds', 'Stock', 'Help', 'Settings']);
   });
 
   it('lands each web account on the most useful permitted control surface', () => {
     expect(webLandingRouteFor({
       protected_access: true,
+      roles: ['owner'],
+      effective_permissions: ['analytics.read', 'finance.read'],
       accessible_modules: [],
     })).toBe('/analytics');
     expect(webLandingRouteFor({
       protected_access: false,
       accessible_modules: ['pos', 'gaming'],
+      effective_permissions: ['pos.read', 'gaming.read'],
     })).toBe('/gaming');
     expect(webLandingRouteFor({
       protected_access: false,
       accessible_modules: ['pos'],
+      effective_permissions: ['pos.read'],
     })).toBe('/pos');
     expect(webLandingRouteFor({
       protected_access: false,
@@ -68,9 +71,9 @@ describe('Gaming Centre web product profile', () => {
   it('adds finance and management surfaces only for an operational owner', () => {
     const owner = labels({
       ...staffAccess,
-      isOwner: true,
       hasProductManagementAccess: true,
       accessibleModules: [],
+      identity: { roles: ['owner'], effective_permissions: ['pos.read', 'gaming.read', 'inventory.read', 'menu.read', 'analytics.read', 'finance.read', 'staff.read'] },
     });
 
     expect(owner).toEqual([
@@ -84,7 +87,6 @@ describe('Gaming Centre web product profile', () => {
   it('keeps Audit Log protected while tenant support is available to co-owners', () => {
     const protectedOwner = labels({
       ...staffAccess,
-      isOwner: true,
       hasAuditAccess: true,
       hasSystemAccess: true,
       hasProductManagementAccess: true,
@@ -95,7 +97,6 @@ describe('Gaming Centre web product profile', () => {
 
     const coOwner = labels({
       ...staffAccess,
-      isOwner: true,
       hasAuditAccess: false,
       hasSystemAccess: true,
       hasProductManagementAccess: true,
@@ -107,11 +108,11 @@ describe('Gaming Centre web product profile', () => {
 
   it('still honours module access for non-owner operational tabs', () => {
     expect(labels({ ...staffAccess, accessibleModules: ['gaming', 'pos'] }))
-      .toEqual(['Gaming', 'POS', 'Shift', 'Customers', 'Refunds', 'Help']);
+      .toEqual(['Gaming', 'POS', 'Shift', 'Customers', 'Refunds', 'Help', 'Settings']);
     expect(labels({ ...staffAccess, accessibleModules: ['pos'] }))
-      .toEqual(['POS', 'Shift', 'Customers', 'Refunds', 'Help']);
+      .toEqual(['POS', 'Shift', 'Customers', 'Refunds', 'Help', 'Settings']);
     expect(labels({ ...staffAccess, accessibleModules: ['gaming'] }))
-      .toEqual(['Gaming', 'Refunds', 'Help']);
+      .toEqual(['Gaming', 'Refunds', 'Help', 'Settings']);
   });
 
   it('hides cafe, membership, and deferred workspaces without deleting their route registration', () => {

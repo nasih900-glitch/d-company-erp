@@ -3,6 +3,7 @@ package cloud.dcompany.erp.ui
 import cloud.dcompany.erp.core.auth.EffectivePermissions
 import cloud.dcompany.erp.core.auth.ErpPermission
 import cloud.dcompany.erp.core.net.MeResponse
+import cloud.dcompany.erp.ui.screens.staff.time.staffTimeAccess
 
 /** Membership money writes require both server permission and protected-owner identity. */
 fun canManageMemberships(profile: MeResponse): Boolean =
@@ -16,6 +17,35 @@ fun canRecoverMembershipEvidence(profile: MeResponse): Boolean =
 fun canManageSystemSettings(profile: MeResponse): Boolean =
     EffectivePermissions.from(profile).has(ErpPermission.SettingsManage)
 
+internal enum class WorkspaceHomeMode { EXECUTIVE, STAFF }
+
+private fun hasManagementWorkspace(profile: MeResponse): Boolean =
+    profile.roles.any { it in setOf("owner", "co_owner", "super_owner", "manager") }
+
+private fun hasBusinessWorkspace(profile: MeResponse): Boolean =
+    profile.roles.any {
+        it in setOf("owner", "co_owner", "super_owner", "manager", "partner", "auditor")
+    }
+
+internal fun workspaceHomeMode(
+    profile: MeResponse,
+    featureProfile: WorkspaceFeatureProfile = WorkspaceFeatureProfiles.Active,
+    permissions: EffectivePermissions = EffectivePermissions.from(profile),
+): WorkspaceHomeMode? {
+    val home = Destination.Dashboard
+    if (!featureProfile.includes(home) || home !in featureProfile.navigationOrder ||
+        (featureProfile.requiresManagement(home) && !hasManagementWorkspace(profile))
+    ) return null
+
+    val executiveAudience = hasBusinessWorkspace(profile)
+    return when {
+        executiveAudience && permissions.has(ErpPermission.AnalyticsRead) && permissions.has(ErpPermission.FinanceRead) -> WorkspaceHomeMode.EXECUTIVE
+        profile.roles.any { it == "gaming_cashier" || it == "store_staff" } && permissions.hasAny(ErpPermission.GamingRead, ErpPermission.PosRead) ->
+            WorkspaceHomeMode.STAFF
+        else -> null
+    }
+}
+
 /**
  * Product-profile, owner-tier and server-permission intersection for every
  * Android route. Feature flags never grant authority and permissions never
@@ -26,18 +56,24 @@ fun allowedDestinations(
     featureProfile: WorkspaceFeatureProfile = WorkspaceFeatureProfiles.Active,
 ): List<Destination> {
     val permissions = EffectivePermissions.from(profile)
-    val ownerWorkspace = profile.protectedAccess || profile.auditAccess
-    val managementWorkspace = ownerWorkspace || profile.roles.any { role ->
-        val normalized = role.trim().lowercase().replace('-', '_').replace(' ', '_')
-        normalized.contains("manager") || normalized.contains("owner")
-    }
-    return featureProfile.navigationOrder.filter { destination ->
+    val ownerWorkspace = hasBusinessWorkspace(profile)
+    val managementWorkspace = hasManagementWorkspace(profile)
+    val homeMode = workspaceHomeMode(profile, featureProfile, permissions)
+    val allowed = featureProfile.navigationOrder.filter { destination ->
         if (!featureProfile.includes(destination)) return@filter false
-        val audienceAllowed = (!featureProfile.requiresOwner(destination) || ownerWorkspace) &&
+        // Attendance opens only the separate self-time pane, never identity administration.
+        val ownTime = destination == Destination.Staff &&
+            (permissions.has(ErpPermission.StaffAttendanceWrite) || staffTimeAccess(profile).canManage)
+        val directory = destination == Destination.Staff && profile.effectivePermissions != null &&
+            permissions.has(ErpPermission.StaffRead)
+        val accountSettings = destination == Destination.Settings
+        val staffHome = destination == Destination.Dashboard && homeMode == WorkspaceHomeMode.STAFF
+        val audienceAllowed = (!featureProfile.requiresOwner(destination) || ownerWorkspace || ownTime || directory || accountSettings || staffHome) &&
             (!featureProfile.requiresManagement(destination) || managementWorkspace)
         if (!audienceAllowed) return@filter false
+        if (destination in setOf(Destination.Finance, Destination.Reports, Destination.Analytics) && !ownerWorkspace) return@filter false
         when (destination) {
-            Destination.Dashboard -> permissions.has(ErpPermission.AnalyticsRead)
+            Destination.Dashboard -> homeMode != null
             Destination.Pos -> permissions.has(ErpPermission.PosRead)
             Destination.Gaming -> permissions.has(ErpPermission.GamingRead)
             Destination.Tables -> permissions.has(ErpPermission.TablesRead)
@@ -52,15 +88,11 @@ fun allowedDestinations(
             )
             Destination.Customers -> permissions.has(ErpPermission.PosRead)
             Destination.Menu -> permissions.has(ErpPermission.MenuRead)
-            Destination.Staff -> permissions.hasAny(
-                ErpPermission.StaffRead,
-                ErpPermission.StaffWrite,
-                ErpPermission.StaffAttendanceWrite,
-            )
+            Destination.Staff -> permissions.hasAny(ErpPermission.StaffRead, ErpPermission.StaffAttendanceWrite) ||
+                staffTimeAccess(profile).canManage
             Destination.Inventory -> permissions.has(ErpPermission.InventoryRead)
-            Destination.Reports,
-            Destination.Analytics,
-            -> permissions.has(ErpPermission.AnalyticsRead)
+            Destination.Reports -> permissions.reportsAccess().canReadAny
+            Destination.Analytics -> permissions.has(ErpPermission.AnalyticsRead)
             Destination.Finance -> permissions.has(ErpPermission.FinanceRead)
             Destination.Events -> permissions.has(ErpPermission.GamingRead)
             Destination.Memberships -> permissions.has(ErpPermission.PosRead)
@@ -75,4 +107,8 @@ fun allowedDestinations(
             Destination.Help -> true
         }
     }
+    // Keep the prior operational default and fallback when adding the staff Home route.
+    return if (homeMode == WorkspaceHomeMode.STAFF && allowed.firstOrNull() == Destination.Dashboard && allowed.size > 1) {
+        listOf(allowed[1], Destination.Dashboard) + allowed.drop(2)
+    } else allowed
 }

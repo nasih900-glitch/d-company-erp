@@ -12,11 +12,11 @@ import io
 import re
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 
@@ -40,6 +40,12 @@ from app.services.reports import (
     ReportsAggregator,
     month_range,
     parse_fiscal_year_start,
+)
+from app.services.reports.overview_csv import serialize_overview_csv
+from app.services.pos.receipt_correction_projection import period_corrections
+from app.services.reports.overview import (
+    POS_LOCAL_HOUR_PROFILE_BASIS,
+    ReportsOverviewService,
 )
 
 router = APIRouter()
@@ -107,6 +113,12 @@ class TenderReclassificationRead(BaseModel):
 
 
 class ReportDTO(BaseModel):
+    effective_gross_revenue_minor: int = 0
+    effective_upi_received_minor: int = 0
+    receipt_corrections_minor: int = 0
+    receipt_corrections_count: int = 0
+    original_orders_count: int = 0
+    corrected_cohort_orders_count: int = 0
     accounting_basis: Literal["operational_receipt"] = "operational_receipt"
     branch_id: UUID | None
     period: Literal["daily", "monthly", "quarterly", "yearly", "custom"]
@@ -147,6 +159,152 @@ class ReportDTO(BaseModel):
     net_profit_minor: int
 
 
+class OverviewRevenueBySourceDTO(BaseModel):
+    receipt_corrections_minor: int = 0
+    effective_total_minor: int = 0
+    basis: Literal["operational_receipt_source_aggregate"] = (
+        "operational_receipt_source_aggregate"
+    )
+    food_minor: int
+    gaming_minor: int
+    hookah_minor: int
+    event_tickets_minor: int
+    memberships_minor: int
+    delivery_aggregator_minor: int
+    other_minor: int
+    manual_collections_minor: int
+    # Signed order-level discount/points/rounding reconciliation. It is not a
+    # drawable positive source slice and must remain separate from the donut
+    # denominator below.
+    adjustments_minor: int
+    positive_source_denominator_minor: int
+    total_minor: int
+    reconciles_to_gross: Literal[True] = True
+
+
+class OverviewPaymentsDTO(BaseModel):
+    basis: Literal["settlement_method_collections"] = (
+        "settlement_method_collections"
+    )
+    cash_minor: int
+    upi_minor: int
+    card_minor: int
+    bank_minor: int
+    qr_minor: int
+    wallet_minor: int
+    other_minor: int
+    total_minor: int
+
+
+class OverviewLinkedCustomersDTO(BaseModel):
+    basis: Literal["current_order_linkage"] = "current_order_linkage"
+    distinct_linked_customers_count: int
+    linked_orders_count: int
+    unlinked_orders_count: int
+
+
+class OverviewLocalHourPointDTO(BaseModel):
+    hour: int = Field(ge=0, le=23)
+    revenue_minor: int
+    orders_count: int = Field(ge=0)
+
+
+class OverviewLocalHourAvailableDTO(BaseModel):
+    availability: Literal["available"] = "available"
+    timezone: str
+    business_date: date
+    day_length_minutes: int
+    basis: Literal["pos_sales_tip_exclusive_local_hour_profile"] = (
+        POS_LOCAL_HOUR_PROFILE_BASIS
+    )
+    reconciles_to_daily_gross: Literal[False] = False
+    total_revenue_minor: int
+    total_orders_count: int
+    points: list[OverviewLocalHourPointDTO]
+
+
+class OverviewLocalHourUnavailableDTO(BaseModel):
+    availability: Literal["unavailable"] = "unavailable"
+    reason: Literal["multi_day_range"] = "multi_day_range"
+
+
+OverviewLocalHourDTO = Annotated[
+    OverviewLocalHourAvailableDTO | OverviewLocalHourUnavailableDTO,
+    Field(discriminator="availability"),
+]
+
+
+class ReportsOverviewDTO(BaseModel):
+    effective_gross_revenue_minor: int = 0
+    receipt_corrections_minor: int = 0
+    effective_upi_received_minor: int = 0
+    schema_version: Literal["reports.overview.v1"] = "reports.overview.v1"
+    branch_id: UUID
+    period_start: date
+    period_end: date
+    timezone: str
+    snapshot_at: datetime
+    accounting_basis: Literal["operational_receipt"] = "operational_receipt"
+    gross_revenue_minor: int
+    orders_count: int = Field(ge=0)
+    sessions_started_count: int = Field(ge=0)
+    sessions_basis: Literal["non_cancelled_sessions_started"] = (
+        "non_cancelled_sessions_started"
+    )
+    revenue_by_source: OverviewRevenueBySourceDTO
+    payments_received: OverviewPaymentsDTO
+    linked_customers: OverviewLinkedCustomersDTO
+    local_hour_profile: OverviewLocalHourDTO
+
+
+class OverviewTopProductDTO(BaseModel):
+    menu_item_id: UUID
+    name: str = Field(min_length=1, max_length=200)
+    product_type: str = Field(min_length=1, max_length=20)
+    quantity_sold: str = Field(pattern=r"^[0-9]+(?:\.[0-9]{1,3})?$")
+    gross_line_sales_minor: int
+
+
+class OverviewTopProductsDTO(BaseModel):
+    basis: Literal["gross_settled_pos_line_sales"] = "gross_settled_pos_line_sales"
+    refunds_basis: Literal["included_original_sales_no_refund_deduction"] = (
+        "included_original_sales_no_refund_deduction"
+    )
+    reconciles_to_gross: Literal[False] = False
+    limit: Literal[5] = 5
+    rows: list[OverviewTopProductDTO] = Field(max_length=5)
+
+
+class OverviewDeviceUsageRowDTO(BaseModel):
+    device_type: str = Field(min_length=1, max_length=20)
+    completed_sessions_count: int = Field(ge=1)
+    play_elapsed_ms: int | None = Field(ge=0)
+    unknown_play_sessions_count: int = Field(ge=0)
+
+
+class OverviewDeviceUsageDTO(BaseModel):
+    basis: Literal["non_cancelled_sessions_ended_in_period"] = (
+        "non_cancelled_sessions_ended_in_period"
+    )
+    grouping: Literal["device_type"] = "device_type"
+    time_basis: Literal["whole_session_pause_adjusted_elapsed_ms"] = (
+        "whole_session_pause_adjusted_elapsed_ms"
+    )
+    rows: list[OverviewDeviceUsageRowDTO]
+
+
+class ReportsOverviewV2DTO(ReportsOverviewDTO):
+    schema_version: Literal["reports.overview.v2"] = "reports.overview.v2"
+    top_products: OverviewTopProductsDTO
+    device_usage: OverviewDeviceUsageDTO
+
+
+ReportsOverviewResponseDTO = Annotated[
+    ReportsOverviewDTO | ReportsOverviewV2DTO,
+    Field(discriminator="schema_version"),
+]
+
+
 class TaxComplianceIssueDTO(BaseModel):
     severity: Literal["critical", "warning", "info"]
     area: str
@@ -176,6 +334,12 @@ class TaxComplianceDTO(BaseModel):
 
 def _to_dto(r: PnLReport) -> ReportDTO:
     return ReportDTO(
+        effective_gross_revenue_minor=r.effective_gross_revenue_minor,
+        effective_upi_received_minor=r.effective_upi_received_minor,
+        receipt_corrections_minor=r.receipt_corrections_minor,
+        receipt_corrections_count=r.receipt_corrections_count,
+        original_orders_count=r.original_orders_count,
+        corrected_cohort_orders_count=r.corrected_cohort_orders_count,
         accounting_basis="operational_receipt",
         branch_id=r.branch_id,
         period=r.period,
@@ -248,11 +412,208 @@ def _selected_branch_id(tenant: TenantContext) -> UUID:
     return tenant.branch_id
 
 
+@router.get("/overview", response_model=ReportsOverviewResponseDTO)
+async def overview_report(
+    session: SessionDep,
+    from_date: date | None = None,
+    to_date: date | None = None,
+    schema_version: Literal["reports.overview.v1", "reports.overview.v2"] = (
+        "reports.overview.v1"
+    ),
+    tenant: TenantContext = Depends(requires("analytics.read")),
+) -> ReportsOverviewDTO | ReportsOverviewV2DTO:
+    """Reduced analytics-safe operational overview for one selected branch."""
+
+    return await _load_overview_dto(
+        session=session, tenant=tenant, from_date=from_date, to_date=to_date,
+        schema_version=schema_version,
+    )
+
+
+@router.get("/overview.csv", response_class=Response)
+async def overview_csv(
+    session: SessionDep,
+    from_date: date | None = None,
+    to_date: date | None = None,
+    tenant: TenantContext = Depends(requires("analytics.read", "analytics.export")),
+) -> Response:
+    """Download the same v2 Overview cohort; this is not a full sales ledger."""
+    overview = await _load_overview_dto(
+        session=session, tenant=tenant, from_date=from_date, to_date=to_date,
+        schema_version="reports.overview.v2",
+    )
+    if not isinstance(overview, ReportsOverviewV2DTO):
+        raise RuntimeError("CSV requires the complete Reports Overview v2 projection")
+    filename = (
+        f"reports-overview-{overview.period_start.isoformat()}-"
+        f"{overview.period_end.isoformat()}.csv"
+    )
+    return Response(
+        content=serialize_overview_csv(overview),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )
+
+
+async def _load_overview_dto(
+    *,
+    session: SessionDep,
+    tenant: TenantContext,
+    from_date: date | None,
+    to_date: date | None,
+    schema_version: Literal["reports.overview.v1", "reports.overview.v2"],
+) -> ReportsOverviewDTO | ReportsOverviewV2DTO:
+    """Shared branch/date admission and explicit analytics-safe projection mapping."""
+    branch_id = _selected_branch_id(tenant)
+    timezone_name = await company_timezone(session, tenant.company_id)
+    if (from_date is None) != (to_date is None):
+        raise BusinessRuleError(
+            "from_date and to_date must either both be provided or both be omitted"
+        )
+    if from_date is None:
+        period_start = period_end = local_today(timezone_name)
+    else:
+        period_start = from_date
+        period_end = to_date
+    if period_end < period_start:
+        raise BusinessRuleError("to_date must be on or after from_date")
+    if (period_end - period_start).days > 365:
+        raise BusinessRuleError("report overview range cannot exceed 366 calendar dates")
+
+    projection = await ReportsOverviewService(session).load(
+        company_id=tenant.company_id,
+        branch_id=branch_id,
+        period_start=period_start,
+        period_end=period_end,
+        timezone_name=timezone_name,
+        include_panels=schema_version == "reports.overview.v2",
+    )
+    report = projection.report
+    revenue = report.revenue
+    positive_source_denominator = sum(
+        max(0, value)
+        for value in (
+            revenue.food_minor,
+            revenue.gaming_minor,
+            revenue.hookah_minor,
+            revenue.event_tickets_minor,
+            revenue.memberships_minor,
+            revenue.delivery_aggregator_minor,
+            revenue.other_minor,
+            revenue.manual_collections_minor,
+        )
+    )
+    revenue_sources = OverviewRevenueBySourceDTO(
+        receipt_corrections_minor=report.receipt_corrections_minor,
+        effective_total_minor=report.effective_gross_revenue_minor,
+        food_minor=revenue.food_minor,
+        gaming_minor=revenue.gaming_minor,
+        hookah_minor=revenue.hookah_minor,
+        event_tickets_minor=revenue.event_tickets_minor,
+        memberships_minor=revenue.memberships_minor,
+        delivery_aggregator_minor=revenue.delivery_aggregator_minor,
+        other_minor=revenue.other_minor,
+        manual_collections_minor=revenue.manual_collections_minor,
+        adjustments_minor=(
+            -revenue.discounts_and_points_redeemed_minor
+            + revenue.round_off_minor
+        ),
+        positive_source_denominator_minor=positive_source_denominator,
+        total_minor=report.gross_revenue_minor,
+    )
+    payments = report.payments_received
+    local_hour = projection.local_hour_profile
+    if local_hour is None:
+        local_hour_dto: OverviewLocalHourDTO = OverviewLocalHourUnavailableDTO()
+    else:
+        local_hour_dto = OverviewLocalHourAvailableDTO(
+            timezone=local_hour.timezone,
+            business_date=local_hour.business_date,
+            day_length_minutes=local_hour.day_length_minutes,
+            total_revenue_minor=local_hour.total_revenue_minor,
+            total_orders_count=local_hour.total_orders_count,
+            points=[
+                OverviewLocalHourPointDTO(
+                    hour=point.hour,
+                    revenue_minor=point.revenue_minor,
+                    orders_count=point.orders_count,
+                )
+                for point in local_hour.points
+            ],
+        )
+    overview = ReportsOverviewDTO(
+        effective_gross_revenue_minor=report.effective_gross_revenue_minor,
+        receipt_corrections_minor=report.receipt_corrections_minor,
+        effective_upi_received_minor=report.effective_upi_received_minor,
+        branch_id=branch_id,
+        period_start=period_start,
+        period_end=period_end,
+        timezone=projection.timezone,
+        snapshot_at=projection.snapshot_at,
+        gross_revenue_minor=report.gross_revenue_minor,
+        orders_count=report.orders_count,
+        sessions_started_count=projection.sessions_started_count,
+        revenue_by_source=revenue_sources,
+        payments_received=OverviewPaymentsDTO(
+            cash_minor=payments.cash_minor,
+            upi_minor=payments.upi_minor,
+            card_minor=payments.card_minor,
+            bank_minor=payments.bank_minor,
+            qr_minor=payments.qr_minor,
+            wallet_minor=payments.wallet_minor,
+            other_minor=payments.other_minor,
+            total_minor=payments.total_minor,
+        ),
+        linked_customers=OverviewLinkedCustomersDTO(
+            distinct_linked_customers_count=(
+                projection.linked_customers.distinct_linked_customers_count
+            ),
+            linked_orders_count=projection.linked_customers.linked_orders_count,
+            unlinked_orders_count=projection.linked_customers.unlinked_orders_count,
+        ),
+        local_hour_profile=local_hour_dto,
+    )
+    if schema_version == "reports.overview.v1":
+        return overview
+    panels = projection.panels
+    if panels is None:
+        raise RuntimeError("Reports Overview v2 panels were not loaded")
+    return ReportsOverviewV2DTO(
+        **overview.model_dump(exclude={"schema_version"}),
+        top_products=OverviewTopProductsDTO(
+            rows=[
+                OverviewTopProductDTO(
+                    menu_item_id=row.menu_item_id,
+                    name=row.name,
+                    product_type=row.product_type,
+                    quantity_sold=format(row.quantity_sold, "f"),
+                    gross_line_sales_minor=row.gross_line_sales_minor,
+                )
+                for row in panels.top_products
+            ]
+        ),
+        device_usage=OverviewDeviceUsageDTO(
+            rows=[
+                OverviewDeviceUsageRowDTO(
+                    device_type=row.device_type,
+                    completed_sessions_count=row.completed_sessions_count,
+                    play_elapsed_ms=row.play_elapsed_ms,
+                    unknown_play_sessions_count=row.unknown_play_sessions_count,
+                )
+                for row in panels.device_usage
+            ]
+        ),
+    )
+
+
 @router.get("/daily", response_model=ReportDTO)
 async def daily_report(
     session: SessionDep,
     on_date: date | None = None,
-    tenant: TenantContext = Depends(requires("analytics.read")),
+    tenant: TenantContext = Depends(requires("finance.read")),
 ) -> ReportDTO:
     """P&L for a single day. Defaults to today if on_date is omitted."""
     timezone_name = await company_timezone(session, tenant.company_id)
@@ -270,7 +631,7 @@ async def daily_report(
 async def monthly_report(
     session: SessionDep,
     yyyy_mm: str | None = None,
-    tenant: TenantContext = Depends(requires("analytics.read")),
+    tenant: TenantContext = Depends(requires("finance.read")),
 ) -> ReportDTO:
     """P&L for a calendar month. Defaults to the current month."""
     timezone_name = await company_timezone(session, tenant.company_id)
@@ -291,7 +652,7 @@ async def quarterly_report(
     session: SessionDep,
     fy: str | None = None,
     q: int | None = None,
-    tenant: TenantContext = Depends(requires("analytics.read")),
+    tenant: TenantContext = Depends(requires("finance.read")),
 ) -> ReportDTO:
     """P&L for one Indian fiscal quarter. Defaults to the current quarter."""
     timezone_name = await company_timezone(session, tenant.company_id)
@@ -317,7 +678,7 @@ async def quarterly_report(
 async def yearly_report(
     session: SessionDep,
     fy: str | None = None,
-    tenant: TenantContext = Depends(requires("analytics.read")),
+    tenant: TenantContext = Depends(requires("finance.read")),
 ) -> ReportDTO:
     """P&L for an Indian fiscal year. Defaults to the current fiscal year."""
     timezone_name = await company_timezone(session, tenant.company_id)
@@ -337,7 +698,7 @@ async def range_report(
     from_date: date,
     to_date: date,
     session: SessionDep,
-    tenant: TenantContext = Depends(requires("analytics.read")),
+    tenant: TenantContext = Depends(requires("finance.read")),
 ) -> ReportDTO:
     """P&L for an arbitrary date range."""
     if to_date < from_date:
@@ -825,6 +1186,31 @@ def _add_tax_bucket(
     slot["cess"] += cess
 
 
+async def _no_value_tax_adjustments(session, *, company_id, branch_id, start_at, end_at):
+    """Zero-tax correction slice only; no credit note or portal filing is implied."""
+    corrections = await period_corrections(
+        session, company_id=company_id, branch_id=branch_id, start_at=start_at, end_at=end_at,
+        include_source=True,
+    )
+    normal: dict[float, int] = {}
+    eco: dict[float, int] = {}
+    review_rows = []
+    for correction in corrections:
+        via = correction.source_snapshot["order"].get("delivery_via")
+        by_rate = eco if via not in (None, "inhouse") else normal
+        for line in correction.source_snapshot["lines"]:
+            # Match the issued line rate bucket, including GST-off documents
+            # that retain a configured rate while every charged tax is zero.
+            rate = float(Decimal(str(line.get("tax_rate") or 0)))
+            by_rate[rate] = by_rate.get(rate, 0) + int(line["taxable_value_minor"])
+        review_rows.append([
+            "No-value correction — accountant review; no payout or portal filing",
+            correction.invoice_no, correction.accounting_at.isoformat(),
+            f"{-Decimal(correction.amount_minor) / Decimal(100):.2f}", "0.00",
+        ])
+    return normal, eco, review_rows
+
+
 def _allocated_component(component: int, cumulative: int, total: int) -> int:
     """Allocate a refund component cumulatively without final rounding drift."""
     if component <= 0 or cumulative <= 0 or total <= 0:
@@ -1042,6 +1428,15 @@ async def gstr1_csv(
     for rate, vals in eco_refund_adjustments.items():
         eco_by_rate[rate] = eco_by_rate.get(rate, 0) - vals["taxable"]
 
+    no_value_normal, no_value_eco, correction_review_rows = await _no_value_tax_adjustments(
+        session, company_id=tenant.company_id, branch_id=selected_branch_id,
+        start_at=start_dt, end_at=end_dt,
+    )
+    for rate, amount in no_value_normal.items():
+        _add_tax_bucket(by_rate, rate=rate, taxable=-amount, cgst=0, sgst=0, igst=0)
+    for rate, amount in no_value_eco.items():
+        eco_by_rate[rate] = eco_by_rate.get(rate, 0) - amount
+
     out: list[list] = [
         ["GSTR-1 B2C-Small Summary — accountant review"],
         ["Company", company.name if company else "D Company"],
@@ -1050,8 +1445,8 @@ async def gstr1_csv(
         ["Note", "Verify portal table mapping before filing. ECO section 9(5) supplies are separated below."],
         [],
         ["Normal outward taxable supplies"],
-        ["Type", "Place of Supply", "Rate %", "Taxable Value ₹",
-         "IGST ₹", "CGST ₹", "SGST ₹", "Cess ₹"],
+        ["Type", "Place of Supply", "Rate %", "Taxable Value",
+         "IGST", "CGST", "SGST", "Cess"],
     ]
     for rate, vals in sorted(by_rate.items()):
         if not any(vals.values()):
@@ -1070,7 +1465,7 @@ async def gstr1_csv(
         out.extend([
             [],
             ["Restaurant services through ECO under CGST section 9(5)"],
-            ["Delivery platform", "Place of Supply", "Rate %", "Supply Value ₹", "D Company GST ₹"],
+            ["Delivery platform", "Place of Supply", "Rate %", "Supply Value", "D Company GST"],
         ])
         for rate, value in sorted(eco_by_rate.items()):
             if not value:
@@ -1082,6 +1477,9 @@ async def gstr1_csv(
                 f"{value / 100:.2f}",
                 "0.00",
             ])
+    if correction_review_rows:
+        out.extend([[], ["Receipt corrections — original invoices retained; accountant review"]])
+        out.extend(correction_review_rows)
     return _csv_response(out, filename=f"GSTR1-{yyyy_mm}.csv")
 
 
@@ -1168,6 +1566,12 @@ async def gstr3b_csv(
     eco_supply_minor -= sum(
         values["taxable"] for values in eco_refund_adjustments.values()
     )
+    no_value_normal, no_value_eco, correction_review_rows = await _no_value_tax_adjustments(
+        session, company_id=tenant.company_id, branch_id=selected_branch_id,
+        start_at=start_dt, end_at=end_dt,
+    )
+    normal_taxable_minor -= sum(no_value_normal.values())
+    eco_supply_minor -= sum(no_value_eco.values())
     rows: list[list] = [
         ["GSTR-3B Summary — accountant review"],
         ["Company", company.name if company else "D Company"],
@@ -1176,7 +1580,7 @@ async def gstr3b_csv(
         ["Note", "Verify GST portal table mapping before filing."],
         [],
         ["Table 3.1 — Outward taxable supplies"],
-        ["", "Total taxable value ₹", "IGST ₹", "CGST ₹", "SGST ₹", "Cess ₹"],
+        ["", "Total taxable value", "IGST", "CGST", "SGST", "Cess"],
         [
             "Outward taxable supplies (other than zero-rated)",
             f"{normal_taxable_minor / 100:.2f}",
@@ -1195,4 +1599,7 @@ async def gstr3b_csv(
         ["Net GST payable",
          f"{rep.tax_collected.total_minor / 100:.2f}"],
     ]
+    if correction_review_rows:
+        rows.extend([[], ["Receipt corrections — original invoices retained; accountant review"]])
+        rows.extend(correction_review_rows)
     return _csv_response(rows, filename=f"GSTR3B-{yyyy_mm}.csv")

@@ -25,8 +25,10 @@ services:
     build:
       context: .
       dockerfile: infra/docker/caddy.Dockerfile
+      additional_contexts:
+        openssl_backport: ${DCOMPANY_OPENSSL_BACKPORT_CONTEXT:-./infra/docker/openssl}
       args:
-        APP_VERSION: ${APP_VERSION:-3.1.46}
+        APP_VERSION: ${APP_VERSION:-3.1.76}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
@@ -60,8 +62,10 @@ services:
     build:
       context: .
       dockerfile: infra/docker/postgres.Dockerfile
+      additional_contexts:
+        openssl_backport: ${DCOMPANY_OPENSSL_BACKPORT_CONTEXT:-./infra/docker/openssl}
       args:
-        APP_VERSION: ${APP_VERSION:-3.1.46}
+        APP_VERSION: ${APP_VERSION:-3.1.76}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
@@ -93,7 +97,7 @@ services:
       context: .
       dockerfile: infra/docker/redis.Dockerfile
       args:
-        APP_VERSION: ${APP_VERSION:-3.1.46}
+        APP_VERSION: ${APP_VERSION:-3.1.76}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
@@ -106,7 +110,7 @@ services:
         umask 077
         printf '%s\n' \
           'user default off' \
-          "user erp_backend on >$${REDIS_PASSWORD} ~dcompany:* -@all +ping +eval +get +set +pttl +time +zremrangebyscore +zcard +zadd +pexpire +hset +expire +incr +incrby +ttl +del +hgetall +multi +exec +discard +select +client|setinfo" \
+          "user erp_backend on >$${REDIS_PASSWORD} ~dcompany:* -@all +ping +eval +get +set +pttl +time +zremrangebyscore +zcard +zadd +pexpire +hset +expire +incr +incrby +ttl +del +hgetall +lpush +llen +rpop +multi +exec +discard +select +client|setinfo" \
           > /run/redis-users.acl
         exec redis-server --aclfile /run/redis-users.acl
     healthcheck:
@@ -126,15 +130,17 @@ services:
     build:
       context: .
       dockerfile: infra/docker/backend.Dockerfile
+      additional_contexts:
+        openssl_backport: ${DCOMPANY_OPENSSL_BACKPORT_CONTEXT:-./infra/docker/openssl}
       args:
-        APP_VERSION: ${APP_VERSION:-3.1.46}
+        APP_VERSION: ${APP_VERSION:-3.1.76}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging
     environment:
       ENV: prod
       # Runtime declarations are checked against the independently baked file.
-      APP_VERSION: ${APP_VERSION:-3.1.46}
+      APP_VERSION: ${APP_VERSION:-3.1.76}
       APP_REVISION: ${APP_REVISION:-unknown}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: json
@@ -219,10 +225,12 @@ services:
     build:
       context: .
       dockerfile: infra/docker/frontend.Dockerfile
+      additional_contexts:
+        openssl_backport: ${DCOMPANY_OPENSSL_BACKPORT_CONTEXT:-./infra/docker/openssl}
       args:
         VITE_API_URL: https://${DOMAIN}/api/v1
-        VITE_APP_VERSION: ${APP_VERSION:-3.1.46}
-        APP_VERSION: ${APP_VERSION:-3.1.46}
+        VITE_APP_VERSION: ${APP_VERSION:-3.1.76}
+        APP_VERSION: ${APP_VERSION:-3.1.76}
         APP_REVISION: ${APP_REVISION:-unknown}
     restart: unless-stopped
     logging: *default-logging

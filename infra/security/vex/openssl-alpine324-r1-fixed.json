@@ -1,0 +1,64 @@
+{
+  "apk_metadata_sha256": {
+    "libcrypto3": "49cc4f97284f748a7199173e4fc60d8c08428d7be684a1b2881e864c4dd84be6",
+    "libssl3": "f3f0c908b4300fd6ea8814e6f40093d71980d685c8308fbc5d0437dcaf6d8b8d"
+  },
+  "archives_sha256": {
+    "libcrypto3": "042026082cc9bc7872d1baa81755c50efa70b05f03b5369fdc5f0a1303009720",
+    "libssl3": "18c5778cbe52e1991303f8531970b05d4e6e036ea08349322f7422f42a689dc7"
+  },
+  "deployment_sources": {
+    "infra/docker/backend.Dockerfile": "ace1bad25e18ad127d23f774613b6a5fb5bb2c7fbfd728bf843d3289a5d789a4",
+    "infra/docker/frontend.Dockerfile": "0f8c7a8f5b88c28d5f8dc8ade038072e00bc1ff09bea10c0f32b1343ec73cd45",
+    "infra/docker/openssl/verify-vendor-r1.sh": "ea1dcba0912d2161ee172838d64c961c3ab34329f18eaffa61242cf0b73fd392",
+    "infra/docker/postgres.Dockerfile": "d9a6e091ee26b6d12b41c81202360e487e61336f1d4f7a1e5f80326a182c442e"
+  },
+  "matches": {
+    "CVE-2026-107496/libcrypto3": "22dd1741be2f1e233e3385f258bff3d667980a36283a4106c2352bd2d02c9a47",
+    "CVE-2026-107496/libssl3": "1f94aaa696d683494e662a1ae2b68da4041da164a503e94438740f29f48cd2e2",
+    "CVE-2026-88823/libcrypto3": "a7053a08dd85d5063437e3816e60a0d7abb9a2f34b4ec168148f3bd1ee9922c4",
+    "CVE-2026-88823/libssl3": "31d939a0677ae88c58da8dbc0a2cb6cded55519e255e516c08e8ff4229cd874b",
+    "CVE-2026-95691/libcrypto3": "b49ef7d28074e8a88adb0cd56824321d9edee2b184aab3435bacd054da1eec8d",
+    "CVE-2026-95691/libssl3": "9c5de7f4550d42fa5fa573c9c48f1a1a4e44045cc2237c4529399fac8194f400",
+    "CVE-2026-95692/libcrypto3": "bd05f3c66e08552c264b3b362d4d27863e33202adae9ef6ae374e41bf8a752a7",
+    "CVE-2026-95692/libssl3": "a353f23ff42a199450dc707bfc64c466c2be0964e88ff10ab1310c06bb0a2591"
+  },
+  "package_version": "3.5.9-r1",
+  "runtime_digests": {
+    "/usr/lib/libcrypto.so.3": [
+      {
+        "algorithm": "sha1",
+        "value": "f452b30c030c354b36ced2db6eebb5b752013201"
+      },
+      {
+        "algorithm": "sha256",
+        "value": "d3170451aed163f70460726a08bfadd8c899d0ca43ea9b6105eaa45d3d1aa5c0"
+      }
+    ],
+    "/usr/lib/libssl.so.3": [
+      {
+        "algorithm": "sha1",
+        "value": "10ddfa36e840d864c9b4522275bd26dfe2d5ee6a"
+      },
+      {
+        "algorithm": "sha256",
+        "value": "6f35d9d1edb0f75228af331a88d740a891753a4fed32a1fccdbf8bf9183cd3cd"
+      }
+    ]
+  },
+  "runtime_sha256": {
+    "/usr/lib/libcrypto.so.3": "d3170451aed163f70460726a08bfadd8c899d0ca43ea9b6105eaa45d3d1aa5c0",
+    "/usr/lib/libssl.so.3": "6f35d9d1edb0f75228af331a88d740a891753a4fed32a1fccdbf8bf9183cd3cd"
+  },
+  "schema": 1,
+  "services": {
+    "backend": "3.24.3",
+    "frontend": "3.24.1",
+    "postgres": "3.24.4"
+  },
+  "signature_key": "alpine-devel@lists.alpinelinux.org-6165ee59",
+  "signature_key_sha256": "207e4696d3c05f7cb05966aee557307151f1f00217af4143c1bcaf33b8df733f",
+  "vendor_commit": "0f4c7e8d0f5f7cebbdc2156eca4391080b732bf2",
+  "vendor_secdb": "https://secdb.alpinelinux.org/v3.24/main.json",
+  "vendor_source": "https://gitlab.alpinelinux.org/alpine/aports/-/commit/0f4c7e8d0f5f7cebbdc2156eca4391080b732bf2"
+}

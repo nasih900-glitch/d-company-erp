@@ -1,6 +1,13 @@
 package cloud.dcompany.erp.ui
 
+import cloud.dcompany.erp.core.auth.CacheScope
+import cloud.dcompany.erp.core.auth.CacheScopeLease
 import cloud.dcompany.erp.core.auth.OutboxGateResult
+import cloud.dcompany.erp.core.auth.SessionRefreshLease
+import cloud.dcompany.erp.core.auth.StoredSession
+import cloud.dcompany.erp.core.handover.HandoverAuthority
+import cloud.dcompany.erp.core.handover.HandoverScope
+import cloud.dcompany.erp.core.handover.OriginalOperationBinding
 import cloud.dcompany.erp.core.net.ApiException
 import cloud.dcompany.erp.core.net.MeResponse
 import java.util.Base64
@@ -16,10 +23,79 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SessionLoginErrorTest {
+
+    private val startupLease = CacheScopeLease(CacheScope("actor", "company", "branch", "till"), 1)
+    private val startupLogin = SessionRefreshLease(StoredSession("synthetic", "synthetic"), 1)
+
+    private fun verifiedStartupBinding(isCurrent: () -> Boolean) = OriginalOperationBinding(
+        HandoverAuthority(HandoverScope("actor", "company", "branch", "till"), 1),
+        startupLease,
+        startupLogin,
+        isCurrent,
+    )
+
+    @Test
+    fun `startup read that finished for an old till cannot publish`() {
+        var current = true
+        val readBinding = verifiedStartupBinding { current }
+        current = false
+        var published = false
+        assertThrows(IllegalStateException::class.java) {
+            publishVerifiedStartupState(true, readBinding, startupLease, startupLogin, {}) {
+                published = true
+            }
+        }
+        assertFalse(published)
+    }
+
+    @Test
+    fun `startup cannot publish after the read if the handover fence closed`() {
+        val readBinding = verifiedStartupBinding { true }
+        var published = false
+        assertThrows(IllegalStateException::class.java) {
+            publishVerifiedStartupState(true, readBinding, startupLease, startupLogin,
+                { error("Retained handover") },
+            ) { published = true }
+        }
+        assertFalse(published)
+    }
+
+    @Test
+    fun `startup publication checks cache generation and original login after the read`() {
+        val readBinding = verifiedStartupBinding { true }
+        var publications = 0
+        assertThrows(IllegalStateException::class.java) {
+            publishVerifiedStartupState(true, readBinding, startupLease.copy(generation = 2), startupLogin, {}) {
+                publications++
+            }
+        }
+        val otherLogin = SessionRefreshLease(StoredSession("synthetic-new", "synthetic-new"), 2)
+        assertThrows(IllegalStateException::class.java) {
+            publishVerifiedStartupState(true, readBinding, startupLease, otherLogin, {}) {
+                publications++
+            }
+        }
+        assertTrue(publishVerifiedStartupState(true, readBinding, startupLease, startupLogin, {}) {
+            publications++
+        })
+        assertEquals(1, publications)
+    }
+
+    @Test
+    fun `an obsolete no POS login cannot replace forced signed out`() {
+        var state: AuthState = AuthState.SignedOut
+        val obsolete = MeResponse("actor", "synthetic@example.invalid", "Synthetic", emptyList(), companyId = "company")
+        val current = publishVerifiedStartupState(false, null, startupLease, startupLogin,
+            { error("Obsolete attempt should not check the fence") },
+        ) { state = AuthState.SignedIn(obsolete) }
+        assertFalse(current)
+        assertEquals(AuthState.SignedOut, state)
+    }
 
     @Test
     fun `invalid credentials are explained without exposing backend wording`() {

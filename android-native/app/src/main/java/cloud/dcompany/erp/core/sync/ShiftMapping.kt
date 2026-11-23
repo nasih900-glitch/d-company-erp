@@ -3,6 +3,8 @@ package cloud.dcompany.erp.core.sync
 import cloud.dcompany.erp.core.db.ServerOpenShiftEntity
 import cloud.dcompany.erp.core.db.ShiftHistoryCacheEntity
 import cloud.dcompany.erp.ui.screens.shift.ShiftDetail
+import cloud.dcompany.erp.ui.screens.shift.displayNetCollectionsMinor
+import cloud.dcompany.erp.ui.screens.shift.displayUpiCollectionsMinor
 
 /**
  * Pure wire-to-cache mappings shared by sync and contract tests.
@@ -27,12 +29,12 @@ internal fun ShiftDetail.toServerOpenShiftCache(
     grossCollectionsMinor = grossCollectionsMinor,
     cashCollectionsMinor = cashCollectionsMinor,
     cardCollectionsMinor = cardCollectionsMinor,
-    upiCollectionsMinor = upiCollectionsMinor,
+    upiCollectionsMinor = displayUpiCollectionsMinor,
     otherCollectionsMinor = otherCollectionsMinor,
     settledPosRefundsMinor = settledPosRefundsMinor,
     settledMembershipRefundsMinor = settledMembershipRefundsMinor,
     totalRefundsMinor = totalRefundsMinor,
-    netCollectionsMinor = netCollectionsMinor,
+    netCollectionsMinor = displayNetCollectionsMinor,
     openedAtMillis = openedAtMillis,
     openedByUserId = openedByUserId,
     openedByName = openedByName,
@@ -63,12 +65,12 @@ internal fun ShiftDetail.toShiftHistoryCache(
     grossCollectionsMinor = grossCollectionsMinor,
     cashCollectionsMinor = cashCollectionsMinor,
     cardCollectionsMinor = cardCollectionsMinor,
-    upiCollectionsMinor = upiCollectionsMinor,
+    upiCollectionsMinor = displayUpiCollectionsMinor,
     otherCollectionsMinor = otherCollectionsMinor,
     settledPosRefundsMinor = settledPosRefundsMinor,
     settledMembershipRefundsMinor = settledMembershipRefundsMinor,
     totalRefundsMinor = totalRefundsMinor,
-    netCollectionsMinor = netCollectionsMinor,
+    netCollectionsMinor = displayNetCollectionsMinor,
     openedByUserId = openedByUserId,
     openedByName = openedByName,
     openedByEmail = openedByEmail,

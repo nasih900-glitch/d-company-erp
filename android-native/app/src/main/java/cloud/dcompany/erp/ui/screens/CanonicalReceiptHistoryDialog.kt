@@ -59,12 +59,15 @@ import cloud.dcompany.erp.core.money.parseRupeesToMinor
 import cloud.dcompany.erp.core.money.minorToRupeesInput
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -73,16 +76,22 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import cloud.dcompany.erp.core.net.CanonicalReceipt
+import cloud.dcompany.erp.core.net.hasReceiptCorrection
+import cloud.dcompany.erp.core.net.hasVerifiedNoPayoutCorrection
 import cloud.dcompany.erp.core.net.CanonicalReceiptGamingSession
 import cloud.dcompany.erp.core.net.CanonicalReceiptLine
 import cloud.dcompany.erp.core.net.CanonicalReceiptPayment
 import cloud.dcompany.erp.core.net.CanonicalReceiptRefund
+import cloud.dcompany.erp.core.net.ReceiptMistakeRequest
 import cloud.dcompany.erp.core.net.asRupees
 import cloud.dcompany.erp.ui.components.ActionIntent
 import cloud.dcompany.erp.ui.components.ErpButton
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.LocalWorkspaceGlassScene
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
 import java.math.BigDecimal
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -110,6 +119,17 @@ internal fun CanonicalReceiptHistoryDialog(
     var amountDraft by remember { mutableStateOf(search.criteria.amountMinor?.let(::minorToRupeesInput).orEmpty()) }
     var filterError by remember { mutableStateOf<String?>(null) }
     var filtersOpen by rememberSaveable { mutableStateOf(search.criteria.isAdvanced) }
+    val app = DCompanyApp.instance
+    val profile by app.shiftCache.profile.collectAsStateWithLifecycle()
+    val lease by app.cacheIsolation.activeLeaseFlow.collectAsStateWithLifecycle()
+    val online by app.connectivity.online.collectAsStateWithLifecycle()
+    val mistakeAccess = receiptMistakeAccess(profile, lease)
+    val mistakeModel = mistakeAccess?.let {
+        viewModel<ReceiptMistakeReportsViewModel>(key = "receipt-mistakes-${it.lease.generation}-${it.report}-${it.review}")
+    }
+    val mistakes = mistakeModel?.reports?.collectAsStateWithLifecycle()?.value ?: ReceiptMistakeReviewState()
+    val submissions = mistakeModel?.submissions?.collectAsStateWithLifecycle()?.value.orEmpty()
+    var showMistakes by remember(mistakeAccess) { mutableStateOf(false) }
     val listState = rememberLazyListState()
     LaunchedEffect(search.viewportRevision) { if (search.viewportRevision > 0) listState.scrollToItem(0) }
     fun submitSearch() {
@@ -125,13 +145,15 @@ internal fun CanonicalReceiptHistoryDialog(
             ?: displayedReceipts.firstOrNull { it.orderId == id }
             ?: receipts.firstOrNull { it.orderId == id }
     }
+    LaunchedEffect(mistakeModel, selected) { selected?.let { mistakeModel?.restoreSubmission(it) } }
+    val hasWorkspaceGlassScene = LocalWorkspaceGlassScene.current != null
 
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         Surface(
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            color = if (hasWorkspaceGlassScene) Color.Transparent else MaterialTheme.colorScheme.surfaceContainerHigh,
             shape = Radius.shapeXl,
             tonalElevation = 0.dp,
             modifier = Modifier
@@ -139,9 +161,56 @@ internal fun CanonicalReceiptHistoryDialog(
                 .fillMaxHeight(0.9f)
                 .widthIn(max = 980.dp)
                 .heightIn(min = 240.dp, max = 760.dp).imePadding()
-                .border(1.dp, MaterialTheme.colorScheme.outline, Radius.shapeXl),
+                .clip(Radius.shapeXl)
+                .then(
+                    if (hasWorkspaceGlassScene) Modifier.liquidWorkspaceSurface(
+                        Radius.shapeXl,
+                        WorkspaceGlassRole.MODAL,
+                        allowWindowProjection = true,
+                    ) else Modifier.border(1.dp, MaterialTheme.colorScheme.outline, Radius.shapeXl),
+                ),
         ) {
-            if (selected == null) {
+            if (showMistakes && mistakeAccess?.review == true && mistakeModel != null) {
+                val reportedReceipt = mistakes.selectedReceipt
+                val reportedOrderId = mistakes.selectedOrderId
+                if (reportedReceipt != null) {
+                    CanonicalReceiptDetail(
+                        receipt = reportedReceipt,
+                        loading = mistakes.detailBusy,
+                        error = mistakes.detailError,
+                        shopTimezone = search.shopTimezone,
+                        onRefresh = { mistakeModel.openReceipt(reportedReceipt.orderId) },
+                        onBack = mistakeModel::backToReports,
+                        onDismiss = onDismiss,
+                        onRefundReceipt = onRefundReceipt,
+                    )
+                } else Column {
+                    ReceiptDialogHeader(
+                        title = "Receipt mistake reports",
+                        subtitle = "Protected Owner review",
+                        onBack = {
+                            if (reportedOrderId != null) mistakeModel.backToReports() else showMistakes = false
+                        },
+                        onRefresh = {
+                            if (reportedOrderId != null) mistakeModel.openReceipt(reportedOrderId) else mistakeModel.loadReports()
+                        },
+                        refreshing = mistakes.busy || mistakes.detailBusy,
+                        onDismiss = onDismiss,
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    if (reportedOrderId == null) {
+                        ReceiptMistakeReview(mistakes, { mistakeModel.loadReports() },
+                            { mistakeModel.loadReports(more = true) }, mistakeModel::openReceipt, Modifier.weight(1f))
+                    } else {
+                        Column(Modifier.padding(Spacing.lg), verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                            Text(mistakes.detailError ?: "Loading original receipt…")
+                            if (mistakes.detailError != null) {
+                                ErpButton("Retry receipt", { mistakeModel.openReceipt(reportedOrderId) }, enabled = online)
+                            }
+                        }
+                    }
+                }
+            } else if (selected == null) {
                 ReceiptHistoryList(
                     receipts = displayedReceipts,
                     hasMore = if (!search.isActive) hasMore else search.hasMore && search.criteria == search.appliedCriteria,
@@ -166,6 +235,11 @@ internal fun CanonicalReceiptHistoryDialog(
                     onRefresh = if (!search.isActive) onRefresh else { { onSearch(search.appliedCriteria ?: search.criteria) } },
                     onLoadMore = if (!search.isActive) onLoadMore else onLoadMoreSearch,
                     onDismiss = onDismiss,
+                    onReviewMistakes = if (mistakeAccess?.review == true && mistakeModel != null) ({
+                        mistakeModel.backToReports()
+                        showMistakes = true
+                        mistakeModel.loadReports()
+                    }) else null,
                 )
             } else {
                 CanonicalReceiptDetail(
@@ -177,6 +251,12 @@ internal fun CanonicalReceiptHistoryDialog(
                     onBack = { selectedOrderId = null },
                     onDismiss = onDismiss,
                     onRefundReceipt = onRefundReceipt,
+                    reportState = submissions[selected.orderId] ?: ReceiptMistakeSubmitState(),
+                    reportOnline = online,
+                    onReportMistake = if (mistakeAccess?.report == true && mistakeModel != null &&
+                        selected.companyId == mistakeAccess.lease.scope.companyId && selected.branchId == mistakeAccess.lease.scope.branchId &&
+                        selected.status in setOf("paid", "refunded")
+                    ) ({ request, acknowledgedKey -> mistakeModel.submit(selected, request, acknowledgedKey) }) else null,
                 )
             }
         }
@@ -208,6 +288,7 @@ private fun ReceiptHistoryList(
     onRefresh: () -> Unit,
     onLoadMore: () -> Unit,
     onDismiss: () -> Unit,
+    onReviewMistakes: (() -> Unit)?,
 ) {
     Column {
         ReceiptDialogHeader(
@@ -223,6 +304,11 @@ private fun ReceiptHistoryList(
             onDismiss = onDismiss,
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        if (onReviewMistakes != null) {
+            TextButton(onReviewMistakes, modifier = Modifier.padding(horizontal = Spacing.lg)) {
+                Text("Review receipt mistake reports")
+            }
+        }
         Row(
             Modifier.fillMaxWidth().padding(horizontal = Spacing.lg, vertical = Spacing.sm),
             horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
@@ -442,8 +528,8 @@ private fun ReceiptHistoryRow(receipt: CanonicalReceipt, onClick: () -> Unit) {
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    receipt.status.uppercase(),
-                    color = if (receipt.status == "refunded") MaterialTheme.colorScheme.operationalWarning else MaterialTheme.colorScheme.operationalGood,
+                    receiptStatusLabel(receipt),
+                    color = if (receipt.hasReceiptCorrection || receipt.status == "refunded") MaterialTheme.colorScheme.operationalWarning else MaterialTheme.colorScheme.operationalGood,
                     style = MaterialTheme.typography.labelMedium,
                 )
             }
@@ -475,6 +561,9 @@ private fun CanonicalReceiptDetail(
     onBack: () -> Unit,
     onDismiss: () -> Unit,
     onRefundReceipt: ((CanonicalReceipt) -> Unit)?,
+    reportState: ReceiptMistakeSubmitState = ReceiptMistakeSubmitState(),
+    reportOnline: Boolean = false,
+    onReportMistake: ((ReceiptMistakeRequest?, String?) -> Unit)? = null,
 ) {
     val clipboard = LocalClipboardManager.current
     val account by DCompanyApp.instance.shiftCache.profile.collectAsStateWithLifecycle()
@@ -503,13 +592,30 @@ private fun CanonicalReceiptDetail(
             }
             item {
                 ReceiptDetailSection("Sale") {
-                    ReceiptValueRow("Status", receipt.status.uppercase())
+                    ReceiptValueRow("Status", receiptStatusLabel(receipt))
                     ReceiptValueRow("Order type", receipt.orderType.replace('_', ' '))
                     ReceiptValueRow("Order ID", receipt.orderId)
                     ReceiptValueRow("Order opened by", receipt.openedByName ?: "Staff record unavailable")
                     ReceiptValueRow("Shift opened by", receipt.shiftOpenedByName ?: "Staff record unavailable")
                     receipt.customerName?.let { ReceiptValueRow("Customer", it) }
                     receipt.customerPhone?.let { ReceiptValueRow("Phone", it) }
+                }
+            }
+            if (onReportMistake != null) item(key = "report-receipt-mistake") {
+                key(receipt.orderId, ownerKey) { ReceiptMistakeForm(reportState, reportOnline, onReportMistake) }
+            }
+            if (receipt.hasReceiptCorrection) item {
+                ReceiptDetailSection("Receipt correction") {
+                    if (receipt.hasVerifiedNoPayoutCorrection) {
+                        Text("Corrected — payment not received; no payout")
+                        ReceiptValueRow("Accounting date", receipt.receiptCorrection!!.accountingAt.receiptDateTime())
+                        ReceiptMoneyRow("Payout", 0L)
+                        Text("Original receipt, recorded payment and drawer close are retained. Effective net and refundable amounts below come from the server.",
+                            style = MaterialTheme.typography.bodySmall)
+                    } else {
+                        Text("Correction details need review. Refresh this receipt or ask an Owner to check its protected history.")
+                        Text("No payout conclusion is available from this metadata.", style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
             item {
@@ -536,7 +642,7 @@ private fun CanonicalReceiptDetail(
                     }
                 }
             }
-            if (onRefundReceipt != null && receipt.refundableMinor > 0L && receipt.pendingRefundMinor == 0L) {
+            if (onRefundReceipt != null && !receipt.hasReceiptCorrection && receipt.refundableMinor > 0L && receipt.pendingRefundMinor == 0L) {
                 item {
                     ErpButton(
                         text = "Open refund for this exact receipt",
@@ -565,14 +671,14 @@ private fun CanonicalReceiptDetail(
                 }
             }
             item {
-                ReceiptDetailSection("Payments") {
+                ReceiptDetailSection(if (receipt.hasReceiptCorrection) "Original recorded payments" else "Payments") {
                     if (receipt.payments.isEmpty()) {
                         Text("No payment rows recorded.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     } else {
                         receipt.payments.forEachIndexed { index, payment ->
                             if (index > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                             ReceiptPaymentRow(payment)
-                            if (canCorrect && (payment.method == "cash" || payment.tenderCorrectionId != null)) {
+                            if (canCorrect && !receipt.hasReceiptCorrection && (payment.method == "cash" || payment.tenderCorrectionId != null)) {
                                 TextButton({ correctedPayment = if (correctedPayment == payment.id) null else payment.id }) {
                                     Text(if (correctedPayment == payment.id) "Hide payment evidence" else if (payment.tenderCorrectionId != null) "View protected correction evidence" else "Correct this Cash payment to UPI")
                                 }
@@ -625,7 +731,8 @@ private fun CanonicalReceiptDetail(
                     if (receipt.roundOffMinor != 0L) ReceiptMoneyRow("Round-off", receipt.roundOffMinor)
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                     ReceiptMoneyRow("Total", receipt.totalMinor, emphasized = true)
-                    ReceiptMoneyRow("Paid", receipt.paidMinor)
+                    ReceiptMoneyRow(if (receipt.hasReceiptCorrection) "Originally recorded paid" else "Paid", receipt.paidMinor)
+                    if (receipt.correctedMinor > 0L) ReceiptMoneyRow("Receipt correction offset", -receipt.correctedMinor)
                     if (receipt.refundedMinor != 0L) {
                         ReceiptMoneyRow("Refunded", -receipt.refundedMinor)
                     }
@@ -854,3 +961,9 @@ private fun String.receiptQuantity(): String = runCatching {
 internal fun configuredTaxPercent(fraction:String):String = runCatching {
     BigDecimal(fraction).movePointRight(2).stripTrailingZeros().toPlainString()+"%"
 }.getOrElse { "Rate unavailable" }
+
+internal fun receiptStatusLabel(receipt: CanonicalReceipt): String = when {
+    receipt.hasVerifiedNoPayoutCorrection -> "CORRECTED · NO PAYOUT"
+    receipt.hasReceiptCorrection -> "CORRECTION · REVIEW DETAILS"
+    else -> receipt.status.uppercase()
+}

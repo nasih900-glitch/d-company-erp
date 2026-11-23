@@ -3,6 +3,7 @@ package cloud.dcompany.erp.core.net
 import cloud.dcompany.erp.core.auth.TerminalPurpose
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import java.math.BigInteger
 
 /**
  * Money is always an integer count of paise, never a Double. The backend keeps
@@ -76,6 +77,7 @@ data class Terminal(
     val purpose: String = TerminalPurpose.HYBRID,
     /** Positive protocol support, never inferred from the app or terminal name. */
     @SerialName("offline_shift_capture_supported") val offlineShiftCaptureSupported: Boolean = false,
+    @SerialName("online_start_work_supported") val onlineStartWorkSupported: Boolean = false,
 )
 
 @Serializable
@@ -195,6 +197,43 @@ data class PublishDirectCheckoutClaimRequest(
 )
 
 @Serializable
+data class GamingVoidProvenance(
+    @SerialName("original_receipt_id") val originalReceiptId: String,
+    @SerialName("gaming_session_id") val gamingSessionId: String,
+    @SerialName("financial_evidence_locked") val financialEvidenceLocked: Boolean = true,
+    @SerialName("mistake_correction_available") val mistakeCorrectionAvailable: Boolean = false,
+)
+
+@Serializable
+data class RetainedMistakeReview(
+    @SerialName("order_id") val orderId: String,
+    @SerialName("original_receipt_id") val originalReceiptId: String,
+    @SerialName("gaming_session_id") val gamingSessionId: String,
+    @SerialName("expected_checkout_version") val expectedCheckoutVersion: Long,
+    @SerialName("review_hash") val reviewHash: String,
+    @SerialName("total_minor") val totalMinor: Long,
+    @SerialName("item_count") val itemCount: Int,
+)
+
+@Serializable
+data class RetainedMistakeCorrectionRequest(
+    @SerialName("original_receipt_id") val originalReceiptId: String,
+    @SerialName("expected_checkout_version") val expectedCheckoutVersion: Long,
+    @SerialName("review_hash") val reviewHash: String,
+    @SerialName("all_items_mistaken_not_supplied") val allItemsMistakenNotSupplied: Boolean,
+    val reason: String,
+)
+
+@Serializable
+data class RetainedMistakeCorrectionResult(
+    @SerialName("correction_id") val correctionId: String,
+    @SerialName("order_id") val orderId: String,
+    @SerialName("original_receipt_id") val originalReceiptId: String,
+    @SerialName("gaming_session_id") val gamingSessionId: String,
+    @SerialName("order_status") val orderStatus: String,
+)
+
+@Serializable
 data class VoidOrderRequest(val reason: String)
 
 @Serializable
@@ -210,6 +249,7 @@ data class CheckoutClaimResult(
     @SerialName("claimant_user_id") val claimantUserId: String,
     @SerialName("terminal_id") val terminalId: String,
     val reused: Boolean = false,
+    @SerialName("server_time") val serverTime: String? = null,
 )
 
 /**
@@ -243,6 +283,8 @@ data class OrderLine(
 @Serializable
 data class Order(
     val id: String,
+    @SerialName("created_at") val createdAt: String = "",
+    @SerialName("held_at") val heldAt: String? = null,
     @SerialName("invoice_no") val invoiceNo: String? = null,
     @SerialName("fiscal_year") val fiscalYear: String? = null,
     @SerialName("invoice_issued_at") val invoiceIssuedAt: String? = null,
@@ -274,6 +316,7 @@ data class Order(
     @SerialName("pending_refund_minor") val pendingRefundMinor: Long = 0,
     @SerialName("payment_methods") val paymentMethods: List<String> = emptyList(),
     val lines: List<OrderLine> = emptyList(),
+    @SerialName("gaming_void_provenance") val gamingVoidProvenance: GamingVoidProvenance? = null,
     @SerialName("checkout_version") val checkoutVersion: Long = 1,
     @SerialName("customer_name") val customerName: String? = null,
     @SerialName("customer_phone") val customerPhone: String? = null,
@@ -314,12 +357,15 @@ data class OrderListItem(
     val dueMinor: Long get() = (totalMinor - paidMinor).coerceAtLeast(0)
 }
 
-/** ₹ formatting for paise, grouped Indian-style (1,23,456.78). */
+/** Display-only adapter: retain the original reward text in storage and requests. */
+fun String.currencyFreeLabel(): String = replace("\u20b9", "")
+
+/** Symbol-free paise formatting, grouped Indian-style (1,23,456.78). */
 fun Long.asRupees(): String {
     val negative = this < 0
-    val paise = kotlin.math.abs(this)
-    val whole = paise / 100
-    val frac = paise % 100
+    // abs(Long.MIN_VALUE) overflows; display the signed aggregate exactly too.
+    val (whole, frac) = BigInteger.valueOf(this).abs()
+        .divideAndRemainder(BigInteger.valueOf(100L))
     val s = whole.toString()
     val grouped = if (s.length <= 3) {
         s
@@ -337,7 +383,7 @@ fun Long.asRupees(): String {
         chunks.joinToString(",") + "," + tail
     }
     val sign = if (negative) "-" else ""
-    return "$sign₹$grouped.${frac.toString().padStart(2, '0')}"
+    return "$sign$grouped.${frac.toString().padStart(2, '0')}"
 }
 
 /**

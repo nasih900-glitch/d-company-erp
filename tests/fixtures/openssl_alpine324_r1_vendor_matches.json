@@ -1,0 +1,1600 @@
+{
+  "artifacts": [
+    {
+      "cpes": [
+        {
+          "cpe": "cpe:2.3:a:libcrypto3:libcrypto3:3.5.9-r1:*:*:*:*:*:*:*",
+          "source": "syft-generated"
+        },
+        {
+          "cpe": "cpe:2.3:a:libcrypto3:libcrypto:3.5.9-r1:*:*:*:*:*:*:*",
+          "source": "syft-generated"
+        },
+        {
+          "cpe": "cpe:2.3:a:libcrypto:libcrypto3:3.5.9-r1:*:*:*:*:*:*:*",
+          "source": "syft-generated"
+        },
+        {
+          "cpe": "cpe:2.3:a:libcrypto:libcrypto:3.5.9-r1:*:*:*:*:*:*:*",
+          "source": "syft-generated"
+        }
+      ],
+      "foundBy": "apk-db-cataloger",
+      "id": "c2547e49b4073f62",
+      "language": "",
+      "licenses": [
+        {
+          "locations": [
+            {
+              "accessPath": "/lib/apk/db/installed",
+              "annotations": {
+                "evidence": "primary"
+              },
+              "layerID": "sha256:68754fa8ab7c189be017d321cb90453b6b9d7c05971ae402c51c30fed416d131",
+              "path": "/lib/apk/db/installed"
+            }
+          ],
+          "spdxExpression": "Apache-2.0",
+          "type": "declared",
+          "urls": [],
+          "value": "Apache-2.0"
+        }
+      ],
+      "locations": [
+        {
+          "accessPath": "/lib/apk/db/installed",
+          "annotations": {
+            "evidence": "primary"
+          },
+          "layerID": "sha256:68754fa8ab7c189be017d321cb90453b6b9d7c05971ae402c51c30fed416d131",
+          "path": "/lib/apk/db/installed"
+        }
+      ],
+      "metadata": {
+        "architecture": "x86_64",
+        "description": "Crypto library from openssl",
+        "files": [
+          {
+            "path": "/etc"
+          },
+          {
+            "path": "/etc/ssl"
+          },
+          {
+            "digest": {
+              "algorithm": "'Q1'+base64(sha1)",
+              "value": "Q1olh8TpdAi2QnTl4FK3TjdUiSwTo="
+            },
+            "path": "/etc/ssl/ct_log_list.cnf"
+          },
+          {
+            "digest": {
+              "algorithm": "'Q1'+base64(sha1)",
+              "value": "Q1olh8TpdAi2QnTl4FK3TjdUiSwTo="
+            },
+            "path": "/etc/ssl/ct_log_list.cnf.dist"
+          },
+          {
+            "digest": {
+              "algorithm": "'Q1'+base64(sha1)",
+              "value": "Q1X/gHDc6qdCBD2BcfmKvpXlq9AuU="
+            },
+            "path": "/etc/ssl/openssl.cnf"
+          },
+          {
+            "digest": {
+              "algorithm": "'Q1'+base64(sha1)",
+              "value": "Q1X/gHDc6qdCBD2BcfmKvpXlq9AuU="
+            },
+            "path": "/etc/ssl/openssl.cnf.dist"
+          },
+          {
+            "path": "/etc/ssl/certs"
+          },
+          {
+            "path": "/etc/ssl/private"
+          },
+          {
+            "path": "/usr"
+          },
+          {
+            "path": "/usr/lib"
+          },
+          {
+            "digest": {
+              "algorithm": "'Q1'+base64(sha1)",
+              "value": "Q19FKzDAMMNUs2ztLbbuu1t1IBMgE="
+            },
+            "ownerGid": "0",
+            "ownerUid": "0",
+            "path": "/usr/lib/libcrypto.so.3",
+            "permissions": "755"
+          },
+          {
+            "path": "/usr/lib/engines-3"
+          },
+          {
+            "digest": {
+              "algorithm": "'Q1'+base64(sha1)",
+              "value": "Q1cDJH+adWeTHZHBcuROD/SWCIMIU="
+            },
+            "ownerGid": "0",
+            "ownerUid": "0",
+            "path": "/usr/lib/engines-3/afalg.so",
+            "permissions": "755"
+          },
+          {
+            "digest": {
+              "algorithm": "'Q1'+base64(sha1)",
+              "value": "Q174D9cxxXlZFUzWICMr7MAtajD0g="
+            },
+            "ownerGid": "0",
+            "ownerUid": "0",
+            "path": "/usr/lib/engines-3/capi.so",
+            "permissions": "755"
+          },
+          {
+            "digest": {
+              "algorithm": "'Q1'+base64(sha1)",
+              "value": "Q1KLtxbPqNQSwPig6zQMh/AMJ0hXA="
+            },
+            "ownerGid": "0",
+            "ownerUid": "0",
+            "path": "/usr/lib/engines-3/loader_attic.so",
+            "permissions": "755"
+          },
+          {
+            "digest": {
+              "algorithm": "'Q1'+base64(sha1)",
+              "value": "Q1FcewCJJdrf9MU2PK9LG86Bu+N1c="
+            },
+            "ownerGid": "0",
+            "ownerUid": "0",
+            "path": "/usr/lib/engines-3/padlock.so",
+            "permissions": "755"
+          },
+          {
+            "path": "/usr/lib/ossl-modules"
+          },
+          {
+            "digest": {
+              "algorithm": "'Q1'+base64(sha1)",
+              "value": "Q16BN0oTZTqdSPmtUvH81oJkLtlek="
+            },
+            "ownerGid": "0",
+            "ownerUid": "0",
+            "path": "/usr/lib/ossl-modules/legacy.so",
+            "permissions": "755"
+          }
+        ],
+        "gitCommitOfApkPort": "0f4c7e8d0f5f7cebbdc2156eca4391080b732bf2",
+        "installedSize": 5221974,
+        "maintainer": "Natanael Copa <ncopa@alpinelinux.org>",
+        "originPackage": "openssl",
+        "package": "libcrypto3",
+        "provides": [
+          "so:libcrypto.so.3=3"
+        ],
+        "pullChecksum": "Q1I05gx2S9sTHg77/A+WuZaCWiHJo=",
+        "pullDependencies": [
+          "so:libc.musl-x86_64.so.1"
+        ],
+        "size": 1980117,
+        "url": "https://www.openssl.org/",
+        "version": "3.5.9-r1"
+      },
+      "metadataType": "apk-db-entry",
+      "name": "libcrypto3",
+      "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r1?arch=x86_64&distro=alpine-3.24.1&upstream=openssl",
+      "type": "apk",
+      "version": "3.5.9-r1"
+    },
+    {
+      "cpes": [
+        {
+          "cpe": "cpe:2.3:a:libssl3:libssl3:3.5.9-r1:*:*:*:*:*:*:*",
+          "source": "syft-generated"
+        },
+        {
+          "cpe": "cpe:2.3:a:libssl3:libssl:3.5.9-r1:*:*:*:*:*:*:*",
+          "source": "syft-generated"
+        },
+        {
+          "cpe": "cpe:2.3:a:libssl:libssl3:3.5.9-r1:*:*:*:*:*:*:*",
+          "source": "syft-generated"
+        },
+        {
+          "cpe": "cpe:2.3:a:libssl:libssl:3.5.9-r1:*:*:*:*:*:*:*",
+          "source": "syft-generated"
+        }
+      ],
+      "foundBy": "apk-db-cataloger",
+      "id": "01f2e1f35c0bcc5e",
+      "language": "",
+      "licenses": [
+        {
+          "locations": [
+            {
+              "accessPath": "/lib/apk/db/installed",
+              "annotations": {
+                "evidence": "primary"
+              },
+              "layerID": "sha256:68754fa8ab7c189be017d321cb90453b6b9d7c05971ae402c51c30fed416d131",
+              "path": "/lib/apk/db/installed"
+            }
+          ],
+          "spdxExpression": "Apache-2.0",
+          "type": "declared",
+          "urls": [],
+          "value": "Apache-2.0"
+        }
+      ],
+      "locations": [
+        {
+          "accessPath": "/lib/apk/db/installed",
+          "annotations": {
+            "evidence": "primary"
+          },
+          "layerID": "sha256:68754fa8ab7c189be017d321cb90453b6b9d7c05971ae402c51c30fed416d131",
+          "path": "/lib/apk/db/installed"
+        }
+      ],
+      "metadata": {
+        "architecture": "x86_64",
+        "description": "SSL shared libraries",
+        "files": [
+          {
+            "path": "/usr"
+          },
+          {
+            "path": "/usr/lib"
+          },
+          {
+            "digest": {
+              "algorithm": "'Q1'+base64(sha1)",
+              "value": "Q1EN36NuhA2GTJtFIidb0m3+LV7mo="
+            },
+            "ownerGid": "0",
+            "ownerUid": "0",
+            "path": "/usr/lib/libssl.so.3",
+            "permissions": "755"
+          }
+        ],
+        "gitCommitOfApkPort": "0f4c7e8d0f5f7cebbdc2156eca4391080b732bf2",
+        "installedSize": 847736,
+        "maintainer": "Natanael Copa <ncopa@alpinelinux.org>",
+        "originPackage": "openssl",
+        "package": "libssl3",
+        "provides": [
+          "so:libssl.so.3=3"
+        ],
+        "pullChecksum": "Q1liSMx7iQMBbzF6s3hvx1ksKDoFw=",
+        "pullDependencies": [
+          "libcrypto3=3.5.9-r1",
+          "so:libc.musl-x86_64.so.1",
+          "so:libcrypto.so.3"
+        ],
+        "size": 382098,
+        "url": "https://www.openssl.org/",
+        "version": "3.5.9-r1"
+      },
+      "metadataType": "apk-db-entry",
+      "name": "libssl3",
+      "purl": "pkg:apk/alpine/libssl3@3.5.9-r1?arch=x86_64&distro=alpine-3.24.1&upstream=openssl",
+      "type": "apk",
+      "version": "3.5.9-r1"
+    }
+  ],
+  "backend_hashlib_match": {
+    "artifact": {
+      "cpes": [
+        "cpe:2.3:a:python_software_foundation:python:3.14.10:*:*:*:*:*:*:*",
+        "cpe:2.3:a:python:python:3.14.10:*:*:*:*:*:*:*"
+      ],
+      "id": "8c8c4c4f1760a069",
+      "language": "",
+      "licenses": [],
+      "locations": [
+        {
+          "accessPath": "/usr/local/bin/python3.14",
+          "annotations": {
+            "evidence": "primary"
+          },
+          "layerID": "sha256:476229b4f396ca2d8eb3dd65e6085c2e543f3d1741880779176f9e8c604f27ae",
+          "path": "/usr/local/bin/python3.14"
+        },
+        {
+          "accessPath": "/usr/local/lib/libpython3.14.so.1.0",
+          "annotations": {
+            "evidence": "supporting"
+          },
+          "layerID": "sha256:476229b4f396ca2d8eb3dd65e6085c2e543f3d1741880779176f9e8c604f27ae",
+          "path": "/usr/local/lib/libpython3.14.so.1.0"
+        }
+      ],
+      "name": "python",
+      "purl": "pkg:generic/python@3.14.10",
+      "type": "binary",
+      "upstreams": [],
+      "version": "3.14.10"
+    },
+    "matchDetails": [
+      {
+        "fix": {
+          "suggestedVersion": "3.14.11"
+        },
+        "found": {
+          "cpes": [
+            "cpe:2.3:a:python:python:*:*:*:*:*:*:*:*"
+          ],
+          "versionConstraint": ">= 3.14.10, < 3.14.11 (unknown)",
+          "vulnerabilityID": "CVE-2026-119170"
+        },
+        "matcher": "stock-matcher",
+        "searchedBy": {
+          "cpes": [
+            "cpe:2.3:a:python:python:3.14.10:*:*:*:*:*:*:*"
+          ],
+          "namespace": "nvd:cpe",
+          "package": {
+            "name": "python",
+            "version": "3.14.10"
+          }
+        },
+        "type": "cpe-match"
+      },
+      {
+        "fix": {
+          "suggestedVersion": "3.14.11"
+        },
+        "found": {
+          "cpes": [
+            "cpe:2.3:a:python_software_foundation:python:*:*:*:*:*:*:*:*"
+          ],
+          "versionConstraint": ">= 3.14.10, < 3.14.11 (unknown)",
+          "vulnerabilityID": "CVE-2026-119170"
+        },
+        "matcher": "stock-matcher",
+        "searchedBy": {
+          "cpes": [
+            "cpe:2.3:a:python_software_foundation:python:3.14.10:*:*:*:*:*:*:*"
+          ],
+          "namespace": "nvd:cpe",
+          "package": {
+            "name": "python",
+            "version": "3.14.10"
+          }
+        },
+        "type": "cpe-match"
+      }
+    ],
+    "relatedVulnerabilities": [],
+    "vulnerability": {
+      "advisories": [],
+      "cvss": [
+        {
+          "metrics": {
+            "baseScore": 8.2
+          },
+          "source": "cna@python.org",
+          "type": "Secondary",
+          "vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N/E:X/CR:X/IR:X/AR:X/MAV:X/MAC:X/MAT:X/MPR:X/MUI:X/MVC:X/MVI:X/MVA:X/MSC:X/MSI:X/MSA:X/S:X/AU:X/R:X/V:X/RE:X/U:X",
+          "vendorMetadata": {},
+          "version": "4.0"
+        }
+      ],
+      "cwes": [
+        {
+          "cve": "CVE-2026-119170",
+          "cwe": "CWE-693",
+          "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+          "type": "Secondary"
+        }
+      ],
+      "dataSource": "https://nvd.nist.gov/vuln/detail/CVE-2026-119170",
+      "description": "There was a regression in how FIPS algorithms were enforced for the hashlib module. Only users that are using OpenSSL in FIPS mode are affected. Only Python 3.14.10 is affected, all other Python versions are unaffected.",
+      "epss": [
+        {
+          "cve": "CVE-2026-119170",
+          "date": "2026-11-18",
+          "epss": 0.00488,
+          "percentile": 0.42684
+        }
+      ],
+      "fix": {
+        "available": [
+          {
+            "date": "2026-11-11",
+            "kind": "first-observed",
+            "version": "3.14.11"
+          }
+        ],
+        "state": "fixed",
+        "versions": [
+          "3.14.11"
+        ]
+      },
+      "id": "CVE-2026-119170",
+      "namespace": "nvd:cpe",
+      "risk": 0.38308,
+      "severity": "High",
+      "urls": [
+        "https://github.com/python/cpython/issues/160923",
+        "https://github.com/python/cpython/pull/160984",
+        "https://mail.python.org/archives/list/security-announce@python.org/thread/PXVTTOBPUMFJSSUXN6XCS7FC5DZOSZXK/",
+        "http://www.openwall.com/lists/oss-security/2026/11/06/30"
+      ]
+    }
+  },
+  "backend_hashlib_proof": {
+    "cpython": "3.14.10",
+    "generic_both_cache_orders": true,
+    "module_path": "/usr/local/lib/python3.14/lib-dynload/_hashlib.cpython-314-x86_64-linux-musl.so",
+    "module_sha256": "3ea80f99a8d7ba7011b20eeef31ecb120c0914c8241dc209c38515e994a01671",
+    "named_both_cache_orders": true,
+    "openssl": "3.5.9",
+    "patch_sha256": "346c4b31e1cdd87d08cd2e79dbbcc00e6e8c6d47bdb045346be7bbf40c283fed",
+    "patched_source_sha256": "d907bf6b22ddd8a55e271d19f8e1e5eda07f931d3e5143698171904f0970e549",
+    "schema": 1,
+    "source_sha256": "de414a57119abef52784d8993e341d53aed635fc2b05c2607d9f98a2c5b72032",
+    "unpatched_control": true
+  },
+  "matches": [
+    {
+      "artifact": {
+        "cpes": [
+          "cpe:2.3:a:libcrypto3:libcrypto3:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto3:libcrypto:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto:libcrypto3:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto:libcrypto:3.5.9-r1:*:*:*:*:*:*:*"
+        ],
+        "id": "c2547e49b4073f62",
+        "language": "",
+        "licenses": [
+          "Apache-2.0"
+        ],
+        "locations": [
+          {
+            "accessPath": "/lib/apk/db/installed",
+            "annotations": {
+              "evidence": "primary"
+            },
+            "layerID": "sha256:68754fa8ab7c189be017d321cb90453b6b9d7c05971ae402c51c30fed416d131",
+            "path": "/lib/apk/db/installed"
+          }
+        ],
+        "metadata": {
+          "Arch": "x86_64",
+          "files": [
+            {
+              "path": "/etc"
+            },
+            {
+              "path": "/etc/ssl"
+            },
+            {
+              "path": "/etc/ssl/ct_log_list.cnf"
+            },
+            {
+              "path": "/etc/ssl/ct_log_list.cnf.dist"
+            },
+            {
+              "path": "/etc/ssl/openssl.cnf"
+            },
+            {
+              "path": "/etc/ssl/openssl.cnf.dist"
+            },
+            {
+              "path": "/etc/ssl/certs"
+            },
+            {
+              "path": "/etc/ssl/private"
+            },
+            {
+              "path": "/usr"
+            },
+            {
+              "path": "/usr/lib"
+            },
+            {
+              "path": "/usr/lib/libcrypto.so.3"
+            },
+            {
+              "path": "/usr/lib/engines-3"
+            },
+            {
+              "path": "/usr/lib/engines-3/afalg.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/capi.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/loader_attic.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/padlock.so"
+            },
+            {
+              "path": "/usr/lib/ossl-modules"
+            },
+            {
+              "path": "/usr/lib/ossl-modules/legacy.so"
+            }
+          ]
+        },
+        "metadataType": "ApkMetadata",
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r1?arch=x86_64&distro=alpine-3.24.1&upstream=openssl",
+        "type": "apk",
+        "upstreams": [
+          {
+            "name": "openssl"
+          }
+        ],
+        "version": "3.5.9-r1"
+      },
+      "matchDetails": [
+        {
+          "found": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*"
+            ],
+            "versionConstraint": ">= 3.5.0, < 3.5.10||>= 4.0.0, < 4.0.4||>= 4.1.0, < 4.1.1 (unknown)",
+            "vulnerabilityID": "CVE-2026-95692"
+          },
+          "matcher": "apk-matcher",
+          "searchedBy": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:3.5.9:*:*:*:*:*:*:*"
+            ],
+            "namespace": "nvd:cpe",
+            "package": {
+              "name": "openssl",
+              "version": "3.5.9-r1"
+            }
+          },
+          "type": "cpe-match"
+        }
+      ],
+      "relatedVulnerabilities": [],
+      "vulnerability": {
+        "advisories": [],
+        "cvss": [
+          {
+            "metrics": {
+              "baseScore": 7.5,
+              "exploitabilityScore": 3.9,
+              "impactScore": 3.6
+            },
+            "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+            "type": "Secondary",
+            "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+            "vendorMetadata": {},
+            "version": "3.1"
+          }
+        ],
+        "cwes": [
+          {
+            "cve": "CVE-2026-95692",
+            "cwe": "CWE-125",
+            "source": "openssl-security@openssl.org",
+            "type": "Secondary"
+          }
+        ],
+        "dataSource": "https://nvd.nist.gov/vuln/detail/CVE-2026-95692",
+        "description": "Issue summary: Setting an AES-GCM-SIV IV shorter than the expected nonce\nlength via EVP_CipherInit_ex() may trigger a heap out-of-bounds read.\nSupplying a longer IV is silently truncated instead of rejected.\n\nImpact summary: An application passing a caller-supplied IV of the wrong\nlength may crash or read beyond its buffer. Because trailing IV bytes are\nignored, an attacker who knows one message and tag may forge messages under a\ndifferent IV.\n\nCWE: CWE-125: Out-of-bounds Read\n\nDescription: AES-GCM-SIV copies the caller-supplied IV or nonce into its\ninternal state using a copy whose length is taken from the expected nonce size\nrather than from the length the caller actually provided. When the caller\npasses a shorter IV, the copy reads past the end of the caller's buffer;\nAddressSanitizer confirms a heap out-of-bounds read reached through\nEVP_CipherInit_ex() into ossl_aes_gcm_siv_init(). When the caller passes a\nlonger IV, the implementation silently discards the trailing bytes instead of\nrejecting the length.\n\nThe truncation breaks the binding between the IV and the computed\nauthentication tag. An attacker who has observed a message and its tag under\none IV can produce a message and tag that verify under a different IV whose\nfirst bytes match, since the surplus bytes never influence the computation.\nThe message itself is unchanged, so this is a failure of IV commitment rather\nthan a classic existential forgery.\n\nOnly applications that call EVP_CipherInit_ex() (or the equivalent provider\ncipher initialization) with an IV length other than the standard 12 bytes for\nAES-GCM-SIV are affected. The severity is limited because the out-of-bounds\nread is small and attacker-controlled only in length, and the forgery requires\nan unusual IV length choice by the application.\n\nFIPS impact: no\nThe FIPS modules are not affected by this issue, as AES-GCM-SIV is not an\napproved algorithm.",
+        "epss": [
+          {
+            "cve": "CVE-2026-95692",
+            "date": "2026-11-18",
+            "epss": 0.00449,
+            "percentile": 0.39681
+          }
+        ],
+        "fix": {
+          "state": "unknown",
+          "versions": []
+        },
+        "id": "CVE-2026-95692",
+        "namespace": "nvd:cpe",
+        "risk": 0.33675,
+        "severity": "High",
+        "urls": [
+          "https://github.com/openssl/openssl/commit/257a3427aa0ef8d9dd2ef5b3e2d1c021a221b116",
+          "https://github.com/openssl/openssl/commit/510872388f5d145cf870868b3d288a23822cb776",
+          "https://github.com/openssl/openssl/commit/70a47ac78b6f3be1b22fb1551bd0bfcff4f29613",
+          "https://openssl-library.org/news/secadv/20261110.txt"
+        ]
+      }
+    },
+    {
+      "artifact": {
+        "cpes": [
+          "cpe:2.3:a:libssl3:libssl3:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl3:libssl:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl:libssl3:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl:libssl:3.5.9-r1:*:*:*:*:*:*:*"
+        ],
+        "id": "01f2e1f35c0bcc5e",
+        "language": "",
+        "licenses": [
+          "Apache-2.0"
+        ],
+        "locations": [
+          {
+            "accessPath": "/lib/apk/db/installed",
+            "annotations": {
+              "evidence": "primary"
+            },
+            "layerID": "sha256:68754fa8ab7c189be017d321cb90453b6b9d7c05971ae402c51c30fed416d131",
+            "path": "/lib/apk/db/installed"
+          }
+        ],
+        "metadata": {
+          "Arch": "x86_64",
+          "files": [
+            {
+              "path": "/usr"
+            },
+            {
+              "path": "/usr/lib"
+            },
+            {
+              "path": "/usr/lib/libssl.so.3"
+            }
+          ]
+        },
+        "metadataType": "ApkMetadata",
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r1?arch=x86_64&distro=alpine-3.24.1&upstream=openssl",
+        "type": "apk",
+        "upstreams": [
+          {
+            "name": "openssl"
+          }
+        ],
+        "version": "3.5.9-r1"
+      },
+      "matchDetails": [
+        {
+          "found": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*"
+            ],
+            "versionConstraint": ">= 3.5.0, < 3.5.10||>= 4.0.0, < 4.0.4||>= 4.1.0, < 4.1.1 (unknown)",
+            "vulnerabilityID": "CVE-2026-95692"
+          },
+          "matcher": "apk-matcher",
+          "searchedBy": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:3.5.9:*:*:*:*:*:*:*"
+            ],
+            "namespace": "nvd:cpe",
+            "package": {
+              "name": "openssl",
+              "version": "3.5.9-r1"
+            }
+          },
+          "type": "cpe-match"
+        }
+      ],
+      "relatedVulnerabilities": [],
+      "vulnerability": {
+        "advisories": [],
+        "cvss": [
+          {
+            "metrics": {
+              "baseScore": 7.5,
+              "exploitabilityScore": 3.9,
+              "impactScore": 3.6
+            },
+            "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+            "type": "Secondary",
+            "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+            "vendorMetadata": {},
+            "version": "3.1"
+          }
+        ],
+        "cwes": [
+          {
+            "cve": "CVE-2026-95692",
+            "cwe": "CWE-125",
+            "source": "openssl-security@openssl.org",
+            "type": "Secondary"
+          }
+        ],
+        "dataSource": "https://nvd.nist.gov/vuln/detail/CVE-2026-95692",
+        "description": "Issue summary: Setting an AES-GCM-SIV IV shorter than the expected nonce\nlength via EVP_CipherInit_ex() may trigger a heap out-of-bounds read.\nSupplying a longer IV is silently truncated instead of rejected.\n\nImpact summary: An application passing a caller-supplied IV of the wrong\nlength may crash or read beyond its buffer. Because trailing IV bytes are\nignored, an attacker who knows one message and tag may forge messages under a\ndifferent IV.\n\nCWE: CWE-125: Out-of-bounds Read\n\nDescription: AES-GCM-SIV copies the caller-supplied IV or nonce into its\ninternal state using a copy whose length is taken from the expected nonce size\nrather than from the length the caller actually provided. When the caller\npasses a shorter IV, the copy reads past the end of the caller's buffer;\nAddressSanitizer confirms a heap out-of-bounds read reached through\nEVP_CipherInit_ex() into ossl_aes_gcm_siv_init(). When the caller passes a\nlonger IV, the implementation silently discards the trailing bytes instead of\nrejecting the length.\n\nThe truncation breaks the binding between the IV and the computed\nauthentication tag. An attacker who has observed a message and its tag under\none IV can produce a message and tag that verify under a different IV whose\nfirst bytes match, since the surplus bytes never influence the computation.\nThe message itself is unchanged, so this is a failure of IV commitment rather\nthan a classic existential forgery.\n\nOnly applications that call EVP_CipherInit_ex() (or the equivalent provider\ncipher initialization) with an IV length other than the standard 12 bytes for\nAES-GCM-SIV are affected. The severity is limited because the out-of-bounds\nread is small and attacker-controlled only in length, and the forgery requires\nan unusual IV length choice by the application.\n\nFIPS impact: no\nThe FIPS modules are not affected by this issue, as AES-GCM-SIV is not an\napproved algorithm.",
+        "epss": [
+          {
+            "cve": "CVE-2026-95692",
+            "date": "2026-11-18",
+            "epss": 0.00449,
+            "percentile": 0.39681
+          }
+        ],
+        "fix": {
+          "state": "unknown",
+          "versions": []
+        },
+        "id": "CVE-2026-95692",
+        "namespace": "nvd:cpe",
+        "risk": 0.33675,
+        "severity": "High",
+        "urls": [
+          "https://github.com/openssl/openssl/commit/257a3427aa0ef8d9dd2ef5b3e2d1c021a221b116",
+          "https://github.com/openssl/openssl/commit/510872388f5d145cf870868b3d288a23822cb776",
+          "https://github.com/openssl/openssl/commit/70a47ac78b6f3be1b22fb1551bd0bfcff4f29613",
+          "https://openssl-library.org/news/secadv/20261110.txt"
+        ]
+      }
+    },
+    {
+      "artifact": {
+        "cpes": [
+          "cpe:2.3:a:libcrypto3:libcrypto3:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto3:libcrypto:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto:libcrypto3:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto:libcrypto:3.5.9-r1:*:*:*:*:*:*:*"
+        ],
+        "id": "c2547e49b4073f62",
+        "language": "",
+        "licenses": [
+          "Apache-2.0"
+        ],
+        "locations": [
+          {
+            "accessPath": "/lib/apk/db/installed",
+            "annotations": {
+              "evidence": "primary"
+            },
+            "layerID": "sha256:68754fa8ab7c189be017d321cb90453b6b9d7c05971ae402c51c30fed416d131",
+            "path": "/lib/apk/db/installed"
+          }
+        ],
+        "metadata": {
+          "Arch": "x86_64",
+          "files": [
+            {
+              "path": "/etc"
+            },
+            {
+              "path": "/etc/ssl"
+            },
+            {
+              "path": "/etc/ssl/ct_log_list.cnf"
+            },
+            {
+              "path": "/etc/ssl/ct_log_list.cnf.dist"
+            },
+            {
+              "path": "/etc/ssl/openssl.cnf"
+            },
+            {
+              "path": "/etc/ssl/openssl.cnf.dist"
+            },
+            {
+              "path": "/etc/ssl/certs"
+            },
+            {
+              "path": "/etc/ssl/private"
+            },
+            {
+              "path": "/usr"
+            },
+            {
+              "path": "/usr/lib"
+            },
+            {
+              "path": "/usr/lib/libcrypto.so.3"
+            },
+            {
+              "path": "/usr/lib/engines-3"
+            },
+            {
+              "path": "/usr/lib/engines-3/afalg.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/capi.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/loader_attic.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/padlock.so"
+            },
+            {
+              "path": "/usr/lib/ossl-modules"
+            },
+            {
+              "path": "/usr/lib/ossl-modules/legacy.so"
+            }
+          ]
+        },
+        "metadataType": "ApkMetadata",
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r1?arch=x86_64&distro=alpine-3.24.1&upstream=openssl",
+        "type": "apk",
+        "upstreams": [
+          {
+            "name": "openssl"
+          }
+        ],
+        "version": "3.5.9-r1"
+      },
+      "matchDetails": [
+        {
+          "found": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*"
+            ],
+            "versionConstraint": ">= 1.0.2, < 1.0.2zt||>= 1.1.1, < 1.1.1zk||>= 3.0.0, < 3.0.24||>= 3.5.0, < 3.5.10||>= 4.0.0, < 4.0.4||>= 4.1.0, < 4.1.1 (unknown)",
+            "vulnerabilityID": "CVE-2026-107496"
+          },
+          "matcher": "apk-matcher",
+          "searchedBy": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:3.5.9:*:*:*:*:*:*:*"
+            ],
+            "namespace": "nvd:cpe",
+            "package": {
+              "name": "openssl",
+              "version": "3.5.9-r1"
+            }
+          },
+          "type": "cpe-match"
+        }
+      ],
+      "relatedVulnerabilities": [],
+      "vulnerability": {
+        "advisories": [],
+        "cvss": [
+          {
+            "metrics": {
+              "baseScore": 7.5,
+              "exploitabilityScore": 3.9,
+              "impactScore": 3.6
+            },
+            "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+            "type": "Secondary",
+            "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+            "vendorMetadata": {},
+            "version": "3.1"
+          }
+        ],
+        "cwes": [
+          {
+            "cve": "CVE-2026-107496",
+            "cwe": "CWE-835",
+            "source": "openssl-security@openssl.org",
+            "type": "Secondary"
+          }
+        ],
+        "dataSource": "https://nvd.nist.gov/vuln/detail/CVE-2026-107496",
+        "description": "Issue summary: Encrypting a CMS message to an EC certificate whose group order\nis 1 may cause CMS_encrypt() or CMS_encrypt_ex() to loop indefinitely.\n\nImpact summary: An attacker able to supply the recipient certificate to an\napplication performing CMS encryption can cause that application to loop\nindefinitely, consuming CPU and resulting in Denial of Service.\n\nCWE: CWE-835: Loop with Unreachable Exit Condition ('Infinite Loop')\n\nDescription: CMS_encrypt() and CMS_encrypt_ex() encrypt a message to one or\nmore recipient certificates and, for an EC recipient, generate an ephemeral\nkey in the recipient's group. If the certificate declares a group order of 1,\nrandom scalar generation can only produce zero. The key generation routine\nthen retries without limit while waiting for a nonzero private scalar, so the\ncall never returns.\n\nThe OpenSSL TLS and QUIC implementations do not use this path. An application\nis exposed only if it calls CMS_encrypt() or CMS_encrypt_ex() with a recipient\ncertificate whose EC parameters are attacker-controlled. Certificates with\nnormal EC group orders do not trigger the loop.\n\nOpenSSL 4.0 and later reject unknown explicit EC groups in default builds.\nThese versions are affected only when configured with the\nenable-ec_explicit_curves option.\n\nThe result is a hang that consumes a CPU core until the process is\ninterrupted, a Denial of Service. The severity is Low because the attacker\nmust supply the recipient certificate and the application must choose to\nencrypt to it; ordinary CMS encryption to trusted recipients is unaffected.\n\nThe fix makes EC key generation fail when the group has no valid nonzero\nprivate scalar, instead of retrying indefinitely.\n\nFIPS impact: no\nThe FIPS modules in 4.1, 4.0, 3.5 and 3.0 are not affected. The FIPS provider\ndoes not support arbitrary explicit EC domain parameters, so an order-1 group\nis rejected during key import before the vulnerable key generation path is\nreached.",
+        "epss": [
+          {
+            "cve": "CVE-2026-107496",
+            "date": "2026-11-18",
+            "epss": 0.00336,
+            "percentile": 0.27474
+          }
+        ],
+        "fix": {
+          "state": "unknown",
+          "versions": []
+        },
+        "id": "CVE-2026-107496",
+        "namespace": "nvd:cpe",
+        "risk": 0.252,
+        "severity": "High",
+        "urls": [
+          "https://github.com/openssl/openssl/commit/36e15b618decdff1b116eead6747718e6e729ad2",
+          "https://github.com/openssl/openssl/commit/a0051cfe699bf5a047bc1c4faef65f80f7987366",
+          "https://github.com/openssl/openssl/commit/a8531368ddb1f86d2a2782a8b693926bb67b59e7",
+          "https://openssl-library.org/news/secadv/20261110.txt"
+        ]
+      }
+    },
+    {
+      "artifact": {
+        "cpes": [
+          "cpe:2.3:a:libssl3:libssl3:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl3:libssl:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl:libssl3:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl:libssl:3.5.9-r1:*:*:*:*:*:*:*"
+        ],
+        "id": "01f2e1f35c0bcc5e",
+        "language": "",
+        "licenses": [
+          "Apache-2.0"
+        ],
+        "locations": [
+          {
+            "accessPath": "/lib/apk/db/installed",
+            "annotations": {
+              "evidence": "primary"
+            },
+            "layerID": "sha256:68754fa8ab7c189be017d321cb90453b6b9d7c05971ae402c51c30fed416d131",
+            "path": "/lib/apk/db/installed"
+          }
+        ],
+        "metadata": {
+          "Arch": "x86_64",
+          "files": [
+            {
+              "path": "/usr"
+            },
+            {
+              "path": "/usr/lib"
+            },
+            {
+              "path": "/usr/lib/libssl.so.3"
+            }
+          ]
+        },
+        "metadataType": "ApkMetadata",
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r1?arch=x86_64&distro=alpine-3.24.1&upstream=openssl",
+        "type": "apk",
+        "upstreams": [
+          {
+            "name": "openssl"
+          }
+        ],
+        "version": "3.5.9-r1"
+      },
+      "matchDetails": [
+        {
+          "found": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*"
+            ],
+            "versionConstraint": ">= 1.0.2, < 1.0.2zt||>= 1.1.1, < 1.1.1zk||>= 3.0.0, < 3.0.24||>= 3.5.0, < 3.5.10||>= 4.0.0, < 4.0.4||>= 4.1.0, < 4.1.1 (unknown)",
+            "vulnerabilityID": "CVE-2026-107496"
+          },
+          "matcher": "apk-matcher",
+          "searchedBy": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:3.5.9:*:*:*:*:*:*:*"
+            ],
+            "namespace": "nvd:cpe",
+            "package": {
+              "name": "openssl",
+              "version": "3.5.9-r1"
+            }
+          },
+          "type": "cpe-match"
+        }
+      ],
+      "relatedVulnerabilities": [],
+      "vulnerability": {
+        "advisories": [],
+        "cvss": [
+          {
+            "metrics": {
+              "baseScore": 7.5,
+              "exploitabilityScore": 3.9,
+              "impactScore": 3.6
+            },
+            "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+            "type": "Secondary",
+            "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+            "vendorMetadata": {},
+            "version": "3.1"
+          }
+        ],
+        "cwes": [
+          {
+            "cve": "CVE-2026-107496",
+            "cwe": "CWE-835",
+            "source": "openssl-security@openssl.org",
+            "type": "Secondary"
+          }
+        ],
+        "dataSource": "https://nvd.nist.gov/vuln/detail/CVE-2026-107496",
+        "description": "Issue summary: Encrypting a CMS message to an EC certificate whose group order\nis 1 may cause CMS_encrypt() or CMS_encrypt_ex() to loop indefinitely.\n\nImpact summary: An attacker able to supply the recipient certificate to an\napplication performing CMS encryption can cause that application to loop\nindefinitely, consuming CPU and resulting in Denial of Service.\n\nCWE: CWE-835: Loop with Unreachable Exit Condition ('Infinite Loop')\n\nDescription: CMS_encrypt() and CMS_encrypt_ex() encrypt a message to one or\nmore recipient certificates and, for an EC recipient, generate an ephemeral\nkey in the recipient's group. If the certificate declares a group order of 1,\nrandom scalar generation can only produce zero. The key generation routine\nthen retries without limit while waiting for a nonzero private scalar, so the\ncall never returns.\n\nThe OpenSSL TLS and QUIC implementations do not use this path. An application\nis exposed only if it calls CMS_encrypt() or CMS_encrypt_ex() with a recipient\ncertificate whose EC parameters are attacker-controlled. Certificates with\nnormal EC group orders do not trigger the loop.\n\nOpenSSL 4.0 and later reject unknown explicit EC groups in default builds.\nThese versions are affected only when configured with the\nenable-ec_explicit_curves option.\n\nThe result is a hang that consumes a CPU core until the process is\ninterrupted, a Denial of Service. The severity is Low because the attacker\nmust supply the recipient certificate and the application must choose to\nencrypt to it; ordinary CMS encryption to trusted recipients is unaffected.\n\nThe fix makes EC key generation fail when the group has no valid nonzero\nprivate scalar, instead of retrying indefinitely.\n\nFIPS impact: no\nThe FIPS modules in 4.1, 4.0, 3.5 and 3.0 are not affected. The FIPS provider\ndoes not support arbitrary explicit EC domain parameters, so an order-1 group\nis rejected during key import before the vulnerable key generation path is\nreached.",
+        "epss": [
+          {
+            "cve": "CVE-2026-107496",
+            "date": "2026-11-18",
+            "epss": 0.00336,
+            "percentile": 0.27474
+          }
+        ],
+        "fix": {
+          "state": "unknown",
+          "versions": []
+        },
+        "id": "CVE-2026-107496",
+        "namespace": "nvd:cpe",
+        "risk": 0.252,
+        "severity": "High",
+        "urls": [
+          "https://github.com/openssl/openssl/commit/36e15b618decdff1b116eead6747718e6e729ad2",
+          "https://github.com/openssl/openssl/commit/a0051cfe699bf5a047bc1c4faef65f80f7987366",
+          "https://github.com/openssl/openssl/commit/a8531368ddb1f86d2a2782a8b693926bb67b59e7",
+          "https://openssl-library.org/news/secadv/20261110.txt"
+        ]
+      }
+    },
+    {
+      "artifact": {
+        "cpes": [
+          "cpe:2.3:a:libcrypto3:libcrypto3:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto3:libcrypto:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto:libcrypto3:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto:libcrypto:3.5.9-r1:*:*:*:*:*:*:*"
+        ],
+        "id": "c2547e49b4073f62",
+        "language": "",
+        "licenses": [
+          "Apache-2.0"
+        ],
+        "locations": [
+          {
+            "accessPath": "/lib/apk/db/installed",
+            "annotations": {
+              "evidence": "primary"
+            },
+            "layerID": "sha256:68754fa8ab7c189be017d321cb90453b6b9d7c05971ae402c51c30fed416d131",
+            "path": "/lib/apk/db/installed"
+          }
+        ],
+        "metadata": {
+          "Arch": "x86_64",
+          "files": [
+            {
+              "path": "/etc"
+            },
+            {
+              "path": "/etc/ssl"
+            },
+            {
+              "path": "/etc/ssl/ct_log_list.cnf"
+            },
+            {
+              "path": "/etc/ssl/ct_log_list.cnf.dist"
+            },
+            {
+              "path": "/etc/ssl/openssl.cnf"
+            },
+            {
+              "path": "/etc/ssl/openssl.cnf.dist"
+            },
+            {
+              "path": "/etc/ssl/certs"
+            },
+            {
+              "path": "/etc/ssl/private"
+            },
+            {
+              "path": "/usr"
+            },
+            {
+              "path": "/usr/lib"
+            },
+            {
+              "path": "/usr/lib/libcrypto.so.3"
+            },
+            {
+              "path": "/usr/lib/engines-3"
+            },
+            {
+              "path": "/usr/lib/engines-3/afalg.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/capi.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/loader_attic.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/padlock.so"
+            },
+            {
+              "path": "/usr/lib/ossl-modules"
+            },
+            {
+              "path": "/usr/lib/ossl-modules/legacy.so"
+            }
+          ]
+        },
+        "metadataType": "ApkMetadata",
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r1?arch=x86_64&distro=alpine-3.24.1&upstream=openssl",
+        "type": "apk",
+        "upstreams": [
+          {
+            "name": "openssl"
+          }
+        ],
+        "version": "3.5.9-r1"
+      },
+      "matchDetails": [
+        {
+          "found": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*"
+            ],
+            "versionConstraint": ">= 3.5.0, < 3.5.10||>= 4.0.0, < 4.0.4||>= 4.1.0, < 4.1.1 (unknown)",
+            "vulnerabilityID": "CVE-2026-95691"
+          },
+          "matcher": "apk-matcher",
+          "searchedBy": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:3.5.9:*:*:*:*:*:*:*"
+            ],
+            "namespace": "nvd:cpe",
+            "package": {
+              "name": "openssl",
+              "version": "3.5.9-r1"
+            }
+          },
+          "type": "cpe-match"
+        }
+      ],
+      "relatedVulnerabilities": [],
+      "vulnerability": {
+        "advisories": [],
+        "cvss": [
+          {
+            "metrics": {
+              "baseScore": 8.1,
+              "exploitabilityScore": 2.9,
+              "impactScore": 5.2
+            },
+            "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+            "type": "Secondary",
+            "vector": "CVSS:3.1/AV:A/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:H",
+            "vendorMetadata": {},
+            "version": "3.1"
+          }
+        ],
+        "cwes": [
+          {
+            "cve": "CVE-2026-95691",
+            "cwe": "CWE-416",
+            "source": "openssl-security@openssl.org",
+            "type": "Secondary"
+          }
+        ],
+        "dataSource": "https://nvd.nist.gov/vuln/detail/CVE-2026-95691",
+        "description": "Issue summary: A retransmitted QUIC CRYPTO frame can release packet storage\nwhile the TLS record layer retains a direct pointer into that storage causing\nuse after free.\n\nImpact summary: A malicious QUIC server can cause a heap-use-after-free read\nin the OpenSSL QUIC client. The server can also identify one allocator-adjacent\nbyte through the client's protected Handshake response.\n\nCWE: CWE-416: Use After Free\n\nDescription: During CRYPTO stream processing, a pointer into the first frame's\nmemory on the stream is lent to the TLS handshake processing. The memory\nmust remain stable until it is processed and released. However the processing\nof retransmitted CRYPTO frames could release the memory if the retransmitted\nframe fully overlapped the existing frame. This then causes use-after-free read\nwhen the TLS handshake processing continues.\n\nThe use-after-free read can lead to a Denial-of-Service of the client\napplication or a minor leak of information about the heap memory contents\nthat might be overwritten with other data, subsequently allocated by\nthe application, to the peer.\n\nFIPS impact: no\nThe FIPS module is not affected as the QUIC implementation is outside of\nthe OpenSSL FIPS module boundary.",
+        "epss": [
+          {
+            "cve": "CVE-2026-95691",
+            "date": "2026-11-18",
+            "epss": 0.00284,
+            "percentile": 0.21236
+          }
+        ],
+        "fix": {
+          "state": "unknown",
+          "versions": []
+        },
+        "id": "CVE-2026-95691",
+        "namespace": "nvd:cpe",
+        "risk": 0.22152,
+        "severity": "High",
+        "urls": [
+          "https://github.com/openssl/openssl/commit/dd90ceb99a3c2ddba336bb4a00be9ebabd84c2a1",
+          "https://github.com/openssl/openssl/commit/ec9d4de9d03989b29db5a3d7efdb4c285deaf386",
+          "https://github.com/openssl/openssl/commit/f6244675833e097c2429a40d1b206d95385bd42f",
+          "https://openssl-library.org/news/secadv/20261110.txt"
+        ]
+      }
+    },
+    {
+      "artifact": {
+        "cpes": [
+          "cpe:2.3:a:libssl3:libssl3:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl3:libssl:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl:libssl3:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl:libssl:3.5.9-r1:*:*:*:*:*:*:*"
+        ],
+        "id": "01f2e1f35c0bcc5e",
+        "language": "",
+        "licenses": [
+          "Apache-2.0"
+        ],
+        "locations": [
+          {
+            "accessPath": "/lib/apk/db/installed",
+            "annotations": {
+              "evidence": "primary"
+            },
+            "layerID": "sha256:68754fa8ab7c189be017d321cb90453b6b9d7c05971ae402c51c30fed416d131",
+            "path": "/lib/apk/db/installed"
+          }
+        ],
+        "metadata": {
+          "Arch": "x86_64",
+          "files": [
+            {
+              "path": "/usr"
+            },
+            {
+              "path": "/usr/lib"
+            },
+            {
+              "path": "/usr/lib/libssl.so.3"
+            }
+          ]
+        },
+        "metadataType": "ApkMetadata",
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r1?arch=x86_64&distro=alpine-3.24.1&upstream=openssl",
+        "type": "apk",
+        "upstreams": [
+          {
+            "name": "openssl"
+          }
+        ],
+        "version": "3.5.9-r1"
+      },
+      "matchDetails": [
+        {
+          "found": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*"
+            ],
+            "versionConstraint": ">= 3.5.0, < 3.5.10||>= 4.0.0, < 4.0.4||>= 4.1.0, < 4.1.1 (unknown)",
+            "vulnerabilityID": "CVE-2026-95691"
+          },
+          "matcher": "apk-matcher",
+          "searchedBy": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:3.5.9:*:*:*:*:*:*:*"
+            ],
+            "namespace": "nvd:cpe",
+            "package": {
+              "name": "openssl",
+              "version": "3.5.9-r1"
+            }
+          },
+          "type": "cpe-match"
+        }
+      ],
+      "relatedVulnerabilities": [],
+      "vulnerability": {
+        "advisories": [],
+        "cvss": [
+          {
+            "metrics": {
+              "baseScore": 8.1,
+              "exploitabilityScore": 2.9,
+              "impactScore": 5.2
+            },
+            "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+            "type": "Secondary",
+            "vector": "CVSS:3.1/AV:A/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:H",
+            "vendorMetadata": {},
+            "version": "3.1"
+          }
+        ],
+        "cwes": [
+          {
+            "cve": "CVE-2026-95691",
+            "cwe": "CWE-416",
+            "source": "openssl-security@openssl.org",
+            "type": "Secondary"
+          }
+        ],
+        "dataSource": "https://nvd.nist.gov/vuln/detail/CVE-2026-95691",
+        "description": "Issue summary: A retransmitted QUIC CRYPTO frame can release packet storage\nwhile the TLS record layer retains a direct pointer into that storage causing\nuse after free.\n\nImpact summary: A malicious QUIC server can cause a heap-use-after-free read\nin the OpenSSL QUIC client. The server can also identify one allocator-adjacent\nbyte through the client's protected Handshake response.\n\nCWE: CWE-416: Use After Free\n\nDescription: During CRYPTO stream processing, a pointer into the first frame's\nmemory on the stream is lent to the TLS handshake processing. The memory\nmust remain stable until it is processed and released. However the processing\nof retransmitted CRYPTO frames could release the memory if the retransmitted\nframe fully overlapped the existing frame. This then causes use-after-free read\nwhen the TLS handshake processing continues.\n\nThe use-after-free read can lead to a Denial-of-Service of the client\napplication or a minor leak of information about the heap memory contents\nthat might be overwritten with other data, subsequently allocated by\nthe application, to the peer.\n\nFIPS impact: no\nThe FIPS module is not affected as the QUIC implementation is outside of\nthe OpenSSL FIPS module boundary.",
+        "epss": [
+          {
+            "cve": "CVE-2026-95691",
+            "date": "2026-11-18",
+            "epss": 0.00284,
+            "percentile": 0.21236
+          }
+        ],
+        "fix": {
+          "state": "unknown",
+          "versions": []
+        },
+        "id": "CVE-2026-95691",
+        "namespace": "nvd:cpe",
+        "risk": 0.22152,
+        "severity": "High",
+        "urls": [
+          "https://github.com/openssl/openssl/commit/dd90ceb99a3c2ddba336bb4a00be9ebabd84c2a1",
+          "https://github.com/openssl/openssl/commit/ec9d4de9d03989b29db5a3d7efdb4c285deaf386",
+          "https://github.com/openssl/openssl/commit/f6244675833e097c2429a40d1b206d95385bd42f",
+          "https://openssl-library.org/news/secadv/20261110.txt"
+        ]
+      }
+    },
+    {
+      "artifact": {
+        "cpes": [
+          "cpe:2.3:a:libcrypto3:libcrypto3:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto3:libcrypto:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto:libcrypto3:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libcrypto:libcrypto:3.5.9-r1:*:*:*:*:*:*:*"
+        ],
+        "id": "c2547e49b4073f62",
+        "language": "",
+        "licenses": [
+          "Apache-2.0"
+        ],
+        "locations": [
+          {
+            "accessPath": "/lib/apk/db/installed",
+            "annotations": {
+              "evidence": "primary"
+            },
+            "layerID": "sha256:68754fa8ab7c189be017d321cb90453b6b9d7c05971ae402c51c30fed416d131",
+            "path": "/lib/apk/db/installed"
+          }
+        ],
+        "metadata": {
+          "Arch": "x86_64",
+          "files": [
+            {
+              "path": "/etc"
+            },
+            {
+              "path": "/etc/ssl"
+            },
+            {
+              "path": "/etc/ssl/ct_log_list.cnf"
+            },
+            {
+              "path": "/etc/ssl/ct_log_list.cnf.dist"
+            },
+            {
+              "path": "/etc/ssl/openssl.cnf"
+            },
+            {
+              "path": "/etc/ssl/openssl.cnf.dist"
+            },
+            {
+              "path": "/etc/ssl/certs"
+            },
+            {
+              "path": "/etc/ssl/private"
+            },
+            {
+              "path": "/usr"
+            },
+            {
+              "path": "/usr/lib"
+            },
+            {
+              "path": "/usr/lib/libcrypto.so.3"
+            },
+            {
+              "path": "/usr/lib/engines-3"
+            },
+            {
+              "path": "/usr/lib/engines-3/afalg.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/capi.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/loader_attic.so"
+            },
+            {
+              "path": "/usr/lib/engines-3/padlock.so"
+            },
+            {
+              "path": "/usr/lib/ossl-modules"
+            },
+            {
+              "path": "/usr/lib/ossl-modules/legacy.so"
+            }
+          ]
+        },
+        "metadataType": "ApkMetadata",
+        "name": "libcrypto3",
+        "purl": "pkg:apk/alpine/libcrypto3@3.5.9-r1?arch=x86_64&distro=alpine-3.24.1&upstream=openssl",
+        "type": "apk",
+        "upstreams": [
+          {
+            "name": "openssl"
+          }
+        ],
+        "version": "3.5.9-r1"
+      },
+      "matchDetails": [
+        {
+          "found": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*"
+            ],
+            "versionConstraint": ">= 3.5.0, < 3.5.10||>= 4.0.0, < 4.0.4||>= 4.1.0, < 4.1.1 (unknown)",
+            "vulnerabilityID": "CVE-2026-88823"
+          },
+          "matcher": "apk-matcher",
+          "searchedBy": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:3.5.9:*:*:*:*:*:*:*"
+            ],
+            "namespace": "nvd:cpe",
+            "package": {
+              "name": "openssl",
+              "version": "3.5.9-r1"
+            }
+          },
+          "type": "cpe-match"
+        }
+      ],
+      "relatedVulnerabilities": [],
+      "vulnerability": {
+        "advisories": [],
+        "cvss": [
+          {
+            "metrics": {
+              "baseScore": 7.5,
+              "exploitabilityScore": 3.9,
+              "impactScore": 3.6
+            },
+            "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+            "type": "Secondary",
+            "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N",
+            "vendorMetadata": {},
+            "version": "3.1"
+          }
+        ],
+        "cwes": [
+          {
+            "cve": "CVE-2026-88823",
+            "cwe": "CWE-325",
+            "source": "openssl-security@openssl.org",
+            "type": "Secondary"
+          }
+        ],
+        "dataSource": "https://nvd.nist.gov/vuln/detail/CVE-2026-88823",
+        "description": "Issue summary: The AES-GCM-SIV implementation treats a zero-length Additional\nAuthenticated Data (AAD) update as a reset of all the AAD supplied so far,\ninstead of leaving the AAD unchanged. An application that supplies its AAD in\nseveral fragments, one of which is empty, therefore produces or verifies\nmessages whose authentication tag does not cover the AAD supplied before\nthe empty fragment.\n\nImpact summary: Data an application intended to authenticate alongside a\nmessage is silently left unauthenticated. An attacker can forge the AAD of such\na message.\n\nCWE: CWE-325: Missing Cryptographic Step\n\nDescription: An application passing AAD in multiple chunks of which some have\nzero length will have the previous AAD chunks effectively unauthenticated. Also,\non context re-initialisation, the AAD was not reset, which meant that any AAD\naccumulated from the previous context usage were also included in the AAD of the\nnew message.\n\nThe fix makes a zero-length AAD update a no-op and clears any accumulated AAD\nwhenever the context is re-initialised with a key or a nonce.\nA re-initialisation that only changes parameters keeps the AAD.\n\nFIPS impact: no\nThe FIPS modules are not affected, as AES-GCM-SIV is not a FIPS approved\nalgorithm and is implemented only in the default provider, outside the\nOpenSSL FIPS module boundary.",
+        "epss": [
+          {
+            "cve": "CVE-2026-88823",
+            "date": "2026-11-18",
+            "epss": 0.00267,
+            "percentile": 0.19014
+          }
+        ],
+        "fix": {
+          "state": "unknown",
+          "versions": []
+        },
+        "id": "CVE-2026-88823",
+        "namespace": "nvd:cpe",
+        "risk": 0.20024999999999998,
+        "severity": "High",
+        "urls": [
+          "https://github.com/openssl/openssl/commit/159e1de0c448d7b9f09ad768c8e141def4aa1eb4",
+          "https://github.com/openssl/openssl/commit/2f5fc833ff9b5bfe00b32f8b5c74f73c5773c682",
+          "https://github.com/openssl/openssl/commit/6747b1a278816dd7db46438040a70b0b5e5e0a90",
+          "https://openssl-library.org/news/secadv/20261110.txt"
+        ]
+      }
+    },
+    {
+      "artifact": {
+        "cpes": [
+          "cpe:2.3:a:libssl3:libssl3:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl3:libssl:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl:libssl3:3.5.9-r1:*:*:*:*:*:*:*",
+          "cpe:2.3:a:libssl:libssl:3.5.9-r1:*:*:*:*:*:*:*"
+        ],
+        "id": "01f2e1f35c0bcc5e",
+        "language": "",
+        "licenses": [
+          "Apache-2.0"
+        ],
+        "locations": [
+          {
+            "accessPath": "/lib/apk/db/installed",
+            "annotations": {
+              "evidence": "primary"
+            },
+            "layerID": "sha256:68754fa8ab7c189be017d321cb90453b6b9d7c05971ae402c51c30fed416d131",
+            "path": "/lib/apk/db/installed"
+          }
+        ],
+        "metadata": {
+          "Arch": "x86_64",
+          "files": [
+            {
+              "path": "/usr"
+            },
+            {
+              "path": "/usr/lib"
+            },
+            {
+              "path": "/usr/lib/libssl.so.3"
+            }
+          ]
+        },
+        "metadataType": "ApkMetadata",
+        "name": "libssl3",
+        "purl": "pkg:apk/alpine/libssl3@3.5.9-r1?arch=x86_64&distro=alpine-3.24.1&upstream=openssl",
+        "type": "apk",
+        "upstreams": [
+          {
+            "name": "openssl"
+          }
+        ],
+        "version": "3.5.9-r1"
+      },
+      "matchDetails": [
+        {
+          "found": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*"
+            ],
+            "versionConstraint": ">= 3.5.0, < 3.5.10||>= 4.0.0, < 4.0.4||>= 4.1.0, < 4.1.1 (unknown)",
+            "vulnerabilityID": "CVE-2026-88823"
+          },
+          "matcher": "apk-matcher",
+          "searchedBy": {
+            "cpes": [
+              "cpe:2.3:a:openssl:openssl:3.5.9:*:*:*:*:*:*:*"
+            ],
+            "namespace": "nvd:cpe",
+            "package": {
+              "name": "openssl",
+              "version": "3.5.9-r1"
+            }
+          },
+          "type": "cpe-match"
+        }
+      ],
+      "relatedVulnerabilities": [],
+      "vulnerability": {
+        "advisories": [],
+        "cvss": [
+          {
+            "metrics": {
+              "baseScore": 7.5,
+              "exploitabilityScore": 3.9,
+              "impactScore": 3.6
+            },
+            "source": "134c704f-9b21-4f2e-91b3-4a467353bcc0",
+            "type": "Secondary",
+            "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N",
+            "vendorMetadata": {},
+            "version": "3.1"
+          }
+        ],
+        "cwes": [
+          {
+            "cve": "CVE-2026-88823",
+            "cwe": "CWE-325",
+            "source": "openssl-security@openssl.org",
+            "type": "Secondary"
+          }
+        ],
+        "dataSource": "https://nvd.nist.gov/vuln/detail/CVE-2026-88823",
+        "description": "Issue summary: The AES-GCM-SIV implementation treats a zero-length Additional\nAuthenticated Data (AAD) update as a reset of all the AAD supplied so far,\ninstead of leaving the AAD unchanged. An application that supplies its AAD in\nseveral fragments, one of which is empty, therefore produces or verifies\nmessages whose authentication tag does not cover the AAD supplied before\nthe empty fragment.\n\nImpact summary: Data an application intended to authenticate alongside a\nmessage is silently left unauthenticated. An attacker can forge the AAD of such\na message.\n\nCWE: CWE-325: Missing Cryptographic Step\n\nDescription: An application passing AAD in multiple chunks of which some have\nzero length will have the previous AAD chunks effectively unauthenticated. Also,\non context re-initialisation, the AAD was not reset, which meant that any AAD\naccumulated from the previous context usage were also included in the AAD of the\nnew message.\n\nThe fix makes a zero-length AAD update a no-op and clears any accumulated AAD\nwhenever the context is re-initialised with a key or a nonce.\nA re-initialisation that only changes parameters keeps the AAD.\n\nFIPS impact: no\nThe FIPS modules are not affected, as AES-GCM-SIV is not a FIPS approved\nalgorithm and is implemented only in the default provider, outside the\nOpenSSL FIPS module boundary.",
+        "epss": [
+          {
+            "cve": "CVE-2026-88823",
+            "date": "2026-11-18",
+            "epss": 0.00267,
+            "percentile": 0.19014
+          }
+        ],
+        "fix": {
+          "state": "unknown",
+          "versions": []
+        },
+        "id": "CVE-2026-88823",
+        "namespace": "nvd:cpe",
+        "risk": 0.20024999999999998,
+        "severity": "High",
+        "urls": [
+          "https://github.com/openssl/openssl/commit/159e1de0c448d7b9f09ad768c8e141def4aa1eb4",
+          "https://github.com/openssl/openssl/commit/2f5fc833ff9b5bfe00b32f8b5c74f73c5773c682",
+          "https://github.com/openssl/openssl/commit/6747b1a278816dd7db46438040a70b0b5e5e0a90",
+          "https://openssl-library.org/news/secadv/20261110.txt"
+        ]
+      }
+    }
+  ]
+}

@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { StaticRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 import type { CostingCoverageDTO, DashboardKPIsDTO } from '@/lib/erp-api';
-import { OwnerCommandCenter } from './AnalyticsScreen';
+import { OwnerCommandCenter, canReadFinancialDashboard, dashboardValueAfterFailure } from './AnalyticsScreen';
 
 const data: DashboardKPIsDTO = {
   date: '2026-09-05', revenue_food_minor: 9000, revenue_gaming_minor: 14000,
@@ -39,5 +39,24 @@ describe('dashboard profit confidence', () => {
     const html = render(complete);
     expect(html).toContain('100.0%');
     expect(html).toContain('Stable');
+  });
+});
+
+
+describe('financial dashboard admission and denial policy', () => {
+  it('requires both explicit read permissions without inferring a role grant', () => {
+    for (const permissions of [undefined, [], ['analytics.read'], ['finance.read']]) {
+      expect(canReadFinancialDashboard(permissions)).toBe(false);
+    }
+    expect(canReadFinancialDashboard(['analytics.read', 'finance.read'])).toBe(true);
+  });
+  it('discards figures and costing only on definitive access denial', () => {
+    for (const status of [401, 403]) {
+      expect(dashboardValueAfterFailure(data, Object.assign(new Error('denied'), { status }))).toBeNull();
+      expect(dashboardValueAfterFailure(complete, Object.assign(new Error('denied'), { status }))).toBeNull();
+    }
+    for (const error of [new Error('offline'), Object.assign(new Error('busy'), { status: 503 })]) {
+      expect(dashboardValueAfterFailure(data, error)).toBe(data);
+    }
   });
 });

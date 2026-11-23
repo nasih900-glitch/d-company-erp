@@ -2,9 +2,11 @@ package cloud.dcompany.erp.ui
 
 import cloud.dcompany.erp.core.auth.TerminalPurpose
 import cloud.dcompany.erp.core.auth.ValidatedTerminalDisplay
+import cloud.dcompany.erp.ui.screens.shift.ShiftDetail
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class TerminalReassignmentPolicyTest {
@@ -206,4 +208,29 @@ class TerminalReassignmentPolicyTest {
         serverGamingBlockerCount = 0,
         alternativeTillCount = 1,
     )
+    @Test fun `saturated other till page cannot hide older exact or legacy null shift`() {
+        for (hiddenTerminal in listOf("original-till", null)) {
+            val recentOthers = (1..200).map { ShiftDetail("shift-$it", "branch", "other-$it", "open", "2026-11-05T00:00:00Z") }
+            val older = ShiftDetail("older", "branch", hiddenTerminal, "open", "2026-11-04T00:00:00Z")
+            val actualBoundedPage = (recentOthers + older).take(200)
+            // Exact pre-fix production predicate: the hidden old shift made this false-clean.
+            val priorCount = actualBoundedPage.count { it.branchId != "branch" || it.status != "open" || it.terminalId == null || it.terminalId == "original-till" }
+            assertEquals(0, priorCount)
+            assertEquals(TerminalReassignmentDecision.Allowed, terminalReassignmentDecision(allowedFacts().copy(serverOpenShiftCount = priorCount)))
+            val safeCount = terminalReassignmentShiftBlockers(actualBoundedPage, "branch", "original-till")
+            assertNull("An incomplete response must not be used as a real zero or nonzero shift count", safeCount)
+            assertTrue(TERMINAL_SHIFT_RESPONSE_LIMIT_MESSAGE.contains("response reached its limit"))
+            assertTrue(TERMINAL_SHIFT_RESPONSE_LIMIT_MESSAGE.contains("cannot be verified"))
+        }
+    }
+    @Test fun `complete shorter shift page preserves exact scope null and malformed row blockers`() {
+        val others = (1..199).map { ShiftDetail("shift-$it", "branch", "other-$it", "open", "2026-11-05T00:00:00Z") }
+        assertEquals(0, terminalReassignmentShiftBlockers(others, "branch", "original-till"))
+        assertEquals(0, terminalReassignmentShiftBlockers(emptyList(), "branch", "original-till"))
+        for (row in listOf(others.first().copy(terminalId = null), others.first().copy(terminalId = "original-till"),
+            others.first().copy(branchId = "foreign"), others.first().copy(status = "closed"))) {
+            assertEquals(1, terminalReassignmentShiftBlockers(listOf(row), "branch", "original-till"))
+        }
+    }
+
 }

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { api } from './api';
-import { gaming } from './erp-api';
+import { gaming, gamingSessionCancelBody } from './erp-api';
 
 vi.mock('./api', () => ({
   api: {
@@ -26,6 +26,19 @@ describe('gaming paid-extension API contract', () => {
 
     await expect(gaming.getSession('session-1')).resolves.toEqual(session);
     expect(api.get).toHaveBeenCalledExactlyOnceWith('/gaming/sessions/session-1');
+  });
+
+  it('always sends the explicit unlinked-order compare-and-swap fence for V1 Void', () => {
+    expect(gamingSessionCancelBody(null, {
+      idempotencyKey: 'gaming-session-void:session-1',
+      expected_participant_revision: 2,
+      expected_billing_revision: 3,
+    })).toEqual({
+      reason: null,
+      expected_order_id: null,
+      expected_participant_revision: 2,
+      expected_billing_revision: 3,
+    });
   });
 
   it('sends the caller-retained idempotency key for a legacy extension', async () => {

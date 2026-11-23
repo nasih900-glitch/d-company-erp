@@ -37,7 +37,7 @@ class FinancePresentationPolicyTest {
         assertFalse(copy.contains("membership", ignoreCase = true))
         assertTrue(copy.contains("customer", ignoreCase = true))
         assertTrue(copy.contains("gaming", ignoreCase = true))
-        assertTrue(presented.any { it.value == "₹125.00" })
+        assertTrue(presented.any { it.value == "125.00" })
     }
 
     @Test

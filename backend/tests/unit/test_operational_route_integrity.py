@@ -12,6 +12,8 @@ from inspect import signature
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
+from starlette.requests import Request
+
 import pytest
 from fastapi import BackgroundTasks
 from pydantic import ValidationError as PydanticValidationError
@@ -25,6 +27,7 @@ from app.core.errors import (
     CheckoutClaimConflictError,
     ConflictError,
     ForbiddenError,
+    IdempotencyConflict,
     NotFoundError,
 )
 from app.core.permissions import ROLE_PERMISSIONS
@@ -88,11 +91,24 @@ class _Session:
         self.results = list(results)
         self.entities = {} if entities is None else entities
         self.statements = []
+        self.collection_fences = []
         self.added = []
         self.flush_count = 0
         self.refreshed = []
 
-    async def execute(self, statement):
+    async def scalars(self, statement):
+        from app.models import PosReceiptCorrection
+
+        assert [column["entity"] for column in statement.column_descriptions] == [PosReceiptCorrection]
+        return []  # No immutable no-value corrections in these legacy fixtures.
+
+    async def execute(self, statement, parameters=None):
+        if str(statement) == "SELECT dcompany_collection_lock(:company)":
+            assert isinstance(parameters, dict) and set(parameters) == {"company"}
+            assert isinstance(parameters["company"], UUID)
+            self.collection_fences.append(parameters["company"])
+            return _Result()
+        assert parameters is None
         rendered = str(statement)
         if (
             "gaming_session_participants" in rendered
@@ -194,6 +210,8 @@ async def test_whole_order_void_replay_requires_the_original_reason() -> None:
 
     same_reason_session = _Session(
         _Result(scalar=order),
+        _Result(scalar=None),  # no Gaming session owns this order
+        _Result(scalar=None),  # no Gaming Void receipt owns this order
         _Result(scalar=voided_at),
         _Result(rows=["Customer left"]),
     )
@@ -209,6 +227,8 @@ async def test_whole_order_void_replay_requires_the_original_reason() -> None:
 
     changed_reason_session = _Session(
         _Result(scalar=order),
+        _Result(scalar=None),  # no Gaming session owns this order
+        _Result(scalar=None),  # no Gaming Void receipt owns this order
         _Result(scalar=voided_at),
         _Result(rows=["Customer left"]),
     )
@@ -788,7 +808,8 @@ def test_routine_pos_billing_is_permission_scoped_not_shift_opener_scoped() -> N
     # Charge-erasing and payout workflows keep their independent high-trust
     # permission plus the existing opener/protected-owner accountability rule.
     assert "require_shift_opener" in pos_router.void_held_order.__code__.co_names
-    assert "require_shift_opener" in pos_router.create_pos_refund_request.__code__.co_names
+    assert _route_permissions(pos_router.create_pos_refund_request) == ("pos.refund",)
+    # Delegated refund creation accountability is exercised below and over HTTP.
 
 
 def test_create_batch_rejects_duplicate_client_line_identity() -> None:
@@ -895,15 +916,23 @@ def _tenant(
     terminal_id: UUID | None = None,
     user_id: UUID | None = None,
     protected_access: bool = False,
+    roles: tuple[str, ...] = ("owner",),
 ) -> TenantContext:
     return TenantContext(
         user_id=user_id or uuid4(),
         company_id=company_id or uuid4(),
         branch_id=branch_id or uuid4(),
         terminal_id=terminal_id or uuid4(),
-        roles=("owner",),
+        roles=roles,
         protected_access=protected_access,
     )
+
+
+def _idempotent_request(key: str, request_hash: str) -> Request:
+    request = Request({"type": "http", "headers": []})
+    request.state.idempotency_key = key
+    request.state.idempotency_request_hash = request_hash
+    return request
 
 
 def _shift(tenant: TenantContext, **overrides):
@@ -913,6 +942,8 @@ def _shift(tenant: TenantContext, **overrides):
         "branch_id": tenant.branch_id,
         "terminal_id": tenant.terminal_id,
         "opened_by": tenant.user_id,
+        "operator_user_id": None,
+        "operator_revision": None,
         "opened_at": datetime.now(UTC),
         "opening_action_id": None,
         "opening_request_hash": None,
@@ -1155,6 +1186,7 @@ async def test_record_payment_with_tip_grows_order_total_and_settles_in_one_shot
     # The durable mirror enqueue occurs inside the payment transaction. There
     # is no post-response webhook task that can be lost after commit.
     assert len(background_tasks.tasks) == 0
+    assert session.collection_fences == [tenant.company_id]
 
 
 @pytest.mark.asyncio
@@ -1289,6 +1321,7 @@ async def test_record_payment_enqueues_paid_order_mirror_with_stable_identity(
     assert captured["payload"]["actor"] == "Owner"
     assert captured["payload"]["status"] == "paid"
     assert captured["payload"]["currency"] == "INR"
+    assert session.collection_fences == [tenant.company_id]
 
 
 @pytest.mark.asyncio
@@ -1408,6 +1441,7 @@ async def test_record_payment_with_unconfigured_mirror_has_no_background_task(
     assert response.order_status == "paid"
 
     assert len(background_tasks.tasks) == 0
+    assert session.collection_fences == [tenant.company_id]
 
 
 @pytest.mark.asyncio
@@ -1678,10 +1712,9 @@ async def test_deleted_package_session_cannot_receive_hourly_membership_waiver(
     assert order.total_minor == 15_000
 
 
-def test_cancel_reason_is_trimmed_and_whitespace_only_is_rejected() -> None:
+def test_cancel_reason_is_trimmed_and_whitespace_becomes_absent_policy_input() -> None:
     assert gaming_router.SessionCancel(reason="  Customer left  ").reason == "Customer left"
-    with pytest.raises(PydanticValidationError):
-        gaming_router.SessionCancel(reason="   \t  ")
+    assert gaming_router.SessionCancel(reason="   \t  ").reason is None
 
 
 def test_shift_close_count_schema_rejects_negative_but_preserves_zero() -> None:
@@ -2396,22 +2429,36 @@ async def test_session_send_retry_returns_the_existing_order_without_creating_an
 
 
 @pytest.mark.asyncio
-async def test_cancel_session_records_trace_and_retry_preserves_the_original_reason() -> None:
-    tenant = _tenant()
+async def test_cancel_session_records_trace_and_retry_preserves_the_original_reason(
+    monkeypatch,
+) -> None:
+    tenant = _tenant(roles=("gaming_supervisor",))
     station = _station(tenant)
     shift = _shift(tenant)
     gaming_session = _gaming_session(tenant, station.id, shift.id)
     first_session = _Session(
         _Result(scalar=gaming_session),
-        _Result(scalar=shift),
-        _Result(scalar=0),  # no active add-ons block whole-session cancellation
+        _Result(rows=[shift]),
+        _Result(rows=[]),  # no active add-ons block whole-session cancellation
         entities={(Station, station.id): station},
     )
+    async def _reserve(*_args, **_kwargs):
+        return None
+
+    async def _store(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(gaming_router, "check_or_reserve", _reserve)
+    monkeypatch.setattr(gaming_router, "store_response", _store)
+    key = f"gaming-session-void:{gaming_session.id}"
+    request_hash = "a" * 64
+    first_payload = gaming_router.SessionCancel(reason="  Customer left before billing  ")
 
     first = await gaming_router.cancel_session(
         gaming_session.id,
-        gaming_router.SessionCancel(reason="  Customer left before billing  "),
+        first_payload,
         first_session,
+        _idempotent_request(key, request_hash),
         tenant,
     )
 
@@ -2423,30 +2470,53 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
     assert gaming_session.billable_minutes == 0
     assert gaming_session.amount_minor == 0
     original_cancelled_at = gaming_session.cancelled_at
+    void_audit = next(
+        entity
+        for entity in first_session.added
+        if isinstance(entity, AuditLog) and entity.action == "gaming_session_voided"
+    )
 
     # The original opener can safely recover a lost response even after the
     # exact shift has closed; scope and opener checks still run first.
     shift.status = "closed"
     retry_session = _Session(
         _Result(scalar=gaming_session),
-        _Result(scalar=shift),
+        _Result(rows=[shift]),
+        _Result(rows=[void_audit]),
         entities={(Station, station.id): station},
     )
     retry = await gaming_router.cancel_session(
         gaming_session.id,
-        gaming_router.SessionCancel(reason="Different retry body"),
+        first_payload,
         retry_session,
+        _idempotent_request(key, request_hash),
         tenant,
     )
     assert retry.cancel_reason == "Customer left before billing"
     assert gaming_session.cancelled_at == original_cancelled_at
     assert retry_session.flush_count == 0
 
+    changed_retry = _Session(
+        _Result(scalar=gaming_session),
+        _Result(rows=[shift]),
+        _Result(rows=[void_audit]),
+        entities={(Station, station.id): station},
+    )
+    with pytest.raises(IdempotencyConflict, match="immutable Void receipt"):
+        await gaming_router.cancel_session(
+            gaming_session.id,
+            gaming_router.SessionCancel(reason="Different retry body"),
+            changed_retry,
+            _idempotent_request(key, "b" * 64),
+            tenant,
+        )
+
     wrong_terminal = _tenant(
         company_id=tenant.company_id,
         branch_id=tenant.branch_id,
         terminal_id=uuid4(),
         user_id=tenant.user_id,
+        roles=("gaming_supervisor",),
     )
     with pytest.raises(BusinessRuleError, match="different terminal"):
         await gaming_router.cancel_session(
@@ -2454,21 +2524,25 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
             gaming_router.SessionCancel(reason="Retry from wrong drawer"),
             _Session(
                 _Result(scalar=gaming_session),
-                _Result(scalar=shift),
-                _Result(scalar=0),
+                _Result(rows=[shift]),
+                _Result(rows=[]),
                 entities={(Station, station.id): station},
             ),
+            _idempotent_request(key, request_hash),
             wrong_terminal,
         )
 
-    # Cancelling removes a billable session, so ordinary staff on the same
-    # terminal still need the accountable shift opener to perform it.
+    # Once custody is recorded, another staff member on the same terminal
+    # cannot waive the charge just because they share the workspace.
     gaming_session.status = "ended"
     shift.status = "open"
+    shift.operator_user_id = tenant.user_id
+    shift.operator_revision = 1
     other_staff = _tenant(
         company_id=tenant.company_id,
         branch_id=tenant.branch_id,
         terminal_id=tenant.terminal_id,
+        roles=("gaming_supervisor",),
     )
     with pytest.raises(BusinessRuleError, match="Only the staff member who opened this shift"):
         await gaming_router.cancel_session(
@@ -2476,10 +2550,11 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
             gaming_router.SessionCancel(reason="Waive this charge"),
             _Session(
                 _Result(scalar=gaming_session),
-                _Result(scalar=shift),
-                _Result(scalar=0),
+                _Result(rows=[shift]),
+                _Result(rows=[]),
                 entities={(Station, station.id): station},
             ),
+            _idempotent_request(f"{key}:staff", "c" * 64),
             other_staff,
         )
 
@@ -2491,16 +2566,17 @@ async def test_cancel_session_records_trace_and_retry_preserves_the_original_rea
         terminal_id=tenant.terminal_id,
         protected_access=True,
     )
-    with pytest.raises(BusinessRuleError, match="only cancel a legacy ended session"):
+    with pytest.raises(BusinessRuleError, match="Only an ended legacy session can be voided"):
         await gaming_router.cancel_session(
             gaming_session.id,
             gaming_router.SessionCancel(reason="Invalid closed-shift cleanup"),
             _Session(
                 _Result(scalar=gaming_session),
-                _Result(scalar=shift),
-                _Result(scalar=0),
+                _Result(rows=[shift]),
+                _Result(rows=[]),
                 entities={(Station, station.id): station},
             ),
+            _idempotent_request(f"{key}:owner", "d" * 64),
             protected_owner,
         )
 
@@ -2572,6 +2648,7 @@ async def test_order_detail_returns_held_timestamp_and_line_preparation_note() -
     table_id = uuid4()
     held_at = datetime(2026, 7, 15, 11, 30, tzinfo=UTC)
     order = SimpleNamespace(
+        company_id=uuid4(),
         id=uuid4(),
         invoice_no=None,
         fiscal_year=None,
@@ -2627,6 +2704,7 @@ async def test_order_detail_returns_held_timestamp_and_line_preparation_note() -
         _Result(rows=[(line, item)]),
         _Result(scalar=0),
         _Result(rows=[]),
+        _Result(),  # no retained Gaming Void provenance
         _Result(),  # points redemption lookup (none)
         entities={(Table, table_id): SimpleNamespace(code="T1")},
     )
@@ -2721,3 +2799,49 @@ async def test_order_list_computes_refundable_balance_net_of_prior_refunds() -> 
     assert response[0].paid_minor == 1_000
     assert response[0].refundable_minor == 600
     assert response[0].payment_methods == ["cash", "upi"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("foreign", ["current", "original"])
+@pytest.mark.parametrize(("reserve", "amendment_context"), [(True,False),(True,True),(False,True)])
+async def test_extracted_refund_preparer_preserves_both_opener_guards(
+    monkeypatch, foreign, reserve, amendment_context
+):
+    from app.models import PaidBillAmendmentIntent
+    from app.services.pos.refund_requests import prepare_pos_refund_request
+
+    tenant=_tenant(protected_access=False)
+    current=_shift(tenant,opened_by=uuid4() if foreign=="current" else tenant.user_id)
+    original=_shift(tenant,opened_by=uuid4() if foreign=="original" else tenant.user_id)
+    order=SimpleNamespace(id=uuid4(),company_id=tenant.company_id,branch_id=tenant.branch_id,
+        terminal_id=tenant.terminal_id,shift_id=original.id,status="paid",closed_at=datetime.now(UTC),
+        invoice_issued_at=datetime.now(UTC),invoice_no="GUARD/1",fiscal_year="26-27")
+
+    class GuardSession(_Session):
+        async def scalar(self, statement):
+            if "pos_receipt_corrections" in str(statement):
+                assert str(statement).startswith("SELECT EXISTS")
+                return False
+            assert statement.column_descriptions[0]["entity"] is PaidBillAmendmentIntent
+            return None
+
+    results=[_Result(scalar=order),_Result(scalar=None),_Result(scalar=current)]
+    if foreign=="original": results.append(_Result(scalar=original))
+    session=GuardSession(*results)
+    action="opener:"+str(uuid4())
+    payload=pos_router.PosRefundRequestCreate(order_id=order.id,shift_id=current.id,
+        reason_code="CUSTOMER_REQUEST",amount_minor=100,expected_paid_minor=100,
+        expected_refundable_minor=100,mode="cash",client_action_id=action)
+    operation="current shift" if foreign=="current" else "original shift"
+    with pytest.raises(BusinessRuleError,match=operation):
+        if reserve and not amendment_context:
+            async def no_replay(*args,**kwargs): return None
+            monkeypatch.setattr(pos_router,"check_or_reserve",no_replay)
+            request=_idempotent_request(action,"b"*64)
+            request.scope["headers"]=[(b"x-client-action-id",action.encode())]
+            await pos_router.create_pos_refund_request(payload,session,request,tenant)
+        else:
+            await prepare_pos_refund_request(session,tenant=tenant,payload=payload,
+                idempotency_key=action,reserve=reserve,amendment_context=amendment_context)
+    assert session.added==[] and session.flush_count==0
+    assert session.results==[]

@@ -204,8 +204,18 @@ async def test_post_grn_replay_returns_the_stored_response_without_creating_a_se
                     "batches_created": 1, "batch_ids": [str(uuid4())], "line_ids": [str(uuid4())],
                     "total_minor": 500, "supplier_invoice_no": None}
 
-    with patch.object(
-        inventory_router, "check_or_reserve", AsyncMock(return_value={"body": stored_body}),
+    fresh = AsyncMock()
+    with (
+        patch.object(
+            inventory_router, "check_or_reserve", AsyncMock(return_value={"body": stored_body}),
+        ),
+        patch.object(
+            inventory_router.grn_commands, "create_authority",
+            AsyncMock(return_value=(fresh, None)),
+        ) as authority,
+        patch.object(
+            inventory_router.grn_commands, "cached_response", AsyncMock(return_value=stored_body),
+        ) as completed,
     ):
         result = await inventory_router.post_grn(
             inventory_router.GrnPost(
@@ -221,6 +231,9 @@ async def test_post_grn_replay_returns_the_stored_response_without_creating_a_se
             tenant,
         )
 
+    authority.assert_awaited_once()
+    completed.assert_awaited_once()
+    assert fresh.await_count == 1
     assert result == stored_body
     assert session.flush_count == 0
 

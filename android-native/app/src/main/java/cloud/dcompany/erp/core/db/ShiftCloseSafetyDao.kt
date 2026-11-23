@@ -7,6 +7,7 @@ import androidx.room.Query
 import androidx.room.RoomDatabase
 import androidx.room.Transaction
 import androidx.sqlite.db.SupportSQLiteDatabase
+import kotlinx.coroutines.flow.Flow
 
 data class ShiftCloseBlockerCounts(
     val pendingLocalCount: Int,
@@ -88,27 +89,7 @@ data class ShiftCloseCaptureResult(
     val message: String? = null,
 )
 
-/**
- * One DB-authoritative gate for close capture and the final server POST.
- *
- * Pending writes may exist when an offline shift captures its close intent;
- * the ordered sync pass sends those writes first. Rejected/ambiguous rows and
- * unfinished human workflows block capture. Immediately before POST /close,
- * every pending row blocks too. The current shift's own open/close outbox row
- * is deliberately absent from this query, so offline open -> work -> close is
- * supported without treating the close intent as its own blocker.
- */
-@Dao
-interface ShiftCloseSafetyDao {
-
-    /*
-     * `held_order_cache` is replaced only from the authenticated terminal's
-     * GET /pos/orders?status=held response. Because the server permits one
-     * open shift per terminal, every unmatched row is work for this terminal's
-     * current shift even though the older cache schema has no shiftId column.
-     */
-    @Query(
-        """
+private const val SHIFT_CLOSE_BLOCKER_QUERY = """
         SELECT
           (
             (SELECT COUNT(*) FROM local_orders
@@ -276,13 +257,41 @@ interface ShiftCloseSafetyDao {
                 (trim(ownerCompanyId) = '' OR trim(ownerUserId) = '' OR trim(branchId) = '' OR
                  trim(terminalId) = '' OR trim(shiftId) = ''))
           ) AS unscopedAttentionCount
-        """,
-    )
+"""
+
+/**
+ * One DB-authoritative gate for close capture and the final server POST.
+ *
+ * Pending writes may exist when an offline shift captures its close intent;
+ * the ordered sync pass sends those writes first. Rejected/ambiguous rows and
+ * unfinished human workflows block capture. Immediately before POST /close,
+ * every pending row blocks too. The current shift's own open/close outbox row
+ * is deliberately absent from this query, so offline open -> work -> close is
+ * supported without treating the close intent as its own blocker.
+ */
+@Dao
+interface ShiftCloseSafetyDao {
+
+    /*
+     * `held_order_cache` is replaced only from the authenticated terminal's
+     * GET /pos/orders?status=held response. Because the server permits one
+     * open shift per terminal, every unmatched row is work for this terminal's
+     * current shift even though the older cache schema has no shiftId column.
+     */
+    @Query(SHIFT_CLOSE_BLOCKER_QUERY)
     suspend fun blockersForExactShift(
         localShiftId: String,
         serverShiftId: String?,
         terminalId: String,
     ): ShiftCloseBlockerCounts
+
+    /** Same conservative cache projection as capture; never a complete server preflight. */
+    @Query(SHIFT_CLOSE_BLOCKER_QUERY)
+    fun observeBlockersForExactShift(
+        localShiftId: String,
+        serverShiftId: String?,
+        terminalId: String,
+    ): Flow<ShiftCloseBlockerCounts>
 
     @Query("SELECT * FROM local_shifts WHERE localId = :localId LIMIT 1")
     suspend fun localShift(localId: String): LocalShiftEntity?

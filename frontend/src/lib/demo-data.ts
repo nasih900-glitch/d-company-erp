@@ -18,7 +18,7 @@ export const COMPANY = {
   phone: null,
   email: null,
   currency: 'INR',
-  currency_symbol: '₹',
+  currency_symbol: '',
 };
 
 export type MenuItem = {

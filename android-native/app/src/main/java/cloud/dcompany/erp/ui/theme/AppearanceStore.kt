@@ -8,25 +8,33 @@ internal class AppearanceStore(context: Context) {
         Context.MODE_PRIVATE,
     )
 
-    fun load(): AppearancePreference = when (preferences.getString(KEY, null)) {
-        "day" -> AppearancePreference.Day
-        "night" -> AppearancePreference.Night
-        else -> AppearancePreference.System
-    }
+    fun load(): AppearancePreference = appearancePreferenceFromPersistedValue(
+        preferences.getString(KEY, null),
+    )
 
     fun save(preference: AppearancePreference) {
-        val editor = preferences.edit()
-        when (preference) {
-            AppearancePreference.System -> editor.remove(KEY)
-            AppearancePreference.Day -> editor.putString(KEY, "day")
-            AppearancePreference.Night -> editor.putString(KEY, "night")
-        }
-        editor.apply()
+        preferences.edit().putString(KEY, preference.persistedValue()).apply()
     }
 
     private companion object {
         const val KEY = "preference"
     }
+}
+
+internal fun AppearancePreference.persistedValue(): String = when (this) {
+    AppearancePreference.System -> "system"
+    AppearancePreference.Day -> "day"
+    AppearancePreference.Night -> "night"
+}
+
+internal fun appearancePreferenceFromPersistedValue(value: String?): AppearancePreference = when (value) {
+    "system" -> AppearancePreference.System
+    "day" -> AppearancePreference.Day
+    "night" -> AppearancePreference.Night
+    // Older builds represented both a fresh install and an explicit System choice by deleting
+    // this key, so those historical states cannot be distinguished. The approved executive
+    // default is Night; future explicit System choices are persisted explicitly.
+    else -> AppearancePreference.Night
 }
 
 internal fun AppearancePreference.next(): AppearancePreference = when (this) {

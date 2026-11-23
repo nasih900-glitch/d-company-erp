@@ -1,3 +1,4 @@
+import { withoutPaidBillWork } from '@/lib/paid-bill-admission';
 import { useState } from 'react';
 import { AlertCircle, Bell, Check, KeyRound, Loader2 } from 'lucide-react';
 
@@ -25,13 +26,13 @@ export default function AccountTab() {
     try {
       if (!me?.email) throw new Error('Your login email is unavailable');
       if (!challenge) {
-        const result = await auth.requestPasswordReset(me.email);
+        const result = await withoutPaidBillWork(() => auth.requestPasswordReset(me.email));
         setChallenge({ id: result.challenge_id, destination: result.destination });
         return;
       }
       if (nxt.length < 10) throw new Error('Password must be at least 10 characters');
       if (nxt !== conf) throw new Error('New passwords do not match');
-      await auth.confirmPasswordReset(challenge.id, code, nxt);
+      await withoutPaidBillWork(() => auth.confirmPasswordReset(challenge.id, code, nxt));
       setDone(true);
       setChallenge(null);
       setCode('');

@@ -1,5 +1,7 @@
 package cloud.dcompany.erp.ui.screens.staff
 
+import cloud.dcompany.erp.core.auth.roleDisplayLabel
+import cloud.dcompany.erp.core.auth.rolePurposeSummary
 import cloud.dcompany.erp.ui.theme.operationalDanger
 import cloud.dcompany.erp.ui.theme.operationalDangerContainer
 import cloud.dcompany.erp.ui.theme.operationalGood
@@ -31,9 +33,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -79,7 +80,11 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SyncProblem
 import cloud.dcompany.erp.core.auth.StaffAccess
 import cloud.dcompany.erp.core.net.MeResponse
+import cloud.dcompany.erp.ui.screens.staff.time.StaffTimeScreen
+import cloud.dcompany.erp.ui.screens.staff.time.staffTimeAccess
+import cloud.dcompany.erp.ui.screens.staff.time.staffIdentityAccess
 import cloud.dcompany.erp.ui.components.ActionIntent
+import cloud.dcompany.erp.ui.components.LiquidDropdownMenu
 import cloud.dcompany.erp.ui.components.ActionBar
 import cloud.dcompany.erp.ui.components.AdaptiveStatGrid
 import cloud.dcompany.erp.ui.components.CompactStatCard
@@ -91,21 +96,41 @@ import cloud.dcompany.erp.ui.components.OperationalStatusBadge
 import cloud.dcompany.erp.ui.components.PanelDivider
 import cloud.dcompany.erp.ui.components.SearchInput
 import cloud.dcompany.erp.ui.components.SectionCard
+import cloud.dcompany.erp.ui.components.workspaceContentCanvas
 import cloud.dcompany.erp.ui.components.UiTone
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
 import cloud.dcompany.erp.ui.theme.Brand
 import cloud.dcompany.erp.ui.theme.Radius
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-/**
- * Staff — login/role/attendance management. Price-free (there is no pay-rate
- * field anywhere in this backend — see StaffViewModel's class doc comment):
- * this screen only ever touches identity and access, never money.
- */
+/** Time uses its own online authority/receipts; existing identity writes keep their scoped outbox. */
 @Composable
 fun StaffScreen(profile: MeResponse, access: StaffAccess) {
+    val time = staffTimeAccess(profile)
+    val identityAccess = staffIdentityAccess(profile, access)
+    val canAdminister = identityAccess.canReadDirectory || identityAccess.canManageDirectory
+    var identity by remember(profile.userId, profile.companyId, time, canAdminister) { mutableStateOf(!time.canRead) }
+    Column(Modifier.fillMaxSize()) {
+        if (time.canRead && canAdminister) Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            TextButton({ identity = false }, modifier = Modifier.heightIn(min = 48.dp)) { Text(if (time.canManage) "Time & draft pay" else "Attendance") }
+            TextButton({ identity = true }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Logins & access") }
+        }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            when {
+                !identity && time.canRead -> StaffTimeScreen(profile)
+                identity && canAdminister -> StaffIdentityScreen(profile, identityAccess)
+                else -> Text("This account has no staff-time or identity-management access.", Modifier.padding(16.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun StaffIdentityScreen(profile: MeResponse, access: StaffAccess) {
     val factory = remember(profile.userId, access) {
         viewModelFactory { initializer { StaffViewModel(profile, access) } }
     }
@@ -116,7 +141,7 @@ fun StaffScreen(profile: MeResponse, access: StaffAccess) {
     val state by vm.state.collectAsStateWithLifecycle()
 
     Column(
-        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(16.dp),
+        Modifier.fillMaxSize().workspaceContentCanvas().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Header(
@@ -128,16 +153,6 @@ fun StaffScreen(profile: MeResponse, access: StaffAccess) {
         )
         if (state.canReadDirectory) {
             StaffSummary(state)
-        }
-        if (state.canReadDirectory || state.canUseAttendance) {
-            AttendanceCard(
-                state,
-                canClock = state.canUseAttendance,
-                onClockIn = vm::clockIn,
-                onClockOut = vm::clockOut,
-                onDismissError = vm::dismissAttendanceError,
-                onResolveUncertain = vm::retry,
-            )
         }
 
         state.notice?.let {
@@ -403,7 +418,7 @@ private fun AttendanceCard(
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(state.onShift, key = { it.id }) { row ->
                     Column(
-                        Modifier.width(220.dp).clip(Radius.shapeMd).background(MaterialTheme.colorScheme.surfaceVariant)
+                        Modifier.width(220.dp).clip(Radius.shapeMd).liquidWorkspaceSurface(Radius.shapeMd)
                             .padding(horizontal = 12.dp, vertical = 10.dp),
                     ) {
                         Text(
@@ -436,7 +451,7 @@ private fun StaffDirectory(state: StaffUiState, vm: StaffViewModel, modifier: Mo
             row.name.contains(needle, ignoreCase = true) ||
                 row.email.contains(needle, ignoreCase = true) ||
                 row.phone.orEmpty().contains(needle, ignoreCase = true) ||
-                row.roles.any { it.contains(needle, ignoreCase = true) }
+                row.roles.any { it.contains(needle, ignoreCase = true) || roleDisplayLabel(it).contains(needle, ignoreCase = true) }
         }
     }
 
@@ -506,7 +521,9 @@ private fun StaffRowCard(
         else -> row.status.ifBlank { "Unknown" }
     }
 
-    Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
+    Column(
+        Modifier.fillMaxWidth().clip(Radius.shapeMd).liquidWorkspaceSurface(Radius.shapeMd),
+    ) {
         DataListRow(
             content = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -527,8 +544,8 @@ private fun StaffRowCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    row.phone?.takeIf(String::isNotBlank)?.let { "$it · ${row.roles.joinToString(", ").ifBlank { "No role" }}" }
-                        ?: row.roles.joinToString(", ").ifBlank { "No role assigned" },
+                    row.phone?.takeIf(String::isNotBlank)?.let { "$it · ${row.roles.filter { it != "pos_discount" }.joinToString(", ") { roleDisplayLabel(it) }.ifBlank { "No role" }}" }
+                        ?: row.roles.filter { it != "pos_discount" }.joinToString(", ") { roleDisplayLabel(it) }.ifBlank { "No role assigned" },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -610,7 +627,7 @@ private fun StaffActionsMenu(
         IconButton(onClick = { expanded = true }) {
             Icon(Icons.Default.MoreVert, contentDescription = "More staff actions", tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        LiquidDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
                 text = { Text("Edit staff") },
                 leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
@@ -671,18 +688,52 @@ private fun EditDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (editor.roleChangesLocked) {
+                    OutlinedTextField(
+                        value = roleDisplayLabel(editor.roleCode, editor.managedRoles != null),
+                        onValueChange = {},
+                        label = { Text("Role") },
+                        enabled = false,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    RoleDropdown(editableStaffRoles(roles, editor), editor.roleCode, editor.managedRoles != null, !saving) {
+                        onChange(editor.copy(roleCode = it, replaceMultipleRoles = true))
+                    }
+                }
+                Text(
+                    (if (editor.hasMultiplePrimaryRoles) "Selected role purpose: " else "") + rolePurposeSummary(editor.roleCode),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+                if (editor.hasMultiplePrimaryRoles) {
+                    Text(
+                        "This account combines multiple roles. A role replacement removes other assignments. Profile-only saves preserve them.",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    if (!editor.roleChangesLocked) TextButton(
+                        onClick = { onChange(editor.copy(replaceMultipleRoles = true)) },
+                        enabled = !saving && !editor.replaceMultipleRoles,
+                    ) {
+                        Text(if (editor.replaceMultipleRoles) "Save will use only the selected role" else "Use only the selected role when saving")
+                    }
+                }
+                Text(
+                    "Role choices use existing permissions. Configurable access may differ; review Access Control for exact actions.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 if (editor.accessChangesLocked) {
                     Text(
-                        if (editor.isSelf) {
-                            "You can't change your own role or status."
-                        } else {
-                            "Only the protected owner can change another owner account's role or status."
+                        when {
+                            editor.isSelf -> "You can't change your own role or status."
+                            editor.managedRoles?.contains("super_owner") == true -> "Protected audit-owner access cannot be changed from Staff."
+                            editor.canManageOwnerAccess && editor.managedRoles == null -> "Exact owner access is unavailable. Connect and reopen this editor before changing access."
+                            else -> "Only the protected owner can change another owner account's role or status."
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else {
-                    RoleDropdown(roles, editor.roleCode) { onChange(editor.copy(roleCode = it)) }
                     rolesError?.let {
                         Text(it, color = MaterialTheme.colorScheme.operationalWarning, style = MaterialTheme.typography.labelSmall)
                     }
@@ -690,6 +741,7 @@ private fun EditDialog(
                         Text("Suspended", color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
                         Switch(
                             checked = editor.status == "suspended",
+                            enabled = !saving,
                             onCheckedChange = { onChange(editor.copy(status = if (it) "suspended" else "active")) },
                         )
                     }
@@ -722,21 +774,41 @@ private fun EditDialog(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun RoleDropdown(roles: List<StaffRole>, selectedCode: String, onSelect: (String) -> Unit) {
+private fun RoleDropdown(
+    roles: List<StaffRole>, selectedCode: String, exactOwnerAccess: Boolean,
+    enabled: Boolean, onSelect: (String) -> Unit,
+) {
     var expanded by remember { mutableStateOf(false) }
-    val label = roles.firstOrNull { it.code == selectedCode }?.name ?: selectedCode.ifBlank { "Pick a role" }
-    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+    var showAdvanced by remember(selectedCode) { mutableStateOf(selectedCode !in EVERYDAY_STAFF_ROLES) }
+    val label = roleDisplayLabel(selectedCode, exactOwnerAccess).ifBlank { "Pick a role" }
+    val everyday = EVERYDAY_STAFF_ROLES.mapNotNull { code -> roles.firstOrNull { it.code == code } }
+    val advanced = roles.filter { it.code !in EVERYDAY_STAFF_ROLES }
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { if (enabled) expanded = it }) {
         OutlinedTextField(
             value = label,
             onValueChange = {},
             readOnly = true,
             label = { Text("Role") },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true),
+            enabled = enabled,
+            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = enabled),
         )
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            roles.forEach { r ->
-                DropdownMenuItem(text = { Text(r.name) }, onClick = { onSelect(r.code); expanded = false })
+        LiquidDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            role = WorkspaceGlassRole.CONTROL,
+        ) {
+            everyday.forEach { role ->
+                DropdownMenuItem(text = { Text(roleDisplayLabel(role.code, exactOwnerAccess)) }, onClick = { onSelect(role.code); expanded = false })
+            }
+            if (advanced.isNotEmpty()) {
+                DropdownMenuItem(
+                    text = { Text(if (showAdvanced) "Hide advanced / legacy roles" else "Advanced / legacy roles…") },
+                    onClick = { showAdvanced = !showAdvanced },
+                )
+                if (showAdvanced) advanced.forEach { role ->
+                    DropdownMenuItem(text = { Text(roleDisplayLabel(role.code, exactOwnerAccess)) }, onClick = { onSelect(role.code); expanded = false })
+                }
             }
         }
     }

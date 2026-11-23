@@ -14,6 +14,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 internal enum class PersistedStartupFailure {
     TIMEOUT,
     STORAGE,
+    HANDOVER_RECOVERY,
 }
 
 internal sealed interface PersistedStartupStateResult {
@@ -72,6 +73,8 @@ internal class PersistedStartupStateRestorer(
     private var current: Deferred<PersistedStartupStateResult>? = null
     @Volatile
     private var completed: PersistedStartupStateResult? = null
+
+    internal fun completedResult(): PersistedStartupStateResult? = completed
 
     fun start(retryFailed: Boolean = false): Deferred<PersistedStartupStateResult> =
         synchronized(lock) {

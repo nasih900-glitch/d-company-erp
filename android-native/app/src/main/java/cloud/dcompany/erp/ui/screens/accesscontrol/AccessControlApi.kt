@@ -21,6 +21,7 @@ data class AccessCell(
     @SerialName("effective_permissions") val effectivePermissions: List<String> = emptyList(),
     @SerialName("unavailable_permissions") val unavailablePermissions: List<String> = emptyList(),
     @SerialName("ceiling_limited_permissions") val ceilingLimitedPermissions: List<String> = emptyList(),
+    val configurable: Boolean = roleCode != "co_owner" && roleCode != "super_owner",
 )
 
 internal val AccessCell.hasExactPermissionEvidence: Boolean

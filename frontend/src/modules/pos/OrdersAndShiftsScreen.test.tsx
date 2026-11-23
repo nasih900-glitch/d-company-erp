@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { OrderListItemDTO, ShiftDTO } from '@/lib/erp-api';
@@ -21,6 +22,9 @@ import {
   shiftCollectionRails,
   shiftOpenerLabel,
   shiftWorkspaceLabel,
+  ShiftDailyWorkNotice,
+  ReceiptStatus,
+  ShiftTenderEvidence,
 } from './OrdersAndShiftsScreen';
 
 describe('Operations deep links', () => {
@@ -28,6 +32,16 @@ describe('Operations deep links', () => {
     expect(operationsInitialTab(new URLSearchParams('tab=shifts'))).toBe('shifts');
     expect(operationsInitialTab(new URLSearchParams('tab=orders'))).toBe('orders');
     expect(operationsInitialTab(new URLSearchParams())).toBe('orders');
+  });
+  it('links permitted attendance while keeping cashier handover and staff departures separate', () => {
+    const permitted = renderToStaticMarkup(<MemoryRouter><ShiftDailyWorkNotice canOpenAttendance/></MemoryRouter>);
+    expect(permitted).toContain('href="/staff/time"');
+    expect(permitted).toContain('Both staff can be clocked in while one runs the till');
+    expect(permitted).toContain('does not record staff departures');
+    expect(permitted).toContain('Change cashier on the tablet');
+    expect(permitted).toContain('Owner recovery is a separate audited action');
+    const reader = renderToStaticMarkup(<MemoryRouter><ShiftDailyWorkNotice canOpenAttendance={false}/></MemoryRouter>);
+    expect(reader).not.toContain('href="/staff/time"');
   });
 });
 
@@ -296,7 +310,7 @@ describe('Orders & Shifts staff-facing shift feedback', () => {
       'Add a recovery reason of at least 12 characters.',
     ]);
     expect(androidShiftRecoveryMissingRequirements('0.001', 'Tablet is isolated', true)).toEqual([
-      'Enter a valid cash count (₹0 or more, up to two decimal places).',
+      'Enter a valid cash count (0 or more, up to two decimal places).',
     ]);
     expect(androidShiftRecoveryMissingRequirements('0.00', 'Tablet is isolated', true)).toEqual([]);
   });
@@ -423,5 +437,28 @@ describe('Orders & Shifts staff-facing shift feedback', () => {
     expect(isUnknownShiftMutationOutcome(gatewayTimeout)).toBe(true);
     expect(shiftActionErrorMessage(gatewayTimeout, 'close')).toContain('could not be confirmed');
     expect(shiftActionErrorMessage(gatewayTimeout, 'close')).not.toContain('shift remains open');
+  });
+});
+
+
+describe('no-value correction history display', () => {
+  it('uses a correction/no-payout badge while the original status remains paid', () => {
+    const html=renderToStaticMarkup(<ReceiptStatus status="paid" corrected/>);
+    expect(html).toContain('Corrected · no payment received · no payout');
+    expect(html).not.toContain('text-accent-good');
+  });
+  it('shows canonical effective UPI and original close separately without subtracting twice', () => {
+    const html=renderToStaticMarkup(<ShiftTenderEvidence shift={shift({
+      receipt_corrections_minor:4600, net_collections_minor:12000,
+      reconstructed_upi_collections_minor:12000, effective_upi_collections_minor:7400,
+      effective_net_collections_minor:7400, receipt_corrections:[{
+        id:'correction',kind:'payment_not_received_full_mistake',amount_minor:4600,
+        accounting_at:'2026-11-08T00:00:00Z',payout_minor:0,label:'No payout',
+      }],
+    })}/>);
+    expect(html).toContain('Original recorded net');expect(html).toContain('120.00');
+    expect(html).toContain('Effective UPI receipt value');expect(html).toContain('74.00');
+    expect(html).toContain('not a bank balance');expect(html).toContain('not backdated');
+    expect(html).not.toContain('28.00');
   });
 });

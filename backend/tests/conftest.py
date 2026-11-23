@@ -11,11 +11,19 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.db import AsyncSessionLocal
+from app.core.logging import configure_logging
 from app.core.security import hash_password
 from app.main import create_app
 from app.models import Branch, Company, Role, Terminal, User, UserRole
 from app.services.pos.loyalty_program import new_legacy_loyalty_program
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Match production logging without starting lifespan background work."""
+    del session
+    configure_logging(get_settings())
 
 
 @pytest.fixture(scope="session")

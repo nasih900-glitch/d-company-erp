@@ -22,6 +22,28 @@ internal fun sessionPlayElapsedMillis(session: GameSession, nowMillis: Long): Lo
         .coerceAtLeast(0L)
 }.getOrNull()
 
+internal fun GameSession.requiresVoidReason(nowMillis: Long): Boolean {
+    if (voidReasonRequired == true) return true
+    if (voidReasonRequired == null) return true
+    if (status != "active") return false
+    val locallyAdvancedElapsed = sessionPlayElapsedMillis(this, nowMillis)
+    val currentElapsed = listOfNotNull(serverPlayElapsedMs, locallyAdvancedElapsed).maxOrNull()
+    return currentElapsed?.let { it >= 30L * 60L * 1_000L } ?: true
+}
+
+/** Participant Void must bind the amount shape used by the locked billing mode. */
+internal fun GameSession.hasReviewedParticipantVoidEvidence(): Boolean {
+    if (participantRevision <= 0) return true
+    if (billingRevision < 0) return false
+    return when {
+        status == "ended" -> amountMinor != null && amountMinor >= 0L
+        status in setOf("active", "paused") && billingMode == "package" ->
+            amountMinor != null && amountMinor >= 0L
+        status in setOf("active", "paused") && billingMode == "hourly" -> amountMinor == null
+        else -> false
+    }
+}
+
 internal fun pauseActionError(session: GameSession, pause: Boolean, reason: String): String? = when {
     pause && !session.pauseAvailable ->
         "Pause is not enabled for this shop yet. The owner must update all tablets before enabling it."

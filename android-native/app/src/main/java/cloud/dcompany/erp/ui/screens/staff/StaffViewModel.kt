@@ -82,7 +82,16 @@ data class StaffEditor(
     val originalRoleCode: String,
     val isSelf: Boolean,
     val accessChangesLocked: Boolean,
+    val canManageOwnerAccess: Boolean = false,
+    val managedRoles: List<String>? = null,
+    val publicRoles: List<String> = emptyList(),
+    val replaceMultipleRoles: Boolean = false,
 ) {
+    val hasMultiplePrimaryRoles: Boolean
+        get() = (managedRoles ?: publicRoles).count { it != "pos_discount" } > 1
+    val roleChangesLocked: Boolean
+        get() = accessChangesLocked ||
+            (originalRoleCode in setOf("owner", "co_owner", "super_owner") && managedRoles == null)
     val validationError: String?
         get() = when {
             name.trim().isEmpty() -> "Enter the staff member's name."
@@ -233,6 +242,7 @@ class StaffViewModel(
 ) : ViewModel() {
 
     private val appCtx = DCompanyApp.instance
+    private val operations = appCtx.handoverOperations.caller(appCtx.shiftCache.profile.value, appCtx.cacheIsolation.currentLease())
     private val db = appCtx.db
     private val api = ApiClient.create<StaffApi>()
     private val loadPlan = access.loadPlan()
@@ -241,6 +251,7 @@ class StaffViewModel(
     private val rolesState = MutableStateFlow(StaffRolesState())
     private val myProfile = MutableStateFlow<MeResponse?>(profile)
     private val editing = MutableStateFlow(EditingState())
+    private var editGeneration = 0L
     private val profileAndAttendanceBranch = combine(
         myProfile,
         appCtx.terminalStore.activeValidatedTerminal,
@@ -398,7 +409,7 @@ class StaffViewModel(
         if (!access.canManageDirectory) return
         val localId = row.localWriteId ?: return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(notice = "Resolve the original till handover before changing this workspace.") } }) {
             var queued = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     db.staffDao().getLocal(localId)?.let { existing ->
@@ -427,7 +438,7 @@ class StaffViewModel(
         val localId = row.localWriteId ?: return
         val expectedVersion = row.localWriteVersion ?: return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(notice = "Resolve the original till handover before changing this workspace.") } }) {
             var discarded = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     val current = db.staffDao().getLocal(localId)
@@ -448,7 +459,9 @@ class StaffViewModel(
 
     fun startEdit(row: StaffRow) {
         if (!access.canManageDirectory) return
-        val currentRole = row.roles.firstOrNull().orEmpty()
+        val currentRole = primaryStaffRole(row.roles)
+        val requestGeneration = ++editGeneration
+        val canManageOwnerAccess = myProfile.value?.auditAccess == true
         editing.update {
             it.copy(
                 editor = StaffEditor(
@@ -460,10 +473,40 @@ class StaffViewModel(
                     originalStatus = row.status,
                     originalRoleCode = currentRole,
                     isSelf = row.isSelf,
-                    accessChangesLocked = row.accessChangesLocked,
+                    accessChangesLocked = row.accessChangesLocked || row.roles.any {
+                        it == "owner" || it == "co_owner" || it == "super_owner"
+                    },
+                    canManageOwnerAccess = canManageOwnerAccess,
+                    publicRoles = row.roles,
                 ),
                 editError = null,
             )
+        }
+        if (!canManageOwnerAccess) return
+        val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
+        val binding = StaffEditorLookupBinding(scopeLease, requestGeneration, row.id)
+        fun lookupIsCurrent() = binding.isCurrent(
+            appCtx.cacheIsolation.currentLease(), editGeneration, editing.value.editor, myProfile.value,
+        )
+        viewModelScope.launch {
+            try {
+                if (!lookupIsCurrent()) return@launch
+                val fresh = api.list().firstOrNull { it.id == row.id } ?: return@launch
+                appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
+                    if (lookupIsCurrent()) {
+                        editing.update { current ->
+                            val editor = current.editor
+                            if (editor?.id == row.id && !current.savingEdit) {
+                                current.copy(editor = resolveStaffEditorAccess(editor, fresh))
+                            } else current
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Public cached roles remain usable for profile edits; owner access stays locked.
+            }
         }
     }
 
@@ -472,6 +515,7 @@ class StaffViewModel(
     }
 
     fun cancelEdit() {
+        editGeneration++
         editing.update { it.copy(editor = null, editError = null) }
     }
 
@@ -502,7 +546,7 @@ class StaffViewModel(
         }
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         editing.update { it.copy(savingEdit = true, editError = null) }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(savingEdit = false, editError = "Resolve the original till handover before changing this workspace.") } }) {
             try {
                 val dao = db.staffDao()
                 if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
@@ -520,11 +564,7 @@ class StaffViewModel(
                     // resubmit of the current value can never trip the
                     // backend's own self-edit guard (router.py's is_self check).
                             status = if (ed.accessChangesLocked || ed.status == ed.originalStatus) null else ed.status,
-                            roleCode = if (ed.accessChangesLocked || ed.roleCode == ed.originalRoleCode) {
-                                null
-                            } else {
-                                ed.roleCode.ifBlank { null }
-                            },
+                            roleCode = staffRoleUpdate(ed),
                     // Always false, not `existingPending?.pendingDelete`: the
                     // only way to reach this save with an existing local row
                     // already attached is either no pending write, or a
@@ -583,7 +623,7 @@ class StaffViewModel(
         }
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
         editing.update { it.copy(deleteConfirmFor = null) }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(deleteConfirmFor = row, notice = "Resolve the original till handover before changing this workspace.") } }) {
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     val dao = db.staffDao()
                     val existingPending = dao.pendingLocalForServerId(row.id)
@@ -619,7 +659,7 @@ class StaffViewModel(
         if (!access.canManageDirectory) return
         val localId = row.localWriteId ?: return
         val scopeLease = appCtx.cacheIsolation.currentLease() ?: return
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(notice = "Resolve the original till handover before changing this workspace.") } }) {
             var changed = false
             if (!appCtx.cacheIsolation.commitIfCurrent(scopeLease) {
                     val dao = db.staffDao()
@@ -684,7 +724,7 @@ class StaffViewModel(
             return
         }
         editing.update { it.copy(creating = true, createError = null) }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(creating = false, createError = "Resolve the original till handover before changing this workspace.") } }) {
             try {
                 val challenge = api.requestRegistration(
                     RegistrationRequestBody(
@@ -698,6 +738,7 @@ class StaffViewModel(
                 // challenge — matters for "Resend code" specifically (see
                 // CreateLoginDialog), not just the first request.
                 editing.update { it.copy(creating = false, createChallenge = challenge, createCode = "") }
+                reconciled()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -735,7 +776,7 @@ class StaffViewModel(
             return
         }
         editing.update { it.copy(creating = true, createError = null) }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(creating = false, createError = "Resolve the original till handover before changing this workspace.") } }) {
             try {
                 api.confirmRegistration(RegistrationConfirmBody(challenge.challengeId, code))
                 editing.update {
@@ -745,6 +786,7 @@ class StaffViewModel(
                     )
                 }
                 retry()
+                reconciled()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -793,12 +835,13 @@ class StaffViewModel(
             return
         }
         editing.update { it.copy(resettingPassword = true, passwordResetError = null) }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(resettingPassword = false, passwordResetError = "Resolve the original till handover before changing this workspace.") } }) {
             try {
                 val challenge = api.requestPasswordReset(PasswordResetRequestBody(draft.email))
                 editing.update {
                     it.copy(resettingPassword = false, passwordResetChallenge = challenge, passwordResetCode = "")
                 }
+                reconciled()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -837,7 +880,7 @@ class StaffViewModel(
             return
         }
         editing.update { it.copy(resettingPassword = true, passwordResetError = null) }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(resettingPassword = false, passwordResetError = "Resolve the original till handover before changing this workspace.") } }) {
             try {
                 api.confirmPasswordReset(PasswordResetConfirmBody(challenge.challengeId, code, draft.newPassword))
                 editing.update {
@@ -846,6 +889,7 @@ class StaffViewModel(
                         resettingPassword = false, notice = "Password reset for ${draft.forName}.",
                     )
                 }
+                reconciled()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -895,7 +939,7 @@ class StaffViewModel(
             return
         }
         editing.update { it.copy(clockingInOut = true, attendanceError = null) }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(clockingInOut = false, attendanceError = "Resolve the original till handover before changing this workspace.") } }) {
             try {
                 api.clockIn(ClockInBody(branchId))
                 when (val refresh = appCtx.sync.refresh("attendance")) {
@@ -917,6 +961,7 @@ class StaffViewModel(
                         )
                     }
                 }
+                reconciled()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -953,7 +998,7 @@ class StaffViewModel(
             return
         }
         editing.update { it.copy(clockingInOut = true, attendanceError = null) }
-        viewModelScope.launch {
+        operations.launch(viewModelScope, onRejected = { editing.update { it.copy(clockingInOut = false, attendanceError = "Resolve the original till handover before changing this workspace.") } }) {
             try {
                 api.clockOut()
                 when (val refresh = appCtx.sync.refresh("attendance")) {
@@ -975,6 +1020,7 @@ class StaffViewModel(
                         )
                     }
                 }
+                reconciled()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

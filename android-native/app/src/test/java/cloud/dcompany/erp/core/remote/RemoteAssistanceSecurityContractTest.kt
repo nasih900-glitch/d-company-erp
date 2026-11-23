@@ -121,9 +121,15 @@ class RemoteAssistanceSecurityContractTest {
                 "pendingRemoteGrant" in activity
         })
         assertTrue("Unsafe workflows must receive a passive Help cue, not an interrupting prompt", run {
+            val reviewAction = activity.substringAfter("onReviewRemoteSupportRequest = {")
+                .substringBefore("onStopRemoteSupport =")
             "remoteSupportRequestWaiting = remoteAssistanceState.pendingGrant != null" in activity &&
                 "onReviewRemoteSupportRequest" in activity &&
-                "currentDestination = Destination.Help" in activity
+                "if (Destination.Help in destinations)" in reviewAction &&
+                "acceptWorkspaceNavigation(" in reviewAction &&
+                "target = Destination.Help" in reviewAction &&
+                "beforeCommit = remoteAssistance.uiGateway::markRouteTransition" in reviewAction &&
+                "afterCommit = { operationalFocus = null }" in reviewAction
         })
         assertFalse("Remote refresh must never call SyncEngine or financial resources", run {
             "sync.refresh(" in coordinator
@@ -133,9 +139,15 @@ class RemoteAssistanceSecurityContractTest {
                 "remoteUiAdmissionRemainedStable" in coordinator
         })
         assertTrue("Global workflow dialogs on Help must activate the same privacy/command shield", run {
-            val dialogs = activity.substringAfter("if (confirmSignOut)")
-                .substringBefore("if (compatibilityState is ClientCompatibilityState.UpdateAvailable)")
-            dialogs.countOccurrences("RemoteSensitiveContent") >= 7
+            val notices = activity.substringAfter("val rootOverlays: @Composable () -> Unit = {")
+                .substringBefore("when (val s = state)")
+            val workspaceDialogs = activity.substringAfter("key(s.me.companyId, s.me.userId) {")
+                .substringBefore("rootOverlays()")
+            val sensitiveAlert = Regex("RemoteSensitiveContent\\s*\\{\\s*AlertDialog\\(")
+            sensitiveAlert.findAll(notices).count() == 4 &&
+                sensitiveAlert.findAll(workspaceDialogs).count() == 4 &&
+                Regex("RemoteSensitiveContent\\s*\\{\\s*RemoteAssistanceConsentDialog\\(")
+                    .containsMatchIn(workspaceDialogs)
         })
     }
 
@@ -146,16 +158,16 @@ class RemoteAssistanceSecurityContractTest {
                 "src/main/java/cloud/dcompany/erp/core/remote/RemoteAssistanceCoordinator.kt",
             ),
         )
-        val revokeTrigger = coordinator.substringAfter("fun revokeConsent()")
-            .substringBefore("fun stopByUser()")
+        val revokeTrigger = coordinator.substringAfter("fun revokeConsent(action: RemoteUiActionBinding)")
+            .substringBefore("fun stopByUser(action: RemoteUiActionBinding)")
         assertTrue(
             "revokeConsent must call the mutation sender exactly once",
-            revokeTrigger.countOccurrences("sendPendingRevocation()") == 1,
+            revokeTrigger.countOccurrences("sendPendingRevocation(original)") == 1,
         )
         assertTrue("Revocation must retain the normal journal reconciliation path", run {
-            coordinator.substringAfter("private suspend fun sendPendingMutations()")
+            coordinator.substringAfter("private suspend fun sendPendingMutations(original: OriginalOperationBinding)")
                 .substringBefore("private suspend fun sendGrantDecision")
-                .countOccurrences("sendPendingRevocation()") == 1
+                .countOccurrences("sendPendingRevocation(original)") == 1
         })
     }
 
@@ -212,10 +224,10 @@ class RemoteAssistanceSecurityContractTest {
             "remoteAssistanceNotificationCopy(sharingPaused)" in notification
         })
         assertTrue("Connectivity changes must update the visible paused-sharing state", run {
-            "notification.show(remaining, sharingPaused = !isOnline)" in coordinator
+            "notification.show(remaining, notificationTarget(active) ?: return@let, sharingPaused = !isOnline)" in coordinator
         })
         assertTrue("Initial session admission must disclose its current connectivity state", run {
-            "notification.show(remaining, sharingPaused = !online.value)" in coordinator
+            "notification.show(remaining, notificationTarget(admittedSession) ?: return@publishSharingState, sharingPaused = !online.value)" in coordinator
         })
     }
 
@@ -259,7 +271,7 @@ class RemoteAssistanceSecurityContractTest {
                 "src/main/java/cloud/dcompany/erp/core/remote/RemoteAssistanceCoordinator.kt",
             ),
         )
-        val remoteBuilder = apiClient.substringAfter("private fun remoteAuthenticatedClientBuilder")
+        val remoteBuilder = apiClient.substringAfter("private fun remoteAuthenticationInterceptors")
             .substringBefore("private fun baseClientBuilder")
         val ordinaryFactory = apiClient.substringAfter("fun init(")
             .substringBefore("internal fun activateTerminalScope")
@@ -268,19 +280,20 @@ class RemoteAssistanceSecurityContractTest {
 
         assertTrue("The ordinary ERP Retrofit must retain pricing authority", run {
             "val client = authenticatedClientBuilder()" in ordinaryFactory &&
-                "val client = remoteAuthenticatedClientBuilder()" !in ordinaryFactory
+                "remoteProofClientBuilder(" !in ordinaryFactory && "remoteAuthenticationInterceptors()" !in ordinaryFactory
         })
         assertTrue("The proof client must use only the remote authority builder", run {
-            "remoteAuthenticatedClientBuilder()" in remoteFactory
+            "remoteProofClientBuilder(proofInterceptor, operationGate, remoteAuthenticationInterceptors())" in remoteFactory &&
+                "authenticatedClientBuilder()" !in remoteFactory
         })
         assertTrue("Remote support must actively strip the financial pricing capability", run {
             "PricingTokenInterceptor(allowPricingAuthority = false)" in remoteBuilder
         })
         assertTrue("Replacement pairing must retain the active signer while creating a candidate", run {
-            "fun startDeviceKeyReplacement()" in coordinator &&
-                "activeIdentity(" in coordinator.substringAfter("fun startDeviceKeyReplacement()")
+            "fun startDeviceKeyReplacement(action: RemoteUiActionBinding)" in coordinator &&
+                "activeIdentity(" in coordinator.substringAfter("fun startDeviceKeyReplacement(action: RemoteUiActionBinding)")
                     .substringBefore("fun refreshNotificationReadiness()") &&
-                "enrollmentCandidate(" in coordinator.substringAfter("fun startDeviceKeyReplacement()")
+                "enrollmentCandidate(" in coordinator.substringAfter("fun startDeviceKeyReplacement(action: RemoteUiActionBinding)")
                     .substringBefore("fun refreshNotificationReadiness()")
         })
     }

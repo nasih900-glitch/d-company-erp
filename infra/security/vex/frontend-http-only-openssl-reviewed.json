@@ -1,0 +1,143 @@
+{
+  "apk_metadata_sha256": {
+    "libcrypto3": "1e33a67dc962071e21299821b3e459151ba9da6e61f6a93a760ada7914f66464",
+    "libssl3": "50488fed0c55512a758ec0632e7e7f893d0eb389f253330744350f9c979c0306"
+  },
+  "database_state": null,
+  "deployment_sources": {
+    "docker-compose.prod.yml": "9c5a1f6c6930e98a7f433fa2e4b33e0b7f02f24f3d2e64d6afaa11fa5bd890c2",
+    "infra/docker/frontend.Dockerfile": "b660bf4417b4a86eb19c19ecb43d259fff989a98232f1fa7d7cd24928f74d1d2",
+    "infra/nginx/frontend.conf": "1e935a53ce1fa472187018781000a9b3c079d5141a273ad376fbb0f02ca9fabb"
+  },
+  "elf_files_sha256": "32d8c0541e7728d0978a3b704018457367365205dbfa8deb7a216cdb923c3adb",
+  "image_startup": {
+    "Cmd": [
+      "nginx",
+      "-g",
+      "daemon off;"
+    ],
+    "Entrypoint": [
+      "/docker-entrypoint.sh"
+    ],
+    "Env": [
+      "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "NGINX_VERSION=1.31.8",
+      "PKG_RELEASE=1",
+      "DYNPKG_RELEASE=1"
+    ],
+    "User": null,
+    "WorkingDir": "/"
+  },
+  "matches": {
+    "CVE-2026-107496/libcrypto3": "a067b7e588029d26caea27f6c3324333f7a0b7ce5d98555786baa3968db44a78",
+    "CVE-2026-107496/libssl3": "219de6a7554a1412231561f45df0272912a4a2f3cb4f56ea673735f0cf45485b",
+    "CVE-2026-88823/libcrypto3": "77d2d205058d91a5ddadbba981b037244964629eb6fbf28fb1021ca0379db659",
+    "CVE-2026-88823/libssl3": "d00c02a29e2912b2b7390bbc98fbc224ac6260073be492a7d6678876c00b9249",
+    "CVE-2026-95691/libcrypto3": "bff46277199c263174f3d16da990820826424f1b86cf80a37ddcba7da812412a",
+    "CVE-2026-95691/libssl3": "50e3091231b52ba55cb27e7947d93f3137d3daef5d3065ab605cccc5fa1d9c37",
+    "CVE-2026-95692/libcrypto3": "41b8aa5a2ec47404423414e93c7815866413f22f4e628ae32ca2c300302cc5d0",
+    "CVE-2026-95692/libssl3": "a65657082cf123387c0a20fed1e2c691dc08ee2f5e358630daf6b290904cc091"
+  },
+  "rationale": {
+    "CVE-2026-107496": "Nginx has SSL/HTTP3 modules compiled in, but the exact reviewed startup/configuration serves HTTP port80 and proxies upstream via HTTP. No TLS/QUIC listener, TLS upstream, CMS recipient or caller-selected cipher path is configured. All native binaries, complete Nginx configuration and entrypoint scripts, empty template state, OpenSSL configuration/engine/provider directories and fixed deployment sources are bound. Reviewed excluded path: CMS encryption with untrusted EC recipient certificates.",
+    "CVE-2026-88823": "Nginx has SSL/HTTP3 modules compiled in, but the exact reviewed startup/configuration serves HTTP port80 and proxies upstream via HTTP. No TLS/QUIC listener, TLS upstream, CMS recipient or caller-selected cipher path is configured. All native binaries, complete Nginx configuration and entrypoint scripts, empty template state, OpenSSL configuration/engine/provider directories and fixed deployment sources are bound. Reviewed excluded path: AES-GCM-SIV decryption.",
+    "CVE-2026-95691": "Nginx has SSL/HTTP3 modules compiled in, but the exact reviewed startup/configuration serves HTTP port80 and proxies upstream via HTTP. No TLS/QUIC listener, TLS upstream, CMS recipient or caller-selected cipher path is configured. All native binaries, complete Nginx configuration and entrypoint scripts, empty template state, OpenSSL configuration/engine/provider directories and fixed deployment sources are bound. Reviewed excluded path: OpenSSL QUIC client.",
+    "CVE-2026-95692": "Nginx has SSL/HTTP3 modules compiled in, but the exact reviewed startup/configuration serves HTTP port80 and proxies upstream via HTTP. No TLS/QUIC listener, TLS upstream, CMS recipient or caller-selected cipher path is configured. All native binaries, complete Nginx configuration and entrypoint scripts, empty template state, OpenSSL configuration/engine/provider directories and fixed deployment sources are bound. Reviewed excluded path: AES-GCM-SIV invalid nonce initialization."
+  },
+  "runtime": {
+    "configuration_sha256": {
+      "/docker-entrypoint.d/10-listen-on-ipv6-by-default.sh": "6af73d816765f1a163eff548e120e9cfad5053776ca7c67d0966cdfaafc652dc",
+      "/docker-entrypoint.d/15-local-resolvers.envsh": "329a1e89cc898599338874f679e22711c4c2d69f65f98b64a72d8b708e69ee44",
+      "/docker-entrypoint.d/20-envsubst-on-templates.sh": "00d6d14424342d6a3439f4d7af190bfc33b96f40221946b174a6c7385ee3b98c",
+      "/docker-entrypoint.d/30-tune-worker-processes.sh": "1f068aa49da8df46bfd5a917debf110af9b115370739e3be34af83ebf583fbce",
+      "/etc/nginx/conf.d/default.conf": "1e935a53ce1fa472187018781000a9b3c079d5141a273ad376fbb0f02ca9fabb",
+      "/etc/nginx/fastcgi.conf": "b2c3d480a58f61f3a7dc61850b461e892e36f236317765a4f2f6d558c928fa57",
+      "/etc/nginx/fastcgi_params": "f37852d0113de30fa6bfc3d9b180ef99383c06739530dd482a8538503afd5a58",
+      "/etc/nginx/mime.types": "6f95d1d7d75e3c072907d845622a69d23110d1266c16ff122b3109b8b21f3ae9",
+      "/etc/nginx/nginx.conf": "4dee6b0c7c8278f6a9b827261c25d3215c9ea8955e41ff7fe3eabdd5297edce7",
+      "/etc/nginx/scgi_params": "f27b2027c571ccafcfb0fbb3f54d7aeee11a984e3a0f5a1fdf14629030fc9011",
+      "/etc/nginx/uwsgi_params": "015cb581c2eb84b1a1ac9b575521d5881f791f632bfa62f34b26ba97d70c0d4f",
+      "/etc/ssl/certs/ca-certificates.crt": "b8d837841b88bfaa1a0fa827cbca8e2576418dd47c9fc4bb7f1f9d89c83111b9",
+      "/etc/ssl/ct_log_list.cnf": "f1c1803d13d1d0b755b13b23c28bd4e20e07baf9f2b744c9337ba5866aa0ec3b",
+      "/etc/ssl/ct_log_list.cnf.dist": "f1c1803d13d1d0b755b13b23c28bd4e20e07baf9f2b744c9337ba5866aa0ec3b",
+      "/etc/ssl/openssl.cnf": "a65a2cb9f4ee8ffdc7ef4f0ac600c0bdafb95b7b1ab457188ac610a62f5ad6b3",
+      "/etc/ssl/openssl.cnf.dist": "a65a2cb9f4ee8ffdc7ef4f0ac600c0bdafb95b7b1ab457188ac610a62f5ad6b3",
+      "/usr/lib/engines-3/afalg.so": "b565e6935269d679a5b8d45bb1ae60559f9621d2c7fe47b8a70cbc90334259e1",
+      "/usr/lib/engines-3/capi.so": "9e4328d873b167552bf4c807dab303a5a7a0c36e9a9f3bb1f1d84d864776bd2e",
+      "/usr/lib/engines-3/loader_attic.so": "9b9c26db1b0f4a99c106a99ed01cc7c84a3c2bbc14df362517b24b4f18b900d7",
+      "/usr/lib/engines-3/padlock.so": "3327f942be17b9f856cc7f56db23d2f3cff14e90688a00af2aeb970655843e8c",
+      "/usr/lib/ossl-modules/legacy.so": "d28ac2184b2b39177578b4cabccee6d178c2b0e6f2ae0ccc8f354267d808ed83"
+    },
+    "crypto_environment": {},
+    "directories": {
+      "/docker-entrypoint.d": "present",
+      "/etc/nginx": "present",
+      "/etc/nginx/templates": "absent",
+      "/etc/ssl": "present",
+      "/usr/lib/engines-3": "present",
+      "/usr/lib/ossl-modules": "present",
+      "/usr/lib/ssl": "absent"
+    },
+    "elf_sha256": {
+      "/bin/busybox": "01a989eb4d1d04b0d146c790ac536abd88f374ec74a2e110c58910b840d42045",
+      "/lib/ld-musl-x86_64.so.1": "095b047c631447e4fa50401fa7ffce01f678587040d65ba18c574981dc630de5",
+      "/sbin/apk": "080ee6db0c5ad0f4e5497de64c6396f8e911191215c762eddb497f2783bde6c4",
+      "/usr/bin/envsubst": "84d164ba0ffa89584713be374fcb73095dca8b809163b24781a387f074779d12",
+      "/usr/bin/getconf": "791a3ce37940d766b4242a006a2978210decc40e035bb385c643553fc278ead0",
+      "/usr/bin/getent": "f225def553bce0cb435ff78686b9272c2f4dd0e34ebe3d79855e775a66d9c6ef",
+      "/usr/bin/iconv": "7a7306c6836018449ed373f110b25dd2eb7cc263e5fe9259f9964a280630c567",
+      "/usr/bin/scanelf": "beebb8f7be5cdcf5a2d12a5eb78736ff65b361396da4a47fd4d2b7d76ca40251",
+      "/usr/bin/ssl_client": "8b23a9dbfea3da8c6da65b93c0fc6d979a82245c17c40d8fbf94d531263b98b4",
+      "/usr/lib/engines-3/afalg.so": "b565e6935269d679a5b8d45bb1ae60559f9621d2c7fe47b8a70cbc90334259e1",
+      "/usr/lib/engines-3/capi.so": "9e4328d873b167552bf4c807dab303a5a7a0c36e9a9f3bb1f1d84d864776bd2e",
+      "/usr/lib/engines-3/loader_attic.so": "9b9c26db1b0f4a99c106a99ed01cc7c84a3c2bbc14df362517b24b4f18b900d7",
+      "/usr/lib/engines-3/padlock.so": "3327f942be17b9f856cc7f56db23d2f3cff14e90688a00af2aeb970655843e8c",
+      "/usr/lib/libapk.so.3.0.0": "51ee6652a1a1f36c83edb6fc425882d62c8d074a1ced144b85a961360919189c",
+      "/usr/lib/libcrypto.so.3": "bb2d86be6845456696f90f0948b6de6369f66612b7cf3ffa755e664436fdbc88",
+      "/usr/lib/libintl.so.8.4.6": "c43f799d118a30b411000220133bf8d297ef5b4684dbca30b45b605e484815a0",
+      "/usr/lib/libpcre2-8.so.0.16.1": "496ce2b43e3910e8c232105fa04cf1b47df8860f9ec90e75dde05303c2fc69be",
+      "/usr/lib/libpcre2-posix.so.3.0.9": "9ff886fbcb29fefc3ad8cab803b2821c4195d3ba6781a618aeb40e5e5fa31457",
+      "/usr/lib/libssl.so.3": "ed8d30405217b3904a8df9ac311002d0ae43df516e60c5b3a8a998eda68ee340",
+      "/usr/lib/libz.so.1.4": "9995c2fe07ba436423709dd8ce6a186c2c6b3db7ac7719496a55554c4a95274e",
+      "/usr/lib/ossl-modules/legacy.so": "d28ac2184b2b39177578b4cabccee6d178c2b0e6f2ae0ccc8f354267d808ed83",
+      "/usr/local/bin/dcompany-caddy-zlib-probe": "e1cd21569043c8482e86e9a379bcfeaa3997d927109da53e28839835d4e4b57e",
+      "/usr/sbin/nginx": "1bd46c2808e318c64fbd0648e9203ba0c3ba1d29ae749a5f1efd2f229a292928",
+      "/usr/sbin/nginx-debug": "8125315198b5abd7fba9d57b16dbe1914826f981bf16fdcd1eef335c400d88f1"
+    },
+    "entrypoint_sha256": {
+      "/docker-entrypoint.sh": "3372fd90162da30d09f62c245e9c6bfd620fb0bb5b48ab54b16e804c2b9e8aae"
+    },
+    "links": {
+      "/etc/nginx/modules": "/usr/lib/nginx/modules",
+      "/etc/ssl/cert.pem": "certs/ca-certificates.crt"
+    },
+    "resolves": {
+      "/bin/busybox": "/bin/busybox",
+      "/lib/ld-musl-x86_64.so.1": "/lib/ld-musl-x86_64.so.1",
+      "/sbin/apk": "/sbin/apk",
+      "/usr/bin/envsubst": "/usr/bin/envsubst",
+      "/usr/bin/getconf": "/usr/bin/getconf",
+      "/usr/bin/getent": "/usr/bin/getent",
+      "/usr/bin/iconv": "/usr/bin/iconv",
+      "/usr/bin/scanelf": "/usr/bin/scanelf",
+      "/usr/bin/ssl_client": "/usr/bin/ssl_client",
+      "/usr/lib/engines-3/afalg.so": "/usr/lib/engines-3/afalg.so",
+      "/usr/lib/engines-3/capi.so": "/usr/lib/engines-3/capi.so",
+      "/usr/lib/engines-3/loader_attic.so": "/usr/lib/engines-3/loader_attic.so",
+      "/usr/lib/engines-3/padlock.so": "/usr/lib/engines-3/padlock.so",
+      "/usr/lib/libapk.so.3.0.0": "/usr/lib/libapk.so.3.0.0",
+      "/usr/lib/libcrypto.so.3": "/usr/lib/libcrypto.so.3",
+      "/usr/lib/libintl.so.8.4.6": "/usr/lib/libintl.so.8.4.6",
+      "/usr/lib/libpcre2-8.so.0.16.1": "/usr/lib/libpcre2-8.so.0.16.1",
+      "/usr/lib/libpcre2-posix.so.3.0.9": "/usr/lib/libpcre2-posix.so.3.0.9",
+      "/usr/lib/libssl.so.3": "/usr/lib/libssl.so.3",
+      "/usr/lib/libz.so.1.4": "/usr/lib/libz.so.1.4",
+      "/usr/lib/ossl-modules/legacy.so": "/usr/lib/ossl-modules/legacy.so",
+      "/usr/local/bin/dcompany-caddy-zlib-probe": "/usr/local/bin/dcompany-caddy-zlib-probe",
+      "/usr/sbin/nginx": "/usr/sbin/nginx",
+      "/usr/sbin/nginx-debug": "/usr/sbin/nginx-debug"
+    }
+  },
+  "schema": 1,
+  "service": "frontend"
+}

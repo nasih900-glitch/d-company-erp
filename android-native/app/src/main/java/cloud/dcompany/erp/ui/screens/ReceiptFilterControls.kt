@@ -17,7 +17,9 @@ import cloud.dcompany.erp.core.db.StaffCacheEntity
 import cloud.dcompany.erp.core.net.CanonicalReceipt
 import cloud.dcompany.erp.core.net.MeResponse
 import cloud.dcompany.erp.core.net.asRupees
+import cloud.dcompany.erp.ui.components.LiquidDropdownMenu
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
 
 data class ReceiptFilterChoice(val id: String, val label: String)
 data class ReceiptFilterChoices(
@@ -78,7 +80,7 @@ internal fun ReceiptFilterControls(
                 modifier = Modifier.weight(1f).testTag("receipt-filter-to"))
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-            OutlinedTextField(amount, { onAmountChange(it.take(20)) }, label = { Text("Invoice amount · ₹") },
+            OutlinedTextField(amount, { onAmountChange(it.take(20)) }, label = { Text("Invoice amount") },
                 singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 modifier = Modifier.weight(1f).testTag("receipt-filter-amount"))
             Box(Modifier.weight(1f)) {
@@ -112,7 +114,12 @@ private fun ReceiptFilterChoiceMenu(label: String, selected: String?, choices: L
                 Text(if (selected == null) allLabel else choices.firstOrNull { it.id == selected }?.label
                     ?: "Saved selection · current label unavailable", maxLines = 2)
             }
-            DropdownMenu(expanded, { expanded = false }, modifier = Modifier.heightIn(max = 320.dp)) {
+            LiquidDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.heightIn(max = 320.dp),
+                role = WorkspaceGlassRole.CONTROL,
+            ) {
                 DropdownMenuItem(text = { Text(allLabel) }, onClick = { expanded = false; onChoose(null) })
                 choices.forEach { choice -> DropdownMenuItem(text = { Text(choice.label) },
                     onClick = { expanded = false; onChoose(choice.id) }) }

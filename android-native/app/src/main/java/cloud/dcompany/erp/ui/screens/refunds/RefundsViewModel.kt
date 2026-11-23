@@ -539,7 +539,7 @@ class RefundsViewModel : ViewModel() {
             }
         }
         val validation = when {
-            amountMinor <= 0 -> "Refund amount must be greater than ₹0."
+            amountMinor <= 0 -> "Refund amount must be greater than 0."
             amountMinor > order.refundableMinor ->
                 "The amount is above this tablet's latest refundable balance. Refresh and try again."
             REFUND_REASONS.none { it.first == reasonCode } -> "Choose a valid refund reason."

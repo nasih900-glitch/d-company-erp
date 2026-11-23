@@ -10,6 +10,9 @@ from app.services.email.mailer import Mailer
 from app.services.realtime import manager as realtime_manager
 
 
+_TEST_SECURITY_EMAIL = "security-otp@test.local"
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def require_local_db(session) -> None:
     try:
@@ -25,8 +28,10 @@ def configured_security_email(monkeypatch, seed_owner) -> list[dict[str, str]]:
     monkeypatch.setenv("SMTP_USER", "business@example.test")
     monkeypatch.setenv("SMTP_PASSWORD", "test-only-app-password")
     monkeypatch.setenv("FROM_EMAIL", "business@example.test")
+    settings = get_settings()
+    monkeypatch.setattr(settings, "account_security_email", _TEST_SECURITY_EMAIL)
     monkeypatch.setattr(
-        get_settings(),
+        settings,
         "account_security_company_id",
         seed_owner["company"].id,
     )
@@ -79,8 +84,8 @@ async def test_new_login_requires_single_use_central_email_otp(
     assert requested.status_code == 202
 
     challenge_id = requested.json()["challenge_id"]
-    assert requested.json()["destination"].startswith("b***@")
-    assert configured_security_email[-1]["to"] == "business@retrocafe.online"
+    assert requested.json()["destination"] == "s***@test.local"
+    assert configured_security_email[-1]["to"] == _TEST_SECURITY_EMAIL
     assert "123456" in configured_security_email[-1]["text"]
     assert "short-pass-123" not in configured_security_email[-1]["text"]
 

@@ -63,7 +63,16 @@ data class ShiftDetail(
     @SerialName("closed_by") val closedByUserId: String? = null,
     @SerialName("closed_by_name") val closedByName: String? = null,
     @SerialName("closed_by_email") val closedByEmail: String? = null,
+    @SerialName("receipt_corrections_minor") val receiptCorrectionsMinor: Long? = null,
+    @SerialName("receipt_corrections") val receiptCorrections: List<cloud.dcompany.erp.core.net.ReceiptCorrectionMetadata> = emptyList(),
+    @SerialName("effective_net_collections_minor") val effectiveNetCollectionsMinor: Long? = null,
+    @SerialName("effective_upi_collections_minor") val effectiveUpiCollectionsMinor: Long? = null,
 )
+
+private val ShiftDetail.hasReceiptCorrection: Boolean get() = receiptCorrectionsMinor?.let { it != 0L } == true || receiptCorrections.isNotEmpty()
+internal val ShiftDetail.displayNetCollectionsMinor: Long? get() = effectiveNetCollectionsMinor ?: netCollectionsMinor.takeUnless { hasReceiptCorrection }
+internal val ShiftDetail.displayUpiCollectionsMinor: Long? get() = effectiveUpiCollectionsMinor ?: upiCollectionsMinor.takeUnless { hasReceiptCorrection }
+
 
 @Serializable
 data class ShiftOpenBody(@SerialName("opening_float_minor") val openingFloatMinor: Long)
@@ -102,6 +111,7 @@ interface ShiftApi {
         @Query("only_open") onlyOpen: Boolean,
         @Query("limit") limit: Int = 200,
         @Header("X-Installation-Id") installationId: String? = null,
+        @Query("shift_id") shiftId: String? = null,
     ): List<ShiftDetail>
 
     @POST("pos/shifts/open")

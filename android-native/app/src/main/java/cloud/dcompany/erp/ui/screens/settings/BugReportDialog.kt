@@ -39,7 +39,7 @@ import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ReportProblem
 import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material3.AlertDialog
+import cloud.dcompany.erp.ui.components.LiquidAlertDialog as AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -57,6 +57,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -78,10 +79,13 @@ import cloud.dcompany.erp.ui.components.ErpButton
 import cloud.dcompany.erp.ui.components.OperationalBanner
 import cloud.dcompany.erp.ui.components.UiTone
 import cloud.dcompany.erp.ui.components.fieldColors
+import cloud.dcompany.erp.ui.components.liquidWorkspaceSurface
 import cloud.dcompany.erp.ui.remote.RemoteSensitiveContent
 import cloud.dcompany.erp.ui.theme.Brand
+import cloud.dcompany.erp.ui.theme.LocalWorkspaceGlassScene
 import cloud.dcompany.erp.ui.theme.Radius
 import cloud.dcompany.erp.ui.theme.Spacing
+import cloud.dcompany.erp.ui.theme.WorkspaceGlassRole
 import kotlinx.coroutines.launch
 
 private sealed interface BugReportPreviewState {
@@ -144,6 +148,9 @@ internal fun BugReportDialog(
             )
         },
         text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                if (state.workspaceRequired) Text(BUG_REPORT_WORKSPACE_REQUIRED,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
             if (state.showingHistory) {
                 SupportHistory(
                     state = state,
@@ -167,6 +174,7 @@ internal fun BugReportDialog(
                     onOpenHistory = onOpenHistory,
                 )
             }
+            }
         },
         confirmButton = {
             when {
@@ -174,14 +182,14 @@ internal fun BugReportDialog(
                 !submitted -> ErpButton(
                     text = "Send to owner",
                     onClick = onSubmit,
-                    enabled = !state.saving,
+                    enabled = !state.saving && !state.workspaceRequired,
                     busy = state.saving,
                     leadingIcon = Icons.Default.ReportProblem,
                 )
                 actionRequired -> ErpButton(
                     text = "Retry send",
                     onClick = onRetry,
-                    enabled = !state.saving,
+                    enabled = !state.saving && !state.workspaceRequired,
                     busy = state.saving,
                 )
                 else -> ErpButton(text = "Done", onClick = onDismiss)
@@ -326,10 +334,12 @@ private fun BugReportForm(
     ) {
         if (state.recentRequests.isNotEmpty()) {
             Surface(
-                color = MaterialTheme.colorScheme.surface,
+                color = Color.Transparent,
                 shape = Radius.shapeMd,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenHistory),
+                border = null,
+                modifier = Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                    .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.CONTROL)
+                    .clickable(onClick = onOpenHistory),
             ) {
                 Row(
                     Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm),
@@ -471,10 +481,11 @@ private fun BugReportForm(
         )
         if (state.attachment == null) {
             Surface(
-                color = MaterialTheme.colorScheme.surface,
+                color = Color.Transparent,
                 shape = Radius.shapeMd,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)
+                border = null,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp).clip(Radius.shapeMd)
+                    .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.CONTROL)
                     .clickable(enabled = !state.saving && !attachmentLoading) {
                         imagePicker.launch("image/*")
                     },
@@ -528,10 +539,11 @@ private fun BugReportForm(
                 }
             }
             Surface(
-                color = MaterialTheme.colorScheme.surface,
+                color = Color.Transparent,
                 shape = Radius.shapeMd,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                modifier = Modifier.fillMaxWidth(),
+                border = null,
+                modifier = Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                    .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.UTILITY),
             ) {
                 Column(
                     Modifier.padding(Spacing.md),
@@ -679,10 +691,11 @@ private fun SupportHistory(
         } else {
             state.recentRequests.forEach { request ->
                 Surface(
-                    color = MaterialTheme.colorScheme.surface,
+                    color = Color.Transparent,
                     shape = Radius.shapeMd,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                    modifier = Modifier.fillMaxWidth(),
+                    border = null,
+                    modifier = Modifier.fillMaxWidth().clip(Radius.shapeMd)
+                        .liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.UTILITY),
                 ) {
                     Column(
                         Modifier.padding(Spacing.md),
@@ -722,10 +735,10 @@ private fun SupportHistory(
                         }
                         if (request.actionRequired) {
                             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-                                TextButton(onClick = { onRetry(request.identity) }) {
+                                TextButton(onClick = { onRetry(request.identity) }, enabled = !state.workspaceRequired) {
                                     Text("Retry send")
                                 }
-                                TextButton(onClick = { onRequestDiscard(request.identity) }) {
+                                TextButton(onClick = { onRequestDiscard(request.identity) }, enabled = !state.workspaceRequired) {
                                     Text("Remove saved copy", color = MaterialTheme.colorScheme.operationalDanger)
                                 }
                             }
@@ -750,11 +763,16 @@ private fun ReasonChoice(
     modifier: Modifier,
     onClick: () -> Unit,
 ) {
+    val selectedColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
     Surface(
-        color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f) else MaterialTheme.colorScheme.surface,
+        color = if (selected) selectedColor else Color.Transparent,
         shape = Radius.shapeMd,
-        border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outlineVariant),
-        modifier = modifier.heightIn(min = 76.dp).selectable(
+        border = if (selected) BorderStroke(1.dp, MaterialTheme.colorScheme.secondary) else null,
+        modifier = modifier.heightIn(min = 76.dp).clip(Radius.shapeMd)
+            .then(
+                if (selected) Modifier
+                else Modifier.liquidWorkspaceSurface(Radius.shapeMd, WorkspaceGlassRole.CONTROL),
+            ).selectable(
             selected = selected,
             enabled = enabled,
             role = Role.RadioButton,
@@ -788,11 +806,23 @@ private fun ContinuationChoice(
     modifier: Modifier,
     onClick: () -> Unit,
 ) {
+    val glass = LocalWorkspaceGlassScene.current != null
     Surface(
         color = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
         shape = Radius.shapePill,
-        border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.outlineVariant),
-        modifier = modifier.heightIn(min = 48.dp).selectable(
+        border = when {
+            selected -> BorderStroke(1.dp, MaterialTheme.colorScheme.onSurfaceVariant)
+            glass -> null
+            else -> BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        },
+        modifier = modifier.heightIn(min = 48.dp).clip(Radius.shapePill)
+            .then(
+                if (!selected && glass) {
+                    Modifier.liquidWorkspaceSurface(Radius.shapePill, WorkspaceGlassRole.CONTROL)
+                } else {
+                    Modifier
+                },
+            ).selectable(
             selected = selected,
             enabled = enabled,
             role = Role.RadioButton,

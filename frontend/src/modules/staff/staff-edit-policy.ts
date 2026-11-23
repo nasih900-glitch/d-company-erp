@@ -1,8 +1,11 @@
+import { EVERYDAY_ROLE_CODES } from '@/lib/roles';
+
 export type StaffStatus = 'active' | 'suspended';
 
 export interface StaffAccessPatch {
   role_code?: string;
   status?: StaffStatus;
+  manual_discount_allowed?: boolean;
 }
 
 interface StaffRoleOption {
@@ -19,11 +22,20 @@ const OWNER_ROLE_CODES = new Set(['super_owner', 'co_owner', 'owner']);
 export function editableStaffRoleOptions<T extends StaffRoleOption>(
   roles: readonly T[],
   canManageOwnerAccess: boolean,
+  hasManagedRoles = false,
 ): T[] {
   return roles.filter((role) => (
-    role.code !== 'super_owner'
+    role.code !== 'super_owner' && role.code !== 'pos_discount'
+    && (role.code !== 'co_owner' || hasManagedRoles)
     && (canManageOwnerAccess || !OWNER_ROLE_CODES.has(role.code))
   ));
+}
+
+/** Keep catalog order out of the everyday choices, and retain legacy selections. */
+export function staffRoleOptionGroups<T extends StaffRoleOption>(roles: readonly T[]) {
+  const everyday = EVERYDAY_ROLE_CODES.flatMap((code) => roles.filter((role) => role.code === code));
+  const advanced = roles.filter((role) => !EVERYDAY_ROLE_CODES.some((code) => code === role.code));
+  return { everyday, advanced };
 }
 
 interface StaffAccessPatchInput {
@@ -33,6 +45,8 @@ interface StaffAccessPatchInput {
   originalStatus: StaffStatus;
   selectedStatus: StaffStatus;
   accessChangesLocked: boolean;
+  roleChangesLocked?: boolean;
+  hasMultiplePrimaryRoles?: boolean;
 }
 
 /**
@@ -52,11 +66,13 @@ export function buildStaffAccessPatch({
   originalStatus,
   selectedStatus,
   accessChangesLocked,
+  roleChangesLocked = accessChangesLocked,
+  hasMultiplePrimaryRoles = false,
 }: StaffAccessPatchInput): StaffAccessPatch {
   if (accessChangesLocked) return {};
 
   const patch: StaffAccessPatch = {};
-  if (roleSelectionChanged && selectedRoleCode !== originalRoleCode) {
+  if (!roleChangesLocked && roleSelectionChanged && (selectedRoleCode !== originalRoleCode || hasMultiplePrimaryRoles)) {
     patch.role_code = selectedRoleCode;
   }
   if (selectedStatus !== originalStatus) {
@@ -80,4 +96,17 @@ export function canChangeStaffAccess({
   if (targetRoles.includes('super_owner')) return false;
   const targetIsOwner = targetRoles.some((role) => OWNER_ROLE_CODES.has(role));
   return !targetIsOwner || callerHasAuditAccess;
+}
+
+/** Never resend an unchanged grant: real role writes revoke active sessions. */
+export function buildStaffDiscountPatch({
+  originalAllowed, selectedAllowed, canManage, selectedRoleCode, primaryRoleWillBeReplaced = false,
+}: {
+  originalAllowed: boolean; selectedAllowed: boolean;
+  canManage: boolean; selectedRoleCode: string;
+  primaryRoleWillBeReplaced?: boolean;
+}): Pick<StaffAccessPatch, 'manual_discount_allowed'> {
+  return canManage && selectedRoleCode === 'gaming_cashier'
+    && (originalAllowed !== selectedAllowed || (primaryRoleWillBeReplaced && selectedAllowed))
+    ? { manual_discount_allowed: selectedAllowed } : {};
 }

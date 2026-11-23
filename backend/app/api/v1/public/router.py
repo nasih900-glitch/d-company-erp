@@ -25,6 +25,7 @@ from app.core.config import get_settings
 from app.core.db import AsyncSessionLocal, SessionDep  # noqa: TC001 - FastAPI dependency.
 from app.core.logging import get_logger
 from app.models import AndroidRelease, Company, MenuCategory, MenuItem
+from app.services.client_updates.policy import AndroidPolicySnapshot, resolve_android_update_policy
 from app.services.client_updates.runtime_parity import (
     RuntimeParityError,
     verify_runtime_parity_for_public_offer,
@@ -235,7 +236,7 @@ async def client_compatibility(
     request: Request,
     response: Response,
     platform: Literal["android", "ios"],
-    version_code: int = Query(ge=1),
+    version_code: int = Query(ge=1, le=2_147_483_647),
 ) -> ClientCompatibilityDTO:
     """Return required policy plus the independently promoted optional offer.
 
@@ -248,6 +249,22 @@ async def client_compatibility(
     response.headers["X-Client-Compatibility-Policy-Revision"] = str(
         settings.client_compatibility_policy_revision
     )
+    distribution_channel = (
+        request.headers.get("X-Client-Distribution-Channel", "direct").strip().lower() or "direct"
+    )
+    policy = None
+    if platform == "android" and distribution_channel == "direct":
+        policy = getattr(request.state, "android_update_policy", None)
+        if policy is None:
+            policy = await resolve_android_update_policy(settings)
+        response.headers["X-Client-Compatibility-Policy-Revision"] = str(policy.revision)
+    elif platform == "android":
+        # Play/managed installations keep the environment safety contract. The
+        # direct APK owner switch cannot raise their floor or leak its artifact.
+        policy = AndroidPolicySnapshot(
+            settings.client_compatibility_policy_revision,
+            settings.android_min_supported_version_code,
+        )
     latest: int
     update_url: str | None
     latest_version_name: str | None
@@ -256,7 +273,7 @@ async def client_compatibility(
     apk_size_bytes: int | None
     apk_signing_cert_sha256: str | None
     if platform == "android":
-        minimum = settings.android_min_supported_version_code
+        minimum = policy.minimum
         # Missing means the existing direct-APK client/monitor contract. Play
         # and managed builds must never be handed our self-hosted APK, even if
         # they happen to share the same version code.
@@ -265,12 +282,22 @@ async def client_compatibility(
             or "direct"
         )
         offer = None
-        if distribution_channel == "direct":
+        if distribution_channel == "direct" and policy.release is None:
             try:
                 async with asyncio.timeout(PUBLIC_COMPATIBILITY_OFFER_BUDGET_SECONDS):
                     offer = await _shared_verified_active_direct_offer(settings)
             except TimeoutError:
                 offer = None
+        if policy.release is not None and distribution_channel == "direct":
+            offer = policy.release
+        # Old clients only clear a persisted Required decision on definitive
+        # supported. Explicit Optional deliberately suppresses their optional
+        # banner; the unconfigured/inherit rollout keeps existing offers.
+        legacy_optional_clear = (
+            policy.mode == "optional" and version_code < 55 and version_code >= minimum
+        )
+        if legacy_optional_clear:
+            offer = None
         if offer is not None:
             latest = offer["version_code"]
             update_url = offer["update_url"]
@@ -314,19 +341,23 @@ async def client_compatibility(
             "This app version is no longer compatible with the ERP server. "
             "Update before continuing; saved offline work will remain on this device."
         )
-    elif (
-        platform == "android" and update_url is not None and version_code < latest
-    ) or (platform == "ios" and version_code < latest):
+    elif (platform == "android" and update_url is not None and version_code < latest) or (
+        platform == "ios" and version_code < latest
+    ):
         compatibility_status = "update_available"
         default_message = "A newer app version is available. You can continue for now."
     else:
         compatibility_status = "supported"
         default_message = "This app version is supported."
 
+    response.headers["X-Minimum-Supported-Version-Code"] = str(minimum)
+    response.headers["X-Latest-Version-Code"] = str(latest)
     return ClientCompatibilityDTO(
         platform=platform,
         current_version_code=version_code,
-        policy_revision=settings.client_compatibility_policy_revision,
+        policy_revision=policy.revision
+        if policy is not None
+        else settings.client_compatibility_policy_revision,
         minimum_supported_version_code=minimum,
         latest_version_code=latest,
         status=compatibility_status,
@@ -338,8 +369,12 @@ async def client_compatibility(
         apk_signing_cert_sha256=apk_signing_cert_sha256,
         message=(
             default_message
-            if compatibility_status == "supported"
-            else settings.client_update_message or default_message
+            if compatibility_status in {"supported", "update_available"}
+            else (
+                default_message
+                if policy is not None and policy.mode == "required"
+                else settings.client_update_message or default_message
+            )
         ),
         checked_at=datetime.now(UTC),
     )

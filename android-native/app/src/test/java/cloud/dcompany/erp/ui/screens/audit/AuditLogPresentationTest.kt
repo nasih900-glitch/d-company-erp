@@ -118,7 +118,7 @@ class AuditLogPresentationTest {
         val close = json.decodeFromString<AuditEntry>(
             """{"id":1,"action":"shift_closed","action_code":"SHF-CLS","entity_type":"Shift","entity_id":"s","created_at":"2026-10-19T00:00:00Z","business_details":{"counted_minor":10000,"expected_minor":10000,"variance_minor":0,"closed_by":"11111111-1111-4111-8111-111111111111"}}""",
         )
-        assertEquals("Counted ₹100.00 · Expected ₹100.00 · Variance ₹0.00", auditBusinessSummary(close))
+        assertEquals("Counted 100.00 · Expected 100.00 · Variance 0.00", auditBusinessSummary(close))
         val orderId = "11111111-1111-4111-8111-111111111111"
         val stock = json.decodeFromString<AuditEntry>(
             """{"id":2,"action":"create","entity_type":"StockMovement","entity_id":"m","created_at":"2026-10-19T00:00:00Z","source_reference":"$orderId","linked_bill_reference":"D/QA/26-27/00001","business_details":{"ref_type":"order","ref_id":"$orderId"}}""",

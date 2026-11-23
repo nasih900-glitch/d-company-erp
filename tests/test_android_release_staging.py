@@ -493,6 +493,7 @@ class AndroidReleaseStagingTest(unittest.TestCase):
             (root / "releases/android").mkdir(parents=True)
             private = root / staging.PRIVATE_UPLOAD_DIRECTORY_NAME
             private.mkdir(mode=0o755)
+            private.chmod(0o755)
             payload = {
                 "remote_root": str(root),
                 "apk_filename": "d-company-erp-v3.1.4-direct.apk",
@@ -692,6 +693,161 @@ class AndroidReleaseStagingTest(unittest.TestCase):
             destination_index = command.index(target.host)
             self.assertEqual("--", command[destination_index - 1])
             self.assertNotIn("--", command[destination_index + 1 :])
+
+    def test_ssh_sudo_defaults_off_and_parser_requires_explicit_opt_in(self) -> None:
+        arguments = [
+            "--manifest",
+            "/safe/manifest.json",
+            "--apk",
+            "/safe/app.apk",
+            "--release-notes",
+            "Reviewed update",
+            "--expected-signer-sha256",
+            SIGNER,
+        ]
+        self.assertFalse(staging._build_parser().parse_args(arguments).ssh_sudo)
+        self.assertTrue(
+            staging._build_parser().parse_args([*arguments, "--ssh-sudo"]).ssh_sudo
+        )
+        target = staging.RemoteTarget(
+            "ubuntu@example.test", Path("/safe/key"), 22, "/opt/d-company-erp"
+        )
+        self.assertFalse(target.ssh_sudo)
+        self.assertEqual(["python3"], target.python_command)
+
+    def test_ssh_sudo_fixed_prefix_preserves_binary_upload_and_destination(
+        self,
+    ) -> None:
+        target = staging.RemoteTarget(
+            "ubuntu@example.test",
+            Path("/safe/key"),
+            22,
+            "/opt/d-company-erp",
+            ssh_sudo=True,
+        )
+        binary = b"PK\x03\x04\x00\xff\n\rpayload"
+        uploaded = []
+
+        def run(command, **kwargs):
+            if "stdin" in kwargs:
+                uploaded.append(kwargs["stdin"].read())
+            return SimpleNamespace(stdout=b'{"ok":true}')
+
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            patch.object(staging.subprocess, "run", side_effect=run) as mocked,
+        ):
+            apk = Path(temporary) / "candidate.apk"
+            apk.write_bytes(binary)
+            staging._ssh_json(target, "runtime", {})
+            staging._ssh_upload_apk(target, apk, {})
+        self.assertEqual([binary], uploaded)
+        self.assertEqual(2, mocked.call_count)
+        for invocation in mocked.call_args_list:
+            command = invocation.args[0]
+            destination = command.index(target.host)
+            self.assertEqual("--", command[destination - 1])
+            self.assertEqual(
+                ["sudo", "-n", "--", "python3"],
+                command[destination + 1 : destination + 5],
+            )
+            self.assertEqual(
+                "/opt/d-company-erp/ops/stage_android_release.py",
+                command[destination + 5],
+            )
+
+    def test_ssh_sudo_flag_rejects_non_bool_before_either_transport(self) -> None:
+        for value in (None, 0, 1, "true", "sudo -S", []):
+            target = staging.RemoteTarget(
+                "ubuntu@example.test",
+                Path("/safe/key"),
+                22,
+                "/opt/d-company-erp",
+                ssh_sudo=value,
+            )
+            for helper in ("json", "upload"):
+                with (
+                    self.subTest(value=value, helper=helper),
+                    patch.object(staging.subprocess, "run") as run,
+                ):
+                    with self.assertRaisesRegex(
+                        staging.AndroidReleaseStagingError, "sudo flag"
+                    ):
+                        if helper == "json":
+                            staging._ssh_json(target, "runtime", {})
+                        else:
+                            staging._ssh_upload_apk(
+                                target, Path("/must-not-open.apk"), {}
+                            )
+                    run.assert_not_called()
+
+    def test_invalid_ssh_sudo_rejects_before_artifact_subprocesses(self) -> None:
+        args = Namespace(
+            ssh_host="ubuntu@example.test",
+            ssh_key=Path("/safe/key"),
+            ssh_port=22,
+            remote_root="/opt/d-company-erp",
+            ssh_sudo="true",
+        )
+        with patch.object(staging.subprocess, "run") as run:
+            with self.assertRaisesRegex(
+                staging.AndroidReleaseStagingError, "sudo flag"
+            ):
+                staging.stage_release(args)
+            run.assert_not_called()
+
+    def test_ssh_sudo_does_not_relax_host_or_root_validation(self) -> None:
+        for host, root in (
+            ("ubuntu@example.test;id", "/opt/d-company-erp"),
+            ("-Jattacker.example", "/opt/d-company-erp"),
+            ("ubuntu@example.test", "/opt/../unsafe"),
+            ("ubuntu@example.test", "/opt/safe;id"),
+        ):
+            target = staging.RemoteTarget(
+                host, Path("/safe/key"), 22, root, ssh_sudo=True
+            )
+            for helper in ("json", "upload"):
+                with (
+                    self.subTest(host=host, root=root, helper=helper),
+                    patch.object(staging.subprocess, "run") as run,
+                ):
+                    with self.assertRaises(staging.AndroidReleaseStagingError):
+                        if helper == "json":
+                            staging._ssh_json(target, "runtime", {})
+                        else:
+                            staging._ssh_upload_apk(
+                                target, Path("/must-not-open.apk"), {}
+                            )
+                    run.assert_not_called()
+
+    def test_ssh_sudo_denial_has_no_unprivileged_retry(self) -> None:
+        target = staging.RemoteTarget(
+            "ubuntu@example.test",
+            Path("/safe/key"),
+            22,
+            "/opt/d-company-erp",
+            ssh_sudo=True,
+        )
+        for helper in ("json", "upload"):
+            with tempfile.TemporaryDirectory() as temporary:
+                apk = Path(temporary) / "candidate.apk"
+                apk.write_bytes(b"private-test-apk")
+                with (
+                    self.subTest(helper=helper),
+                    patch.object(
+                        staging.subprocess,
+                        "run",
+                        side_effect=staging.subprocess.CalledProcessError(
+                            1, ["ssh"], stderr=b"sudo denied"
+                        ),
+                    ) as run,
+                ):
+                    with self.assertRaises(staging.AndroidReleaseStagingError):
+                        if helper == "json":
+                            staging._ssh_json(target, "runtime", {})
+                        else:
+                            staging._ssh_upload_apk(target, apk, {})
+                    self.assertEqual(1, run.call_count)
 
     def test_verification_only_does_not_require_vps_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1003,6 +1159,7 @@ class AndroidReleaseStagingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             parent = Path(temporary) / "locks"
             parent.mkdir(mode=0o755)
+            parent.chmod(0o755)
             lock_file = parent / "production-install.lock"
             with (
                 self.assertRaisesRegex(
@@ -1049,6 +1206,7 @@ class AndroidReleaseStagingTest(unittest.TestCase):
                 ssh_host="root@example.test",
                 ssh_key=key,
                 ssh_port=22,
+                ssh_sudo=True,
                 remote_root="/opt/d-company-erp",
                 apkanalyzer=None,
                 apksigner=None,
@@ -1065,6 +1223,7 @@ class AndroidReleaseStagingTest(unittest.TestCase):
             )
 
             def remote(_target, action: str, payload: dict) -> dict:
+                self.assertIs(_target.ssh_sudo, True)
                 events.append(action)
                 if action == "runtime":
                     return {"ok": True, "runtime_parity": runtime}
@@ -1131,6 +1290,145 @@ class AndroidReleaseStagingTest(unittest.TestCase):
         self.assertIn("--headers-only", workflow)
         self.assertIn('cron: "7 */6 * * *"', workflow)
         self.assertIn("FULL_APK_CHECK", workflow)
+
+
+    def test_build83_staging_requires_exact_receipt_and_retains_older_redis_identity(self):
+        payload = {"version_code": 83, "version_name": "3.1.76", "source_git_sha": "1" * 40}
+        images = {name: "sha256:" + "2" * 64 for name in ("postgres", "backend", "frontend", "caddy")}
+        redis = {"version_name": "3.1.64", "image_id": "sha256:" + "3" * 64, "retained": True}
+        digest = "4" * 64
+        running = {"version_name": "3.1.76", "source_git_sha": "1" * 40,
+                   "services": {name: {"image_id": image} for name, image in images.items()}}
+        with (
+            patch.object(staging, "run_path", return_value={"staging_identity": lambda *args: ("erp", images, redis, digest)}),
+            patch.object(staging, "inspect_release_pair", return_value=running) as inspect,
+        ):
+            result = staging._inspect_running_release(payload)
+            self.assertEqual(result["services"]["redis"], redis)
+            self.assertEqual(result["deployment_receipt_sha256"], digest)
+            self.assertEqual(inspect.call_args.kwargs["project_name"], "erp")
+            self.assertEqual(set(inspect.call_args.kwargs["services"]), set(images))
+            self.assertEqual(inspect.call_args.kwargs["expected_images"], {"services": running["services"]})
+
+        with patch.object(staging, "inspect_release_pair") as inspect:
+            for denied in ({**payload, "version_code": 71}, {**payload, "version_name": "3.1.64"}):
+                with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "exact Android version pair"):
+                    staging._inspect_running_release(denied)
+            with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "Build 72 did not pass"):
+                staging._inspect_running_release({**payload, "version_name": "3.1.65", "version_code": 72})
+            with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "Build 73 did not pass"):
+                staging._inspect_running_release({**payload, "version_name": "3.1.66", "version_code": 73})
+            with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "Build 74 is a superseded signed candidate"):
+                staging._inspect_running_release({**payload, "version_name": "3.1.67", "version_code": 74})
+            with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "Build 75 is a superseded tagged candidate"):
+                staging._inspect_running_release({**payload, "version_name": "3.1.68", "version_code": 75})
+            inspect.assert_not_called()
+        with (
+            patch.object(staging, "run_path", side_effect=OSError("receipt missing")),
+            patch.object(staging, "inspect_release_pair") as inspect,
+        ):
+            with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "retained Redis proof failed"):
+                staging._inspect_running_release(payload)
+            inspect.assert_not_called()
+
+    def test_superseded_build74_is_refused_before_any_runtime_inspection(self):
+        with (
+            patch.object(staging, "run_path") as verifier,
+            patch.object(staging, "inspect_release_pair") as inspect,
+        ):
+            for version, code in (("3.1.67", 74), ("3.1.69", 74), ("3.1.67", 76)):
+                with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "superseded signed candidate"):
+                    staging._inspect_running_release({"version_name": version, "version_code": code, "source_git_sha": "1" * 40})
+            verifier.assert_not_called()
+            inspect.assert_not_called()
+
+    def test_superseded_build77_is_refused_before_any_runtime_inspection(self):
+        with (
+            patch.object(staging, "run_path") as verifier,
+            patch.object(staging, "inspect_release_pair") as inspect,
+        ):
+            for version, code in (("3.1.70", 77), ("3.1.71", 77), ("3.1.70", 78)):
+                with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "superseded tagged candidate"):
+                    staging._inspect_running_release({"version_name": version, "version_code": code, "source_git_sha": "1" * 40})
+            verifier.assert_not_called()
+            inspect.assert_not_called()
+
+    def test_predecessor_build80_is_refused_by_fallback_source_before_runtime_inspection(self):
+        with (
+            patch.object(staging, "run_path") as verifier,
+            patch.object(staging, "inspect_release_pair") as inspect,
+        ):
+            for version, code in (("3.1.73", 80), ("3.1.75", 80), ("3.1.73", 81)):
+                with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "predecessor candidate"):
+                    staging._inspect_running_release({"version_name": version, "version_code": code, "source_git_sha": "1" * 40})
+            verifier.assert_not_called()
+            inspect.assert_not_called()
+
+    def test_superseded_build81_is_refused_before_any_runtime_inspection(self):
+        with (
+            patch.object(staging, "run_path") as verifier,
+            patch.object(staging, "inspect_release_pair") as inspect,
+        ):
+            for version, code in (("3.1.74", 81), ("3.1.75", 81), ("3.1.74", 82)):
+                with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "superseded tagged candidate"):
+                    staging._inspect_running_release({"version_name": version, "version_code": code, "source_git_sha": "1" * 40})
+            verifier.assert_not_called()
+            inspect.assert_not_called()
+
+    def test_superseded_build82_is_refused_before_any_runtime_inspection(self):
+        with (
+            patch.object(staging, "run_path") as verifier,
+            patch.object(staging, "inspect_release_pair") as inspect,
+        ):
+            for version, code in (("3.1.75", 82), ("3.1.76", 82), ("3.1.75", 83)):
+                with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "superseded tagged candidate"):
+                    staging._inspect_running_release({"version_name": version, "version_code": code, "source_git_sha": "1" * 40})
+            verifier.assert_not_called()
+            inspect.assert_not_called()
+
+    def test_superseded_build79_is_refused_before_any_runtime_inspection(self):
+        with (
+            patch.object(staging, "run_path") as verifier,
+            patch.object(staging, "inspect_release_pair") as inspect,
+        ):
+            for version, code in (("3.1.72", 79), ("3.1.73", 79), ("3.1.72", 80)):
+                with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "superseded tagged candidate"):
+                    staging._inspect_running_release({"version_name": version, "version_code": code, "source_git_sha": "1" * 40})
+            verifier.assert_not_called()
+            inspect.assert_not_called()
+
+    def test_superseded_build78_is_refused_before_any_runtime_inspection(self):
+        with (
+            patch.object(staging, "run_path") as verifier,
+            patch.object(staging, "inspect_release_pair") as inspect,
+        ):
+            for version, code in (("3.1.71", 78), ("3.1.72", 78), ("3.1.71", 79)):
+                with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "superseded tagged candidate"):
+                    staging._inspect_running_release({"version_name": version, "version_code": code, "source_git_sha": "1" * 40})
+            verifier.assert_not_called()
+            inspect.assert_not_called()
+
+    def test_superseded_build76_is_refused_before_any_runtime_inspection(self):
+        with (
+            patch.object(staging, "run_path") as verifier,
+            patch.object(staging, "inspect_release_pair") as inspect,
+        ):
+            for version, code in (("3.1.69", 76), ("3.1.70", 76), ("3.1.69", 77)):
+                with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "superseded signed candidate"):
+                    staging._inspect_running_release({"version_name": version, "version_code": code, "source_git_sha": "1" * 40})
+            verifier.assert_not_called()
+            inspect.assert_not_called()
+
+    def test_superseded_build75_is_refused_before_any_runtime_inspection(self):
+        with (
+            patch.object(staging, "run_path") as verifier,
+            patch.object(staging, "inspect_release_pair") as inspect,
+        ):
+            for version, code in (("3.1.68", 75), ("3.1.69", 75), ("3.1.68", 76)):
+                with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "superseded tagged candidate"):
+                    staging._inspect_running_release({"version_name": version, "version_code": code, "source_git_sha": "1" * 40})
+            verifier.assert_not_called()
+            inspect.assert_not_called()
 
 
 if __name__ == "__main__":

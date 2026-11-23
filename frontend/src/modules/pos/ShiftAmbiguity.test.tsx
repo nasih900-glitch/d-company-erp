@@ -223,8 +223,8 @@ describe("Unknown Shift outcomes survive later refusals", () => {
     expect(document.body.textContent).toContain(
       "Your earlier request is not marked successful",
     );
-    expect(document.body.textContent).toContain("₹75.00");
-    expect(document.body.textContent).toContain("₹80.00");
+    expect(document.body.textContent).toContain("75.00");
+    expect(document.body.textContent).toContain("80.00");
     expect(document.body.textContent).toContain("Another closer");
     act(() => button("Acknowledge & refresh Shifts").click());
     expect(dismissed).toHaveBeenCalledOnce();

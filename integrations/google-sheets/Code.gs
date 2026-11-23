@@ -1,21 +1,23 @@
 /**
  * D Company ERP Mirror v1 — authenticated, append-only Google Sheets sink.
  *
- * Before deployment, add a Script Property named
- * D_COMPANY_ERP_MIRROR_HMAC_SECRET containing the same random secret used by
- * the ERP dispatcher (at least 32 UTF-8 bytes). Deploy this bound script as a
- * Web app that executes as the sheet owner.
+ * Use a private, Owner-only standalone project. Before deployment, configure
+ * D_COMPANY_ERP_SPREADSHEET_ID with the native target spreadsheet ID and
+ * D_COMPANY_ERP_MIRROR_HMAC_SECRET with the ERP dispatcher's random secret
+ * (at least 32 UTF-8 bytes). Deploy the Web app as the authorized sheet owner.
+ * Workbook sharing does not grant access to this separate script project.
  *
  * Legacy mode owns only the "ERP Mirror v1" tab. Optional daily-collections
  * mode also owns a hidden append-only log plus an explicitly configured future
  * range in "SHOP SALES REVENUE". Accepted financial events are never updated
- * or deleted. Keep unrelated Apps Script files in the bound project intact.
+ * or deleted. Keep the workbook's unrelated receipt/OCR script intact.
  */
 
 const MIRROR_SCHEMA = "erp-mirror.v1";
 const MIRROR_SCHEMA_VERSION = 1;
 const MIRROR_TAB_NAME = "ERP Mirror v1";
 const HMAC_SECRET_PROPERTY = "D_COMPANY_ERP_MIRROR_HMAC_SECRET";
+const SPREADSHEET_ID_PROPERTY = "D_COMPANY_ERP_SPREADSHEET_ID";
 const EVENT_ID_COLUMN = 4;
 const PAYLOAD_HASH_COLUMN = 25;
 const MAX_SIGNED_PAYLOAD_CHARS = 131072;
@@ -110,6 +112,26 @@ const EVENT_KEYS = [
   "payload_json", "payload_sha256", "schema", "schema_version",
   "source_id", "source_revision", "source_type",
 ];
+
+function getMirrorSpreadsheet() {
+  const id = PropertiesService.getScriptProperties().getProperty(SPREADSHEET_ID_PROPERTY);
+  if (typeof id !== "string" || !/^[A-Za-z0-9_-]{20,200}$/.test(id)) {
+    throw mirrorError(
+      "spreadsheet_not_configured",
+      "Configure the native spreadsheet ID in the private receiver project.",
+      false
+    );
+  }
+  const spreadsheet = SpreadsheetApp.openById(id);
+  if (!spreadsheet || spreadsheet.getId() !== id) {
+    throw mirrorError(
+      "spreadsheet_binding_mismatch",
+      "The receiver could not verify its configured spreadsheet.",
+      false
+    );
+  }
+  return spreadsheet;
+}
 
 function doPost(e) {
   try {
@@ -257,6 +279,7 @@ function parsePayload(event) {
 }
 
 function appendIdempotently(event, payload) {
+  if (isStaffHoursRequest(event, payload)) return appendStaffHoursIdempotently(event, payload);
   if (
     event.event_type === CONNECTION_TEST_EVENT_TYPE &&
     event.source_type === CONNECTION_TEST_SOURCE_TYPE &&
@@ -697,7 +720,7 @@ function requireSafeInteger(name, value, signed) {
 }
 
 function getOrCreateMirrorSheet() {
-  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const spreadsheet = getMirrorSpreadsheet();
   let sheet = spreadsheet.getSheetByName(MIRROR_TAB_NAME);
   if (sheet) return sheet;
   sheet = spreadsheet.insertSheet(MIRROR_TAB_NAME);
@@ -738,7 +761,7 @@ function setupDailyCollectionsProjection() {
 
 /** Read-only helper used by the owner before setting d2_formula_sha256. */
 function getDailyCollectionsD2Fingerprint() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DAILY_PROJECTION_SHEET);
+  const sheet = getMirrorSpreadsheet().getSheetByName(DAILY_PROJECTION_SHEET);
   if (!sheet) throw new Error(DAILY_PROJECTION_SHEET + " does not exist.");
   const formula = sheet.getRange("D2").getFormula();
   if (!formula) throw new Error("D2 must contain the existing ARRAYFORMULA.");
@@ -795,7 +818,7 @@ function a1ColumnNumber(a1Notation) {
 }
 
 function getOrCreateDailyLogSheet() {
-  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const spreadsheet = getMirrorSpreadsheet();
   let sheet = spreadsheet.getSheetByName(DAILY_LOG_TAB_NAME);
   if (!sheet) {
     sheet = spreadsheet.insertSheet(DAILY_LOG_TAB_NAME);
@@ -809,7 +832,7 @@ function getOrCreateDailyLogSheet() {
 }
 
 function getDailyLogSheet() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DAILY_LOG_TAB_NAME);
+  const sheet = getMirrorSpreadsheet().getSheetByName(DAILY_LOG_TAB_NAME);
   if (!sheet) {
     throw mirrorError("daily_setup_missing", "Run the daily collections owner setup first.", false);
   }
@@ -828,7 +851,7 @@ function installDailyLogOwnership(sheet) {
 }
 
 function installDailyProjection(config) {
-  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const spreadsheet = getMirrorSpreadsheet();
   const sheet = spreadsheet.getSheetByName(config.projection_sheet);
   if (!sheet) {
     throw mirrorError("projection_sheet_missing", "The configured collections sheet is missing.", false);
@@ -891,7 +914,7 @@ function assertDailyCollectionsSetup(config) {
   const logSheet = getDailyLogSheet();
   assertExactHeadersFor(logSheet, DAILY_LOG_HEADERS, DAILY_LOG_TAB_NAME);
   assertDailyLogOwnership(logSheet);
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(config.projection_sheet);
+  const sheet = getMirrorSpreadsheet().getSheetByName(config.projection_sheet);
   if (!sheet) {
     throw mirrorError("projection_sheet_missing", "The configured collections sheet is missing.", false);
   }
@@ -1267,4 +1290,344 @@ function jsonResponse(body) {
   return ContentService
     .createTextOutput(JSON.stringify(body))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// Additive staff capability. No existing financial schema or setup is changed.
+const STAFF_HOURS_CAPABILITY = "staff_hours.v1";
+const STAFF_CONNECTION_EVENT_TYPE = "staff_hours.connection_test";
+const STAFF_CONNECTION_SOURCE_TYPE = "staff_hours_configuration";
+const STAFF_FACT_EVENT_TYPE = "staff_hours.fact";
+const STAFF_CONFIG_PROPERTY = "D_COMPANY_ERP_STAFF_HOURS_CONFIG";
+const STAFF_LOG_TAB = "ERP Staff Hours v1";
+const STAFF_VIEW_TAB = "STAFF HOURS ERP";
+const STAFF_MANUAL_TAB = "STAFF HOURS MANUAL OVERRIDES";
+const STAFF_LOG_PROTECTION = "D Company ERP staff hours log v1";
+const STAFF_VIEW_PROTECTION = "D Company ERP staff hours projection v1";
+const STAFF_MANUAL_PROTECTION = "D Company ERP staff hours manual review v1";
+const STAFF_LOG_LIMIT = 20000;
+const STAFF_HEADERS = [
+  "Record Key", "Source Revision", "Record Kind", "Staff ID", "Staff", "Branch ID",
+  "Company ID", "Business Timezone", "Currency", "Clock In", "Clock Out",
+  "Actual Break Minutes", "Gross Seconds", "Work Seconds", "Monthly Base Minor",
+  "Daily Presence Minutes", "Planned Break Minutes", "Planned Work Minutes",
+  "Working Weekday Mask", "Effective From", "Pay Status", "OT Pay Minor",
+  "Payable Minor", "Needs Review", "Event ID", "Event Key", "Configuration ID",
+  "Payload SHA256", "Occurred At", "Received At", "Payload JSON",
+];
+const STAFF_VIEW_HEADERS = STAFF_HEADERS.map(function (header, index) {
+  const labels = {0: "Attendance / Policy ID", 12: "Gross Hours", 13: "Worked Hours", 14: "Monthly Base",
+    15: "Daily Presence Hours", 16: "Planned Break Hours", 17: "Planned Work Hours",
+    21: "OT Pay (draft, unset)", 22: "Payable (draft, unset)"};
+  return labels[index] || header;
+}).concat(["Effective Work Minutes", "Correction Status"]);
+const STAFF_MANUAL_HEADERS = [
+  "Attendance ID", "ERP Source Revision", "ERP Payload SHA256", "Reviewed Work Minutes", "Reason", "Notes",
+];
+const STAFF_PAYLOAD_KEYS = [
+  "payload_schema", "record_kind", "record_id", "staff_id", "staff_name", "branch_id",
+  "business_timezone", "currency", "clock_in_at", "clock_out_at", "actual_break_minutes",
+  "gross_seconds", "work_seconds", "monthly_salary_minor", "daily_presence_minutes",
+  "planned_break_minutes", "daily_work_minutes", "working_weekday_mask", "effective_from",
+  "pay_status", "overtime_pay_minor", "payable_minor", "review_required",
+];
+
+function staffError(code, message) { return mirrorError(code, message, false); }
+function staffUuid(name, value) {
+  requireText(name, value, 36, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+}
+function readStaffHoursConfig() {
+  let config;
+  try { config = JSON.parse(PropertiesService.getScriptProperties().getProperty(STAFF_CONFIG_PROPERTY) || "null"); }
+  catch (_error) { throw staffError("staff_config_invalid", "Staff-hours configuration is invalid."); }
+  if (!isObject(config) || !hasExactKeys(config, ["company_id", "projection_end_row"]) ||
+      !Number.isSafeInteger(config.projection_end_row) || config.projection_end_row < 2 ||
+      config.projection_end_row > STAFF_LOG_LIMIT) {
+    throw staffError("staff_config_invalid", "Staff-hours configuration is invalid.");
+  }
+  staffUuid("company_id", config.company_id);
+  return config;
+}
+function staffResponse(status, event, config) {
+  return jsonResponse({ok: true, status: status, event_id: event.event_id,
+    payload_sha256: event.payload_sha256, schema: MIRROR_SCHEMA,
+    capability: STAFF_HOURS_CAPABILITY, scope: {company_id: config.company_id}});
+}
+function isStaffHoursRequest(event, payload) {
+  return event.event_type.indexOf("staff_hours.") === 0 ||
+    event.source_type.indexOf("staff_hours.") === 0 || event.source_type === STAFF_CONNECTION_SOURCE_TYPE ||
+    (typeof payload.required_capability === "string" && payload.required_capability.indexOf("staff_hours.") === 0) ||
+    (typeof payload.payload_schema === "string" && payload.payload_schema.indexOf("staff_hours.") === 0);
+}
+function staffTimestampMicros(name, value) {
+  if (typeof value !== "string" || !/^(?:20\d{2}|2100)-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(value)) {
+    throw staffError("staff_timestamp_invalid", name + " must be an exact UTC timestamp.");
+  }
+  const whole = Date.parse(value.slice(0, 19) + "Z");
+  if (isNaN(whole) || new Date(whole).toISOString().slice(0, 19) !== value.slice(0, 19)) {
+    throw staffError("staff_timestamp_invalid", name + " is invalid.");
+  }
+  return whole * 1000 + Number(value.slice(20, 26));
+}
+function validateStaffFact(event, payload, config) {
+  if (!hasExactKeys(payload, STAFF_PAYLOAD_KEYS) || payload.payload_schema !== STAFF_HOURS_CAPABILITY ||
+      event.event_type !== STAFF_FACT_EVENT_TYPE || event.company_id !== config.company_id ||
+      (payload.record_kind !== "attendance" && payload.record_kind !== "policy") ||
+      event.source_type !== "staff_hours." + payload.record_kind || event.source_id !== payload.record_id ||
+      !/^\d{20}$/.test(event.source_revision) || /^0+$/.test(event.source_revision)) {
+    throw staffError("staff_payload_invalid", "Staff-hours fact identity or schema is invalid.");
+  }
+  staffUuid("record_id", payload.record_id); staffUuid("staff_id", payload.staff_id);
+  requirePlainText("staff_name", payload.staff_name, 200);
+  requirePlainText("business_timezone", payload.business_timezone, 64);
+  requirePlainText("currency", payload.currency, 8);
+  if (payload.pay_status !== "draft" || payload.overtime_pay_minor !== null || payload.payable_minor !== null ||
+      typeof payload.review_required !== "boolean") {
+    throw staffError("staff_pay_not_draft", "Staff-hours facts cannot post pay or overtime amounts.");
+  }
+  const policyFields = ["monthly_salary_minor", "daily_presence_minutes", "planned_break_minutes",
+    "daily_work_minutes", "working_weekday_mask", "effective_from"];
+  const attendanceFields = ["branch_id", "clock_in_at", "clock_out_at", "actual_break_minutes", "gross_seconds", "work_seconds"];
+  if (payload.record_kind === "attendance") {
+    for (let i = 0; i < policyFields.length; i++) {
+      if (payload[policyFields[i]] !== null) throw staffError("staff_payload_invalid", "Attendance cannot infer pay policy.");
+    }
+    staffUuid("branch_id", payload.branch_id);
+    const entered = staffTimestampMicros("clock_in_at", payload.clock_in_at);
+    if (payload.clock_out_at === null) {
+      if (payload.actual_break_minutes !== null || payload.gross_seconds !== null || payload.work_seconds !== null || !payload.review_required) {
+        throw staffError("staff_payload_invalid", "Open attendance is provisional.");
+      }
+    } else {
+      const exited = staffTimestampMicros("clock_out_at", payload.clock_out_at);
+      const gross = Math.floor((exited - entered) / 1000000);
+      if (exited < entered || payload.gross_seconds !== gross || !Number.isSafeInteger(payload.gross_seconds)) {
+        throw staffError("staff_payload_invalid", "Attendance duration is inconsistent.");
+      }
+      if (payload.actual_break_minutes === null) {
+        if (payload.work_seconds !== null || !payload.review_required) throw staffError("staff_payload_invalid", "Unknown break must remain unknown.");
+      } else {
+        const minutes = payload.actual_break_minutes;
+        if (!Number.isSafeInteger(minutes) || minutes < 0 || minutes > 1440 || minutes * 60 > gross ||
+            payload.work_seconds !== gross - minutes * 60 || payload.review_required) {
+          throw staffError("staff_payload_invalid", "Explicit attendance break/work duration is inconsistent.");
+        }
+      }
+    }
+  } else {
+    for (let i = 0; i < attendanceFields.length; i++) {
+      if (payload[attendanceFields[i]] !== null) throw staffError("staff_payload_invalid", "Policy cannot invent attendance.");
+    }
+    for (let i = 0; i < policyFields.length - 1; i++) requireSafeInteger(policyFields[i], payload[policyFields[i]], false);
+    if (payload.monthly_salary_minor > 1000000000000 || payload.daily_presence_minutes < 1 || payload.daily_presence_minutes > 1440 ||
+        payload.planned_break_minutes >= payload.daily_presence_minutes ||
+        payload.daily_work_minutes !== payload.daily_presence_minutes - payload.planned_break_minutes ||
+        payload.working_weekday_mask < 1 || payload.working_weekday_mask > 127 || !payload.review_required) {
+      throw staffError("staff_payload_invalid", "Draft work policy is inconsistent.");
+    }
+    requireIsoDate("effective_from", payload.effective_from);
+  }
+}
+function staffRow(event, payload, receivedAt) {
+  const cell = function (value) { return value === null ? "" : value; };
+  return [event.source_type + ":" + event.source_id, event.source_revision, payload.record_kind,
+    payload.staff_id, safeText(payload.staff_name), cell(payload.branch_id), event.company_id,
+    safeText(payload.business_timezone), safeText(payload.currency), cell(payload.clock_in_at), cell(payload.clock_out_at),
+    cell(payload.actual_break_minutes), cell(payload.gross_seconds), cell(payload.work_seconds), cell(payload.monthly_salary_minor),
+    cell(payload.daily_presence_minutes), cell(payload.planned_break_minutes), cell(payload.daily_work_minutes),
+    cell(payload.working_weekday_mask), cell(payload.effective_from), "draft", "", "", payload.review_required,
+    event.event_id, safeText(event.event_key), event.configuration_id, event.payload_sha256,
+    event.occurred_at, receivedAt, event.payload_json];
+}
+/** Same decision contract as the projection formula, independently executable in tests. */
+function staffEffectiveWork(row, manualRows) {
+  if (row[2] !== "attendance") return {minutes: null, status: "Draft policy"};
+  const known = row[23] === false && Number.isSafeInteger(row[13]) && row[13] >= 0;
+  const fallback = known ? row[13] / 60 : null;
+  const id = String(row[0]).slice(-36).toLowerCase();
+  const matching = manualRows.filter(function (manual) { return String(manual[0]).toLowerCase() === id; });
+  if (matching.length === 0) return {minutes: fallback, status: known ? "ERP fact" : "ERP unknown"};
+  const current = matching.filter(function (manual) {
+    return String(manual[1]) === String(row[1]) && String(manual[2]).toLowerCase() === String(row[27]);
+  });
+  if (current.length > 1) return {minutes: fallback, status: "Ambiguous correction"};
+  const manual = current.length === 1 ? current[0] : matching[0];
+  if (!/^\d{20}$/.test(String(manual[1])) || !/^[a-f0-9]{64}$/.test(String(manual[2]))) {
+    return {minutes: fallback, status: "Invalid correction"};
+  }
+  if (String(manual[1]) !== String(row[1]) || String(manual[2]) !== String(row[27])) {
+    return {minutes: fallback, status: "Stale correction"};
+  }
+  const minutes = manual[3];
+  const numeric = typeof minutes === "number" ? Number.isSafeInteger(minutes) :
+    typeof minutes === "string" && /^(0|[1-9][0-9]{0,4})$/.test(minutes);
+  if (!numeric || Number(minutes) < 0 || Number(minutes) > 10080 || typeof manual[4] !== "string" ||
+      manual[4].trim().length === 0 || manual[4].length > 500) {
+    return {minutes: fallback, status: "Invalid correction"};
+  }
+  return {minutes: Number(minutes), status: "Manual correction"};
+}
+function staffProjectionFormula(config) {
+  const log = quoteSheetName(STAFF_LOG_TAB);
+  const manual = quoteSheetName(STAFF_MANUAL_TAB);
+  const range = manual + "!A2:F" + config.projection_end_row;
+  const columns = [];
+  const policyUnits = {15: 100, 16: 60, 17: 60, 18: 60};
+  for (let column = 1; column <= STAFF_HEADERS.length; column++) {
+    const value = "INDEX(latest,0," + column + ")";
+    if (column === 1) columns.push("ids");
+    else if (column === 22 || column === 23) columns.push('IF(kind<>"", "", "")');
+    else if (column >= 15 && column <= 20) columns.push('IF(kind="policy",' + value + (policyUnits[column] ? "/" + policyUnits[column] : "") + ',"")');
+    else if (column === 6 || column === 10) columns.push('IF(kind="attendance",' + value + ',"")');
+    else if (column === 11) columns.push('IF(closed,' + value + ',"")');
+    else if (column === 12) columns.push('IF(known,' + value + ',"")');
+    else if (column === 13) columns.push('IF(closed,' + value + '/3600,"")');
+    else if (column === 14) columns.push('IF(known,' + value + '/3600,"")');
+    else columns.push(value);
+  }
+  columns.push('IF(kind="attendance",IF(status="Manual correction",minutes,IF(known,work/60,"")),"")');
+  columns.push("status");
+  const lookup = function (column) {
+    return 'IF(cmatches>0,IFERROR(VLOOKUP(keys,manualdata,' + (column + 1) + ',FALSE),""),' +
+      'IFERROR(VLOOKUP(ids,' + range + ',' + column + ',FALSE),""))';
+  };
+  return "=IFNA(ARRAYFORMULA(LET(log,FILTER(" + log + "!A2:AE," + log + "!A2:A<>\"\"," + log +
+    "!G2:G=\"" + config.company_id + "\",REGEXMATCH(" + log +
+    "!AD2:AD,\"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$\"))," +
+    "sorted,SORT(log,1,TRUE,2,FALSE),latest,SORTN(sorted,9^9,2,1,TRUE)," +
+    'kind,INDEX(latest,0,3),ids,RIGHT(INDEX(latest,0,1),36),revision,TO_TEXT(INDEX(latest,0,2)),' +
+    'hash,TO_TEXT(INDEX(latest,0,28)),work,INDEX(latest,0,14),' +
+    'known,(kind="attendance")*(INDEX(latest,0,24)=FALSE)*ISNUMBER(work)*(work>=0)*(IFERROR(INT(work),-1)=work),' +
+    'closed,(kind="attendance")*REGEXMATCH(TO_TEXT(INDEX(latest,0,11)),"Z$"),' +
+    'matches,COUNTIF(' + manual + '!A2:A' + config.projection_end_row + ',ids),' +
+    'manualdata,IFERROR(FILTER({LOWER(IFERROR(' + manual + '!A2:A' + config.projection_end_row + ',""))&"|"&IFERROR(' + manual + '!B2:B' + config.projection_end_row + ',"")&"|"&LOWER(IFERROR(' + manual + '!C2:C' + config.projection_end_row + ',"")),IFERROR(' + range + ',"")},IFERROR(' + manual + '!A2:A' + config.projection_end_row + ',"")<>""),{"","","","","","",""}),' +
+    'manualkeys,INDEX(manualdata,0,1),keys,LOWER(ids)&"|"&revision&"|"&hash,' +
+    'cmatches,MAP(keys,LAMBDA(currentkey,SUM(N(EXACT(manualkeys,currentkey))))),' +
+    'mrevision,' + lookup(2) + ',mhash,' + lookup(3) + ',mminutes,' + lookup(4) + ',reason,' + lookup(5) + ',' +
+    'proof,REGEXMATCH(TO_TEXT(mrevision),"^[0-9]{20}$")*REGEXMATCH(TO_TEXT(mhash),"^[a-f0-9]{64}$"),' +
+    'current,EXACT(TO_TEXT(mrevision),revision)*EXACT(TO_TEXT(mhash),hash),' +
+    'minutes,IFERROR(VALUE(mminutes),-1),' +
+    'validminutes,IF(ISNUMBER(mminutes),(IFERROR(INT(mminutes),-1)=mminutes),REGEXMATCH(TO_TEXT(mminutes),"^(0|[1-9][0-9]{0,4})$"))*(minutes>=0)*(minutes<=10080),' +
+    'validreason,ISTEXT(reason)*(LEN(TRIM(reason))>0)*(LEN(reason)<=500),' +
+    'status,IF(kind<>"attendance","Draft policy",IF(matches=0,IF(known,"ERP fact","ERP unknown"),' +
+    'IF(cmatches>1,"Ambiguous correction",IF(proof=0,"Invalid correction",IF(current=0,"Stale correction",' +
+    'IF(validminutes*validreason,"Manual correction","Invalid correction")))))),' +
+    "ARRAY_CONSTRAIN({" + columns.join(",") + "}," + (config.projection_end_row - 1) + ",33))),)";
+}
+function staffSheet(name, headers, create) {
+  const book = getMirrorSpreadsheet();
+  let sheet = book.getSheetByName(name);
+  if (!sheet && create) {
+    sheet = book.insertSheet(name);
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.setFrozenRows(1);
+  }
+  if (!sheet) throw staffError("staff_setup_missing", "Run the staff-hours Owner setup first.");
+  assertExactHeadersFor(sheet, headers, name);
+  return sheet;
+}
+function staffProtectSheet(sheet, description, hide) {
+  const protections = sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET);
+  let protection = null;
+  for (let i = 0; i < protections.length; i++) if (protections[i].getDescription() === description) protection = protections[i];
+  if (!protection) protection = sheet.protect().setDescription(description);
+  lockProtectionToOwner(protection);
+  if (hide && !sheet.isSheetHidden()) sheet.hideSheet();
+}
+function assertStaffHoursSetup(config) {
+  const log = staffSheet(STAFF_LOG_TAB, STAFF_HEADERS, false);
+  const view = staffSheet(STAFF_VIEW_TAB, STAFF_VIEW_HEADERS, false);
+  const manual = staffSheet(STAFF_MANUAL_TAB, STAFF_MANUAL_HEADERS, false);
+  const range = view.getRange(2, 1, config.projection_end_row - 1, STAFF_VIEW_HEADERS.length);
+  if (manual.getLastRow() > config.projection_end_row) throw staffError("staff_manual_capacity_exceeded", "Manual staff corrections exceed the supported range.");
+  if (!log.isSheetHidden() || !hasOwnedProtection(log, STAFF_LOG_PROTECTION, null) ||
+      !hasOwnedProtection(view, STAFF_VIEW_PROTECTION, range.getA1Notation()) ||
+      !hasOwnedProtection(manual, STAFF_MANUAL_PROTECTION, null) ||
+      view.getMaxRows() < config.projection_end_row || view.getRange("A2").getFormula() !== staffProjectionFormula(config) ||
+      /^#/.test(view.getRange("A2").getDisplayValue())) {
+    throw staffError("staff_projection_not_verified", "Staff-hours log/projection/manual-review ownership is not verified.");
+  }
+  if (log.getLastRow() > STAFF_LOG_LIMIT) throw staffError("staff_capacity_exceeded", "Staff-hours log limit exceeded.");
+  if (log.getLastRow() >= 2) {
+    const companies = log.getRange(2, 7, log.getLastRow() - 1, 1).getDisplayValues();
+    for (let i = 0; i < companies.length; i++) {
+      if (String(companies[i][0]) !== config.company_id) throw staffError("staff_scope_mismatch", "Staff-hours log company changed.");
+    }
+  }
+  return log;
+}
+function setupStaffHoursProjection() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw mirrorError("lock_timeout", "The mirror is busy; retry later.", true);
+  try {
+    const config = readStaffHoursConfig();
+    const log = staffSheet(STAFF_LOG_TAB, STAFF_HEADERS, true);
+    const view = staffSheet(STAFF_VIEW_TAB, STAFF_VIEW_HEADERS, true);
+    const manual = staffSheet(STAFF_MANUAL_TAB, STAFF_MANUAL_HEADERS, true);
+    if (manual.getMaxRows() < config.projection_end_row) manual.insertRowsAfter(manual.getMaxRows(), config.projection_end_row - manual.getMaxRows());
+    // Preserve exact source-revision/hash text and all existing manual values.
+    manual.getRange(2, 1, config.projection_end_row - 1, 3).setNumberFormat("@");
+    if (view.getMaxRows() < config.projection_end_row) view.insertRowsAfter(view.getMaxRows(), config.projection_end_row - view.getMaxRows());
+    const range = view.getRange(2, 1, config.projection_end_row - 1, STAFF_VIEW_HEADERS.length);
+    const formula = view.getRange("A2").getFormula();
+    if (!formula) {
+      if (!range.isBlank()) throw staffError("staff_projection_collision", "Staff-hours projection contains manual values.");
+      view.getRange("A2").setFormula(staffProjectionFormula(config));
+      SpreadsheetApp.flush();
+    } else if (formula !== staffProjectionFormula(config)) throw staffError("staff_projection_not_verified", "Staff-hours formula changed.");
+    staffProtectSheet(log, STAFF_LOG_PROTECTION, true);
+    staffProtectSheet(manual, STAFF_MANUAL_PROTECTION, false);
+    protectRange(view, range, STAFF_VIEW_PROTECTION);
+    assertStaffHoursSetup(config);
+    return {ok: true, capability: STAFF_HOURS_CAPABILITY, scope: {company_id: config.company_id}};
+  } finally { lock.releaseLock(); }
+}
+function appendStaffHoursIdempotently(event, payload) {
+  const config = readStaffHoursConfig();
+  if (event.company_id !== config.company_id) throw staffError("staff_scope_mismatch", "Staff-hours company does not match.");
+  const log = assertStaffHoursSetup(config);
+  if (event.event_type === STAFF_CONNECTION_EVENT_TYPE) {
+    if (event.source_type !== STAFF_CONNECTION_SOURCE_TYPE || event.source_revision !== event.configuration_id ||
+        !hasExactKeys(payload, ["required_capability", "scope", "status"]) ||
+        payload.required_capability !== STAFF_HOURS_CAPABILITY || payload.status !== "test" ||
+        !isObject(payload.scope) || !hasExactKeys(payload.scope, ["company_id"]) || payload.scope.company_id !== config.company_id) {
+      throw staffError("staff_connection_invalid", "Staff-hours capability test does not match.");
+    }
+    staffUuid("source_id", event.source_id);
+    return staffResponse("accepted", event, config);
+  }
+  validateStaffFact(event, payload, config);
+  const existing = findTextRow(log, 25, event.event_id);
+  if (existing !== null) {
+    const stored = log.getRange(existing, 1, 1, STAFF_HEADERS.length).getValues()[0];
+    const receivedAt = stored[29];
+    if (!isCanonicalIsoTimestamp(receivedAt) || !rowsEqual(stored, staffRow(event, payload, receivedAt))) {
+      throw staffError("staff_event_conflict", "The retained staff-hours event differs or is incomplete.");
+    }
+    return staffResponse("duplicate", event, config);
+  }
+  const key = event.source_type + ":" + event.source_id;
+  const keys = {};
+  if (log.getLastRow() >= 2) {
+    const previous = log.getRange(2, 1, log.getLastRow() - 1, STAFF_HEADERS.length).getValues();
+    for (let i = 0; i < previous.length; i++) {
+      if (String(previous[i][6]) !== config.company_id) throw staffError("staff_scope_mismatch", "Staff-hours log company changed.");
+      keys[String(previous[i][0])] = true;
+      if (String(previous[i][0]) === key && String(previous[i][1]) === event.source_revision) {
+        throw staffError("staff_revision_conflict", "This staff-hours source revision already exists.");
+      }
+    }
+  }
+  keys[key] = true;
+  if (Object.keys(keys).length > config.projection_end_row - 1 || log.getLastRow() >= STAFF_LOG_LIMIT) {
+    throw staffError("staff_capacity_exceeded", "The staff-hours log/projection has no remaining capacity.");
+  }
+  const next = log.getLastRow() + 1;
+  if (next > log.getMaxRows()) {
+    log.insertRowsAfter(log.getMaxRows(), Math.min(1000, STAFF_LOG_LIMIT - log.getMaxRows()));
+  }
+  log.getRange(next, 1, 1, 11).setNumberFormat("@");
+  log.getRange(next, 20, 1, 2).setNumberFormat("@");
+  log.getRange(next, 25, 1, 7).setNumberFormat("@");
+  appendVerifiedRow(log, staffRow(event, payload, new Date().toISOString()), STAFF_HEADERS.length);
+  return staffResponse("accepted", event, config);
 }

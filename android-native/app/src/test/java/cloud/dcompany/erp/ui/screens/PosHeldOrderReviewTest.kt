@@ -26,6 +26,7 @@ class PosHeldOrderReviewTest {
         assertEquals("order-1", review.orderId)
         assertEquals("shift-1", review.shiftIdAtReview)
         assertEquals("PS5 Station 2", review.sourceLabel)
+        assertEquals("session", review.type)
         assertEquals(20_000L, review.subtotalMinor)
         assertEquals(500L, review.lineOrMembershipDiscountMinor)
         assertEquals(2_000L, review.manualDiscountMinor)
@@ -104,7 +105,7 @@ class PosHeldOrderReviewTest {
         id = "order-1",
         invoiceNo = "INV-101",
         status = "held",
-        type = "gaming",
+        type = "session",
         sourceLabel = null,
         subtotalMinor = 20_000L,
         discountMinor = 3_500L,

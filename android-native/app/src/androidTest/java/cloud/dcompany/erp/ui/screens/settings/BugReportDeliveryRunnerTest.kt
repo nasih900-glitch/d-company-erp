@@ -43,13 +43,14 @@ class BugReportDeliveryRunnerTest {
     }
 
     @Test
-    fun inFlightAccountSwitchStillUsesTheCapturedEmployeeABearer() = runBlocking {
+    fun inFlightAccountSwitchKeepsCapturedABearerAndPreservesUnknownOwnedRow() = runBlocking {
         insertPendingReport("report-a")
         val bearerA = jwt("user-a", "company-1", "branch-1", "a")
         val bearerB = jwt("user-b", "company-1", "branch-1", "b")
         var currentBearer = bearerA
         val suppliedBearers = mutableListOf<String>()
         val runner = BugReportDeliveryRunner(
+            commitOwned = { write -> write() },
             dao = database.bugReportDao(),
             authority = BugReportRunAuthority(ownerA) { currentBearer },
             apiForBearer = { supplied ->
@@ -75,7 +76,7 @@ class BugReportDeliveryRunnerTest {
         assertEquals(listOf(bearerA), suppliedBearers)
         assertTrue(outcome.identityChanged)
         assertEquals(
-            BugReportOutboxState.SENT,
+            BugReportOutboxState.PENDING,
             database.bugReportDao().observeForOwner(ownerA.companyId, ownerA.userId).first().single().state,
         )
     }
@@ -86,6 +87,7 @@ class BugReportDeliveryRunnerTest {
         val bearerB = jwt("user-b", "company-1", "branch-1", "b")
         var apiCreated = false
         val runner = BugReportDeliveryRunner(
+            commitOwned = { write -> write() },
             dao = database.bugReportDao(),
             authority = BugReportRunAuthority(ownerA) { bearerB },
             apiForBearer = {
@@ -111,6 +113,7 @@ class BugReportDeliveryRunnerTest {
         val bearerA = jwt("user-a", "company-1", "branch-1", "a")
         var createCount = 0
         val runner = BugReportDeliveryRunner(
+            commitOwned = { write -> write() },
             dao = database.bugReportDao(),
             authority = BugReportRunAuthority(ownerA) { bearerA },
             apiForBearer = {
@@ -175,6 +178,7 @@ class BugReportDeliveryRunnerTest {
         val bearerA = jwt("user-a", "company-1", "branch-1", "a")
         var uploadCount = 0
         val runner = BugReportDeliveryRunner(
+            commitOwned = { write -> write() },
             dao = dao,
             authority = BugReportRunAuthority(ownerA) { bearerA },
             apiForBearer = {
