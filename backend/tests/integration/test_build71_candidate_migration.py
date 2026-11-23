@@ -9,6 +9,9 @@ import io
 import json
 import os
 from collections import Counter
+from collections.abc import Callable
+from copy import deepcopy
+from functools import partial
 from pathlib import Path
 from runpy import run_path
 import shutil
@@ -98,9 +101,10 @@ def _client_command(database_url: str, command: str, *arguments: str) -> subproc
     )
 
 
-def _inventory(database_url: str) -> dict:
+def _inventory(database_url: str, *, grn_backfill: bool = False) -> dict:
     result = _client_command(
         database_url, "psql", "-X", "--tuples-only", "--no-align",
+        *(["--set", "build72_grn_observation=on"] if grn_backfill else []),
         "--file", str(ROOT / "infra/scripts/verify-build55-transition-state.sql"),
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -192,10 +196,17 @@ def _restore_catalogue(rows: list[str]) -> list[str]:
     return run_path(str(ROOT / "infra/scripts/verify-build72-transition.py"))["restore_catalogue"](rows)
 
 
-def _assert_retained(before: dict, after: dict, columns: dict, projection: dict, work: dict, database_url: str, revision: str):
+def _assert_retained(before: dict, after: dict, columns: dict, projection: dict, work: dict,
+                     database_url: str, revision: str, *, grn_backfill: Callable[[dict, dict], None] | None = None):
     assert after["database_revision"] == revision
-    assert after["sequences"] == before["sequences"]
-    assert _legacy_projection(database_url, columns) == projection
+    if grn_backfill is None:
+        assert after["sequences"] == before["sequences"]
+        assert _legacy_projection(database_url, columns) == projection
+    else:
+        grn_backfill(before, after)
+        assert _legacy_projection(database_url, {k: v for k, v in columns.items() if k != "audit_log"}) == {
+            k: v for k, v in projection.items() if k != "audit_log"
+        }
     assert _work_evidence(database_url) == work
     current_columns = _columns(database_url)
     # No 0096-0101 migration adds a column to a Build71 table. Keep this exact
@@ -210,7 +221,8 @@ def _assert_retained(before: dict, after: dict, columns: dict, projection: dict,
     }
     assert retained_column_catalogue == baseline_column_catalogue
     assert set(after["tables"]) == set(before["tables"]) | NEW_LEDGERS[revision]
-    for table in NEW_LEDGERS[revision]:
+    populated_ledgers = {"grn_action_decisions", "grn_completion_proofs"} if grn_backfill is not None else set()
+    for table in NEW_LEDGERS[revision] - populated_ledgers:
         assert after["tables"][table] == {"row_count": 0, "row_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
 
 
@@ -530,7 +542,8 @@ NEW_LEDGERS["0104"] = NEW_LEDGERS["0103"]
 NEW_LEDGERS["0105"] = NEW_LEDGERS["0104"] | {REPORT_TABLE}
 
 
-def _assert_0103_catalogue_is_additive(before: dict, after: dict) -> None:
+def _assert_0103_catalogue_is_additive(before: dict, after: dict, *,
+                                       grn_backfill: Callable[[dict, dict], None] | None = None) -> None:
     tables = {"grn_action_decisions", "grn_completion_proofs", "grn_recovery_sessions"}
     sources = {
         "grns", "purchase_orders", "grn_lines", "purchase_order_lines", "batches",
@@ -565,12 +578,16 @@ def _assert_0103_catalogue_is_additive(before: dict, after: dict) -> None:
     assert before["database_revision"] == "0102"
     assert after["database_revision"] == "0103"
     assert set(after["tables"]) == set(before["tables"]) | tables
-    original = {name: value for name, value in before["tables"].items()
-                if name != "alembic_version"}
+    expected_changes = {"alembic_version"}
+    if grn_backfill is None:
+        assert after["sequences"] == before["sequences"]
+    else:
+        grn_backfill(before, after)
+        expected_changes.add("audit_log")
+    original = {name: value for name, value in before["tables"].items() if name not in expected_changes}
     assert {name: after["tables"][name] for name in original} == original
     assert before["tables"]["alembic_version"]["row_count"] == 1
     assert after["tables"]["alembic_version"]["row_count"] == 1
-    assert after["sequences"] == before["sequences"]
     old_rows, new_rows = set(before["schema_catalog_rows"]), set(after["schema_catalog_rows"])
     assert old_rows <= new_rows
     observed_functions = set()
@@ -657,18 +674,85 @@ def _retained_fleet(database_url: str) -> dict:
     return json.loads(result.stdout)
 
 
+def _assert_grn_backfill_fail_closed(source, before, fleet_before, migrated, fleet_after, verifier, keyless_id):
+    verify = verifier["verify_after"]
+    evidence = migrated["legacy_grn_backfill"]
+    sequence = before["sequences"]["audit_log_id_seq"]
+    count = before["legacy_grn_backfill"]["row_count"]
+    assert not sequence["is_called"]
+    assert evidence["audit_append"]["row_count"] == count
+    assert evidence["audit_append"]["first_id"] == sequence["last_value"]
+    assert evidence["audit_append"]["last_id"] == sequence["last_value"] + count - 1
+    assert evidence["audit_prefix"] == before["legacy_grn_backfill"]["audit_prefix"]
+    # A called sequence ending immediately before the same first ID must also pass.
+    called = deepcopy(before)
+    called["sequences"]["audit_log_id_seq"].update(last_value=sequence["last_value"] - 1, is_called=True)
+    verify(called, fleet_before, migrated, fleet_after)
+    for partition, field, value, message in (
+        ("audit_prefix", "row_sha256", "1" * 64, "retained audit prefix changed"),
+        ("audit_prefix", "high_water", sequence["last_value"], "retained audit prefix changed"),
+        ("audit_append", "row_sha256", "2" * 64, "unexpected migration audit append"),
+        ("audit_append", "first_id", sequence["last_value"] + 1, "unexpected migration audit append"),
+        ("audit_append", "timestamp_count", 2, "unexpected migration audit append"),
+    ):
+        changed = deepcopy(migrated)
+        changed["legacy_grn_backfill"][partition][field] = value
+        with pytest.raises(ValueError, match=message):
+            verify(before, fleet_before, changed, fleet_after)
+    for ledger in ("grn_action_decisions", "grn_completion_proofs"):
+        changed = deepcopy(migrated)
+        changed["tables"][ledger]["row_sha256"] = "3" * 64
+        with pytest.raises(ValueError, match="exact retained source projection"):
+            verify(before, fleet_before, changed, fleet_after)
+    changed = deepcopy(migrated)
+    changed["sequences"]["audit_log_id_seq"]["cache_size"] += 1
+    with pytest.raises(ValueError, match="unexpected audit or other sequence change"):
+        verify(before, fleet_before, changed, fleet_after)
+
+    with psycopg.connect(_sync_url(source)) as connection:
+        assert connection.execute(
+            "SELECT g.idempotency_key,d.id,p.id FROM grns g "
+            "LEFT JOIN grn_action_decisions d ON d.id=g.id LEFT JOIN grn_completion_proofs p ON p.id=g.id "
+            "WHERE g.id=%s", (keyless_id,),
+        ).fetchone() == (None, None, None)
+        connection.execute(
+            "INSERT INTO audit_log(company_id, action, entity_type, entity_id) "
+            "SELECT company_id, 'test_unrelated', 'GRN', id::text FROM grn_action_decisions LIMIT 1"
+        )
+    unrelated = _inventory(source, grn_backfill=True)
+    with pytest.raises(ValueError, match="retained audit prefix changed|unexpected audit or other sequence change"):
+        verify(before, fleet_before, unrelated, fleet_after)
+
+
 @pytest.mark.integration
-def test_build72_preserves_populated_build71_restore_and_empty_roundtrip(tmp_path):
+@pytest.mark.parametrize("keyed_grns", [False, True], ids=["empty-grn-roundtrip", "historical-grns"])
+def test_build72_preserves_populated_build71_restore_and_empty_roundtrip(tmp_path, keyed_grns):
     old_backend = _export_build71_backend(tmp_path / "build71-current")
+    inventory = partial(_inventory, grn_backfill=True)
     with (
         _disposable_database("erp_grn_recovery_20261113_b71_source") as source,
         _disposable_database("erp_grn_recovery_20261113_b103_restore") as restored,
     ):
         verifier = run_path(str(ROOT / "infra/scripts/verify-build72-transition.py"))
         _populate_build71(old_backend, source, legacy_pending=True)
-        before = _inventory(source)
+        if keyed_grns:
+            from tests.integration.test_grn_command_migration import ZERO_FIXTURE
+
+            _run_feature(source, "tests/integration/test_inventory_purchase_accounting.py",
+                         "grn_fifo_sale_finance_and_supplier_settlement_are_exact_and_idempotent", backend=old_backend)
+            zero_fixture = "tests/integration/test_grn_migration_zero_fixture.py"
+            (old_backend / zero_fixture).write_text(ZERO_FIXTURE)
+            _run_feature(source, zero_fixture, "legacy_zero_provenance", backend=old_backend)
+            with psycopg.connect(_sync_url(source)) as connection:
+                # The historical fixture creates posted receipts, a keyed zero
+                # receipt with unknown provenance, and a keyless zero receipt.
+                [(keyless_id,)] = connection.execute("SELECT id FROM grns WHERE idempotency_key IS NULL").fetchall()
+                connection.execute("SELECT setval('audit_log_id_seq', (SELECT max(id)+7 FROM audit_log), false)")
+        before = inventory(source)
+        assert _inventory(source) == {key: value for key, value in before.items() if key != "legacy_grn_backfill"}
         fleet_before = _retained_fleet(source)
         verifier["verify_before"](before, fleet_before)
+        assert before["legacy_grn_backfill"]["row_count"] == (4 if keyed_grns else 0)
         columns = _columns(source)
         projection = _legacy_projection(source, columns)
         work = _work_evidence(source)
@@ -683,7 +767,7 @@ def test_build72_preserves_populated_build71_restore_and_empty_roundtrip(tmp_pat
         recovered = _client_command(restored, "pg_restore", "--no-owner", "--no-privileges",
             "--single-transaction", "--exit-on-error", str(backup))
         assert recovered.returncode == 0, recovered.stderr
-        baseline = _inventory(restored)
+        baseline = inventory(restored)
         verifier["verify_restore"](before, baseline)
         verifier["verify_same_fleet"](fleet_before, _retained_fleet(restored))
         assert baseline["tables"] == before["tables"]
@@ -693,19 +777,20 @@ def test_build72_preserves_populated_build71_restore_and_empty_roundtrip(tmp_pat
         assert baseline["trigger_catalog_rows"] == before["trigger_catalog_rows"]
         assert _work_evidence(restored) == work
         assert _run_alembic(restored, "upgrade", "0102").returncode == 0
-        at102 = _inventory(restored)
+        at102 = inventory(restored)
         _assert_retained(baseline, at102, columns, projection, work, restored, "0102")
         assert _run_alembic(restored, "upgrade", "0103").returncode == 0
-        at103 = _inventory(restored)
-        _assert_retained(baseline, at103, columns, projection, work, restored, "0103")
-        _assert_0103_catalogue_is_additive(at102, at103)
+        at103 = inventory(restored)
+        backfill = verifier["verify_legacy_grn_backfill"]
+        _assert_retained(baseline, at103, columns, projection, work, restored, "0103", grn_backfill=backfill)
+        _assert_0103_catalogue_is_additive(at102, at103, grn_backfill=backfill)
         assert _run_alembic(restored, "upgrade", "0104").returncode == 0
-        at104 = _inventory(restored)
-        _assert_retained(baseline, at104, columns, projection, work, restored, "0104")
+        at104 = inventory(restored)
+        _assert_retained(baseline, at104, columns, projection, work, restored, "0104", grn_backfill=backfill)
         _assert_0104_stock_guard_delta(at103, at104)
         assert _run_alembic(restored, "upgrade", "0105").returncode == 0
-        at105 = _inventory(restored)
-        _assert_retained(baseline, at105, columns, projection, work, restored, "0105")
+        at105 = inventory(restored)
+        _assert_retained(baseline, at105, columns, projection, work, restored, "0105", grn_backfill=backfill)
         _assert_0105_report_delta(at104, at105)
         for previous, following in ((at103, at104), (at104, at105)):
             assert all(following["tables"][table] == entry for table, entry in previous["tables"].items()
@@ -713,7 +798,7 @@ def test_build72_preserves_populated_build71_restore_and_empty_roundtrip(tmp_pat
         # The backup/restore probe can render known equivalent CHECK
         # spellings. Exercise the installer against the raw live-shaped delta.
         assert _run_alembic(source, "upgrade", "0105").returncode == 0
-        migrated = _inventory(source)
+        migrated = inventory(source)
         fleet_after = _retained_fleet(source)
         verifier["verify_after"](before, fleet_before, migrated, fleet_after)
         modified = {**migrated, "tables": {**migrated["tables"], "payments": migrated["tables"]["attendance"]}}
@@ -722,15 +807,21 @@ def test_build72_preserves_populated_build71_restore_and_empty_roundtrip(tmp_pat
         with pytest.raises(ValueError, match="fleet changed"):
             verifier["verify_after"](before, fleet_before, migrated,
                                     {**fleet_after, "all_installations_identity_sha256": "f" * 64})
+        if keyed_grns:
+            _assert_grn_backfill_fail_closed(source, before, fleet_before, migrated, fleet_after, verifier, keyless_id)
+            refused = _run_alembic(restored, "downgrade", "0095")
+            assert refused.returncode != 0 and "GRN command evidence prevents downgrade" in refused.stderr
+            assert inventory(restored) == at105
+            return
         assert _run_alembic(restored, "downgrade", "0095").returncode == 0
-        at95 = _inventory(restored)
+        at95 = inventory(restored)
         assert at95["database_revision"] == "0095"
         for key in ("tables", "sequences", "trigger_catalog_rows"):
             assert at95[key] == baseline[key], key
         assert _restore_catalogue(at95["schema_catalog_rows"]) == _restore_catalogue(
             baseline["schema_catalog_rows"])
         assert _run_alembic(restored, "upgrade", "0105").returncode == 0
-        assert _inventory(restored) == at105
+        assert inventory(restored) == at105
         assert _legacy_projection(restored, columns) == projection
         assert _work_evidence(restored) == work
         (tmp_path / "build72-rehearsal-result.json").write_text(json.dumps({

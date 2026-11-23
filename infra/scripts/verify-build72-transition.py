@@ -15,6 +15,9 @@ PREVIOUS = run_path(str(SCRIPTS / "verify-build66-transition.py"))
 FLEET = run_path(str(SCRIPTS / "verify-build72-readiness.py"))
 REQUIRE = PREVIOUS["require"]
 EMPTY_SHA256 = PREVIOUS["EMPTY_SHA256"]
+EMPTY_INVENTORY = {"row_count": 0, "row_sha256": EMPTY_SHA256}
+GRN_LEDGERS = {"grn_action_decisions": "decision_sha256", "grn_completion_proofs": "proof_sha256"}
+AUDIT_SEQUENCE = "audit_log_id_seq"
 NEW_TABLES = {
     "gaming_retained_bill_corrections", "grn_action_decisions", "grn_completion_proofs", "grn_recovery_sessions",
     "paid_bill_action_decisions", "paid_bill_amendment_intents", "paid_bill_recovery_sessions",
@@ -73,6 +76,21 @@ def verify_before(before, fleet):
             "unexpected prior application tables")
     REQUIRE(fleet["installation_row_count"] == before["tables"]["client_installations"]["row_count"],
             "fleet differs from the stopped database inventory")
+    verify_prior_audit(before)
+
+
+def verify_prior_audit(before):
+    evidence = before["legacy_grn_backfill"]
+    prefix = evidence["audit_prefix"]
+    inventory = before["tables"]["audit_log"]
+    high_water = prefix["high_water"]
+    REQUIRE(prefix == {**inventory, "high_water": high_water}
+            and (high_water is None if inventory["row_count"] == 0 else type(high_water) is int),
+            "stopped audit prefix differs from the complete audit inventory")
+    REQUIRE(evidence["audit_append"] == {**EMPTY_INVENTORY, "first_id": None, "last_id": None,
+                "timestamp_count": 0, "timestamps_observed": True}, "stopped audit already has an append partition")
+    for key in (*GRN_LEDGERS.values(), "audit_sha256"):
+        PREVIOUS["row_digest"]({"row_count": evidence["row_count"], "row_sha256": evidence[key]})
 
 
 def verify_same_fleet(before, after):
@@ -88,8 +106,49 @@ def verify_restore(before, restored):
             "restore occurred on a different PostgreSQL data cluster")
     REQUIRE(restore_catalogue(before["schema_catalog_rows"]) == restore_catalogue(restored["schema_catalog_rows"]),
             "restored schema differs from the quiesced database")
-    keys = ("tables", "sequences", "gaming_sessions_legacy_projection", "trigger_catalog_rows")
+    verify_prior_audit(before)
+    verify_prior_audit(restored)
+    keys = ("tables", "sequences", "gaming_sessions_legacy_projection", "trigger_catalog_rows", "legacy_grn_backfill")
     REQUIRE(all(before[key] == restored[key] for key in keys), "restored database rows, sequences or triggers differ")
+
+
+def verify_legacy_grn_backfill(before, after):
+    old = before["legacy_grn_backfill"]
+    new = after["legacy_grn_backfill"]
+    source_keys = ("row_count", *GRN_LEDGERS.values(), "audit_sha256")
+    REQUIRE(all(old[key] == new[key] for key in source_keys), "retained GRN source projection changed")
+    REQUIRE(old["audit_prefix"] == new["audit_prefix"], "retained audit prefix changed")
+
+    count = old["row_count"]
+    sequence = before["sequences"][AUDIT_SEQUENCE]
+    first = last = None
+    expected_sequences = before["sequences"]
+    if count:
+        REQUIRE(set(sequence) == {"last_value", "is_called", "start_value", "increment_by", "min_value",
+                                 "max_value", "cache_size", "cycle", "owned_by"}
+                and all(type(sequence[key]) is int for key in ("last_value", "start_value", "min_value", "max_value"))
+                and type(sequence["is_called"]) is bool
+                and sequence["increment_by"] == 1 and sequence["cache_size"] == 1
+                and sequence["cycle"] is False and sequence["owned_by"] == "public.audit_log.id"
+                and sequence["min_value"] <= sequence["last_value"] <= sequence["max_value"],
+                "audit sequence cannot allocate a verified contiguous migration tail")
+        first = sequence["last_value"] + int(sequence["is_called"])
+        last = first + count - 1
+        high_water = old["audit_prefix"]["high_water"]
+        REQUIRE((high_water is None or high_water < first) and last <= sequence["max_value"],
+                "migration audit IDs overlap retained rows or exceed sequence bounds")
+        expected_sequences = {**expected_sequences, AUDIT_SEQUENCE: {**sequence, "last_value": last, "is_called": True}}
+    REQUIRE(after["sequences"] == expected_sequences, "unexpected audit or other sequence change")
+
+    REQUIRE(new["audit_append"] == {"row_count": count, "row_sha256": old["audit_sha256"],
+                "first_id": first, "last_id": last, "timestamp_count": int(count > 0), "timestamps_observed": True}
+            and after["tables"]["audit_log"]["row_count"] == before["tables"]["audit_log"]["row_count"] + count,
+            "unexpected migration audit append")
+    if not count:
+        REQUIRE(after["tables"]["audit_log"] == before["tables"]["audit_log"], "complete audit inventory changed")
+    for ledger, digest_key in GRN_LEDGERS.items():
+        REQUIRE(after["tables"][ledger] == {"row_count": count, "row_sha256": old[digest_key]},
+                "GRN ledger differs from the exact retained source projection")
 
 
 def verify_after(before, pre_fleet, after, post_fleet):
@@ -97,10 +156,13 @@ def verify_after(before, pre_fleet, after, post_fleet):
     PREVIOUS["inventory"](after, "0105")
     FLEET["verify_fleet"](post_fleet, "0105")
     REQUIRE({**pre_fleet, "database_revision": "0105"} == post_fleet, "legacy or current fleet changed")
-    keys = ("database_identity", "sequences", "gaming_sessions_legacy_projection")
+    keys = ("database_identity", "gaming_sessions_legacy_projection")
     REQUIRE(all(before[key] == after[key] for key in keys), "database identity or retained projection changed")
+    verify_legacy_grn_backfill(before, after)
     expected = {**before["tables"], "alembic_version": after["tables"]["alembic_version"],
-                **{table: {"row_count": 0, "row_sha256": EMPTY_SHA256} for table in NEW_TABLES}}
+                "audit_log": after["tables"]["audit_log"],
+                **{table: EMPTY_INVENTORY for table in NEW_TABLES - GRN_LEDGERS.keys()},
+                **{table: after["tables"][table] for table in GRN_LEDGERS}}
     REQUIRE(expected == after["tables"], "retained rows changed or a candidate ledger is not empty")
     for name, (removed, added) in CATALOGUE_DELTA.items():
         old = set(before[f"{name}_catalog_rows"])
@@ -112,7 +174,7 @@ def verify_after(before, pre_fleet, after, post_fleet):
 
 def image_override(attestation, retained):
     images = attestation["services"]
-    REQUIRE(attestation["version_name"] == "3.1.78" and set(images) == PREVIOUS["IMAGE_SERVICES"],
+    REQUIRE(attestation["version_name"] == "3.1.79" and set(images) == PREVIOUS["IMAGE_SERVICES"],
             "unexpected candidate version or service inventory")
     services = {service: {"image": row["image_id"]} for service, row in images.items()}
     services["redis"]["image"] = retained["redis"]["image_id"]

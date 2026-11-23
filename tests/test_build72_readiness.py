@@ -393,7 +393,7 @@ def test_successful_deployment_receipt_is_private_bound_and_contains_no_credenti
     retained = {"redis": {"image_id": "older-verified-image"}}
     checksums = {"active": "8" * 64, "result": "9" * 64, "hold": "a" * 64}
     images = {name: "sha256:" + "c" * 64 for name in UPGRADE_RUNTIME["CANDIDATE_SERVICES"]}
-    running = {"version_name": "3.1.78", "source_git_sha": CANDIDATE,
+    running = {"version_name": "3.1.79", "source_git_sha": CANDIDATE,
                "services": {name: {"image_id": image} for name, image in images.items()}}
     args = SimpleNamespace(baseline=baseline, baseline_sha256="d" * 64, revision=CANDIDATE,
                            candidate_source_archive_sha256="e" * 64, project="erp", repo_root=repository)

@@ -10,6 +10,112 @@ SET LOCAL timezone = 'UTC';
 SET LOCAL bytea_output = 'hex';
 SET LOCAL search_path = pg_catalog, public;
 
+\set grn_transition '{}'
+\if :{?build72_grn_observation}
+-- Project 0103's deterministic legacy records from retained source rows on
+-- both sides of migration. The migrated functions can lock rows and cannot
+-- serve as an independent, read-only reference for their own output.
+WITH receipts AS (
+    SELECT g.id, p.company_id, p.branch_id, p.supplier_id, g.received_by,
+           g.idempotency_key, g.request_hash, g.created_at, g.journal_entry_id,
+           k.terminal_id, k.terminal_id IS NOT NULL AS terminal_known,
+           to_jsonb(g) - 'updated_at' AS grn,
+           jsonb_build_object('id', p.id, 'company_id', p.company_id,
+               'branch_id', p.branch_id, 'supplier_id', p.supplier_id,
+               'po_number', p.po_number, 'total_minor', p.total_minor,
+               'created_by', p.created_by, 'expected_at', p.expected_at) AS po
+      FROM public.grns g
+      JOIN public.purchase_orders p ON p.id = g.purchase_order_id
+      LEFT JOIN public.idempotency_keys k
+        ON k.key = g.idempotency_key AND k.request_hash = g.request_hash
+       AND k.user_id IS NOT DISTINCT FROM g.received_by
+     WHERE g.idempotency_key IS NOT NULL
+), sources AS (
+    SELECT r.*, jsonb_build_object(
+           'grn', r.grn, 'po', r.po,
+           'lines', (SELECT jsonb_agg(to_jsonb(l) - 'updated_at' ORDER BY l.created_at, l.id)
+                       FROM public.grn_lines l WHERE l.grn_id = r.id),
+           'po_lines', (SELECT jsonb_agg(to_jsonb(l) - 'updated_at' ORDER BY l.id)
+                          FROM public.purchase_order_lines l WHERE l.purchase_order_id = (r.po->>'id')::uuid),
+           'batches', (SELECT jsonb_agg(to_jsonb(b) - 'qty_on_hand' - 'updated_at' ORDER BY b.id)
+                         FROM public.batches b WHERE b.grn_id = r.id),
+           'ingredients', (SELECT jsonb_agg(jsonb_build_object('id', i.id,
+                               'company_id', i.company_id, 'base_unit', i.base_unit) ORDER BY i.id)
+                             FROM public.ingredients i WHERE i.id IN
+                               (SELECT l.ingredient_id FROM public.grn_lines l WHERE l.grn_id = r.id)),
+           'movements', (SELECT jsonb_agg(to_jsonb(m) - 'updated_at' ORDER BY m.id)
+                           FROM public.stock_movements m WHERE m.ref_id = r.id),
+           'journal', (SELECT to_jsonb(j) - 'updated_at' FROM public.journal_entries j
+                        WHERE j.id = r.journal_entry_id),
+           'journal_lines', (SELECT coalesce(jsonb_agg(to_jsonb(l) - 'updated_at' ORDER BY l.id), '[]')
+                               FROM public.journal_lines l WHERE l.journal_entry_id = r.journal_entry_id)
+           ) AS source
+      FROM receipts r
+), expected_rows AS (
+    SELECT jsonb_build_object('id', s.id, 'action_key', s.idempotency_key,
+               'company_id', s.company_id, 'branch_id', s.branch_id,
+               'actor_user_id', s.received_by, 'terminal_id', s.terminal_id,
+               'terminal_known', s.terminal_known, 'request_hash', s.request_hash,
+               'outcome', 'accepted', 'accepted_grn_id', s.id, 'original_wire_json', NULL,
+               'cancellation_reason', NULL, 'recovery_session_id', NULL, 'decided_at', s.created_at)::text AS decision,
+           jsonb_build_object('id', s.id, 'profile', 'legacy', 'original_wire_json', NULL,
+               'terminal_id', s.terminal_id, 'terminal_known', s.terminal_known, 'source', s.source,
+               'response', jsonb_build_object('ok', true, 'id', s.grn->>'id',
+                   'purchase_order_id', s.po->>'id', 'batches_created', jsonb_array_length(s.source->'lines'),
+                   'batch_ids', (SELECT jsonb_agg(l.line->>'batch_id' ORDER BY l.ordinality)
+                                  FROM jsonb_array_elements(s.source->'lines') WITH ORDINALITY AS l(line, ordinality)),
+                   'line_ids', (SELECT jsonb_agg(l.line->>'id' ORDER BY l.ordinality)
+                                 FROM jsonb_array_elements(s.source->'lines') WITH ORDINALITY AS l(line, ordinality)),
+                   'total_minor', (s.po->>'total_minor')::bigint,
+                   'supplier_invoice_no', s.grn->'supplier_invoice_no', 'journal_entry_id', s.grn->'journal_entry_id',
+                   'accounting_status', CASE WHEN s.journal_entry_id IS NULL THEN 'no_balance' ELSE 'posted' END))::text AS proof,
+           (to_jsonb(jsonb_populate_record(NULL::public.audit_log, jsonb_build_object(
+               'company_id', s.company_id, 'actor_user_id', s.received_by,
+               'action', 'grn_command_accepted', 'entity_type', 'GrnCompletionProof', 'entity_id', s.id,
+               'after', jsonb_build_object('purpose', 'inventory_grn_receive')))) - 'id' - 'created_at')::text AS audit
+      FROM sources s
+), expected AS (
+    SELECT count(*)::bigint AS row_count,
+           encode(sha256(convert_to(coalesce(string_agg(decision, chr(10) ORDER BY decision), ''), 'UTF8')), 'hex') AS decisions,
+           encode(sha256(convert_to(coalesce(string_agg(proof, chr(10) ORDER BY proof), ''), 'UTF8')), 'hex') AS proofs,
+           encode(sha256(convert_to(coalesce(string_agg(audit, chr(10) ORDER BY audit), ''), 'UTF8')), 'hex') AS audits
+      FROM expected_rows
+), boundary AS (
+    -- The verifier independently anchors this boundary to the stopped sequence.
+    SELECT CASE WHEN row_count > 0 AND to_regclass('public.grn_completion_proofs') IS NOT NULL
+                THEN (SELECT last_value::numeric FROM public.audit_log_id_seq) - row_count + 1 END AS first_id
+      FROM expected
+), audit_rows AS (
+    SELECT a.id, a.created_at, to_jsonb(a)::text AS full_row,
+           (to_jsonb(a) - 'id' - 'created_at')::text AS material,
+           b.first_id IS NOT NULL AND a.id >= b.first_id AS appended
+      FROM public.audit_log a CROSS JOIN boundary b
+), audit_inventory AS (
+    SELECT count(*) FILTER (WHERE NOT appended)::bigint AS prefix_count,
+           max(id) FILTER (WHERE NOT appended) AS prefix_high_water,
+           encode(sha256(convert_to(coalesce(string_agg(full_row, chr(10) ORDER BY full_row)
+               FILTER (WHERE NOT appended), ''), 'UTF8')), 'hex') AS prefix_sha256,
+           count(*) FILTER (WHERE appended)::bigint AS append_count,
+           min(id) FILTER (WHERE appended) AS first_id,
+           max(id) FILTER (WHERE appended) AS last_id,
+           count(DISTINCT created_at) FILTER (WHERE appended) AS timestamp_count,
+           coalesce(bool_and(created_at <= transaction_timestamp()) FILTER (WHERE appended), true) AS timestamps_observed,
+           encode(sha256(convert_to(coalesce(string_agg(material, chr(10) ORDER BY material)
+               FILTER (WHERE appended), ''), 'UTF8')), 'hex') AS append_sha256
+      FROM audit_rows
+)
+SELECT jsonb_build_object('legacy_grn_backfill', jsonb_build_object(
+    'row_count', e.row_count, 'decision_sha256', e.decisions, 'proof_sha256', e.proofs, 'audit_sha256', e.audits,
+    'audit_prefix', jsonb_build_object('row_count', a.prefix_count, 'row_sha256', a.prefix_sha256,
+                                      'high_water', a.prefix_high_water),
+    'audit_append', jsonb_build_object('row_count', a.append_count, 'row_sha256', a.append_sha256,
+                                      'first_id', a.first_id, 'last_id', a.last_id,
+                                      'timestamp_count', a.timestamp_count, 'timestamps_observed', a.timestamps_observed)
+)) AS grn_transition
+FROM expected e CROSS JOIN audit_inventory a
+\gset
+\endif
+
 -- chr(10) avoids an extra escape layer in the generated SQL: the full-row
 -- digest must use the same newline separator as the direct Gaming projection.
 WITH table_terms AS (
@@ -171,10 +277,11 @@ SELECT jsonb_build_object(
         'increment_by', increment_by, 'min_value', min_value, 'max_value', max_value,
         'cache_size', cache_size, 'cycle', cycle, 'owned_by', owned_by)
         ORDER BY sequence_name) FROM sequence_inventory)
-);
+) || %L::jsonb;
 $query$,
         table_terms.statement,
-        sequence_terms.statement
+        sequence_terms.statement,
+        :'grn_transition'
     ) AS statement
       FROM table_terms CROSS JOIN sequence_terms
 )

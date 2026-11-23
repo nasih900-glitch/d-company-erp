@@ -1292,12 +1292,12 @@ class AndroidReleaseStagingTest(unittest.TestCase):
         self.assertIn("FULL_APK_CHECK", workflow)
 
 
-    def test_build85_staging_requires_exact_receipt_and_retains_older_redis_identity(self):
-        payload = {"version_code": 85, "version_name": "3.1.78", "source_git_sha": "1" * 40}
+    def test_build86_staging_requires_exact_receipt_and_retains_older_redis_identity(self):
+        payload = {"version_code": 86, "version_name": "3.1.79", "source_git_sha": "1" * 40}
         images = {name: "sha256:" + "2" * 64 for name in ("postgres", "backend", "frontend", "caddy")}
         redis = {"version_name": "3.1.64", "image_id": "sha256:" + "3" * 64, "retained": True}
         digest = "4" * 64
-        running = {"version_name": "3.1.78", "source_git_sha": "1" * 40,
+        running = {"version_name": "3.1.79", "source_git_sha": "1" * 40,
                    "services": {name: {"image_id": image} for name, image in images.items()}}
         with (
             patch.object(staging, "run_path", return_value={"staging_identity": lambda *args: ("erp", images, redis, digest)}),
@@ -1436,7 +1436,7 @@ class AndroidReleaseStagingTest(unittest.TestCase):
             patch.object(staging, "run_path") as verifier,
             patch.object(staging, "inspect_release_pair") as inspect,
         ):
-            for version, code in (("3.1.76", 83), ("3.1.78", 83), ("3.1.76", 85)):
+            for version, code in (("3.1.76", 83), ("3.1.79", 83), ("3.1.76", 86)):
                 with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "superseded signed candidate"):
                     staging._inspect_running_release({"version_name": version, "version_code": code, "source_git_sha": "1" * 40})
             verifier.assert_not_called()
@@ -1448,8 +1448,20 @@ class AndroidReleaseStagingTest(unittest.TestCase):
             patch.object(staging, "run_path") as verifier,
             patch.object(staging, "inspect_release_pair") as inspect,
         ):
-            for version, code in (("3.1.77", 84), ("3.1.78", 84), ("3.1.77", 85)):
+            for version, code in (("3.1.77", 84), ("3.1.79", 84), ("3.1.77", 86)):
                 with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "superseded tagged candidate"):
+                    staging._inspect_running_release({"version_name": version, "version_code": code, "source_git_sha": "1" * 40})
+            verifier.assert_not_called()
+            inspect.assert_not_called()
+
+
+    def test_superseded_build85_is_refused_before_any_runtime_inspection(self):
+        with (
+            patch.object(staging, "run_path") as verifier,
+            patch.object(staging, "inspect_release_pair") as inspect,
+        ):
+            for version, code in (("3.1.78", 85), ("3.1.79", 85), ("3.1.78", 86)):
+                with self.assertRaisesRegex(staging.AndroidReleaseStagingError, "superseded signed candidate"):
                     staging._inspect_running_release({"version_name": version, "version_code": code, "source_git_sha": "1" * 40})
             verifier.assert_not_called()
             inspect.assert_not_called()
