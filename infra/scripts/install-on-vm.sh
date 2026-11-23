@@ -158,7 +158,7 @@ refuse_unreviewed_successor() {
   fi
   # Read the executing source first: changing REPO_DIR, .env or CLI flags cannot
   # disguise this closed candidate as a historical or fresh-install release.
-  if [ "$script_version" = 3.1.77 ] && [ -z "${BUILD72_UPGRADE_EVIDENCE:-}" ]; then
+  if [ "$script_version" = 3.1.78 ] && [ -z "${BUILD72_UPGRADE_EVIDENCE:-}" ]; then
     echo "Build72 production admission is closed: reviewed deployed-image/source provenance, current fleet evidence and Redis ACTIVE_REDIS_REPAIR.json / CONFIG_RECREATION_HOLD.json recreation admission are unavailable. Neither upgrades nor fresh-install fallback are admitted." >&2
     return 1
   fi
@@ -202,12 +202,16 @@ refuse_unreviewed_successor() {
     echo "Build83 is a superseded signed candidate; this fallback installer admits only its exact successor." >&2
     return 1
   fi
-  if [ "$repo_version" = 3.1.77 ] && [ "$script_version" != 3.1.77 ]; then
+  if [ "$repo_version" = 3.1.77 ] || [ "$script_version" = 3.1.77 ]; then
+    echo "Build84 is a superseded tagged candidate; this fallback installer admits only its exact successor." >&2
+    return 1
+  fi
+  if [ "$repo_version" = 3.1.78 ] && [ "$script_version" != 3.1.78 ]; then
     echo "Build72 production admission is closed: the repository selects the unreviewed successor even though another installer source was invoked." >&2
     return 1
   fi
   if [ -n "${BUILD72_UPGRADE_EVIDENCE:-}" ]; then
-    if [ "$repo_version" != 3.1.77 ] || [ "$script_version" != 3.1.77 ] || \
+    if [ "$repo_version" != 3.1.78 ] || [ "$script_version" != 3.1.78 ] || \
        [ "${MAINTENANCE_CONFIRMED:-false}" != true ] || [ ! -f .env ] || [ -L .env ] || \
        [ -n "${BUILD55_ACCEPTANCE_CREDENTIAL_FILE:-}${BUILD66_ACCEPTANCE_CREDENTIAL_FILE:-}${LEGACY_CODE14_REVISION:-}${LEGACY_CODE16_REVISION:-}" ]; then
       echo "Build72 production admission is closed: the exact existing upgrade, maintenance confirmation and reviewed evidence are required." >&2
@@ -397,7 +401,7 @@ if grep -qx 'APP_VERSION=3.1.64' "$CANDIDATE_BUILD_ROOT/.env.production.example"
     fi
   done
   TYPED_LEDGER_TRANSITION=true
-elif grep -qx 'APP_VERSION=3.1.77' "$CANDIDATE_BUILD_ROOT/.env.production.example"; then
+elif grep -qx 'APP_VERSION=3.1.78' "$CANDIDATE_BUILD_ROOT/.env.production.example"; then
   BUILD66_VERIFIER="$CANDIDATE_BUILD_ROOT/infra/scripts/verify-build72-transition.py"
   LEDGER_PROJECTION_SQL="$BUILD45_PENDING_STATE_SQL"
   for release_input in "$BUILD66_VERIFIER" "$BUILD72_RUNTIME" \

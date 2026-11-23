@@ -1,13 +1,15 @@
 # D Company ERP — current project state
 
-## Local Build 84 release candidate
+## Local Build 85 release candidate
 
-Version 3.1.77 targets Android build 84, Room 58 and Alembic 0105. Its
-[release record](docs/V3_1_77_RELEASE_CANDIDATE.md) covers the post-handover
-cashier authority fix and the guarded installer's scanner script permissions.
+Version 3.1.78 targets Android build 85, Room 58 and Alembic 0105. Its
+[release record](docs/V3_1_78_RELEASE_CANDIDATE.md) covers the post-handover
+cashier authority fix and the Linux regression for the installer’s scanner
+script permissions.
 
-Signed Build 83 / v3.1.76 remains immutable and withheld. Build 84 keeps the
-reviewed Build 71 direct-upgrade path, Redis and database preservation checks,
+Build 84 / v3.1.77 remains immutable and withheld after the hosted installer
+fixture failure. Build 85 keeps the reviewed Build 71 direct-upgrade path,
+Redis and database preservation checks,
 runtime security thresholds, and compatibility defaults. Exact-source
 verification, signing, upgrade, deployment and the tablet offer remain separate
 release gates.

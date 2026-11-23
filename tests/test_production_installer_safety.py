@@ -108,7 +108,15 @@ def test_candidate_archive_restores_only_reviewed_scanner_and_runtime_modes(
     template_name = "infra/security/vex/zlib-cve-2026-85091.openvex.json"
     zlib_name = "infra/docker/caddy-zlib/verify-official-zlib.sh"
     profile_name = "infra/docker/verify-backend-runtime-profile.py"
-    reviewed_modes = {template_name: 0o644, zlib_name: 0o755, profile_name: 0o644}
+    backport_name = "infra/docker/openssl/verify-backport-runtime.sh"
+    vendor_name = "infra/docker/openssl/verify-vendor-r1.sh"
+    reviewed_modes = {
+        template_name: 0o644,
+        zlib_name: 0o755,
+        profile_name: 0o644,
+        backport_name: 0o755,
+        vendor_name: 0o755,
+    }
     peer = tmp_path / "peer.txt"
     peer.write_text("another reviewed input\n", encoding="utf-8")
     archive = tmp_path / "source.tar"
@@ -190,7 +198,7 @@ def test_candidate_archive_restores_only_reviewed_scanner_and_runtime_modes(
     assert "Frozen zlib VEX template is missing or linked." in rejected_parent.stderr
     assert stat.S_IMODE(external_template.stat().st_mode) == 0o600
 
-    for name in (zlib_name, profile_name):
+    for name in (zlib_name, profile_name, backport_name, vendor_name):
         linked_runtime = tmp_path / f"linked-{Path(name).name}.tar"
         with tarfile.open(linked_runtime, "w") as package:
             for other in reviewed_modes.keys() - {name}:
@@ -212,6 +220,26 @@ def test_candidate_archive_restores_only_reviewed_scanner_and_runtime_modes(
         assert rejected_runtime.returncode != 0
         assert "Frozen runtime verifier is missing or linked." in rejected_runtime.stderr
         assert stat.S_IMODE(external_template.stat().st_mode) == 0o600
+
+    for name in (backport_name, vendor_name):
+        incomplete = tmp_path / f"missing-{Path(name).name}.tar"
+        with tarfile.open(incomplete, "w") as package:
+            for other in reviewed_modes.keys() - {name}:
+                package.add(ROOT / other, arcname=other)
+        incomplete_snapshot = tmp_path / f"incomplete-{Path(name).name}"
+        incomplete_snapshot.mkdir(mode=0o700)
+        rejected_missing = subprocess.run(
+            ["bash", "-c", "set -euo pipefail\numask 077\n" + extraction_and_mode_check],
+            env={**os.environ, "CANDIDATE_SOURCE_ARCHIVE": str(incomplete),
+                 "CANDIDATE_BUILD_ROOT": str(incomplete_snapshot)},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert rejected_missing.returncode != 0
+        assert "Frozen runtime verifier is missing or linked." in rejected_missing.stderr
+        assert not (incomplete_snapshot / name).exists()
+        assert stat.S_IMODE((incomplete_snapshot / zlib_name).stat().st_mode) == 0o700
 
 
 def test_business_quiescence_verifier_requires_exact_zero_evidence() -> None:
